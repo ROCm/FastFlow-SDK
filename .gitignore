@@ -1,0 +1,15 @@
+# Build trees, venv, and local tooling — never committed (mirrors hrx/.gitignore).
+/build/
+/build-*/
+/.venv/
+/out/
+/tools-bin/
+/.cache/
+# per-project local build dirs (submodules are tracked only as gitlinks)
+projects/*/bld/
+projects/*/build/
+projects/*/build-*/
+# generated at configure time
+**/version.h
+*.log
+*_aie_cdo_*.bin

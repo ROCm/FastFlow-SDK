@@ -1,0 +1,66 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# rocm-npu-staging — version manifest (the pin authority). 2026-06-26.
+# Exact revisions the NPU stack is built/validated against. projects/ are
+# git submodules; this file records their pins. Build orchestration is in dev.py,
+# Python deps in requirements.txt.
+#
+# Everything is built FROM SOURCE (submodules) against one ROCm LLVM; Peano
+# (llvm-aie) is the ONLY wheel-sourced toolchain piece.
+
+[meta]
+host = "linux-x86_64; build + artifact handoff only — on-device run needs an NPU + amdxdna driver"
+note = "projects/ are pinned by commit (below); canonical remote URLs are in .gitmodules."
+
+[llvm]                          # projects/llvm-project — ROCm amd-llvm, LLVM 23
+repo       = "github.com/jtuyls/llvm-project"            # origin (fork, pushable)
+upstream   = "github.com/ROCm/llvm-project"              # remote 'amd' (fetch-only; push disabled)
+commit     = "46fcb339fb61119b337f973c7ca9e710a319fdd0"  # ROCm amd-llvm weekly snapshot
+branch     = "amd-compiler-ww-2026-17"                   # weekly snapshot the pin sits on (NOT the moving amd-staging)
+llvm_major = 23
+
+[mlir_aie]                      # projects/mlir-aie — built from source against [llvm]
+repo     = "github.com/Xilinx/mlir-aie"
+commit   = "14273685bebf296798cc86facd3459b5a017cda7"    # nightly 2026-06-13 ("14273685be")
+provides = ["aie-opt", "aie-translate", "aiecc.py", "IRON python", "bootgen", "aie_api", "aie-rt"]
+note     = "Builds cleanly against ROCm LLVM (46fcb339); its clone-llvm.sh nominally pins llvm.org ea2f5081 (also LLVM 23)."
+
+[peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
+wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"
+index = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
+note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
+
+[fastflowlm]                    # projects/fastflowlm
+repo   = "github.com/ROCm/FastFlowLM"                    # ROCm upstream
+branch = "pr-1-iron"
+commit = "cd25d05ca67bf162e568e2c9e7f3edfb4871270b"
+note   = "FLM_Xclbin IRON designs; Peano-capable ones build with ENABLE_CHESSCC=0."
+
+[hrx]                           # projects/hrx — amdxdna runtime
+repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
+branch     = "amdxdna-hal-native"                         # == ROCm/hrx-system PR #37 (+ follow-ups)
+commit     = "9d369966fbc9f798cea5115cb02de2ba833bea9d"
+hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ; own shim-xdna (no XRT)
+
+[hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
+repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready
+status     = "transitional — may be upstreamed to mlir-aie / hrx / other later"
+xrt_source = "github.com/nod-ai/XRT @ a9fdf618ceba32d28bbf6715a5ee627a51a74b24"  # XRT 2.18.0
+note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, no XRT install)."
+
+[eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
+package      = "eudsl-python-extras"
+version      = "0.1.0.20260629.149+b27b3ae"              # OVERRIDES mlir-aie's own pin (0.1.0.20260418)
+find_links   = "https://llvm.github.io/eudsl"
+sha256       = "42157b9bc95fbde97d1bc10aefd268b3bc68bc34af6f97a2dd2cb4c1e751104f"  # sdist (verified on fetch)
+mlir_aie_pin = "0.1.0.20260418.906+a736a7d"              # what mlir-aie pins (correct for its intended LLVM)
+override_via = "patches/mlir-aie/0001-eudsl-for-amd-llvm-23.patch"
+note         = "TEMPORARY override: mlir-aie's eudsl 04-18 breaks on amd-llvm-23 nanobind (ScalarValue Value(OpResult)); 06-29 fixes it and emits size-identical IR. The patch bumps the version AND repoints mlir-aie's find-links to .cache/find-links; with dev.py's PIP_FIND_LINKS + PIP_NO_INDEX the vendoring is network-free (sha256-verified prefetched sdist). Remove when mlir-aie's Python/IRON path is built against an aligned LLVM."
+
+# Reduced hard deps — all SOURCE-built via the mlir-aie submodule (NOT wheels):
+#   aie_api -> projects/mlir-aie/third_party/aie_api  (AIEOPT_DIR for kernel -I)
+#   aie-rt  -> projects/mlir-aie/third_party/aie-rt
+#   bootgen -> built by mlir-aie -> build/mlir-aie/bin/bootgen  (build-time only, never runtime)
+#   eudsl   -> prefetched + verified (see [eudsl]); the only build-time network fetch
+#   xrt     -> NONE at runtime (XRT source used only to build hrx-xclbinutil)
+#   peano   -> the only wheel (see [peano])

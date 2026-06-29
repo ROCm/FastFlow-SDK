@@ -1,0 +1,19 @@
+[submodule "projects/llvm-project"]
+	path = projects/llvm-project
+	url = https://github.com/jtuyls/llvm-project.git
+[submodule "projects/mlir-aie"]
+	path = projects/mlir-aie
+	url = https://github.com/Xilinx/mlir-aie.git
+	ignore = dirty
+[submodule "projects/fastflowlm"]
+	path = projects/fastflowlm
+	url = https://github.com/ROCm/FastFlowLM.git
+	branch = pr-1-iron
+[submodule "projects/hrx"]
+	path = projects/hrx
+	url = https://github.com/jtuyls/hrx.git
+	branch = amdxdna-hal-native
+[submodule "projects/hrx-xclbinutil"]
+	path = projects/hrx-xclbinutil
+	url = https://github.com/jtuyls/hrx-xclbinutil.git
+	branch = main

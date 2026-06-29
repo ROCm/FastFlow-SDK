@@ -1,0 +1,42 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# rocm-npu-staging Python dependencies (installed into .venv by `dev.py setup`).
+#
+# Policy: Peano (llvm-aie) is the ONLY wheel-sourced toolchain piece. Everything
+# else — LLVM/MLIR, mlir-aie (aie-opt/aie-translate/aiecc), bootgen, aie_api,
+# aie-rt — is built from source under projects/. `eudsl_python_extras` is built by
+# the mlir-aie CMake build (utils/.../vendor_eudsl.py), so it is NOT pip-installed.
+#
+# NON-pip system deps (apt) — checked by `dev.py doctor`:
+#   clang clang++ lld, python3.12 + dev headers (python3-dev), git, make
+#   (build-essential), ccache (optional). bazel is fetched by projects/hrx
+#   `dev.py setup`. cmake + ninja come from pip below (so the apt set stays
+#   minimal). (hrx-xclbinutil self-defines uuid_t — no uuid-dev needed.)
+#
+# Installed via requirements.lock (hash-pinned, uv pip compile). Edit this file,
+# then regenerate the lock (see cmd_setup docstring).
+
+# --- build-system: LLVM/MLIR Python bindings + eudsl-from-source ---
+cmake>=3.30           # mlir-aie requires >=3.30; system cmake is often older
+ninja                 # pip-provided so it's not a separate apt dep
+nanobind==2.13.0
+pybind11==3.0.4
+scikit-build-core==0.12.2
+setuptools>=64        # eudsl backend does `from setuptools.build_meta import ...`; venvs omit setuptools
+wheel
+PyYAML==6.0.3
+
+# --- IRON runtime: to run the source-built aie.dialects / aie.extras ---
+numpy==1.26.4         # verified for this flow (mlir-aie nominally wants >=2.4.6)
+ml_dtypes>=0.5.4
+cloudpickle
+rich
+aiofiles
+
+# --- FastFlowLM kernel scripts (needed by some designs) ---
+pyparsing
+sympy
+
+# --- Peano: AIE hardware codegen (the only wheel-sourced toolchain piece) ---
+--find-links https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
+llvm-aie==21.0.0.2026061501+acc2a72c
