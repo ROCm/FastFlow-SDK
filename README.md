@@ -20,8 +20,10 @@ amd-llvm pin), `mlir-aie`, `fastflowlm` (ROCm/FastFlowLM), `hrx`, and
 ## Quickstart (`dev.py` — setup + build + test)
 
 System prerequisites (apt — the only manual step; cmake/ninja come from pip):
-`sudo apt-get install -y clang lld python3-dev git build-essential`.
-Run `python dev.py doctor` to check and get the exact install command for anything missing.
+`sudo apt-get install -y gcc g++ python3-dev git make libssl-dev`.
+The canonical build toolchain is **gcc** (matching TheRock's pinned manylinux
+gcc-toolset). To build with clang locally instead, install `clang lld` and set
+`CC=clang CXX=clang++`. Run `python dev.py doctor` to check prerequisites.
 
 ```bash
 python dev.py doctor             # check system (apt) prereqs

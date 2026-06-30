@@ -69,13 +69,26 @@ def cmake_env():
     return e
 
 
-# System (apt) prerequisites — NOT installed by pip. (cmake/ninja come from pip.)
-#   probe-on-PATH tools, then headers compiled with the C compiler.
-_SYS_TOOLS = [  # (probe, apt-package)
-    ("clang", "clang"), ("clang++", "clang"), ("ld.lld", "lld"),
-    ("git", "git"), ("make", "build-essential"),
+# System (apt) prerequisites NOT installed by pip (cmake/ninja come from pip).
+_SYS_HEADERS = [
+    ("Python.h", "python3-dev"),              # MLIR Python bindings
+    ("openssl/opensslv.h", "libssl-dev"),     # mlir-aie's bootgen find_package(OpenSSL)
 ]
-_SYS_HEADERS = [("Python.h", "python3-dev")]  # for MLIR Python bindings
+
+
+def _compilers():
+    """(cc, cxx) for the build. Canonical toolchain is gcc — matching TheRock, whose
+    manylinux image pins a gcc-toolset to build amd-llvm. Override locally with the
+    standard CC/CXX env vars (e.g. `CC=clang CXX=clang++ python dev.py build llvm`).
+    Falls back to clang only if gcc is unavailable."""
+    cc, cxx = os.environ.get("CC"), os.environ.get("CXX")
+    if cc and cxx:
+        return cc, cxx
+    if shutil.which("gcc") and shutil.which("g++"):
+        return "gcc", "g++"
+    if shutil.which("clang") and shutil.which("clang++"):
+        return "clang", "clang++"
+    return None, None
 
 
 def _have_header(hdr):
@@ -95,7 +108,13 @@ def _have_header(hdr):
 def check_system(verbose=True):
     """Return (ok, missing_apt_packages). Reports tool/header presence."""
     missing = []
-    for probe, pkg in _SYS_TOOLS:
+    cc, cxx = _compilers()
+    if verbose:
+        print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: {(cc + '/' + cxx) if cc else 'need gcc (or set CC/CXX)'} (canonical: gcc; set CC/CXX for clang)")
+        print(f"  [{'ok ' if shutil.which('ld.lld') else '--  '}] ld.lld (optional; used with clang)")
+    if not cc:
+        missing.append("build-essential")  # provides gcc/g++
+    for probe, pkg in [("git", "git"), ("make", "build-essential")]:
         ok = shutil.which(probe) is not None
         if verbose:
             print(f"  [{'ok ' if ok else 'MISS'}] {probe}")
@@ -218,10 +237,14 @@ def check_pins():
         pinned = man.get(sec, {}).get("commit")
         if not pinned:
             continue
-        r = subprocess.run(["git", "-C", str(PROJ / sub), "rev-parse", "HEAD"],
+        sub_dir = PROJ / sub
+        if not (sub_dir / ".git").exists():   # not checked out — rev-parse here would walk up to the superproject
+            print(f"  [absent] {sub}: not checked out (skipped)")
+            continue
+        r = subprocess.run(["git", "-C", str(sub_dir), "rev-parse", "HEAD"],
                            capture_output=True, text=True)
         head = r.stdout.strip()
-        match = bool(head) and head == pinned
+        match = head == pinned
         print(f"  [{'ok  ' if match else 'DRIFT'}] {sub}: manifest {pinned[:12]} vs HEAD {(head[:12] or '?')}")
         if not match:
             drift.append(sub)
@@ -299,15 +322,18 @@ def cmd_setup(args):
 def cmd_build_llvm(args):
     """LLVM+MLIR from the amd-llvm pin (mlir-aie's flags)."""
     OUT.mkdir(exist_ok=True)
+    cc, cxx = _compilers()
     cfg = [
         cmake_bin(), "-G", "Ninja", "-S", PROJ / "llvm-project" / "llvm", "-B", LLVM_BUILD,
         "-DLLVM_ENABLE_PROJECTS=mlir", "-DLLVM_TARGETS_TO_BUILD=host",
         "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
         "-DMLIR_ENABLE_BINDINGS_PYTHON=ON", "-DCMAKE_BUILD_TYPE=Release",
         "-DLLVM_INSTALL_UTILS=ON", "-DLLVM_CCACHE_BUILD=ON",
-        "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", "-DLLVM_USE_LINKER=lld",
+        f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}",
         f"-DPython3_EXECUTABLE={venv_py()}",
     ]
+    if "clang" in (cc or "") and shutil.which("ld.lld"):   # clang+lld; gcc uses its default linker
+        cfg.append("-DLLVM_USE_LINKER=lld")
     sh(cfg, env=cmake_env())
     sh([cmake_bin(), "--build", LLVM_BUILD, "-j", NPROC], env=cmake_env())
     print("build llvm: ok ->", LLVM_BUILD / "lib" / "cmake")
@@ -319,6 +345,7 @@ def cmd_build_mlir_aie(args):
         sys.exit("eudsl not prefetched/verified — run: python dev.py fetch  (or: python dev.py setup)")
     src = PROJ / "mlir-aie"
     bdir = BUILD / "mlir-aie"
+    cc, cxx = _compilers()   # match the compiler used for build/llvm
     env = cmake_env()
     # Network-free eudsl vendoring: the patch points mlir-aie's find-links at the local
     # prefetch cache (no remote URL), PIP_FIND_LINKS gives the cache as an absolute path
@@ -328,6 +355,7 @@ def cmd_build_mlir_aie(args):
     env["PIP_NO_INDEX"] = "1"
     cfg = [
         cmake_bin(), "-G", "Ninja", "-S", src, "-B", bdir, "-DCMAKE_BUILD_TYPE=Release",
+        f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}",
         f"-DLLVM_DIR={LLVM_BUILD/'lib'/'cmake'/'llvm'}",
         f"-DMLIR_DIR={LLVM_BUILD/'lib'/'cmake'/'mlir'}",
         f"-DCMAKE_MODULE_PATH={src/'cmake'/'modulesXilinx'}",
@@ -398,6 +426,36 @@ def cmd_test(args):
     sh(cmd, env=build_env())
 
 
+def cmd_smoke(args):
+    """Build-level smoke tests (no NPU, no FLM design / no fastflowlm needed):
+      - hrx-xclbinutil: its ctest 'smoke' (package a MEM_TOPOLOGY section into an
+        .xclbin, --info, dump-section round-trip);
+      - mlir-aie: aie-opt reports its version and parses a trivial NPU device.
+    Use this when fastflowlm isn't available (the full e2e needs an FLM design)."""
+    rc = 0
+    xbld = PROJ / "hrx-xclbinutil" / "bld"
+    if (xbld / "CMakeCache.txt").exists():
+        print("== hrx-xclbinutil smoke (ctest) ==")
+        rc |= subprocess.run(["ctest", "--test-dir", str(xbld), "--output-on-failure"],
+                             env=cmake_env()).returncode
+    else:
+        print("smoke: hrx-xclbinutil not built (run: python dev.py build hrx-xclbinutil)"); rc = 1
+    aieopt = BUILD / "mlir-aie" / "bin" / "aie-opt"
+    if aieopt.exists():
+        print("== mlir-aie smoke (aie-opt) ==")
+        sh([aieopt, "--version"])
+        p = subprocess.run([str(aieopt)], input=b"module { aie.device(npu2) {} }\n",
+                           capture_output=True)
+        ok = p.returncode == 0
+        print(f"  aie-opt parses aie.device(npu2): {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(p.stderr.decode()[:300]); rc = 1
+    else:
+        print("smoke: aie-opt not built (run: python dev.py build mlir-aie)"); rc = 1
+    print("smoke: PASS" if rc == 0 else "smoke: FAIL")
+    return rc
+
+
 def cmd_deps(args):
     """Print the in-repo dependency manifest (self-contained)."""
     print((ROOT / "requirements.txt").read_text())
@@ -413,6 +471,7 @@ def main():
         choices=["llvm", "mlir-aie", "hrx-xclbinutil", "hrx", "flm", "all"])
     b.add_argument("design", nargs="?")
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
+    sub.add_parser("smoke")
     sub.add_parser("deps")
     a = p.parse_args()
     if a.cmd == "doctor": sys.exit(cmd_doctor(a))
@@ -420,6 +479,7 @@ def main():
     elif a.cmd == "fetch": cmd_fetch(a)
     elif a.cmd == "deps": cmd_deps(a)
     elif a.cmd == "test": cmd_test(a)
+    elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "build":
         {"llvm": cmd_build_llvm, "mlir-aie": cmd_build_mlir_aie,
          "hrx-xclbinutil": cmd_build_hrx_xclbinutil, "hrx": cmd_build_hrx,
