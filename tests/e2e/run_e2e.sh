@@ -52,10 +52,15 @@ PDI="$DDIR/build/bitstream/from_iron/dequant.mlir.prj/main.pdi"
 [ -n "$BASE_LIBS" ] || fail "hrx base libs not found (run: python dev.py build hrx)"
 echo "== HAL artifact-contract check =="
 LOADER="$STAGE/out/hal_pdi_loader"
-clang -I"$PROJ/hrx/runtime/src" -I"$PROJ/hrx/build/cmake/runtime/src" \
+# Use the same compiler dev.py builds the HAL libs with: canonical gcc, $CC override,
+# clang only as a last resort (the manylinux CI image ships gcc, not clang).
+CC="${CC:-$(command -v gcc || command -v cc || command -v clang)}"
+[ -n "$CC" ] || fail "no C compiler found (need gcc/cc/clang)"
+"$CC" -I"$PROJ/hrx/runtime/src" -I"$PROJ/hrx/build/cmake/runtime/src" \
   "$HERE/../hal-contract/hal_pdi_loader.c" -o "$LOADER" \
   -Wl,--start-group "$HAL_LIB" $BASE_LIBS -Wl,--end-group -lpthread -ldl -lm \
-  2>"$STAGE/out/e2e-loader-link.log" || fail "ws_d_loader link failed"
+  2>"$STAGE/out/e2e-loader-link.log" \
+  || { tail -10 "$STAGE/out/e2e-loader-link.log"; fail "HAL PDI loader build failed"; }
 "$LOADER" "$XCLBIN" "$PDI" || fail "HAL did not extract matching PDI"
 
 echo "E2E PASS: $DESIGN"
