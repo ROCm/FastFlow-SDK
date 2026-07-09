@@ -5,10 +5,6 @@
 	path = projects/mlir-aie
 	url = https://github.com/Xilinx/mlir-aie.git
 	ignore = dirty
-[submodule "projects/fastflowlm"]
-	path = projects/fastflowlm
-	url = https://github.com/ROCm/FastFlowLM.git
-	branch = pr-1-iron
 [submodule "projects/hrx"]
 	path = projects/hrx
 	url = https://github.com/jtuyls/hrx.git

@@ -23,4 +23,3 @@ jobs:
       contents: read
     with:
       name: Build + smoke
-    secrets: inherit   # forwards FASTFLOWLM_DEPLOY_KEY to the reusable workflow

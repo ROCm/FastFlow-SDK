@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: MIT
 #
 # Reusable workflow: build the rocm-npu-staging stack from source (LLVM 23 + mlir-aie
-# + hrx-xclbinutil + the amdxdna HAL + the FastFlowLM design) and run build-level
-# smoke + the FLM e2e (xclbin + HAL PDI artifact-contract check). The ROCm scale
+# + hrx-xclbinutil + the amdxdna HAL) and run build-level smoke + the e2e (build an
+# mlir-aie IRON design -> xclbin + HAL PDI artifact-contract check). The ROCm scale
 # runner + manylinux build container can do the heavy from-source build.
 #
-# projects/fastflowlm (ROCm/FastFlowLM) is private; it is fetched with a read-only SSH
-# deploy key passed in as the FASTFLOWLM_DEPLOY_KEY secret. The key is written to a
-# job-scoped temp file (never ~/.ssh) and shredded in a final always() step. Only
-# FastFlowLM is routed over SSH; the public submodules stay on anonymous HTTPS.
+# Every submodule is public, so they are all fetched over anonymous HTTPS and the
+# workflow needs no secrets.
 name: Build rocm-npu-staging Linux
 
 on:
@@ -18,10 +16,6 @@ on:
       name:
         type: string
         default: Build + smoke
-    secrets:
-      FASTFLOWLM_DEPLOY_KEY:
-        required: true
-        description: Read-only SSH deploy key for the private ROCm/FastFlowLM submodule.
 
 jobs:
   build_rocm_npu_staging_linux:
@@ -47,23 +41,9 @@ jobs:
       - name: Install system build dependencies
         run: dnf install -y openssl-devel || yum install -y openssl-devel
 
-      # FastFlowLM is private: authenticate its fetch with a read-only deploy key kept
-      # in a job-scoped temp file. Scope SSH to FastFlowLM only so the public submodules
-      # stay on anonymous HTTPS; IdentitiesOnly avoids offering any other agent key.
-      - name: Configure FastFlowLM deploy key
-        env:
-          DEPLOY_KEY: ${{ secrets.FASTFLOWLM_DEPLOY_KEY }}
-        run: |
-          set -eu
-          install -m 600 /dev/null "$RUNNER_TEMP/ffl_deploy_key"
-          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/ffl_deploy_key"
-          git config --global core.sshCommand \
-            "ssh -i $RUNNER_TEMP/ffl_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-          git config --global url."git@github.com:ROCm/FastFlowLM.git".insteadOf "https://github.com/ROCm/FastFlowLM.git"
-
       - name: Initialize submodules
         run: |
-          git submodule update --init projects/llvm-project projects/hrx projects/hrx-xclbinutil projects/fastflowlm
+          git submodule update --init projects/llvm-project projects/hrx projects/hrx-xclbinutil
           git submodule update --init --recursive projects/mlir-aie
 
       # setup creates .venv, installs the hash-pinned requirements.lock, applies the
@@ -72,32 +52,18 @@ jobs:
         run: python3 dev.py setup
 
       # Gate: system prereqs (clang/lld/python3-dev) + submodule-pins-vs-manifest
-      # (fastflowlm now present, must match its pin) + patches + prefetch + version drift.
+      # + patches + prefetch + version drift.
       - name: Doctor
         run: .venv/bin/python dev.py doctor
 
-      - name: Build (hrx-xclbinutil, LLVM, mlir-aie, amdxdna HAL, FLM)
-        run: |
-          .venv/bin/python dev.py build hrx-xclbinutil
-          .venv/bin/python dev.py build llvm
-          .venv/bin/python dev.py build mlir-aie
-          .venv/bin/python dev.py build hrx
-          .venv/bin/python dev.py build flm
+      - name: Build (hrx-xclbinutil, LLVM, mlir-aie, amdxdna HAL)
+        run: .venv/bin/python dev.py build all
 
       # Build-level smoke (no NPU): hrx-xclbinutil packaging round-trip + aie-opt.
       - name: Smoke tests
         run: .venv/bin/python dev.py smoke
 
-      # FLM e2e: build a design xclbin + the HAL PDI artifact-contract check. Needs the
-      # fastflowlm source + Peano; runs off-device (no NPU required).
-      - name: FLM e2e (xclbin + HAL PDI artifact-contract)
+      # e2e: build an mlir-aie IRON design's xclbin through Peano + the HAL PDI
+      # artifact-contract check. Runs off-device (no NPU required).
+      - name: e2e (xclbin + HAL PDI artifact-contract)
         run: .venv/bin/python dev.py test
-
-      # Always remove the deploy key + its git config, even on failure. The container is
-      # ephemeral, but this is belt-and-suspenders for reused self-hosted runners.
-      - name: Remove deploy key
-        if: always()
-        run: |
-          shred -u "$RUNNER_TEMP/ffl_deploy_key" 2>/dev/null || rm -f "$RUNNER_TEMP/ffl_deploy_key"
-          git config --global --unset core.sshCommand || true
-          git config --global --remove-section url."git@github.com:ROCm/FastFlowLM.git" 2>/dev/null || true

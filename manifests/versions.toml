@@ -24,17 +24,12 @@ repo     = "github.com/Xilinx/mlir-aie"
 commit   = "14273685bebf296798cc86facd3459b5a017cda7"    # nightly 2026-06-13 ("14273685be")
 provides = ["aie-opt", "aie-translate", "aiecc.py", "IRON python", "bootgen", "aie_api", "aie-rt"]
 note     = "Builds cleanly against ROCm LLVM (46fcb339); its clone-llvm.sh nominally pins llvm.org ea2f5081 (also LLVM 23)."
+e2e_design = "programming_examples/basic/matrix_scalar_add"   # the design `dev.py test` builds
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
 wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"
 index = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
 note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
-
-[fastflowlm]                    # projects/fastflowlm
-repo   = "github.com/ROCm/FastFlowLM"                    # ROCm upstream
-branch = "pr-1-iron"
-commit = "cd25d05ca67bf162e568e2c9e7f3edfb4871270b"
-note   = "FLM_Xclbin IRON designs; Peano-capable ones build with ENABLE_CHESSCC=0."
 
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
