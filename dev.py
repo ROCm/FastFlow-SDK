@@ -10,7 +10,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py setup                 # venv + python deps (incl. pip cmake/ninja) + fetch
   python dev.py fetch                 # apply temp patches + prefetch eudsl (verified) — offline-ready
   python dev.py build llvm            # LLVM+MLIR from projects/llvm-project (amd-llvm pin)
-  python dev.py build mlir-aie        # aie-opt/aie-translate against build/llvm
+  python dev.py build iron-tools      # aie-opt/aie-translate against build/llvm
   python dev.py build hrx-xclbinutil  # the xclbin packager
   python dev.py build hrx             # the amdxdna HAL (IREE runtime)
   python dev.py build all             # everything above, in dependency order
@@ -71,7 +71,7 @@ def cmake_env():
 # System (apt) prerequisites NOT installed by pip (cmake/ninja come from pip).
 _SYS_HEADERS = [
     ("Python.h", "python3-dev"),              # MLIR Python bindings
-    ("openssl/opensslv.h", "libssl-dev"),     # mlir-aie's bootgen find_package(OpenSSL)
+    ("openssl/opensslv.h", "libssl-dev"),     # iron-tools' bootgen find_package(OpenSSL)
 ]
 
 
@@ -129,17 +129,17 @@ def check_system(verbose=True):
 
 
 def build_env():
-    """Env for the IRON flow: the SOURCE mlir-aie toolchain (built against ROCm
-    amd-llvm) + Peano (wheel) + hrx-xclbinutil. No wheel fallback for mlir-aie."""
+    """Env for the IRON flow: the SOURCE iron-tools toolchain (built against ROCm
+    amd-llvm) + Peano (wheel) + hrx-xclbinutil. No wheel fallback for iron-tools."""
     e = dict(os.environ)
-    src_bin = BUILD / "mlir-aie" / "bin"
+    src_bin = BUILD / "iron-tools" / "bin"
     if not (src_bin / "aie-opt").exists():
-        sys.exit("mlir-aie not built from source — run: python dev.py build mlir-aie")
+        sys.exit("iron-tools not built from source — run: python dev.py build iron-tools")
     e["PATH"] = os.pathsep.join(
         [str(ROOT / "tools-bin"), str(src_bin), str(VENV / "bin"), e.get("PATH", "")])
-    e["PYTHONPATH"] = str(BUILD / "mlir-aie" / "python")
+    e["PYTHONPATH"] = str(BUILD / "iron-tools" / "python")
     e["PEANO_INSTALL_DIR"] = str(site_packages() / "llvm-aie")   # Peano: the only wheel
-    e["AIEOPT_DIR"] = str(PROJ / "mlir-aie" / "third_party" / "aie_api")
+    e["AIEOPT_DIR"] = str(PROJ / "iron-tools" / "third_party" / "aie_api")
     return e
 
 
@@ -229,7 +229,7 @@ def check_pins():
     """Verify each submodule's checked-out commit == manifests/versions.toml (the
     manifest is load-bearing: drift is reported)."""
     man = _manifest()
-    sec_to_sub = {"llvm": "llvm-project", "mlir_aie": "mlir-aie", "hrx": "hrx"}
+    sec_to_sub = {"llvm": "llvm-project", "iron_tools": "iron-tools", "hrx": "hrx"}
     drift = []
     for sec, sub in sec_to_sub.items():
         pinned = man.get(sec, {}).get("commit")
@@ -270,13 +270,13 @@ def cmd_doctor(args):
     # cross-check: the eudsl version lives in BOTH the patch and versions.toml — guard drift
     import re
     eudsl_ver = _manifest().get("eudsl", {}).get("version", "")
-    patch_f = PATCHES / "mlir-aie" / "0001-eudsl-for-amd-llvm-23.patch"
+    patch_f = PATCHES / "iron-tools" / "0001-eudsl-for-amd-llvm-23.patch"
     pm = re.search(r"\+eudsl-python-extras==(\S+)", patch_f.read_text()) if patch_f.exists() else None
     ver_ok = bool(eudsl_ver) and pm is not None and pm.group(1) == eudsl_ver
     print(f"  [{'ok  ' if ver_ok else 'DRIFT'}] eudsl version: patch=={pm.group(1) if pm else '?'} == manifest=={eudsl_ver or '?'}")
     rc = 0
     if not ver_ok:
-        print("\neudsl version DRIFT: patches/mlir-aie/0001-… and versions.toml [eudsl] disagree — sync them")
+        print("\neudsl version DRIFT: patches/iron-tools/0001-… and versions.toml [eudsl] disagree — sync them")
         rc = 1
     if patch_bad:
         print(f"\nPATCH does not apply: {', '.join(patch_bad)} — regenerate against the current submodule")
@@ -300,7 +300,7 @@ def cmd_setup(args):
     requirements.txt is the human-edited input; regenerate the lock after editing it:
       .venv/bin/uv pip compile requirements.txt --generate-hashes --emit-index-url \\
           --emit-find-links --python-version 3.12 -o requirements.lock
-    mlir-aie/LLVM/bootgen/aie_api/aie-rt build from source; eudsl is prefetched (fetch)."""
+    iron-tools/LLVM/bootgen/aie_api/aie-rt build from source; eudsl is prefetched (fetch)."""
     OUT.mkdir(exist_ok=True)
     ok, missing = check_system(verbose=False)
     if missing:
@@ -337,12 +337,12 @@ def cmd_build_llvm(args):
     print("build llvm: ok ->", LLVM_BUILD / "lib" / "cmake")
 
 
-def cmd_build_mlir_aie(args):
+def cmd_build_iron_tools(args):
     """aie-opt/aie-translate against build/llvm (NOT the wheel)."""
     if not _eudsl_cache_ok():
         sys.exit("eudsl not prefetched/verified — run: python dev.py fetch  (or: python dev.py setup)")
-    src = PROJ / "mlir-aie"
-    bdir = BUILD / "mlir-aie"
+    src = PROJ / "iron-tools"
+    bdir = BUILD / "iron-tools"
     cc, cxx = _compilers()   # match the compiler used for build/llvm
     env = cmake_env()
     # Network-free eudsl vendoring: the patch points mlir-aie's find-links at the local
@@ -366,7 +366,7 @@ def cmd_build_mlir_aie(args):
     ]
     sh(cfg, env=env)
     sh([cmake_bin(), "--build", bdir, "-j", NPROC], env=env)
-    print("build mlir-aie: ok ->", bdir / "bin")
+    print("build iron-tools: ok ->", bdir / "bin")
 
 
 def cmd_build_hrx_xclbinutil(args):
@@ -396,13 +396,13 @@ def cmd_build_hrx(args):
 def cmd_build_all(args):
     cmd_build_hrx_xclbinutil(args)
     cmd_build_llvm(args)
-    cmd_build_mlir_aie(args)
+    cmd_build_iron_tools(args)
     cmd_build_hrx(args)
 
 
 def cmd_test(args):
     """e2e: build a design's xclbin + HAL PDI artifact-contract check. DESIGN is an
-    mlir-aie programming_examples/basic design; defaults to matrix_scalar_add (the
+    iron-tools programming_examples/basic design; defaults to matrix_scalar_add (the
     validated one). Others must be Peano-capable and use the `jit_xclbin` rule —
     `jit_xclbin_elf` designs also emit insts.elf, which needs aiebu-asm (absent here)."""
     cmd = ["bash", ROOT / "tests" / "e2e" / "run_e2e.sh"]
@@ -415,7 +415,7 @@ def cmd_smoke(args):
     """Build-level smoke tests (no NPU, no design build):
       - hrx-xclbinutil: its ctest 'smoke' (package a MEM_TOPOLOGY section into an
         .xclbin, --info, dump-section round-trip);
-      - mlir-aie: aie-opt reports its version and parses a trivial NPU device.
+      - iron-tools: aie-opt reports its version and parses a trivial NPU device.
     Cheaper than the full e2e, which additionally builds a design through Peano."""
     rc = 0
     xbld = PROJ / "hrx-xclbinutil" / "bld"
@@ -425,9 +425,9 @@ def cmd_smoke(args):
                              env=cmake_env()).returncode
     else:
         print("smoke: hrx-xclbinutil not built (run: python dev.py build hrx-xclbinutil)"); rc = 1
-    aieopt = BUILD / "mlir-aie" / "bin" / "aie-opt"
+    aieopt = BUILD / "iron-tools" / "bin" / "aie-opt"
     if aieopt.exists():
-        print("== mlir-aie smoke (aie-opt) ==")
+        print("== iron-tools smoke (aie-opt) ==")
         sh([aieopt, "--version"])
         p = subprocess.run([str(aieopt)], input=b"module { aie.device(npu2) {} }\n",
                            capture_output=True)
@@ -436,7 +436,7 @@ def cmd_smoke(args):
         if not ok:
             print(p.stderr.decode()[:300]); rc = 1
     else:
-        print("smoke: aie-opt not built (run: python dev.py build mlir-aie)"); rc = 1
+        print("smoke: aie-opt not built (run: python dev.py build iron-tools)"); rc = 1
     print("smoke: PASS" if rc == 0 else "smoke: FAIL")
     return rc
 
@@ -453,7 +453,7 @@ def main():
     sub.add_parser("setup")
     sub.add_parser("fetch")
     b = sub.add_parser("build"); b.add_argument("what",
-        choices=["llvm", "mlir-aie", "hrx-xclbinutil", "hrx", "all"])
+        choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "all"])
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
     sub.add_parser("smoke")
     sub.add_parser("deps")
@@ -465,7 +465,7 @@ def main():
     elif a.cmd == "test": cmd_test(a)
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "build":
-        {"llvm": cmd_build_llvm, "mlir-aie": cmd_build_mlir_aie,
+        {"llvm": cmd_build_llvm, "iron-tools": cmd_build_iron_tools,
          "hrx-xclbinutil": cmd_build_hrx_xclbinutil, "hrx": cmd_build_hrx,
          "all": cmd_build_all}[a.what](a)
 

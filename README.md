@@ -8,13 +8,14 @@ The stack (everything built from source against one ROCm LLVM; only Peano is a w
 
 ```
 LLVM+MLIR (ROCm amd-llvm pin, LLVM 23) ─┐
-                                         ├─ mlir-aie/IRON design ─ .xclbin
-Peano (llvm-aie wheel, AIE codegen) ─────┘                       │
-hrx-xclbinutil (xclbin packaging) ───────────────────────────────┘  ─ HRX amdxdna HAL extracts PDI
+                                         ├─ iron-tools/IRON design ─ .xclbin
+Peano (llvm-aie wheel, AIE codegen) ─────┘                         │
+hrx-xclbinutil (xclbin packaging) ─────────────────────────────────┘  ─ HRX amdxdna HAL extracts PDI
 ```
 
 `projects/` are git submodules: `llvm-project` (jtuyls/llvm-project @ the ROCm
-amd-llvm pin), `mlir-aie`, `hrx`, and `hrx-xclbinutil` (transitional).
+amd-llvm pin), `iron-tools` (Xilinx/mlir-aie), `hrx`, and `hrx-xclbinutil`
+(transitional).
 
 ## Quickstart (`dev.py` — setup + build + test)
 
@@ -29,14 +30,14 @@ python dev.py doctor             # check system (apt) prereqs
 python dev.py setup              # .venv + Python deps (hash-pinned requirements.lock); cmake/ninja/Peano via pip
 python dev.py build hrx-xclbinutil
 python dev.py build llvm         # LLVM+MLIR from the amd-llvm pin (long; uses all cores)
-python dev.py build mlir-aie     # aie-opt/aie-translate/bootgen against build/llvm
+python dev.py build iron-tools   # aie-opt/aie-translate/bootgen against build/llvm
 python dev.py build hrx          # the amdxdna HAL (IREE runtime)
 python dev.py build all          # all of the above, in order
 python dev.py test [DESIGN]      # e2e BUILD test (no NPU run)
 python dev.py deps               # print requirements.txt
 ```
 
-Build-only on a host without an NPU. The **e2e test** builds an mlir-aie IRON
+Build-only on a host without an NPU. The **e2e test** builds an iron-tools IRON
 design (`programming_examples/basic/matrix_scalar_add` by default) end-to-end to a
 `.xclbin` with the source toolchain, then verifies the amdxdna HAL extracts the PDI
 byte-for-byte == bootgen's — closing the artifact contract. It requires

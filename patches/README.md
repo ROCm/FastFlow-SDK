@@ -9,10 +9,10 @@ Application is idempotent (already-applied patches are skipped). The patched
 submodules carry `ignore = dirty` in `.gitmodules`, so applying a patch does not
 show up as submodule drift.
 
-## patches/mlir-aie/
+## patches/iron-tools/
 
 ### 0001-eudsl-for-amd-llvm-23.patch
-Edits two mlir-aie files:
+Edits two files in the submodule (upstream `Xilinx/mlir-aie`):
 1. `python/requirements.txt`: bumps the pinned `eudsl-python-extras` to the
    `manifests/versions.toml [eudsl]` version, and repoints its `-f` find-links from
    `https://llvm.github.io/eudsl` to the local prefetch cache (`../../../.cache/find-links`)
@@ -22,7 +22,7 @@ Edits two mlir-aie files:
    of fetching them.
 
 Combined with `dev.py` setting `PIP_FIND_LINKS` (absolute cache) + `PIP_NO_INDEX=1`
-for the mlir-aie build, eudsl vendoring is **network-free** (resolved from the
+for the iron-tools build, eudsl vendoring is **network-free** (resolved from the
 sha256-verified prefetched sdist).
 
 **Why:** mlir-aie pins eudsl `0.1.0.20260418` — correct for mlir-aie's *intended*
