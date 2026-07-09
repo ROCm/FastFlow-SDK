@@ -1,0 +1,194 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Reusable workflow: build the rocm-npu-staging stack from source on WINDOWS — the
+# Windows counterpart of build_rocm_npu_staging_linux.yml, kept as consistent with it
+# as possible. SAME dev.py command sequence (setup -> doctor -> build all -> smoke ->
+# e2e), including the same e2e; steps run in bash (Git Bash is present on the runner)
+# so the git/dev.py steps are identical to Linux.
+#
+# Only OS-forced differences: the azure-windows-scale-rocm runner (no manylinux
+# container); clang-cl (from the VS Developer environment, or LLVM) instead of the
+# gcc-toolset — NOT MSVC cl, which rejects the GNU extensions in hrx-xclbinutil's
+# vendored sources; OpenSSL from vcpkg instead of dnf openssl-devel (the only system
+# library); Python via actions/setup-python; and Windows venv paths (.venv/Scripts).
+# cmake/ninja come from pip; ccache is optional (dev.py enables LLVM_CCACHE_BUILD only
+# if ccache is found).
+#
+# Every submodule is public, so they are all fetched over anonymous HTTPS and the
+# workflow needs no secrets.
+name: Build rocm-npu-staging Windows
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        type: string
+        default: Build + smoke (Windows)
+
+defaults:
+  run:
+    shell: bash   # Git Bash on the Windows runner -> git/dev.py steps match Linux
+
+jobs:
+  build_rocm_npu_staging_windows:
+    name: ${{ inputs.name }}
+    runs-on: azure-windows-scale-rocm
+    # Cold build compiles LLVM 23 + iron-tools + the amdxdna HAL from source; ccache
+    # (CCACHE_DIR) speeds up warm runs but the first run is long.
+    timeout-minutes: 180
+    env:
+      PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
+      CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
+      # RNS_LLVM_BUILD_DIR is set in a step below (the `runner` context is not allowed in
+      # a job-level env: block) — see "Point the LLVM build tree at the job-scoped temp".
+      # OPENSSL_ROOT_DIR is set dynamically from the vcpkg install below (points
+      # CMake's find_package(OpenSSL) at it) — see "Install OpenSSL (vcpkg)".
+    steps:
+      # Git for Windows defaults to core.autocrlf=true, checking files out with CRLF. The
+      # patches/ series AND the iron-tools sources they patch are LF, so CRLF makes
+      # `git apply` fail ("patch does not apply cleanly"). Force LF for the superproject
+      # and every submodule. MUST run before actions/checkout so the .patch files
+      # themselves are not CRLF-converted either.
+      - name: Configure git for LF checkouts
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Adjust git config
+        run: git config --global --add safe.directory "$PWD"
+
+      # Python 3.12 for dev.py (tomllib); the manylinux image ships it on Linux.
+      - name: Set up Python
+        uses: actions/setup-python@v5   # TODO: SHA-pin
+        with:
+          python-version: '3.12'
+
+      # VS Developer environment: puts the MSVC headers/libs + toolchain on PATH.
+      - name: Set up MSVC (VS Developer environment)
+        uses: ilammy/msvc-dev-cmd@v1   # TODO: SHA-pin
+        with:
+          arch: x64
+
+      # clang-cl, NOT cl. hrx-xclbinutil's vendored sources use GNU-only syntax that cl
+      # rejects: __attribute__((aligned))/((visibility)) and __builtin_bswap64. Five sites
+      # in all, so `cl` support is a small follow-up in that repo -- everything else here
+      # already builds under both (the iron-tools patch guards key on CMake's MSVC var,
+      # true for cl and clang-cl alike). Setting CC/CXX makes dev.py pin the compiler for
+      # the CMake builds it drives (and CMake honours CC/CXX for the ones it does not).
+      # VS ships clang-cl when the "C++ Clang tools" component is installed; fall back
+      # to the LLVM toolchain package if it is not.
+      - name: Set up clang-cl
+        run: |
+          set -eu
+          if ! command -v clang-cl >/dev/null 2>&1; then
+            vsllvm="$(cygpath -u "${VSINSTALLDIR:-C:/}")VC/Tools/Llvm/x64/bin"
+            if [ -x "$vsllvm/clang-cl.exe" ]; then
+              cygpath -m "$vsllvm" >> "$GITHUB_PATH"
+            else
+              choco install --no-progress -y llvm
+              echo "C:/Program Files/LLVM/bin" >> "$GITHUB_PATH"
+            fi
+          fi
+          echo "CC=clang-cl"  >> "$GITHUB_ENV"
+          echo "CXX=clang-cl" >> "$GITHUB_ENV"
+
+      # Build LLVM in the runner's job-scoped temp dir rather than under the workspace.
+      # LLVM unconditionally attaches a Windows version resource to every executable
+      # (AddLLVM.cmake gates it only on MSVC, which clang-cl also sets), CMake mangles the
+      # absolute path of that out-of-tree .rc into the object dir, and the SDK's rc.exe is
+      # not long-path aware. Under the workspace the longest target
+      # (mlir-bytecode-parser-fuzzer, 88-char object dir) lands at 277 chars -> exceeds
+      # MAX_PATH (260) -> "fatal error RC1109: error creating ...". RUNNER_TEMP keeps it at
+      # 243, is unique per job and is cleaned up by the runner, so a reused (non-container)
+      # host cannot leave a stale tree behind nor two jobs collide. ccache stays in the
+      # workspace, so warm rebuilds still work.
+      #
+      # This must be a step: the `runner` context is rejected in a job-level env: block
+      # ("Unrecognized named-value: 'runner'" -> the workflow never runs). Use the
+      # RUNNER_TEMP env var instead, forward-slashed so CMake/Python read it cleanly.
+      - name: Point the LLVM build tree at the job-scoped temp
+        run: echo "RNS_LLVM_BUILD_DIR=${RUNNER_TEMP//\\//}/llvm" >> "$GITHUB_ENV"
+
+      # OpenSSL (bootgen's find_package(OpenSSL)) is the ONLY system library dep — the
+      # Linux job likewise installs just openssl-devel. Use vcpkg (not choco's openssl,
+      # which fetches from slproweb.com — 404s on older versions, flaky in CI). Point
+      # find_package(OpenSSL) at the vcpkg tree (forward-slashed so CMake reads it cleanly).
+      # cmake + ninja come from pip (the venv); ccache is optional (dev.py enables
+      # LLVM_CCACHE_BUILD only if ccache is on PATH), so no tool installs are needed here.
+      - name: Install OpenSSL (vcpkg) for bootgen
+        run: |
+          set -eu
+          # Release-only overlay triplet (same dynamic linkage as the stock x64-windows)
+          # so vcpkg builds OpenSSL ONCE instead of debug+release — ~halves the cold build.
+          mkdir -p .vcpkg-triplets
+          printf '%s\n' \
+            'set(VCPKG_TARGET_ARCHITECTURE x64)' \
+            'set(VCPKG_CRT_LINKAGE dynamic)' \
+            'set(VCPKG_LIBRARY_LINKAGE dynamic)' \
+            'set(VCPKG_BUILD_TYPE release)' > .vcpkg-triplets/x64-windows-rel.cmake
+          triplets="$PWD/.vcpkg-triplets"
+          if command -v cygpath >/dev/null; then triplets="$(cygpath -m "$triplets")"; fi
+
+          # vcpkg's openssl port builds from source and needs Perl. With no Perl on the
+          # NATIVE PATH, vcpkg_find_acquire_program(PERL) downloads Strawberry Perl from
+          # GitHub releases — an extra hop that has failed here with HTTP 504. Provide Perl
+          # so vcpkg uses it and skips that download. Note Git Bash's /usr/bin/perl is an
+          # MSYS binary and is invisible to the native vcpkg.exe, so probe the real path.
+          if [ ! -x /c/Strawberry/perl/bin/perl.exe ]; then
+            choco install --no-progress -y strawberryperl
+          fi
+          export PATH="/c/Strawberry/perl/bin:$PATH"
+          echo "C:/Strawberry/perl/bin" >> "$GITHUB_PATH"
+
+          # openssl's sources still come over the network; retry transient failures.
+          ok=0
+          for attempt in 1 2 3; do
+            if vcpkg install openssl --triplet x64-windows-rel --overlay-triplets="$triplets"; then
+              ok=1; break
+            fi
+            echo "::warning::vcpkg install openssl failed (attempt $attempt/3) — retrying"
+            sleep 20
+          done
+          [ "$ok" -eq 1 ]
+          # Discover the vcpkg root from the binary on PATH: this runner does NOT set
+          # VCPKG_INSTALLATION_ROOT, and VCPKG_ROOT may point at the VS-bundled vcpkg
+          # rather than the one that installed the packages (vcpkg warns + uses its own
+          # detected root, e.g. C:\vcpkg). Classic mode installs to <root>/installed.
+          root="$(dirname "$(command -v vcpkg)")"
+          if command -v cygpath >/dev/null; then root="$(cygpath -m "$root")"; fi   # -> C:/vcpkg (CMake-friendly)
+          echo "OPENSSL_ROOT_DIR=$root/installed/x64-windows-rel" >> "$GITHUB_ENV"
+
+      # Same submodules as Linux. --depth 1 (fetch only the pinned commit, not full
+      # history — big for the LLVM monorepo) + --jobs (clone in parallel): cloning is
+      # markedly slower on this runner than on Linux. The build needs the pinned trees,
+      # not history; check_pins/patches work on shallow checkouts.
+      - name: Initialize submodules
+        run: |
+          git submodule update --init --depth 1 --jobs 4 projects/llvm-project projects/hrx projects/hrx-xclbinutil
+          git submodule update --init --recursive --depth 1 --jobs 4 projects/iron-tools
+
+      # setup creates .venv, installs the pinned requirements, applies the temporary
+      # patches, and prefetches the eudsl sdist (the single network step).
+      - name: Setup (venv + pinned deps + prefetch)
+        run: python dev.py setup
+
+      # Gate: system prereqs (clang-cl/git) + submodule-pins-vs-manifest + patches
+      # + prefetch + version drift.
+      - name: Doctor
+        run: .venv/Scripts/python.exe dev.py doctor
+
+      - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
+        run: .venv/Scripts/python.exe dev.py build all
+
+      # Build-level smoke (no NPU): hrx-xclbinutil packaging round-trip + aie-opt.
+      - name: Smoke tests
+        run: .venv/Scripts/python.exe dev.py smoke
+
+      # e2e: build an iron-tools IRON design's xclbin through Peano + the HAL PDI
+      # artifact-contract check. Runs off-device (no NPU required). Same driver as Linux.
+      - name: e2e (xclbin + HAL PDI artifact-contract)
+        run: .venv/Scripts/python.exe dev.py test

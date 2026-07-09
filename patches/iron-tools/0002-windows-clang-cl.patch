@@ -1,0 +1,83 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cae6e453..bba4c4eb 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -239,7 +239,13 @@ cmake_dependent_option(AIECC_LINK_WITH_XCHESSCC
+ # If we need runtime libs, then statically link them.
+ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+ 
+-add_flag_if_supported("-Werror=sign-compare" WERROR_SIGN_COMPARE)
++# Not an error under an MSVC ABI (cl/clang-cl): enums whose enumerators are all
++# non-negative get an *unsigned* underlying type under the Itanium ABI but a *signed* one
++# under the MS ABI, so aie-rt's `XAie_Events`-vs-`u32` comparisons trip -Wsign-compare on
++# Windows only. The comparisons are correct; only the enum's signedness differs.
++if (NOT MSVC)
++  add_flag_if_supported("-Werror=sign-compare" WERROR_SIGN_COMPARE)
++endif()
+ add_flag_if_supported("-Werror=unused" WERROR_USED)
+ 
+ # What happens when you have a non-void function with no return?
+diff --git a/runtime_lib/test_lib/CMakeLists.txt b/runtime_lib/test_lib/CMakeLists.txt
+index df0e4992..da9328b1 100644
+--- a/runtime_lib/test_lib/CMakeLists.txt
++++ b/runtime_lib/test_lib/CMakeLists.txt
+@@ -68,6 +68,14 @@ if (BUILD_TEST_UTILS_LIBRARY)
+   set_target_properties(test_utils PROPERTIES PUBLIC_HEADER "test_utils.h;xrt_test_wrapper.h;cxxopts.hpp;parameter_scratchpad.h")
+   add_runtime_pic_flag(test_utils)
+ 
++  # /EHsc: test_utils.h pulls in cxxopts, whose throw_or_mimic() throws. MSVC-style
++  # drivers default exceptions off; cl only warns (C4530) but clang-cl rejects `throw`
++  # outright. GCC/Clang enable exceptions by default, so this is Windows-only -- and this
++  # project only builds there (see runtime_lib/CMakeLists.txt's enableTestLibProject).
++  if (MSVC)
++    target_compile_options(test_utils PRIVATE /EHsc)
++  endif()
++
+   # XRT headers on Windows pull in boost/any.hpp which is not typically
+   # available.  Skip XRT integration there; the core helpers (load_instr_*,
+   # nearly_equal, etc.) are still usable without it.
+diff --git a/test/CppTests/CMakeLists.txt b/test/CppTests/CMakeLists.txt
+index 9dd18b52..def4e877 100644
+--- a/test/CppTests/CMakeLists.txt
++++ b/test/CppTests/CMakeLists.txt
+@@ -4,6 +4,15 @@
+ 
+ set(CMAKE_CXX_STANDARD 17)
+ 
++# Every test here uses `throw std::runtime_error(...)` as its assertion mechanism, and
++# bfloat16_fallback_test additionally pulls in cxxopts via test_utils.h. MSVC-style
++# drivers default C++ exceptions off: cl only warns (C4530), but clang-cl rejects `throw`
++# outright. GCC/Clang enable them by default, so this is Windows-only. Directory scope so
++# tests added later are covered too.
++if(MSVC)
++  add_compile_options(/EHsc)
++endif()
++
+ include(CTest)
+ 
+ add_executable(target_model  target_model.cpp)
+diff --git a/tools/bootgen/CMakeLists.txt b/tools/bootgen/CMakeLists.txt
+index b4b898ea..ee8a67f7 100644
+--- a/tools/bootgen/CMakeLists.txt
++++ b/tools/bootgen/CMakeLists.txt
+@@ -135,7 +135,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+ else()
+   set(bootgen_warning_ignores)
+ endif()
+-if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
++# MSVC is true for cl AND clang-cl; CMAKE_CXX_COMPILER_ID is "Clang" for the latter, so
++# matching on the id skipped this block and left bootgen without /EHsc (LLVM compiles with
++# exceptions off) -> "cannot use 'throw' with exceptions disabled".
++if (MSVC)
+   target_compile_definitions(bootgen-lib PRIVATE YY_NO_UNISTD_H)
+   # Enable correct unwind semantics on MSVC
+   target_compile_options(bootgen-lib PRIVATE /EHsc)
+@@ -160,7 +163,7 @@ add_executable(bootgen ${BOOTGEN_SOURCE}/main.cpp)
+ target_include_directories(bootgen PUBLIC ${BOOTGEN_SOURCE} ${OPENSSL_INCLUDE_DIR}
+   ${CMAKE_CURRENT_BINARY_DIR}/include)
+ target_compile_options(bootgen PRIVATE ${bootgen_warning_ignores})
+-if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
++if (MSVC)   # see the bootgen-lib block above: also true for clang-cl
+   target_compile_options(bootgen PRIVATE /EHsc)
+   target_compile_options(bootgen PRIVATE /wd4996 /wd4840 /wd4005 /wd5033)
+ endif()

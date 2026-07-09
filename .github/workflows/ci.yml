@@ -1,8 +1,10 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 #
-# Entry workflow: builds + validates the rocm-npu-staging stack on Linux via the
-# reusable build_rocm_npu_staging_linux.yml (ROCm scale runner + TheRock manylinux).
+# Entry workflow: builds + validates the rocm-npu-staging stack via the reusable
+# build_rocm_npu_staging_{linux,windows}.yml workflows — Linux (ROCm scale runner +
+# TheRock manylinux) and Windows (azure-windows-scale-rocm + clang-cl), same dev.py
+# flow. Every submodule is public, so neither needs secrets.
 name: CI
 
 on:
@@ -23,3 +25,11 @@ jobs:
       contents: read
     with:
       name: Build + smoke
+
+  windows:
+    name: Windows
+    uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
+    permissions:
+      contents: read
+    with:
+      name: Build + smoke (Windows)

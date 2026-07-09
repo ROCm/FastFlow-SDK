@@ -14,7 +14,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build hrx-xclbinutil  # the xclbin packager
   python dev.py build hrx             # the amdxdna HAL (IREE runtime)
   python dev.py build all             # everything above, in dependency order
-  python dev.py test [DESIGN]         # e2e build test (no NPU run)
+  python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py deps                  # print the dependency overview
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
@@ -27,10 +27,19 @@ PROJ = ROOT / "projects"
 BUILD = ROOT / "build"
 OUT = ROOT / "out"
 VENV = ROOT / ".venv"
-LLVM_BUILD = BUILD / "llvm"
+# LLVM's build tree is the deepest one we create. On Windows the SDK's rc.exe is not
+# long-path aware, and CMake mangles the ABSOLUTE path of out-of-tree .rc sources into
+# the object dir (…/foo.dir/C_/home/runner/…/llvm/resources/…), which pushes some
+# targets past MAX_PATH (260) -> "fatal error RC1109: error creating …". Allow the LLVM
+# build tree to be relocated somewhere short; the Windows CI points this at the
+# job-scoped $RUNNER_TEMP. Unset -> build/llvm.
+LLVM_BUILD = Path(os.environ.get("RNS_LLVM_BUILD_DIR") or (BUILD / "llvm"))
 PATCHES = ROOT / "patches"                      # temporary submodule patches (see patches/README.md)
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
 NPROC = str(os.cpu_count() or 8)
+IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and MSVC differ on Windows
+_VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
+_EXE = ".exe" if IS_WINDOWS else ""
 
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -43,28 +52,31 @@ def sh(cmd, cwd=None, env=None, check=True):
 
 
 def venv_py():
-    return VENV / "bin" / "python"
-
-
-def site_packages():
-    """Resolve the venv's site-packages without hardcoding the python version."""
-    import glob
-    hits = sorted(glob.glob(str(VENV / "lib" / "python3*" / "site-packages")))
-    if hits:
-        return Path(hits[-1])
-    return VENV / "lib" / "python3" / "site-packages"  # fallback
+    return VENV / _VBIN / f"python{_EXE}"
 
 
 def cmake_bin():
     """cmake from the venv (pip, >=3.30) if set up, else system cmake."""
-    c = VENV / "bin" / "cmake"
+    c = VENV / _VBIN / f"cmake{_EXE}"
     return str(c) if c.exists() else "cmake"
+
+
+def cmake_path(p: Path) -> str:
+    r"""A path in the form CMake always parses correctly (forward slashes; no-op on POSIX).
+
+    CMake accepts '/' on every platform, and it re-emits some cache values verbatim into
+    generated CMake code — CMAKE_MODULE_PATH, for instance, is forwarded into the
+    try_compile scratch project. A Windows backslash there is read as an escape:
+        set(CMAKE_MODULE_PATH "C:\home\...")  ->  Invalid character escape '\h'
+    which fails the compiler-ABI check before any of our code is compiled.
+    """
+    return p.as_posix()
 
 
 def cmake_env():
     """PATH with the venv bin first so the pip-provided cmake/ninja are used."""
     e = dict(os.environ)
-    e["PATH"] = os.pathsep.join([str(VENV / "bin"), e.get("PATH", "")])
+    e["PATH"] = os.pathsep.join([str(VENV / _VBIN), e.get("PATH", "")])
     return e
 
 
@@ -83,6 +95,12 @@ def _compilers():
     cc, cxx = os.environ.get("CC"), os.environ.get("CXX")
     if cc and cxx:
         return cc, cxx
+    if IS_WINDOWS:
+        # Windows wants clang-cl (see check_system): MSVC cl rejects the GNU-only syntax
+        # in hrx-xclbinutil's vendored sources. CC/CXX are handled above; with neither set,
+        # return None rather than hardcode -DCMAKE_*_COMPILER, and let CMake pick from the
+        # VS Developer environment. doctor flags a missing clang-cl.
+        return None, None
     if shutil.which("gcc") and shutil.which("g++"):
         return "gcc", "g++"
     if shutil.which("clang") and shutil.which("clang++"):
@@ -108,6 +126,23 @@ def check_system(verbose=True):
     """Return (ok, missing_apt_packages). Reports tool/header presence."""
     missing = []
     cc, cxx = _compilers()
+    if IS_WINDOWS:
+        # Windows deps come from the VS toolchain + choco/vcpkg, not apt; _compilers()
+        # returns None by design, so probe the toolchain directly. clang-cl is REQUIRED,
+        # not merely preferred: MSVC cl rejects the GNU-only syntax in hrx-xclbinutil's
+        # vendored sources (__attribute__((aligned))/((visibility)), __builtin_bswap64).
+        # Finding only cl is a fail here rather than a confusing compile error later.
+        # Relax this to "cl or clang-cl" once those five sites are made portable.
+        has_clang_cl = bool(shutil.which("clang-cl"))
+        has_git = bool(shutil.which("git"))
+        if verbose:
+            print(f"  [{'ok ' if has_clang_cl else 'MISS'}] clang-cl (required; MSVC cl cannot build hrx-xclbinutil)")
+            if not has_clang_cl and shutil.which("cl"):
+                print("         found MSVC cl but not clang-cl — install the VS 'C++ Clang tools' component")
+            print(f"  [{'ok ' if has_git else 'MISS'}] git")
+            print("  [note] set CC=CXX=clang-cl so the builds dev.py drives pin the compiler")
+            print("  [note] OpenSSL (bootgen) comes from choco/vcpkg on Windows; no apt package list")
+        return (has_clang_cl and has_git, [])   # apt package names are not meaningful on Windows
     if verbose:
         print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: {(cc + '/' + cxx) if cc else 'need gcc (or set CC/CXX)'} (canonical: gcc; set CC/CXX for clang)")
         print(f"  [{'ok ' if shutil.which('ld.lld') else '--  '}] ld.lld (optional; used with clang)")
@@ -128,19 +163,11 @@ def check_system(verbose=True):
     return (not missing, missing)
 
 
-def build_env():
-    """Env for the IRON flow: the SOURCE iron-tools toolchain (built against ROCm
-    amd-llvm) + Peano (wheel) + hrx-xclbinutil. No wheel fallback for iron-tools."""
-    e = dict(os.environ)
-    src_bin = BUILD / "iron-tools" / "bin"
-    if not (src_bin / "aie-opt").exists():
-        sys.exit("iron-tools not built from source — run: python dev.py build iron-tools")
-    e["PATH"] = os.pathsep.join(
-        [str(ROOT / "tools-bin"), str(src_bin), str(VENV / "bin"), e.get("PATH", "")])
-    e["PYTHONPATH"] = str(BUILD / "iron-tools" / "python")
-    e["PEANO_INSTALL_DIR"] = str(site_packages() / "llvm-aie")   # Peano: the only wheel
-    e["AIEOPT_DIR"] = str(PROJ / "iron-tools" / "third_party" / "aie_api")
-    return e
+# NOTE: the IRON toolchain env (PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR + the
+# "is iron-tools built?" check) lives in tests/e2e/run_e2e.py, its only consumer. It used
+# to be duplicated here as build_env(); the copy drifted — it looked for `aie-opt` with no
+# `.exe` and put `.venv/bin` (not Scripts) on PATH, so `dev.py test` aborted on Windows
+# before run_e2e.py ever ran. One definition, in the place that uses it.
 
 
 # ---- commands ----
@@ -229,7 +256,8 @@ def check_pins():
     """Verify each submodule's checked-out commit == manifests/versions.toml (the
     manifest is load-bearing: drift is reported)."""
     man = _manifest()
-    sec_to_sub = {"llvm": "llvm-project", "iron_tools": "iron-tools", "hrx": "hrx"}
+    sec_to_sub = {"llvm": "llvm-project", "iron_tools": "iron-tools", "hrx": "hrx",
+                  "hrx_xclbinutil": "hrx-xclbinutil"}
     drift = []
     for sec, sub in sec_to_sub.items():
         pinned = man.get(sec, {}).get("commit")
@@ -311,29 +339,66 @@ def cmd_setup(args):
     pip = [str(venv_py()), "-m", "pip", "install"]
     sh(pip + ["--upgrade", "pip"])
     lock = ROOT / "requirements.lock"
-    src = lock if lock.exists() else ROOT / "requirements.txt"   # lock = reproducible (hashes)
+    # requirements.lock is hash-pinned for LINUX wheels; on Windows the platform-specific
+    # wheels (llvm-aie, cmake, ...) have different sha256s, so those hashes can't match.
+    # Use the unpinned requirements.txt there — same version pins + find-links, no hashes.
+    if IS_WINDOWS:
+        src = ROOT / "requirements.txt"
+    else:
+        src = lock if lock.exists() else ROOT / "requirements.txt"   # lock = reproducible (hashes)
     sh(pip + ["-r", str(src)])
     cmd_fetch(args)   # group all network here: prefetch build-time pkgs so `build` is offline
     print("setup: ok (deps + prefetched build-time pkgs; everything else builds from source)")
+
+
+def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
+    """CMake compiler flags. Empty when _compilers() found none — on Windows with CC/CXX
+    unset, so CMake picks from the VS Developer environment rather than us hardcoding a
+    compiler it may not have. On POSIX these pin gcc/clang exactly as before."""
+    return [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"] if cc and cxx else []
 
 
 def cmd_build_llvm(args):
     """LLVM+MLIR from the amd-llvm pin (mlir-aie's flags)."""
     OUT.mkdir(exist_ok=True)
     cc, cxx = _compilers()
+    # ccache is OPTIONAL: LLVM_CCACHE_BUILD=ON is a FATAL_ERROR if ccache isn't found, so
+    # only enable it when ccache is on PATH (Linux CI has it; a Windows runner may not).
+    ccache = ["-DLLVM_CCACHE_BUILD=ON"] if shutil.which("ccache") else []
+    # Static MSVC runtime, matching what iron-tools expects: it does
+    # `set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded...")` unconditionally, and lld-link
+    # rejects a mixed link ("/failifmismatch: ... 'RuntimeLibrary'"). This is the same CRT
+    # upstream builds its own LLVM with (utils/mlir_wheels/setup.py), so we track a
+    # configuration mlir-aie actually tests. LLVM_USE_CRT_RELEASE is gone in LLVM 23;
+    # CMAKE_MSVC_RUNTIME_LIBRARY is the only knob (honoured: CMP0091 is NEW here).
+    #
+    # The `$<$<CONFIG:Debug>:Debug>` is CMake's idiom for "…Debug only in a Debug config":
+    # it selects the debug static CRT (/MTd) there and the release one (/MT) everywhere
+    # else. We always configure Release so it evaluates to plain "MultiThreaded", but it is
+    # the same expression iron-tools uses for itself, so the two agree in *any* config.
+    crt = ["-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>"] if IS_WINDOWS else []
     cfg = [
-        cmake_bin(), "-G", "Ninja", "-S", PROJ / "llvm-project" / "llvm", "-B", LLVM_BUILD,
+        cmake_bin(), "-G", "Ninja",
+        "-S", cmake_path(PROJ / "llvm-project" / "llvm"), "-B", cmake_path(LLVM_BUILD),
         "-DLLVM_ENABLE_PROJECTS=mlir", "-DLLVM_TARGETS_TO_BUILD=host",
         "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
         "-DMLIR_ENABLE_BINDINGS_PYTHON=ON", "-DCMAKE_BUILD_TYPE=Release",
-        "-DLLVM_INSTALL_UTILS=ON", "-DLLVM_CCACHE_BUILD=ON",
-        f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}",
-        f"-DPython3_EXECUTABLE={venv_py()}",
+        "-DLLVM_INSTALL_UTILS=ON", *ccache,
+        # Nothing in this stack consumes the LLVM/MLIR examples or benchmarks, and the
+        # default target builds them. Dropping them cuts build time, and it removes
+        # mlir/examples (gated on LLVM_INCLUDE_EXAMPLES) whose long target names are what
+        # first pushed the Windows rc.exe output path past MAX_PATH. Utils (FileCheck,
+        # lit, ...) are separate and still built via LLVM_INSTALL_UTILS above.
+        "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+        *_cc_flags(cc, cxx), *crt,
+        f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
     ]
-    if "clang" in (cc or "") and shutil.which("ld.lld"):   # clang+lld; gcc uses its default linker
+    # clang+lld; gcc uses its default linker. Skipped on Windows: "clang" matches
+    # "clang-cl" there, but the MSVC-style driver picks its own linker (link/lld-link).
+    if not IS_WINDOWS and "clang" in (cc or "") and shutil.which("ld.lld"):
         cfg.append("-DLLVM_USE_LINKER=lld")
     sh(cfg, env=cmake_env())
-    sh([cmake_bin(), "--build", LLVM_BUILD, "-j", NPROC], env=cmake_env())
+    sh([cmake_bin(), "--build", cmake_path(LLVM_BUILD), "-j", NPROC], env=cmake_env())
     print("build llvm: ok ->", LLVM_BUILD / "lib" / "cmake")
 
 
@@ -352,44 +417,63 @@ def cmd_build_iron_tools(args):
     env["PIP_FIND_LINKS"] = str(FETCH_CACHE)
     env["PIP_NO_INDEX"] = "1"
     cfg = [
-        cmake_bin(), "-G", "Ninja", "-S", src, "-B", bdir, "-DCMAKE_BUILD_TYPE=Release",
-        f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}",
-        f"-DLLVM_DIR={LLVM_BUILD/'lib'/'cmake'/'llvm'}",
-        f"-DMLIR_DIR={LLVM_BUILD/'lib'/'cmake'/'mlir'}",
-        f"-DCMAKE_MODULE_PATH={src/'cmake'/'modulesXilinx'}",
+        cmake_bin(), "-G", "Ninja",
+        "-S", cmake_path(src), "-B", cmake_path(bdir), "-DCMAKE_BUILD_TYPE=Release",
+        *_cc_flags(cc, cxx),
+        f"-DLLVM_DIR={cmake_path(LLVM_BUILD/'lib'/'cmake'/'llvm')}",
+        f"-DMLIR_DIR={cmake_path(LLVM_BUILD/'lib'/'cmake'/'mlir')}",
+        f"-DCMAKE_MODULE_PATH={cmake_path(src/'cmake'/'modulesXilinx')}",
         # install the xaiengine runtime_lib into the build tree (co-located with bin/python),
         # not the default /usr/local (which needs root and breaks an unprivileged build).
-        f"-DCMAKE_INSTALL_PREFIX={bdir}",
+        f"-DCMAKE_INSTALL_PREFIX={cmake_path(bdir)}",
         "-DAIE_RUNTIME_TARGETS=x86_64", "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
         "-DAIE_ENABLE_BINDINGS_PYTHON=ON",
-        f"-DPython3_EXECUTABLE={venv_py()}",
+        f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
     ]
     sh(cfg, env=env)
-    sh([cmake_bin(), "--build", bdir, "-j", NPROC], env=env)
+    sh([cmake_bin(), "--build", cmake_path(bdir), "-j", NPROC], env=env)
     print("build iron-tools: ok ->", bdir / "bin")
 
 
 def cmd_build_hrx_xclbinutil(args):
     d = PROJ / "hrx-xclbinutil"
-    sh([cmake_bin(), "-G", "Ninja", "-B", d / "bld", "-S", d, "-DCMAKE_BUILD_TYPE=Release"], env=cmake_env())
-    sh([cmake_bin(), "--build", d / "bld", "--target", "hrx-xclbinutil", "-j", NPROC], env=cmake_env())
+    sh([cmake_bin(), "-G", "Ninja", "-B", cmake_path(d / "bld"), "-S", cmake_path(d),
+        "-DCMAKE_BUILD_TYPE=Release"], env=cmake_env())
+    sh([cmake_bin(), "--build", cmake_path(d / "bld"), "--target", "hrx-xclbinutil",
+        "-j", NPROC], env=cmake_env())
     # expose as `xclbinutil` for aiecc.py
     tb = ROOT / "tools-bin"; tb.mkdir(exist_ok=True)
-    link = tb / "xclbinutil"
+    built = d / "bld" / "tools" / f"hrx-xclbinutil{_EXE}"
+    link = tb / f"xclbinutil{_EXE}"
     if link.exists() or link.is_symlink():
         link.unlink()
-    link.symlink_to(d / "bld" / "tools" / "hrx-xclbinutil")
+    if IS_WINDOWS:
+        shutil.copy2(built, link)   # symlinks need Developer Mode/admin on Windows
+    else:
+        link.symlink_to(built)
     print("build hrx-xclbinutil: ok ->", link)
 
 
 def cmd_build_hrx(args):
     d = PROJ / "hrx"
+    cc, cxx = _compilers()
+    # hrx's `dev.py cmake configure` forwards these to cmake verbatim and picks no
+    # generator of its own, so on Windows CMake defaults to the Visual Studio generator.
+    # That is wrong three ways: (1) MSBuild ignores CC/CXX, silently building with `cl`
+    # instead of the clang-cl the rest of the stack uses; (2) it is multi-config, so an
+    # unqualified `--build` produces Debug; (3) `--build -j N` under MSBuild races on the
+    # per-target .pdb ("error C1041 ... please use /FS"). Ninja + an explicit build type
+    # fixes all three, and matches hrx's own README (`cmake -S . -B ... -GNinja`).
+    gen = ["-GNinja", "-DCMAKE_BUILD_TYPE=Release", *_cc_flags(cc, cxx)] if IS_WINDOWS else []
     sh([sys.executable, "dev.py", "setup"], cwd=d)
     sh([sys.executable, "dev.py", "cmake", "setup"], cwd=d)
-    sh([sys.executable, "dev.py", "cmake", "configure",
+    sh([sys.executable, "dev.py", "cmake", "configure", *gen,
         "-DIREE_HAL_DRIVER_AMDXDNA=ON", "-DIREE_BUILD_TESTS=OFF"], cwd=d)
-    sh(["cmake", "--build", d / "build" / "cmake",
-        "--target", "iree_hal_drivers_amdxdna_registration_registration", "-j", NPROC])
+    # cmake_bin()/cmake_env(): the pip cmake lives in the venv and is not on PATH, so a
+    # bare `cmake` here finds the system one on Linux and nothing at all on Windows.
+    sh([cmake_bin(), "--build", cmake_path(d / "build" / "cmake"),
+        "--target", "iree_hal_drivers_amdxdna_registration_registration", "-j", NPROC],
+       env=cmake_env())
     print("build hrx (amdxdna HAL): ok")
 
 
@@ -401,14 +485,25 @@ def cmd_build_all(args):
 
 
 def cmd_test(args):
-    """e2e: build a design's xclbin + HAL PDI artifact-contract check. DESIGN is an
-    iron-tools programming_examples/basic design; defaults to matrix_scalar_add (the
-    validated one). Others must be Peano-capable and use the `jit_xclbin` rule —
-    `jit_xclbin_elf` designs also emit insts.elf, which needs aiebu-asm (absent here)."""
-    cmd = ["bash", ROOT / "tests" / "e2e" / "run_e2e.sh"]
-    if getattr(args, "design", None):
+    """e2e: build a design's xclbin + HAL PDI artifact-contract check. Runs on Linux and
+    Windows. DESIGN is an iron-tools programming_examples/basic design; the default and
+    its -d device come from `[iron_tools] e2e_design`/`e2e_device` in the manifest. Others
+    must be Peano-capable and use the `jit_xclbin` rule — `jit_xclbin_elf` designs also
+    emit insts.elf, which needs aiebu-asm (absent here) — and pass extra aieargs after
+    `--`."""
+    # run_e2e.py derives every tool location from its own sys.executable, so it must run
+    # under the venv python (which owns cmake, ninja and the Peano wheel).
+    if not venv_py().exists():
+        sys.exit(f"no venv at {VENV} (run: python dev.py setup)")
+    cmd = [venv_py(), ROOT / "tests" / "e2e" / "run_e2e.py"]
+    if args.design:
         cmd.append(args.design)
-    sh(cmd, env=build_env())
+    if args.design_args:
+        cmd += ["--", *args.design_args]
+    # No env= here: run_e2e.py builds the IRON toolchain env itself (see the note above
+    # build_env's former home). run_e2e.py already prints "E2E FAIL: ..."; propagate its
+    # status rather than let sh()'s check=True bury it under a CalledProcessError.
+    sys.exit(sh(cmd, check=False).returncode)
 
 
 def cmd_smoke(args):
@@ -425,7 +520,7 @@ def cmd_smoke(args):
                              env=cmake_env()).returncode
     else:
         print("smoke: hrx-xclbinutil not built (run: python dev.py build hrx-xclbinutil)"); rc = 1
-    aieopt = BUILD / "iron-tools" / "bin" / "aie-opt"
+    aieopt = BUILD / "iron-tools" / "bin" / f"aie-opt{_EXE}"
     if aieopt.exists():
         print("== iron-tools smoke (aie-opt) ==")
         sh([aieopt, "--version"])
@@ -455,6 +550,7 @@ def main():
     b = sub.add_parser("build"); b.add_argument("what",
         choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "all"])
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
+    t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     sub.add_parser("smoke")
     sub.add_parser("deps")
     a = p.parse_args()
