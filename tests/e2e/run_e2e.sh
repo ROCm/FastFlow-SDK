@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: MIT
 # rocm-npu-staging e2e BUILD test (no NPU run). Proves the chain:
 #   IRON emit -> Peano -> bootgen PDI -> hrx-xclbinutil(.xclbin) -> [HAL extracts PDI]
-# Exits non-zero on any failure. DESIGN defaults to Dequant_Q4_0_w128x512.
+# Exits non-zero on any failure. DESIGN is an mlir-aie programming_examples/basic
+# design and defaults to matrix_scalar_add.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 STAGE="$(cd "$HERE/../.." && pwd)"
 PROJ="$STAGE/projects"
-DESIGN="${1:-Dequant_Q4_0_w128x512}"
+DESIGN="${1:-matrix_scalar_add}"
+mkdir -p "$STAGE/out"
 fail() { echo "E2E FAIL: $*"; exit 1; }
 
 # --- env: SOURCE mlir-aie toolchain + Peano (wheel) + hrx-xclbinutil ---
@@ -27,13 +29,16 @@ export AIEOPT_DIR="$PROJ/mlir-aie/third_party/aie_api"
 command -v aiecc.py >/dev/null || fail "aiecc.py not on PATH (run: python dev.py build mlir-aie)"
 
 # --- 1. build the design end-to-end -> .xclbin ---
-DDIR="$PROJ/fastflowlm/FLM_Xclbin/$DESIGN"
+# NPU2=1 selects devicename=npu2 (see programming_examples/makefile-common). The
+# design's @iron.jit compile() writes build/final.xclbin plus the aiecc project dir
+# build/final.prj/, which holds bootgen's main.pdi (used by step 3).
+DDIR="$PROJ/mlir-aie/programming_examples/basic/$DESIGN"
 [ -d "$DDIR" ] || fail "no design $DDIR"
 echo "== building $DESIGN =="
-make -C "$DDIR" bitstream DEVICE=npu2 ENABLE_CHESSCC=0 >/dev/null 2>"$STAGE/out/e2e-make.log" \
-  || { tail -5 "$STAGE/out/e2e-make.log"; fail "FLM build failed"; }
-XCLBIN="$(ls "$DDIR"/build/xclbins/*.xclbin 2>/dev/null | head -1)"
-[ -n "$XCLBIN" ] || fail "no .xclbin produced"
+make -C "$DDIR" all NPU2=1 >/dev/null 2>"$STAGE/out/e2e-make.log" \
+  || { tail -5 "$STAGE/out/e2e-make.log"; fail "design build failed"; }
+XCLBIN="$DDIR/build/final.xclbin"
+[ -f "$XCLBIN" ] || fail "no .xclbin produced"
 mkdir -p "$STAGE/out/artifacts"; cp "$XCLBIN" "$STAGE/out/artifacts/$DESIGN.xclbin"
 echo "  ok: $DESIGN.xclbin ($(stat -c%s "$XCLBIN") B)"
 
@@ -47,7 +52,7 @@ echo "  ok: sections present (MEM_TOPOLOGY/AIE_PARTITION/EMBEDDED_METADATA)"
 # a missing hrx build is a failure, not a skip.
 HAL_LIB="$PROJ/hrx/build/cmake/runtime/src/iree/hal/drivers/amdxdna/libiree_hal_drivers_amdxdna_amdxdna.a"
 BASE_LIBS=$(find "$PROJ/hrx/build/cmake/runtime/src/iree/base" -name "*.a" 2>/dev/null | tr '\n' ' ')
-PDI="$DDIR/build/bitstream/from_iron/dequant.mlir.prj/main.pdi"
+PDI="$DDIR/build/final.prj/main.pdi"
 [ -f "$HAL_LIB" ] || fail "projects/hrx not built (run: python dev.py build hrx — or build all)"
 [ -n "$BASE_LIBS" ] || fail "hrx base libs not found (run: python dev.py build hrx)"
 echo "== HAL artifact-contract check =="

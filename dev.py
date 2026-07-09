@@ -13,9 +13,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build mlir-aie        # aie-opt/aie-translate against build/llvm
   python dev.py build hrx-xclbinutil  # the xclbin packager
   python dev.py build hrx             # the amdxdna HAL (IREE runtime)
-  python dev.py build flm [DESIGN]    # an FLM_Xclbin design -> .xclbin
   python dev.py build all             # everything above, in dependency order
-  python dev.py test                  # e2e build test (no NPU run)
+  python dev.py test [DESIGN]         # e2e build test (no NPU run)
   python dev.py deps                  # print the dependency overview
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
@@ -130,7 +129,7 @@ def check_system(verbose=True):
 
 
 def build_env():
-    """Env for the FLM/IRON flow: the SOURCE mlir-aie toolchain (built against ROCm
+    """Env for the IRON flow: the SOURCE mlir-aie toolchain (built against ROCm
     amd-llvm) + Peano (wheel) + hrx-xclbinutil. No wheel fallback for mlir-aie."""
     e = dict(os.environ)
     src_bin = BUILD / "mlir-aie" / "bin"
@@ -230,8 +229,7 @@ def check_pins():
     """Verify each submodule's checked-out commit == manifests/versions.toml (the
     manifest is load-bearing: drift is reported)."""
     man = _manifest()
-    sec_to_sub = {"llvm": "llvm-project", "mlir_aie": "mlir-aie",
-                  "fastflowlm": "fastflowlm", "hrx": "hrx"}
+    sec_to_sub = {"llvm": "llvm-project", "mlir_aie": "mlir-aie", "hrx": "hrx"}
     drift = []
     for sec, sub in sec_to_sub.items():
         pinned = man.get(sec, {}).get("commit")
@@ -395,31 +393,18 @@ def cmd_build_hrx(args):
     print("build hrx (amdxdna HAL): ok")
 
 
-def cmd_build_flm(args):
-    design = args.design or "Dequant_Q4_0_w128x512"
-    ddir = PROJ / "fastflowlm" / "FLM_Xclbin" / design
-    if not ddir.exists():
-        sys.exit(f"no such design: {ddir}")
-    sh(["make", "bitstream", "DEVICE=npu2", "ENABLE_CHESSCC=0"], cwd=ddir, env=build_env())
-    xclbins = list((ddir / "build" / "xclbins").glob("*.xclbin"))
-    (OUT / "artifacts").mkdir(parents=True, exist_ok=True)
-    dst = OUT / "artifacts" / f"{design}.xclbin"
-    shutil.copy(xclbins[0], dst)
-    print(f"build flm: ok -> {dst} ({dst.stat().st_size} B)")
-
-
 def cmd_build_all(args):
     cmd_build_hrx_xclbinutil(args)
     cmd_build_llvm(args)
     cmd_build_mlir_aie(args)
     cmd_build_hrx(args)
-    cmd_build_flm(args)
 
 
 def cmd_test(args):
-    """e2e: build a design's xclbin + HAL PDI artifact-contract check. Defaults to
-    Dequant_Q4_0_w128x512 (the validated design); pass another to test it, e.g.
-    `dev.py test Dequant_Q8_0_w128x512` (Dequant_* are Peano/ENABLE_CHESSCC=0 capable)."""
+    """e2e: build a design's xclbin + HAL PDI artifact-contract check. DESIGN is an
+    mlir-aie programming_examples/basic design; defaults to matrix_scalar_add (the
+    validated one). Others must be Peano-capable and use the `jit_xclbin` rule —
+    `jit_xclbin_elf` designs also emit insts.elf, which needs aiebu-asm (absent here)."""
     cmd = ["bash", ROOT / "tests" / "e2e" / "run_e2e.sh"]
     if getattr(args, "design", None):
         cmd.append(args.design)
@@ -427,11 +412,11 @@ def cmd_test(args):
 
 
 def cmd_smoke(args):
-    """Build-level smoke tests (no NPU, no FLM design / no fastflowlm needed):
+    """Build-level smoke tests (no NPU, no design build):
       - hrx-xclbinutil: its ctest 'smoke' (package a MEM_TOPOLOGY section into an
         .xclbin, --info, dump-section round-trip);
       - mlir-aie: aie-opt reports its version and parses a trivial NPU device.
-    Use this when fastflowlm isn't available (the full e2e needs an FLM design)."""
+    Cheaper than the full e2e, which additionally builds a design through Peano."""
     rc = 0
     xbld = PROJ / "hrx-xclbinutil" / "bld"
     if (xbld / "CMakeCache.txt").exists():
@@ -468,8 +453,7 @@ def main():
     sub.add_parser("setup")
     sub.add_parser("fetch")
     b = sub.add_parser("build"); b.add_argument("what",
-        choices=["llvm", "mlir-aie", "hrx-xclbinutil", "hrx", "flm", "all"])
-    b.add_argument("design", nargs="?")
+        choices=["llvm", "mlir-aie", "hrx-xclbinutil", "hrx", "all"])
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
     sub.add_parser("smoke")
     sub.add_parser("deps")
@@ -483,7 +467,7 @@ def main():
     elif a.cmd == "build":
         {"llvm": cmd_build_llvm, "mlir-aie": cmd_build_mlir_aie,
          "hrx-xclbinutil": cmd_build_hrx_xclbinutil, "hrx": cmd_build_hrx,
-         "flm": cmd_build_flm, "all": cmd_build_all}[a.what](a)
+         "all": cmd_build_all}[a.what](a)
 
 
 if __name__ == "__main__":

@@ -33,10 +33,6 @@ cloudpickle
 rich
 aiofiles
 
-# --- FastFlowLM kernel scripts (needed by some designs) ---
-pyparsing
-sympy
-
 # --- Peano: AIE hardware codegen (the only wheel-sourced toolchain piece) ---
 --find-links https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
 llvm-aie==21.0.0.2026061501+acc2a72c
