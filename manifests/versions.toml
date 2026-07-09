@@ -19,7 +19,7 @@ commit     = "46fcb339fb61119b337f973c7ca9e710a319fdd0"  # ROCm amd-llvm weekly 
 branch     = "amd-compiler-ww-2026-17"                   # weekly snapshot the pin sits on (NOT the moving amd-staging)
 llvm_major = 23
 
-[mlir_aie]                      # projects/mlir-aie — built from source against [llvm]
+[iron_tools]                    # projects/iron-tools — built from source against [llvm]
 repo     = "github.com/Xilinx/mlir-aie"
 commit   = "14273685bebf296798cc86facd3459b5a017cda7"    # nightly 2026-06-13 ("14273685be")
 provides = ["aie-opt", "aie-translate", "aiecc.py", "IRON python", "bootgen", "aie_api", "aie-rt"]
@@ -49,13 +49,13 @@ version      = "0.1.0.20260629.149+b27b3ae"              # OVERRIDES mlir-aie's 
 find_links   = "https://llvm.github.io/eudsl"
 sha256       = "42157b9bc95fbde97d1bc10aefd268b3bc68bc34af6f97a2dd2cb4c1e751104f"  # sdist (verified on fetch)
 mlir_aie_pin = "0.1.0.20260418.906+a736a7d"              # what mlir-aie pins (correct for its intended LLVM)
-override_via = "patches/mlir-aie/0001-eudsl-for-amd-llvm-23.patch"
+override_via = "patches/iron-tools/0001-eudsl-for-amd-llvm-23.patch"
 note         = "TEMPORARY override: mlir-aie's eudsl 04-18 breaks on amd-llvm-23 nanobind (ScalarValue Value(OpResult)); 06-29 fixes it and emits size-identical IR. The patch bumps the version AND repoints mlir-aie's find-links to .cache/find-links; with dev.py's PIP_FIND_LINKS + PIP_NO_INDEX the vendoring is network-free (sha256-verified prefetched sdist). Remove when mlir-aie's Python/IRON path is built against an aligned LLVM."
 
-# Reduced hard deps — all SOURCE-built via the mlir-aie submodule (NOT wheels):
-#   aie_api -> projects/mlir-aie/third_party/aie_api  (AIEOPT_DIR for kernel -I)
-#   aie-rt  -> projects/mlir-aie/third_party/aie-rt
-#   bootgen -> built by mlir-aie -> build/mlir-aie/bin/bootgen  (build-time only, never runtime)
+# Reduced hard deps — all SOURCE-built via the iron-tools submodule (NOT wheels):
+#   aie_api -> projects/iron-tools/third_party/aie_api  (AIEOPT_DIR for kernel -I)
+#   aie-rt  -> projects/iron-tools/third_party/aie-rt
+#   bootgen -> built by iron-tools -> build/iron-tools/bin/bootgen  (build-time only, never runtime)
 #   eudsl   -> prefetched + verified (see [eudsl]); the only build-time network fetch
 #   xrt     -> NONE at runtime (XRT source used only to build hrx-xclbinutil)
 #   peano   -> the only wheel (see [peano])

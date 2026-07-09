@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 # rocm-npu-staging e2e BUILD test (no NPU run). Proves the chain:
 #   IRON emit -> Peano -> bootgen PDI -> hrx-xclbinutil(.xclbin) -> [HAL extracts PDI]
-# Exits non-zero on any failure. DESIGN is an mlir-aie programming_examples/basic
+# Exits non-zero on any failure. DESIGN is an iron-tools programming_examples/basic
 # design and defaults to matrix_scalar_add.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -13,26 +13,26 @@ DESIGN="${1:-matrix_scalar_add}"
 mkdir -p "$STAGE/out"
 fail() { echo "E2E FAIL: $*"; exit 1; }
 
-# --- env: SOURCE mlir-aie toolchain + Peano (wheel) + hrx-xclbinutil ---
-# Source-only: mlir-aie/aie-opt/aiecc/bootgen are built against ROCm amd-llvm.
-# (Only Peano comes from a wheel.) No wheel fallback for mlir-aie.
+# --- env: SOURCE iron-tools toolchain + Peano (wheel) + hrx-xclbinutil ---
+# Source-only: iron-tools/aie-opt/aiecc/bootgen are built against ROCm amd-llvm.
+# (Only Peano comes from a wheel.) No wheel fallback for iron-tools.
 XU="$PROJ/hrx-xclbinutil/bld/tools/hrx-xclbinutil"
 [ -x "$XU" ] || fail "hrx-xclbinutil not built (run: python dev.py build hrx-xclbinutil)"
 mkdir -p "$STAGE/tools-bin"; ln -sf "$XU" "$STAGE/tools-bin/xclbinutil"
 SVENV="$STAGE/.venv/lib/python3.12/site-packages"
-[ -x "$STAGE/build/mlir-aie/bin/aie-opt" ] || fail "mlir-aie not built from source (run: python dev.py build mlir-aie)"
-echo "== toolchain: SOURCE mlir-aie (built against ROCm amd-llvm) + Peano wheel =="
-export PATH="$STAGE/tools-bin:$STAGE/build/mlir-aie/bin:$STAGE/.venv/bin:$PATH"
-export PYTHONPATH="$STAGE/build/mlir-aie/python"
+[ -x "$STAGE/build/iron-tools/bin/aie-opt" ] || fail "iron-tools not built from source (run: python dev.py build iron-tools)"
+echo "== toolchain: SOURCE iron-tools (built against ROCm amd-llvm) + Peano wheel =="
+export PATH="$STAGE/tools-bin:$STAGE/build/iron-tools/bin:$STAGE/.venv/bin:$PATH"
+export PYTHONPATH="$STAGE/build/iron-tools/python"
 export PEANO_INSTALL_DIR="$SVENV/llvm-aie"
-export AIEOPT_DIR="$PROJ/mlir-aie/third_party/aie_api"
-command -v aiecc.py >/dev/null || fail "aiecc.py not on PATH (run: python dev.py build mlir-aie)"
+export AIEOPT_DIR="$PROJ/iron-tools/third_party/aie_api"
+command -v aiecc.py >/dev/null || fail "aiecc.py not on PATH (run: python dev.py build iron-tools)"
 
 # --- 1. build the design end-to-end -> .xclbin ---
 # NPU2=1 selects devicename=npu2 (see programming_examples/makefile-common). The
 # design's @iron.jit compile() writes build/final.xclbin plus the aiecc project dir
 # build/final.prj/, which holds bootgen's main.pdi (used by step 3).
-DDIR="$PROJ/mlir-aie/programming_examples/basic/$DESIGN"
+DDIR="$PROJ/iron-tools/programming_examples/basic/$DESIGN"
 [ -d "$DDIR" ] || fail "no design $DDIR"
 echo "== building $DESIGN =="
 make -C "$DDIR" all NPU2=1 >/dev/null 2>"$STAGE/out/e2e-make.log" \
