@@ -14,7 +14,6 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build hrx-xclbinutil  # the xclbin packager
   python dev.py build hrx             # the amdxdna HAL (IREE runtime)
   python dev.py build hrx-cts         # amdxdna HAL conformance binaries (need an NPU to run)
-  python dev.py build fastflowlm      # HRX amdxdna + FastFlowLM app only
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py submodules NAME...    # init (and optionally reset/clean) submodules
@@ -24,7 +23,6 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py test-hrx-cts [SUITE]  # amdxdna HAL conformance suites (needs an NPU)
   python dev.py test-npu [DESIGN]     # ON-DEVICE e2e: one dispatch of a design via hrx (needs an NPU)
                                      #   --device npu2|npu1   --chain (opt-in chained testbench)
-  python dev.py test-fastflowlm       # pull qwen3:0.6b + run a 1k HRX benchmark
   python dev.py deps                  # print the dependency overview
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
@@ -44,15 +42,9 @@ VENV = ROOT / ".venv"
 # build tree to be relocated somewhere short; the Windows CI points this at the
 # job-scoped $RUNNER_TEMP. Unset -> build/llvm.
 LLVM_BUILD = Path(os.environ.get("RNS_LLVM_BUILD_DIR") or (BUILD / "llvm"))
-HRX_CMAKE_BUILD = PROJ / "hrx" / "build" / "cmake"
-FASTFLOWLM_BUILD = BUILD / "FastFlowLM"
-FASTFLOWLM_INSTALL = BUILD / "FastFlowLM-install"
-FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
 PATCHES = ROOT / "patches"                      # temporary submodule patches (see patches/README.md)
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
 NPROC = str(os.cpu_count() or 8)
-BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or NPROC
-FASTFLOWLM_MIN_RUSTC = (1, 80, 0)
 IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and MSVC differ on Windows
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -136,23 +128,6 @@ def _compilers():
     if shutil.which("clang") and shutil.which("clang++"):
         return "clang", "clang++"
     return None, None
-
-
-def _rustc_version():
-    rustc = shutil.which("rustc")
-    if not rustc:
-        return None
-    r = subprocess.run([rustc, "--version"], capture_output=True, text=True)
-    if r.returncode != 0:
-        return None
-    parts = r.stdout.split()
-    if len(parts) < 2:
-        return None
-    nums = parts[1].split("-", 1)[0].split(".")
-    try:
-        return tuple(int(n) for n in nums[:3])
-    except ValueError:
-        return None
 
 
 def _have_header(hdr):
@@ -259,18 +234,13 @@ def _patch_state(patch, sub):
     return "appliable" if fwd.returncode == 0 else "broken"
 
 
-def apply_patches(submodule_names=None):
+def apply_patches():
     """Apply the temporary submodule patches (idempotent). These live only in
     rocm-npu-staging and are upstreamable as-is; see patches/README.md."""
     if not PATCHES.exists():
         return
-    selected = set(submodule_names) if submodule_names is not None else None
     for sub_dir in sorted(p for p in PATCHES.iterdir() if p.is_dir()):
-        if selected is not None and sub_dir.name not in selected:
-            continue
         sub = PROJ / sub_dir.name
-        if not sub.exists():
-            sys.exit(f"submodule missing for patches/{sub_dir.name} (run: git submodule update --init projects/{sub_dir.name})")
         for patch in sorted(sub_dir.glob("*.patch")):
             st = _patch_state(patch, sub)
             if st == "applied":
@@ -309,7 +279,7 @@ def check_pins():
     manifest is load-bearing: drift is reported)."""
     man = _manifest()
     sec_to_sub = {"llvm": "llvm-project", "iron_tools": "iron-tools", "hrx": "hrx",
-                  "hrx_xclbinutil": "hrx-xclbinutil", "fastflowlm": "FastFlowLM"}
+                  "hrx_xclbinutil": "hrx-xclbinutil"}
     drift = []
     for sec, sub in sec_to_sub.items():
         pinned = man.get(sec, {}).get("commit")
@@ -509,92 +479,46 @@ def cmd_build_hrx_xclbinutil(args):
 def cmd_build_hrx(args):
     d = PROJ / "hrx"
     cc, cxx = _compilers()
-    if not (d / "CMakeLists.txt").exists():
-        sys.exit("missing projects/hrx (run: git submodule update --init projects/hrx)")
-    apply_patches({"hrx"})
-
-    sh([
-        cmake_bin(), "-G", "Ninja",
-        "-S", cmake_path(d), "-B", cmake_path(HRX_CMAKE_BUILD),
-        "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-        "-DIREE_HAL_DRIVER_AMDGPU=OFF",
-        "-DIREE_HAL_DRIVER_AMDXDNA=ON",
-        # Declare test targets so `build hrx-cts` can compile them later, but
-        # the normal HRX build below only asks CMake for the runtime targets.
-        "-DIREE_BUILD_TESTS=ON",
-        "-DLIBHRX_BUILD_CTS=OFF",
-        "-DHRX_INSTALL_TESTS=OFF",
-        "-DLIBHRX_BUILD_PASSTHROUGH=OFF",
-        "-DLOOM_BUILD=OFF",
-        # libhrx currently links local-task support unconditionally; keep it enabled
-        # until HRX makes that dependency conditional.
-        "-DIREE_HAL_DRIVER_LOCAL_SYNC=OFF",
-        "-DIREE_HAL_DRIVER_NULL=OFF",
-        *_cc_flags(cc, cxx),
-    ], env=cmake_env())
-    sh([
-        cmake_bin(), "--build", cmake_path(HRX_CMAKE_BUILD),
-        "--target", "iree_hal_drivers_amdxdna_registration_registration", "hrx", "flatcc_runtime",
-        "-j", BUILD_JOBS,
-    ], env=cmake_env())
-    print("build hrx (minimal amdxdna HAL + libhrx): ok ->", HRX_CMAKE_BUILD)
+    # hrx's `dev.py cmake configure` forwards these to cmake verbatim and picks no
+    # generator of its own, so on Windows CMake defaults to the Visual Studio generator.
+    # That is wrong three ways: (1) MSBuild ignores CC/CXX, silently building with `cl`
+    # instead of the clang-cl the rest of the stack uses; (2) it is multi-config, so an
+    # unqualified `--build` produces Debug; (3) `--build -j N` under MSBuild races on the
+    # per-target .pdb ("error C1041 ... please use /FS"). Ninja + an explicit build type
+    # fixes all three, and matches hrx's own README (`cmake -S . -B ... -GNinja`).
+    gen = ["-GNinja", "-DCMAKE_BUILD_TYPE=Release", *_cc_flags(cc, cxx)] if IS_WINDOWS else []
+    sh([sys.executable, "dev.py", "setup"], cwd=d)
+    sh([sys.executable, "dev.py", "cmake", "setup"], cwd=d)
+    # IREE_BUILD_TESTS=ON only *declares* the test targets (iree_cc_test is a no-op
+    # without it); nothing here builds them. `build hrx-cts` compiles the four the
+    # NPU runner needs -- see cmd_build_hrx_cts.
+    sh([sys.executable, "dev.py", "cmake", "configure", *gen,
+        "-DIREE_HAL_DRIVER_AMDXDNA=ON", "-DIREE_BUILD_TESTS=ON"], cwd=d)
+    # cmake_bin()/cmake_env(): the pip cmake lives in the venv and is not on PATH, so a
+    # bare `cmake` here finds the system one on Linux and nothing at all on Windows.
+    build = [cmake_bin(), "--build", cmake_path(d / "build" / "cmake"), "--target"]
+    sh([*build, "iree_hal_drivers_amdxdna_registration_registration", "-j", NPROC],
+       env=cmake_env())
+    # libhrx.so: the host-runtime lib the iron-tools HRX IRON path links (FindHRX/test-npu).
+    sh([*build, "libhrx_src_libhrx_hrx", "-j", NPROC], env=cmake_env())
+    # libflatcc_runtime.a: build_xadx_helper.sh links it to produce libironhrx_xadx.so,
+    # and hrxruntime/discovery.py keys off it to identify the HRX build dir. No other
+    # target depends on it, so it must be requested by name.
+    sh([*build, "flatcc_runtime", "-j", NPROC], env=cmake_env())
+    print("build hrx (amdxdna HAL + libhrx + flatcc_runtime): ok")
 
 
 def cmd_build_hrx_cts(args):
     """The amdxdna HAL conformance binaries. Separate from `build hrx` (and from
     `build all`) because they are only useful on a machine with an NPU; `build hrx`
     configures with IREE_BUILD_TESTS=ON, which merely declares the targets."""
-    if not (HRX_CMAKE_BUILD / "CMakeCache.txt").exists():
+    d = PROJ / "hrx"
+    if not (d / "build" / "cmake" / "CMakeCache.txt").exists():
         sys.exit("hrx not configured — run: python dev.py build hrx")
-    sh([cmake_bin(), "--build", cmake_path(HRX_CMAKE_BUILD),
-        *[f"--target=iree_hal_drivers_amdxdna_cts_{t}" for t in HRX_CTS_TESTS], "-j", BUILD_JOBS],
+    sh([cmake_bin(), "--build", cmake_path(d / "build" / "cmake"),
+        *[f"--target=iree_hal_drivers_amdxdna_cts_{t}" for t in HRX_CTS_TESTS], "-j", NPROC],
        env=cmake_env())
     print(f"build hrx-cts: ok ({', '.join(HRX_CTS_TESTS)})")
-
-
-def cmd_build_fastflowlm(args):
-    """Build the pinned FastFlowLM app against `dev.py build hrx` output.
-    This intentionally skips LLVM, iron-tools, and hrx-xclbinutil."""
-    if IS_WINDOWS:
-        sys.exit("build fastflowlm is currently wired for the Linux HRX smoke path")
-    flm_src = PROJ / "FastFlowLM" / "src"
-    if not (flm_src / "CMakeLists.txt").exists():
-        sys.exit("missing projects/FastFlowLM (run: git submodule update --init --recursive projects/FastFlowLM)")
-    if not _have_header("libdrm/drm.h"):
-        sys.exit("missing libdrm/drm.h: FastFlowLM's amdxdna headers require libdrm "
-                 "(Ubuntu: sudo apt-get install libdrm-dev; Fedora: sudo dnf install libdrm-devel)")
-    if not shutil.which("cargo"):
-        sys.exit("missing cargo: FastFlowLM's tokenizers-cpp build requires Rust/Cargo "
-                 "(install a current toolchain with rustup)")
-    rustc_version = _rustc_version()
-    if rustc_version is None or rustc_version < FASTFLOWLM_MIN_RUSTC:
-        got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
-        need = ".".join(str(n) for n in FASTFLOWLM_MIN_RUSTC)
-        sys.exit(f"rustc >= {need} required for FastFlowLM's tokenizers-cpp build "
-                 f"(found {got}; install/update a current toolchain with rustup)")
-    apply_patches({"FastFlowLM"})
-    if not (HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "libhrx.so").exists():
-        sys.exit("missing libhrx.so (run: python dev.py build hrx)")
-    if not (HRX_CMAKE_BUILD / "libflatcc_runtime.a").exists():
-        sys.exit("missing libflatcc_runtime.a (run: python dev.py build hrx)")
-
-    cc, cxx = _compilers()
-    sh([
-        cmake_bin(), "-G", "Ninja",
-        "-S", cmake_path(flm_src), "-B", cmake_path(FASTFLOWLM_BUILD),
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DFLM_VERSION=0.9.44",
-        "-DNPU_VERSION=32.0.203.304",
-        f"-DHRX_DIR={cmake_path(PROJ / 'hrx')}",
-        f"-DHRX_BUILD={cmake_path(HRX_CMAKE_BUILD)}",
-        f"-DHRX_LIB={cmake_path(HRX_CMAKE_BUILD / 'libhrx' / 'src' / 'libhrx' / 'libhrx.so')}",
-        f"-DHRX_FLATCC_LIB={cmake_path(HRX_CMAKE_BUILD / 'libflatcc_runtime.a')}",
-        f"-DCMAKE_INSTALL_PREFIX={cmake_path(FASTFLOWLM_INSTALL)}",
-        f"-DCMAKE_XCLBIN_PREFIX={cmake_path(flm_src)}",
-        *_cc_flags(cc, cxx),
-    ], env=cmake_env())
-    sh([cmake_bin(), "--build", cmake_path(FASTFLOWLM_BUILD), "-j", BUILD_JOBS], env=cmake_env())
-    print("build fastflowlm: ok ->", flm_src / "build" / f"flm{_EXE}")
 
 
 def cmd_build_all(args):
@@ -624,15 +548,6 @@ def cmd_test(args):
     # build_env's former home). run_e2e.py already prints "E2E FAIL: ..."; propagate its
     # status rather than let sh()'s check=True bury it under a CalledProcessError.
     sys.exit(sh(cmd, check=False).returncode)
-
-
-def cmd_test_fastflowlm(args):
-    """Run the on-device FastFlowLM HRX smoke test."""
-    script = ROOT / "tests" / "fastflowlm" / "run_fastflowlm_hrx_smoke.sh"
-    env = cmake_env()
-    env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
-    env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
-    sys.exit(sh(["bash", script], env=env, check=False).returncode)
 
 
 def cmd_smoke(args):
@@ -1154,10 +1069,9 @@ def main():
     sub.add_parser("setup")
     sub.add_parser("fetch")
     b = sub.add_parser("build"); b.add_argument("what",
-        choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "fastflowlm", "all"])
+        choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "all"])
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
-    sub.add_parser("test-fastflowlm")
     sub.add_parser("smoke")
     sm = sub.add_parser("submodules"); sm.add_argument("names", nargs="+")
     sm.add_argument("--reset", action="store_true", help="force-reset tracked files")
@@ -1182,7 +1096,6 @@ def main():
     elif a.cmd == "fetch": cmd_fetch(a)
     elif a.cmd == "deps": cmd_deps(a)
     elif a.cmd == "test": cmd_test(a)
-    elif a.cmd == "test-fastflowlm": cmd_test_fastflowlm(a)
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "submodules": cmd_submodules(a)
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
@@ -1193,7 +1106,7 @@ def main():
     elif a.cmd == "build":
         {"llvm": cmd_build_llvm, "iron-tools": cmd_build_iron_tools,
          "hrx-xclbinutil": cmd_build_hrx_xclbinutil, "hrx": cmd_build_hrx,
-         "hrx-cts": cmd_build_hrx_cts, "fastflowlm": cmd_build_fastflowlm,
+         "hrx-cts": cmd_build_hrx_cts,
          "all": cmd_build_all}[a.what](a)
 
 

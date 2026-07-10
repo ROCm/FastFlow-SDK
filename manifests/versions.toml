@@ -50,14 +50,6 @@ status     = "transitional — may be upstreamed to mlir-aie / hrx / other later
 xrt_source = "github.com/nod-ai/XRT @ a9fdf618ceba32d28bbf6715a5ee627a51a74b24"  # XRT 2.18.0
 note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, no XRT install). Builds on Windows with clang-cl ONLY: its vendored aie-pdi-transform sources use GNU extensions (__attribute__((aligned)), void* arithmetic) that MSVC cl rejects."
 
-[fastflowlm]                    # projects/FastFlowLM — HRX-native FastFlowLM PR #602
-repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
-upstream   = "github.com/FastFlowLM/FastFlowLM"
-branch     = "hrx_native_pr"
-pr         = "FastFlowLM/FastFlowLM#602"
-commit     = "bea0185993e6b896ce726a2382732f4f4bb98f81"
-note       = "Pinned PR head for the HRX amdxdna app path. The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
-
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
 version      = "0.1.0.20260629.149+b27b3ae"              # OVERRIDES mlir-aie's own pin (0.1.0.20260418)
