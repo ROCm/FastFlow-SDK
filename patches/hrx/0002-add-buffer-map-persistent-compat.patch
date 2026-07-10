@@ -1,0 +1,48 @@
+diff --git a/libhrx/include/hrx_runtime.h b/libhrx/include/hrx_runtime.h
+index b4986538f..0ee156e5f 100644
+--- a/libhrx/include/hrx_runtime.h
++++ b/libhrx/include/hrx_runtime.h
+@@ -604,6 +604,11 @@ HRX_API hrx_status_t hrx_buffer_map_with_mode(hrx_buffer_t buffer,
+                                               hrx_mapping_mode_t mapping_mode,
+                                               hrx_map_flags_t flags,
+                                               size_t offset, size_t size,
+                                               void** mapped_ptr);
+-
++// Compatibility wrapper for older libhrx clients. Maps the entire buffer
++// persistently; callers should use hrx_buffer_map_with_mode for new code.
++HRX_API hrx_status_t hrx_buffer_map_persistent(hrx_buffer_t buffer,
++                                               hrx_map_flags_t flags,
++                                               void** mapped_ptr);
++
+ HRX_API hrx_status_t hrx_buffer_unmap(hrx_buffer_t buffer);
+diff --git a/libhrx/src/libhrx/buffer.c b/libhrx/src/libhrx/buffer.c
+index 181778003..04115f01f 100644
+--- a/libhrx/src/libhrx/buffer.c
++++ b/libhrx/src/libhrx/buffer.c
+@@ -199,6 +199,23 @@ hrx_status_t hrx_buffer_map_with_mode(hrx_buffer_t buffer,
+   buffer->mapped_ptr = buffer->mapping.contents.data;
+   *mapped_ptr = buffer->mapping.contents.data;
+   HRX_RETURN_AND_END_ZONE(z0, hrx_ok_status());
+ }
+-
++hrx_status_t hrx_buffer_map_persistent(hrx_buffer_t buffer,
++                                       hrx_map_flags_t flags,
++                                       void** mapped_ptr) {
++  HRX_TRACE_ZONE_BEGIN(z0, "hrx_buffer_map_persistent");
++  if (!buffer || !mapped_ptr) {
++    HRX_RETURN_AND_END_ZONE(z0,
++                            hrx_make_status(HRX_STATUS_INVALID_ARGUMENT,
++                                            "buffer or mapped_ptr is NULL"));
++  }
++  if (buffer->is_mapped) {
++    *mapped_ptr = buffer->mapped_ptr;
++    HRX_RETURN_AND_END_ZONE(z0, hrx_ok_status());
++  }
++  HRX_RETURN_AND_END_ZONE(
++      z0, hrx_buffer_map_with_mode(buffer, HRX_MAPPING_MODE_PERSISTENT, flags,
++                                   0, buffer->size, mapped_ptr));
++}
++
+ hrx_status_t hrx_buffer_unmap(hrx_buffer_t buffer) {
+   HRX_TRACE_ZONE_BEGIN(z0, "hrx_buffer_unmap");
+   if (buffer) {

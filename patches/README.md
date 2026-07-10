@@ -46,6 +46,43 @@ state N (error_index M, submit_index K)` reaches `dev.py test-npu` and the CTS.
 
 **Remove when:** fixed upstream in hrx (`libhrx/src/libhrx/semaphore.c`).
 
+### 0002-add-buffer-map-persistent-compat.patch
+Restores the removed `hrx_buffer_map_persistent` export as a compatibility wrapper
+around `hrx_buffer_map_with_mode(..., HRX_MAPPING_MODE_PERSISTENT, ...)`.
+
+**Why:** the pinned FastFlowLM PR's bundled engine libraries were built against the
+older libhrx ABI and still import `hrx_buffer_map_persistent`. The current pinned
+HRX has the generalized mapping API, so this keeps the staging stack link/runtime
+compatible without rebuilding all engine libraries.
+
+**Remove when:** FastFlowLM's bundled engine libraries are rebuilt against the
+current HRX mapping API, or HRX carries this compatibility wrapper upstream.
+
+### 0003-disable-command-chain-on-old-amdxdna-stacks.patch
+Extends the amdxdna native DDI caps with driver-stack identity and command-chain
+policy status, then disables parent `ERT_CMD_CHAIN` on known-problem Linux KMQ
+stacks. The exact stock Ubuntu 6.17 amdxdna `srcversion`
+`2DBDA75956CAFA9D029EA89` is denied regardless of firmware, and otherwise XDNA2
+stacks keep command chains disabled until the reported firmware reaches `1.1.0.0`.
+The HAL still records the host-patched runlist path and falls back to direct
+child submissions, so FastFlowLM can run on those stacks while newer validated
+firmware keeps command chains enabled by default.
+
+**Remove when:** Linux KMQ command chains are validated on stock Ubuntu firmware,
+or upstream hrx carries equivalent driver/firmware capability gating.
+
+## patches/FastFlowLM/
+
+### 0001-use-hrx-map-with-mode.patch
+Updates the FastFlowLM C++ HRX wrapper to call `hrx_buffer_map_with_mode` with
+`HRX_MAPPING_MODE_PERSISTENT` instead of the removed `hrx_buffer_map_persistent`
+helper.
+
+**Why:** the pinned HRX public header no longer declares `hrx_buffer_map_persistent`
+for new code.
+
+**Remove when:** FastFlowLM PR #602 is updated for the current HRX API.
+
 ## patches/iron-tools/
 
 ### 0003-add-hrx-iron-path.patch
