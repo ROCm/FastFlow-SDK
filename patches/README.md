@@ -9,7 +9,60 @@ Application is idempotent (already-applied patches are skipped). The patched
 submodules carry `ignore = dirty` in `.gitmodules`, so applying a patch does not
 show up as submodule drift.
 
+Because they are upstreamable, a patch carries only changes that belong upstream.
+CI-only scaffolding belongs in `tests/` here, not inside a patch.
+
+## Editing a patch
+
+Never hand-edit hunk bodies or `@@` headers: the line counts must agree with the
+body, and a malformed hunk only fails later, at `git apply` time. Regenerate the
+patch instead, from the submodule's pinned commit. To edit `0003`, commit the
+patches that precede it so `git diff --cached` yields `0003` alone:
+
+```bash
+cd projects/iron-tools
+git checkout -f <pin> && git clean -fdx     # -x: patch-created files are gitignored
+git apply ../../patches/iron-tools/0001-*.patch
+git add -A -f && git commit -qm base        # everything 0003 applies on top of
+git apply ../../patches/iron-tools/000[12]-*.patch
+# ...edit files...
+git add -A -f
+git diff --cached > ../../patches/iron-tools/0003-add-hrx-iron-path.patch
+```
+
+`git add -f` is required: several files these patches create are gitignored
+upstream. Then verify against the pin with `git apply --check` and
+`git apply --reverse --check` — `dev.py` uses the reverse check to decide a patch
+is already applied, so a patch that does not reverse cleanly breaks `setup`.
+
+## patches/hrx/
+
+### 0001-surface-semaphore-failure-status.patch
+A failed device dispatch reached callers as a bare `INTERNAL` with no detail.
+`iree_async_semaphore_multi_wait` reports failures as `iree_status_from_code(code)`,
+dropping the annotation, and leaves the original status owned by the semaphore.
+`hrx_semaphore_wait` now queries it back, so the amdxdna HAL's `did not complete: ert
+state N (error_index M, submit_index K)` reaches `dev.py test-npu` and the CTS.
+
+**Remove when:** fixed upstream in hrx (`libhrx/src/libhrx/semaphore.c`).
+
 ## patches/iron-tools/
+
+### 0003-add-hrx-iron-path.patch
+Adds an HRX host-runtime to mlir-aie's IRON path so a design can run on the NPU
+through the hrx amdxdna HAL (`libhrx.so`) instead of XRT — `cmake/modules/FindHRX.cmake`,
+`python/utils/hostruntime/hrxruntime/` (the `IRON_RUNTIME=hrx` runtime + xadx builder),
+`runtime_lib/test_lib/hrx_test_wrapper.h`, and a `vector_scalar_add` HRX testbench
+(`test_chain_hrx.py` / `test_runlist_hrx.cpp`). Drives `dev.py test-npu`.
+
+Ported from Abhishek Varma's `avarma_add_hrx` branch of mlir-aie (the upstream-able
+reference integration), scoped to our pin (`git diff <our-pin>..avarma_add_hrx` over the
+16 touched files). **Remove when** this lands upstream in mlir-aie.
+
+The hrxruntime binds libhrx by symbol, so it tracks the hrx pin: `hrx_buffer_map_persistent`
+became `hrx_buffer_map_with_mode(buffer, mode, flags, offset, size, ptr)`. A removed symbol
+surfaces as `undefined symbol` from ctypes at import, which `aie/utils/__init__.py` swallows
+into "libhrx.so could not be located" -- `dev.py verify-npu-prereqs` reports the real one.
 
 ### 0001-eudsl-for-amd-llvm-23.patch
 Edits two files in the submodule (upstream `Xilinx/mlir-aie`):
