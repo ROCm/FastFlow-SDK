@@ -1,0 +1,112 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# On-device FastFlowLM smoke for the pinned HRX amdxdna runtime. This workflow
+# intentionally builds only projects/hrx and projects/FastFlowLM, then pulls a
+# small model and runs a 1k benchmark on the NPU runner.
+name: FastFlowLM HRX Linux
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  fastflowlm_hrx_linux:
+    name: FastFlowLM + HRX amdxdna
+    runs-on: linux-gfx1151-gpu-rocm
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Adjust git config
+        run: git config --global --add safe.directory "$PWD"
+
+      - name: Install system build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo_cmd=()
+          if [[ "$(id -u)" != "0" ]]; then
+            sudo_cmd=(sudo)
+          fi
+          if command -v apt-get >/dev/null 2>&1; then
+            "${sudo_cmd[@]}" apt-get update
+            "${sudo_cmd[@]}" apt-get install -y \
+              build-essential \
+              cmake \
+              curl \
+              git \
+              libavcodec-dev \
+              libavformat-dev \
+              libavutil-dev \
+              libboost-program-options-dev \
+              libcurl4-openssl-dev \
+              libdrm-dev \
+              libfftw3-dev \
+              libreadline-dev \
+              libswresample-dev \
+              libswscale-dev \
+              ninja-build \
+              pkg-config \
+              python3
+          elif command -v dnf >/dev/null 2>&1; then
+            "${sudo_cmd[@]}" dnf install -y \
+              boost-devel \
+              cmake \
+              curl \
+              fftw-devel \
+              ffmpeg-devel \
+              gcc \
+              gcc-c++ \
+              git \
+              libcurl-devel \
+              libdrm-devel \
+              ninja-build \
+              pkgconf-pkg-config \
+              python3 \
+              readline-devel
+          else
+            echo "No supported package manager found; assuming build dependencies are preinstalled."
+          fi
+
+      - name: Install Rust toolchain
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: stable
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+              sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup_bin="$(command -v rustup)"
+          "$rustup_bin" toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+          "$rustup_bin" default "$RUST_TOOLCHAIN"
+          rustc_bin="$("$rustup_bin" which rustc)"
+          cargo_bin="$("$rustup_bin" which cargo)"
+          echo "$(dirname "$cargo_bin")" >> "$GITHUB_PATH"
+          "$rustc_bin" --version
+          "$cargo_bin" --version
+
+      - name: Initialize HRX and FastFlowLM submodules
+        run: |
+          git submodule update --init projects/hrx
+          git submodule update --init --recursive projects/FastFlowLM
+
+      - name: Build minimal HRX amdxdna
+        run: python3 dev.py build hrx
+
+      - name: Build FastFlowLM
+        run: python3 dev.py build fastflowlm
+
+      - name: Run FastFlowLM HRX smoke
+        run: python3 dev.py test-fastflowlm
