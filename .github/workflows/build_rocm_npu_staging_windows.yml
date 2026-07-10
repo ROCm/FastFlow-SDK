@@ -68,6 +68,13 @@ jobs:
           python-version: '3.12'
 
       # VS Developer environment: puts the MSVC headers/libs + toolchain on PATH.
+      # F821 only: see the Linux workflow. `python`, not `python3`: this job uses the
+      # setup-python interpreter, which is only guaranteed to publish `python`.
+      - name: Lint (undefined names)
+        run: |
+          python -m pip install --quiet --disable-pip-version-check ruff==0.15.21
+          python -m ruff check --select F821 dev.py tests
+
       - name: Set up MSVC (VS Developer environment)
         uses: ilammy/msvc-dev-cmd@v1   # TODO: SHA-pin
         with:
@@ -167,10 +174,7 @@ jobs:
       # markedly slower on this runner than on Linux. The build needs the pinned trees,
       # not history; check_pins/patches work on shallow checkouts.
       - name: Initialize submodules
-        run: |
-          git submodule update --init --depth 1 --jobs 4 projects/llvm-project projects/hrx projects/hrx-xclbinutil
-          git submodule update --init --recursive --depth 1 --jobs 4 projects/iron-tools
-
+        run: python dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools --shallow
       # setup creates .venv, installs the pinned requirements, applies the temporary
       # patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + pinned deps + prefetch)

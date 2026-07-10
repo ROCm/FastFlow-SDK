@@ -5,6 +5,8 @@
 # build_rocm_npu_staging_{linux,windows}.yml workflows — Linux (ROCm scale runner +
 # TheRock manylinux) and Windows (azure-windows-scale-rocm + clang-cl), same dev.py
 # flow. Every submodule is public, so neither needs secrets.
+# The Linux build also publishes a run-prerequisites artifact; npu_e2e consumes it
+# and runs a design on the NPU through the hrx HAL (linux-gfx1151-gpu-rocm = Strix).
 name: CI
 
 on:
@@ -25,6 +27,7 @@ jobs:
       contents: read
     with:
       name: Build + smoke
+      upload_artifact: true   # publish run-prereqs for npu_e2e
 
   windows:
     name: Windows
@@ -33,3 +36,73 @@ jobs:
       contents: read
     with:
       name: Build + smoke (Windows)
+
+  npu_e2e:
+    name: NPU e2e (gfx1151)
+    needs: linux
+    runs-on: linux-gfx1151-gpu-rocm
+    permissions:
+      contents: read
+    timeout-minutes: 60   # no compile here — just build the small design + run on the NPU
+    # To reduce NPU-runner load, gate this to main/dispatch by adding e.g.:
+    #   if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    container:
+      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
+      # amdxdna NPU node lives under the DRM accel subsystem at /dev/accel/accel0
+      # (NOT /dev/accel0); hrx's shim scans /dev/accel/ and opens accel0.
+      options: --device=/dev/accel/accel0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Adjust git config
+        run: git config --global --add safe.directory "$PWD"
+
+      # No openssl-devel: this job compiles nothing against OpenSSL. The headers are a
+      # build-time dep of iron-tools' bootgen, which arrives prebuilt in the artifact and
+      # resolves libcrypto from openssl-libs.
+
+      # Source needed to build+run the design: the patched iron-tools (example + aie_api +
+      # hrxruntime) and hrx (headers + runtime/src for the xadx helper). llvm-project and
+      # hrx-xclbinutil are NOT needed: their binaries arrive prebuilt in the artifact.
+      # --reset --clean because this runner is self-hosted; see cmd_submodules.
+      - name: Initialize submodules
+        run: python3 dev.py submodules hrx iron-tools --reset --clean hrx iron-tools --shallow
+      # venv + apply the temporary patches (so the example + hrxruntime source exist) +
+      # prefetch eudsl. The heavy compile is skipped — it comes from the artifact.
+      - name: Setup (venv + patches + prefetch)
+        run: python3 dev.py setup
+
+      - name: Download build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npu-prereqs
+          path: .artifact
+
+      - name: Extract build artifact (build/iron-tools, hrx build, tools)
+        run: tar -xzf .artifact/npu-prereqs.tar.gz -C "$PWD"
+
+      # This job never checks out llvm-project, so a symlink into it dangles and surfaces
+      # as an ImportError from inside the design's Makefile.
+      - name: Verify artifact is self-contained
+        run: .venv/bin/python dev.py verify-npu-prereqs --extracted
+
+      # Fail fast and unambiguously if the runner has no usable NPU: the accel node, its
+      # permissions, and libhrx opening the device. Without this a missing or busy device
+      # surfaces much later as an opaque dispatch error.
+      - name: NPU device probe
+        run: .venv/bin/python dev.py npu-probe
+
+      # amdxdna HAL conformance, one layer below the IRON design: if these pass but the
+      # e2e fails, the fault is in the design/host-runtime path, not the HAL.
+      #
+      # What it actually covers today: driver, event, semaphore, buffer mapping, queue
+      # alloca/host-call. NOT executable dispatch (amdxdna has no cts/executable suite),
+      # and NOT fill/copy/update/transfer -- the backend self-skips those until it has
+      # native blit support. dev.py prints passed/skipped per suite and fails a suite
+      # that ran nothing, so that erosion cannot pass silently.
+      - name: HRX CTS (amdxdna, on device)
+        run: .venv/bin/python dev.py test-hrx-cts
+
+      - name: NPU e2e (single dispatch of a design via hrx)
+        run: .venv/bin/python dev.py test-npu

@@ -13,13 +13,21 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build iron-tools      # aie-opt/aie-translate against build/llvm
   python dev.py build hrx-xclbinutil  # the xclbin packager
   python dev.py build hrx             # the amdxdna HAL (IREE runtime)
+  python dev.py build hrx-cts         # amdxdna HAL conformance binaries (need an NPU to run)
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
+  python dev.py submodules NAME...    # init (and optionally reset/clean) submodules
+  python dev.py package-npu-prereqs   # stage + tar what the NPU job needs (no NPU)
+  python dev.py verify-npu-prereqs    # assert that archive is self-contained + imports (no NPU)
+  python dev.py npu-probe             # is an NPU present + openable by libhrx? (needs an NPU)
+  python dev.py test-hrx-cts [SUITE]  # amdxdna HAL conformance suites (needs an NPU)
+  python dev.py test-npu [DESIGN]     # ON-DEVICE e2e: one dispatch of a design via hrx (needs an NPU)
+                                     #   --device npu2|npu1   --chain (opt-in chained testbench)
   python dev.py deps                  # print the dependency overview
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, os, subprocess, sys, shutil
+import argparse, ctypes, os, shutil, subprocess, sys, tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -44,6 +52,20 @@ _EXE = ".exe" if IS_WINDOWS else ""
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
 PEANO_INDEX = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
+
+# amdxdna HAL conformance suites (gtest binaries). They open a real device.
+HRX_CTS_TESTS = ["core_tests", "buffer_tests", "command_buffer_tests", "queue_tests"]
+HRX_CTS_DIR = ("runtime", "src", "iree", "hal", "drivers", "amdxdna", "cts")
+# The amdxdna NPU is a DRM accel node: /dev/accel/accel0, not /dev/accel0.
+ACCEL_DIR = Path("/dev/accel")
+# NPU targets for `test-npu`. `make` selects the device through makefile-common's
+# NPU2 switch; `devgen` is the XAie_TxnHeader.DevGen the design must then carry
+# (aie-rt xaiegbl_defs.h). libhrx cannot report the generation -- its ARCHITECTURE
+# property is a gfxNNNN string -- so the target is declared, not detected.
+NPU_TARGETS = {
+    "npu2": {"make": ["NPU2=1"], "devgen": 4, "arch": "AIE2P (Strix)"},
+    "npu1": {"make": [],         "devgen": 3, "arch": "AIE2IPU (Phoenix)"},
+}
 
 
 def sh(cmd, cwd=None, env=None, check=True):
@@ -467,14 +489,36 @@ def cmd_build_hrx(args):
     gen = ["-GNinja", "-DCMAKE_BUILD_TYPE=Release", *_cc_flags(cc, cxx)] if IS_WINDOWS else []
     sh([sys.executable, "dev.py", "setup"], cwd=d)
     sh([sys.executable, "dev.py", "cmake", "setup"], cwd=d)
+    # IREE_BUILD_TESTS=ON only *declares* the test targets (iree_cc_test is a no-op
+    # without it); nothing here builds them. `build hrx-cts` compiles the four the
+    # NPU runner needs -- see cmd_build_hrx_cts.
     sh([sys.executable, "dev.py", "cmake", "configure", *gen,
-        "-DIREE_HAL_DRIVER_AMDXDNA=ON", "-DIREE_BUILD_TESTS=OFF"], cwd=d)
+        "-DIREE_HAL_DRIVER_AMDXDNA=ON", "-DIREE_BUILD_TESTS=ON"], cwd=d)
     # cmake_bin()/cmake_env(): the pip cmake lives in the venv and is not on PATH, so a
     # bare `cmake` here finds the system one on Linux and nothing at all on Windows.
-    sh([cmake_bin(), "--build", cmake_path(d / "build" / "cmake"),
-        "--target", "iree_hal_drivers_amdxdna_registration_registration", "-j", NPROC],
+    build = [cmake_bin(), "--build", cmake_path(d / "build" / "cmake"), "--target"]
+    sh([*build, "iree_hal_drivers_amdxdna_registration_registration", "-j", NPROC],
        env=cmake_env())
-    print("build hrx (amdxdna HAL): ok")
+    # libhrx.so: the host-runtime lib the iron-tools HRX IRON path links (FindHRX/test-npu).
+    sh([*build, "libhrx_src_libhrx_hrx", "-j", NPROC], env=cmake_env())
+    # libflatcc_runtime.a: build_xadx_helper.sh links it to produce libironhrx_xadx.so,
+    # and hrxruntime/discovery.py keys off it to identify the HRX build dir. No other
+    # target depends on it, so it must be requested by name.
+    sh([*build, "flatcc_runtime", "-j", NPROC], env=cmake_env())
+    print("build hrx (amdxdna HAL + libhrx + flatcc_runtime): ok")
+
+
+def cmd_build_hrx_cts(args):
+    """The amdxdna HAL conformance binaries. Separate from `build hrx` (and from
+    `build all`) because they are only useful on a machine with an NPU; `build hrx`
+    configures with IREE_BUILD_TESTS=ON, which merely declares the targets."""
+    d = PROJ / "hrx"
+    if not (d / "build" / "cmake" / "CMakeCache.txt").exists():
+        sys.exit("hrx not configured — run: python dev.py build hrx")
+    sh([cmake_bin(), "--build", cmake_path(d / "build" / "cmake"),
+        *[f"--target=iree_hal_drivers_amdxdna_cts_{t}" for t in HRX_CTS_TESTS], "-j", NPROC],
+       env=cmake_env())
+    print(f"build hrx-cts: ok ({', '.join(HRX_CTS_TESTS)})")
 
 
 def cmd_build_all(args):
@@ -536,6 +580,483 @@ def cmd_smoke(args):
     return rc
 
 
+def _require_txn_devgen(insts, target):
+    """Fail if insts.bin targets a different AIE generation than the NPU we dispatch on.
+
+    A mismatched stream is accepted by the driver and then never completes -- the
+    firmware watchdog reports it as `ert state 8` (ERT_CMD_STATE_TIMEOUT) a minute later,
+    with nothing pointing at the device. XAie_TxnHeader: Major, Minor, DevGen, ..."""
+    want = NPU_TARGETS[target]["devgen"]
+    data = insts.read_bytes()
+    if len(data) < 3:
+        sys.exit(f"{insts}: too small for a TXN header")
+    got = data[2]
+    if got != want:
+        by_gen = {v["devgen"]: f"{k} / {v['arch']}" for k, v in NPU_TARGETS.items()}
+        sys.exit(f"{insts}: TXN DevGen={got} ({by_gen.get(got, 'unknown')}) but --device="
+                 f"{target} needs DevGen={want} ({by_gen[want]})")
+    print(f"insts.bin: TXN DevGen={got} (matches --device={target})")
+
+
+def _iron_env():
+    """The IRON toolchain env, from its single definition in tests/e2e/run_e2e.py.
+
+    That module owns PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR and the "is iron-tools
+    built?" check, and it puts tools-bin first on PATH so aiecc's bare `xclbinutil`
+    resolves to hrx-xclbinutil. Imported by path rather than duplicated here: the old
+    build_env() copy drifted, which is why it was removed."""
+    sys.path.insert(0, str(ROOT / "tests" / "e2e"))
+    import run_e2e
+    try:
+        return run_e2e.toolchain_env(run_e2e.require_xclbinutil())
+    except run_e2e.E2EError as e:
+        sys.exit(str(e))
+
+
+def _libhrx_path():
+    hits = sorted((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so"))
+    return hits[0] if hits else None
+
+
+def _hrx_check(lib, status, what):
+    """(ok, message) for an hrx_status_t. Consumes the status.
+
+    hrx_status_is_ok is a header inline (status == NULL) and is not exported, so a
+    c_void_p restype of None is the OK sentinel."""
+    if status is None:
+        return True, "ok"
+    msg = ctypes.c_char_p()
+    length = ctypes.c_size_t()
+    lib.hrx_status_ignore(lib.hrx_status_to_string(status, ctypes.byref(msg), ctypes.byref(length)))
+    code = lib.hrx_status_code(status)
+    text = msg.value.decode("utf-8", "replace") if msg.value else "?"
+    if msg.value:
+        lib.hrx_status_free_message(msg)
+    lib.hrx_status_ignore(status)
+    return False, f"{what} failed (code {code}): {text}"
+
+
+def _bind_libhrx(lib):
+    v, p, u32, i32p = ctypes.c_void_p, ctypes.POINTER, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int)
+    sigs = {
+        "hrx_status_code": (ctypes.c_int, [v]),
+        "hrx_status_ignore": (None, [v]),
+        "hrx_status_free_message": (None, [ctypes.c_char_p]),
+        "hrx_status_to_string": (v, [v, p(ctypes.c_char_p), p(ctypes.c_size_t)]),
+        "hrx_gpu_initialize": (v, [u32]),
+        "hrx_gpu_shutdown": (v, []),
+        "hrx_gpu_device_count": (v, [i32p]),
+    }
+    for name, (res, argtypes) in sigs.items():
+        fn = getattr(lib, name)
+        fn.restype, fn.argtypes = res, argtypes
+
+
+# Submodules with nested submodules of their own, and those a patch touches.
+RECURSIVE_SUBMODULES = ("iron-tools",)
+
+
+def cmd_submodules(args):
+    """Initialize the submodules a job needs, uniformly across Linux and Windows.
+
+    --reset restores tracked files (`update --force`). --clean additionally removes
+    untracked and ignored files from the named submodules: actions/checkout cleans the
+    repo root but not submodule work trees, so on a reused self-hosted runner a
+    previously patched tree survives, and the files patch 0003 creates are gitignored --
+    a leftover copy makes `git apply` fail with "already exists". `-x` is what removes
+    them, so `clean -fd` is not enough. Nested submodules carry a .git and are skipped.
+
+    --shallow (--depth 1 --jobs 4) is always safe here and is the single biggest win:
+    llvm-project alone carries >4 GB of history, and nothing reads it. Patches apply to
+    the work tree, `doctor` compares pins with rev-parse, and `git apply --reverse
+    --check` needs only the checkout. Fetching a pinned SHA at depth 1 works because the
+    forges we clone from serve it."""
+    force = ["--force"] if args.reset else []
+    shallow = ["--depth", "1", "--jobs", "4"] if args.shallow else []
+    update = ["git", "submodule", "update", "--init", *force]
+    # One call for the flat submodules so --jobs can fetch them in parallel; the ones with
+    # nested submodules need --recursive, which we do not want to apply to the others.
+    flat = [n for n in args.names if n not in RECURSIVE_SUBMODULES]
+    if flat:
+        sh([*update, *shallow, *[f"projects/{n}" for n in flat]], cwd=ROOT)
+    for name in args.names:
+        if name in RECURSIVE_SUBMODULES:
+            sh([*update, "--recursive", *shallow, f"projects/{name}"], cwd=ROOT)
+    for name in args.clean:
+        if name not in args.names:
+            sys.exit(f"--clean {name}: not among the initialized submodules")
+        sh(["git", "-C", str(PROJ / name), "clean", "-qfdx"])
+    print(f"submodules: ok ({', '.join(args.names)})")
+
+
+# The run-prerequisites npu_e2e needs, and nothing else. aiecc drives
+# aie-opt/aie-translate/bootgen; xclbinutil packages the xclbin. aie-lsp-server and
+# aie-visualize are editor tools and are not shipped.
+NPU_PREREQ_TOOLS = ["aiecc", "aie-opt", "aie-translate", "bootgen",
+                    "target_model", "target_model_rtti", "register_database"]
+NPU_PREREQ_ARCHIVE = BUILD / "artifacts" / "npu-prereqs.tar.gz"
+
+
+def _tool(path):
+    """`path`, or `path.exe` on Windows. Fails loudly rather than silently skipping."""
+    for cand in (path, path.with_suffix(".exe")):
+        if cand.exists():
+            return cand
+    sys.exit(f"missing from the build tree: {path}")
+
+
+def _stage(src, dst):
+    """Copy dereferenced: the archive must hold real files, never symlinks.
+
+    MLIR's AddMLIRPython.cmake materializes the aie Python package as absolute symlinks
+    into projects/llvm-project, projects/iron-tools and build/llvm. build/llvm is not
+    shipped and the consumer checks out no llvm-project, so archiving the links produces
+    an artifact that only works on the machine that built it. copytree/copy2 follow
+    symlinks by default and raise on a dangling one."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst, follow_symlinks=True)
+
+
+def _strip(stage, cts_rel):
+    """Strip the ELF binaries: they are run-only and the artifact crosses a slow link.
+
+    Never strip a static archive -- it discards the symbol table, and libflatcc_runtime.a
+    is linked by build_xadx_helper.sh. python/ holds executable .py scripts, so select by
+    location and suffix rather than by the executable bit."""
+    strip = shutil.which("strip")
+    if not strip:
+        print("package: no strip(1) on PATH; shipping unstripped binaries")
+        return
+    targets = []
+    for f in stage.rglob("*"):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(stage).as_posix()
+        in_bindir = "/bin/" in f"/{rel}" or rel.startswith("tools-bin/") or cts_rel in rel
+        if in_bindir or f.suffix == ".so" or ".so." in f.name:
+            targets.append(f)
+    if targets:
+        subprocess.run([strip, "-s", *[str(t) for t in targets]], check=True)
+        print(f"package: stripped {len(targets)} binaries")
+
+
+def cmd_package_npu_prereqs(args):
+    """Stage exactly what npu_e2e executes and tar it (build/artifacts/npu-prereqs.tar.gz).
+
+    Not `tar -h`: staging with a dereferencing copy fails loudly on a dangling symlink,
+    where tar would silently drop it."""
+    it, hrxb = BUILD / "iron-tools", PROJ / "hrx" / "build" / "cmake"
+    cts_src = hrxb.joinpath(*HRX_CTS_DIR)
+    cts_rel = "/".join(HRX_CTS_DIR)
+    stage = BUILD / "npu-stage"
+    if stage.exists():
+        shutil.rmtree(stage)
+
+    for t in NPU_PREREQ_TOOLS:
+        tool = _tool(it / "bin" / t)
+        _stage(tool, stage / "build" / "iron-tools" / "bin" / tool.name)
+    for d in ("python", "lib", "runtime_lib"):
+        _stage(it / d, stage / "build" / "iron-tools" / d)
+
+    # hrx: the runtime library plus exactly what build_xadx_helper.sh compiles and links
+    # against (flatcc runtime + its headers + the generated runtime headers). The rest of
+    # that build tree is build-time only.
+    _stage(hrxb / "libhrx", stage / "projects/hrx/build/cmake/libhrx")
+    flatcc = [f for f in hrxb.glob("*flatcc_runtime*") if f.is_file()]
+    if not flatcc:
+        sys.exit(f"flatcc_runtime not built in {hrxb} — run: python dev.py build hrx")
+    for f in flatcc:
+        _stage(f, stage / "projects/hrx/build/cmake" / f.name)
+    _stage(hrxb / "_deps/flatcc-src/include",
+           stage / "projects/hrx/build/cmake/_deps/flatcc-src/include")
+    for h in (hrxb / "runtime" / "src").rglob("*.h"):
+        _stage(h, stage / "projects/hrx/build/cmake" / h.relative_to(hrxb))
+
+    # amdxdna HAL conformance suites; the binaries only, not the CMake scratch beside them.
+    for t in HRX_CTS_TESTS:
+        binary = _tool(cts_src / t)
+        _stage(binary, stage / "projects/hrx/build/cmake" / cts_rel / binary.name)
+
+    xclbinutil = _tool(ROOT / "tools-bin" / "xclbinutil")
+    _stage(xclbinutil, stage / "tools-bin" / xclbinutil.name)
+
+    _strip(stage, cts_rel)
+
+    NPU_PREREQ_ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(NPU_PREREQ_ARCHIVE, "w:gz") as tar:
+        tar.add(stage, arcname=".")
+    shutil.rmtree(stage)
+    mb = NPU_PREREQ_ARCHIVE.stat().st_size / 1e6
+    print(f"package-npu-prereqs: ok -> {NPU_PREREQ_ARCHIVE} ({mb:.0f} MB)")
+
+
+def _rehearse(python, pythonpath, hrx_dir, hrx_build):
+    """Import the aie package the way the design build does, with the HRX backend forced.
+
+    Three distinct failures all reach `import aie.iron` as the same message -- a missing
+    libhrx, an hrxruntime the CMake SOURCES list never installed, and an xadx helper that
+    will not compile. aie/utils/__init__.py catches every exception from its hrx probe and
+    reports only "libhrx.so could not be located", and discovery.ensure_xadx_helper()
+    swallows the compiler's CalledProcessError and returns None. So check each layer
+    explicitly, cheapest and most specific first, before letting the import speak.
+
+    HRX_DIR is the source checkout (the artifact ships only projects/hrx/build);
+    HRX_BUILD is the artifact."""
+    env = dict(os.environ, PYTHONPATH=str(pythonpath), HRX_DIR=str(hrx_dir),
+               HRX_BUILD=str(hrx_build))
+
+    # 1. The files discovery.py resolves by path. Names a packaging omission outright.
+    for rel, why in [("libhrx/src/libhrx/libhrx.so", "discovery.find_libhrx()"),
+                     ("libflatcc_runtime.a", "discovery.find_hrx_build()")]:
+        if not (hrx_build / rel).is_file():
+            sys.exit(f"artifact is missing {rel} under {hrx_build} (needed by {why})")
+    if not (hrx_dir / "libhrx" / "include" / "hrx_runtime.h").is_file():
+        sys.exit(f"{hrx_dir} is not an hrx source checkout (needed by build_xadx_helper.sh)")
+
+    # 1b. dlopen it here: hrxruntime does this at import and the probe discards the reason,
+    #     so a libhrx that gained a shared-library dependency the image lacks would be
+    #     reported as "libhrx.so could not be located".
+    libhrx = hrx_build / "libhrx/src/libhrx/libhrx.so"
+    if not IS_WINDOWS:
+        try:
+            ctypes.CDLL(str(libhrx), mode=ctypes.RTLD_GLOBAL)
+        except OSError as e:
+            sys.exit(f"{libhrx} is present but will not load: {e}")
+
+    # 2. Build the xadx helper ourselves so the compiler's error is visible; hrxruntime
+    #    would build it on import and discard the reason.
+    pkg = pythonpath / "aie/utils/hostruntime/hrxruntime"
+    helper, source = pkg / "build_xadx_helper.sh", pkg / "libironhrx_xadx.so"
+    if not helper.is_file():
+        sys.exit(f"artifact is missing {helper} (is patch 0003's CMakeLists hunk applied?)")
+    if not source.exists() and not IS_WINDOWS:   # the helper is a POSIX shell script
+        sh(["bash", str(helper)], env=dict(env, HRX_DIR=str(hrx_dir), HRX_BUILD=str(hrx_build)))
+
+    # 3. Now the probe can only fail for reasons the layers above did not cover, and
+    #    IRON_RUNTIME=auto lets aie.utils import so its DEBUG log reaches us.
+    script = (
+        "import logging, sys\n"
+        "logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)\n"
+        "import aie.utils as u\n"
+        "from aie.utils.hostruntime.hrxruntime import discovery\n"
+        "print('hrx_dir  :', discovery.find_hrx_dir())\n"
+        "print('hrx_build:', discovery.find_hrx_build())\n"
+        "print('libhrx   :', discovery.find_libhrx())\n"
+        "print('xadx     :', discovery.find_xadx_helper())\n"
+        "assert u.has_hrx, 'hrx backend unavailable; see the DEBUG line above for why'\n"
+    )
+    sh([python, "-c", script], env=dict(env, IRON_RUNTIME="auto"))
+
+    # 4. Finally the real thing: the design build's import, with the backend forced.
+    sh([python, "-c", "import aie.ir, aie.iron\nprint('rehearsal ok:', aie.ir.__file__)\n"],
+       env=dict(env, IRON_RUNTIME="hrx"))
+
+
+def cmd_verify_npu_prereqs(args):
+    """Assert the run-prerequisites are self-contained, off-device.
+
+    --extracted checks a tree the consumer already unpacked; the default checks the
+    archive and then rehearses npu_e2e's imports from it."""
+    hrxruntime = "build/iron-tools/python/aie/utils/hostruntime/hrxruntime"
+    required = ["build/iron-tools/python/aie/ir.py",
+                f"{hrxruntime}/discovery.py",
+                # build_xadx_helper.sh compiles iron_hrx_xadx.cpp against these; discovery
+                # resolves libhrx.so and the flatcc archive by path, so a packaging omission
+                # here surfaces as an unrelated "libhrx.so could not be located".
+                f"{hrxruntime}/build_xadx_helper.sh",
+                f"{hrxruntime}/iron_hrx_xadx.cpp",
+                "projects/hrx/build/cmake/libhrx/src/libhrx/libhrx.so",
+                "projects/hrx/build/cmake/libflatcc_runtime.a"]
+    if args.extracted:
+        # `find`/rglob over a missing root yields nothing, so assert the roots exist
+        # before concluding anything from the absence of symlinks.
+        roots = [BUILD / "iron-tools", PROJ / "hrx" / "build", ROOT / "tools-bin"]
+        for r in roots:
+            if not r.is_dir():
+                sys.exit(f"{r} missing: did the artifact extract?")
+        links = [p for r in roots for p in r.rglob("*") if p.is_symlink()]
+        if links:
+            sys.exit("artifact has symlinks (staged without dereferencing?):\n  " +
+                     "\n  ".join(str(p) for p in links[:20]))
+        for rel in required:
+            if not (ROOT / rel).is_file():
+                sys.exit(f"missing from the artifact: {rel}")
+        print(f"verify-npu-prereqs: ok (no symlinks under {len(roots)} roots)")
+        return 0
+
+    if not NPU_PREREQ_ARCHIVE.exists():
+        sys.exit(f"{NPU_PREREQ_ARCHIVE} not found — run: python dev.py package-npu-prereqs")
+    with tarfile.open(NPU_PREREQ_ARCHIVE) as tar:
+        members = tar.getmembers()
+        links = [m.name for m in members if m.issym() or m.islnk()]
+        if links:
+            sys.exit(f"archive holds {len(links)} link(s); it is not self-contained:\n  " +
+                     "\n  ".join(links[:20]))
+        names = {m.name.lstrip("./") for m in members}
+        for rel in required:
+            if rel not in names:
+                sys.exit(f"missing from the archive: {rel}")
+    rehearsal = BUILD / "rehearsal"
+    if rehearsal.exists():
+        shutil.rmtree(rehearsal)
+    rehearsal.mkdir(parents=True)
+    with tarfile.open(NPU_PREREQ_ARCHIVE) as tar:
+        tar.extractall(rehearsal, filter="data")
+    _rehearse(venv_py(), rehearsal / "build" / "iron-tools" / "python",
+              PROJ / "hrx", rehearsal / "projects" / "hrx" / "build" / "cmake")
+    shutil.rmtree(rehearsal)
+    print(f"verify-npu-prereqs: ok ({len(members)} entries, no links)")
+    return 0
+
+
+def cmd_npu_probe(args):
+    """Is an NPU present and can libhrx open it? Run before test-npu/test-hrx-cts so a
+    missing or busy device is not reported as a dispatch failure. Needs no artifact
+    beyond libhrx.so."""
+    rc = 0
+    nodes = sorted(ACCEL_DIR.glob("accel*")) if ACCEL_DIR.is_dir() else []
+    if not nodes:
+        print(f"  [MISS] no {ACCEL_DIR}/accel* node — is the amdxdna driver loaded?")
+        rc = 1
+    for n in nodes:
+        ok = os.access(n, os.R_OK) and os.access(n, os.W_OK)
+        print(f"  [{'ok ' if ok else 'MISS'}] {n} (read+write={ok})")
+        if not ok:
+            rc = 1
+
+    lib_path = _libhrx_path()
+    if not lib_path:
+        print("  [MISS] libhrx.so — run: python dev.py build hrx")
+        return 1
+    print(f"  [ok ] libhrx: {lib_path}")
+
+    lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+    _bind_libhrx(lib)
+    ok, msg = _hrx_check(lib, lib.hrx_gpu_initialize(0), "hrx_gpu_initialize")
+    if not ok:
+        print(f"  [MISS] {msg}")
+        return 1
+    print("  [ok ] hrx_gpu_initialize")
+
+    count = ctypes.c_int(0)
+    ok, msg = _hrx_check(lib, lib.hrx_gpu_device_count(ctypes.byref(count)), "hrx_gpu_device_count")
+    if not ok:
+        print(f"  [MISS] {msg}")
+        rc = 1
+    else:
+        print(f"  [{'ok ' if count.value else 'MISS'}] hrx gpu devices: {count.value}")
+        if count.value == 0:
+            rc = 1
+    lib.hrx_status_ignore(lib.hrx_gpu_shutdown())
+
+    print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
+    return rc
+
+
+def _gtest_counts(output):
+    """(passed, skipped) from a gtest run's summary lines."""
+    import re
+    passed = skipped = 0
+    for line in output.splitlines():
+        m = re.match(r"\[\s+PASSED\s+\] (\d+) test", line)
+        if m:
+            passed = int(m.group(1))
+        m = re.match(r"\[\s+SKIPPED\s+\] (\d+) test", line)
+        if m:
+            skipped = int(m.group(1))
+    return passed, skipped
+
+
+def cmd_test_hrx_cts(args):
+    """Run the amdxdna HAL conformance suites on the NPU (REQUIRES an NPU). These open a
+    real device, so they localise a dispatch failure to the HAL rather than the IRON
+    design: core_tests covers driver/event/semaphore (incl. chained command buffers).
+
+    A suite whose cases all self-skip still exits 0 -- gtest does not count a skip as a
+    failure -- so report passed/skipped per suite and fail a suite that ran nothing. The
+    amdxdna backend skips every fill/copy/update case until it has native blit support,
+    which is why command_buffer_tests is mostly skips today."""
+    cts = PROJ.joinpath("hrx", "build", "cmake", *HRX_CTS_DIR)
+    names = [args.suite] if getattr(args, "suite", None) else HRX_CTS_TESTS
+    missing = [n for n in names if not (cts / n).exists()]
+    if missing:
+        sys.exit(f"CTS binaries missing ({', '.join(missing)}) — run: python dev.py build hrx")
+    failed, counts = [], {}
+    for n in names:
+        print(f"\n=== hrx CTS: {n} ===", flush=True)
+        r = subprocess.run([str(cts / n)], capture_output=True, text=True)
+        print(r.stdout, end="")
+        if r.stderr:
+            print(r.stderr, end="", file=sys.stderr)
+        counts[n] = _gtest_counts(r.stdout)
+        if r.returncode != 0:
+            failed.append(n)
+        elif counts[n][0] == 0:
+            print(f"{n}: every case skipped; the suite asserts nothing")
+            failed.append(n)
+
+    print("\nhrx CTS summary:")
+    for n in names:
+        p, s = counts.get(n, (0, 0))
+        print(f"  {n:24s} {p:3d} passed  {s:3d} skipped")
+    total_p = sum(c[0] for c in counts.values())
+    total_s = sum(c[1] for c in counts.values())
+    if failed:
+        print(f"\nhrx CTS: FAIL ({', '.join(failed)})")
+        return 1
+    print(f"\nhrx CTS: PASS ({total_p} passed, {total_s} skipped across {len(names)} suites)")
+    return 0
+
+
+def cmd_test_npu(args):
+    """ON-DEVICE e2e (REQUIRES an NPU, e.g. a gfx1151/Strix box): build an iron-tools
+    design and dispatch it once through the hrx HAL, checking the result. That single
+    ERT_START_NPU dispatch is what the compiler emits; it is the gate.
+
+    --chain instead runs patch 0003's chained testbench, which dispatches the same
+    kernel several times in one ERT_CMD_CHAIN. Chaining is an hrx runlist feature
+    rather than compiler output, and it currently aborts past two links, so it is
+    opt-in and does not gate CI.
+
+    Needs `build iron-tools` + `build hrx` (which builds libhrx.so) first."""
+    design = getattr(args, "design", None) or "vector_scalar_add"
+    ddir = PROJ / "iron-tools" / "programming_examples" / "basic" / design
+    if not ddir.is_dir():
+        sys.exit(f"{design}: no such design under programming_examples/basic")
+    # The hrx IRON host-runtime is added by patch 0003 and registered in the built
+    # package by its python/CMakeLists.txt hunk; without both, IRON_RUNTIME=hrx raises.
+    if not (BUILD / "iron-tools" / "python" / "aie" / "utils" / "hostruntime"
+            / "hrxruntime" / "discovery.py").exists():
+        sys.exit("hrxruntime missing from the built aie package — "
+                 "is patches/iron-tools/0003 applied? (run: python dev.py fetch, then build iron-tools)")
+    if not list((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so")):
+        sys.exit("libhrx.so not found — run: python dev.py build hrx")
+
+    env = _iron_env()
+    env["HRX_DIR"] = str(PROJ / "hrx")
+    env["HRX_BUILD"] = str(PROJ / "hrx" / "build" / "cmake")
+    env["IRON_RUNTIME"] = "hrx"
+    # makefile-common reads NPU2, not DEVICE (`devicename ?= $(if $(filter 1,$(NPU2)),
+    # npu2,npu)`). Building for the wrong device is accepted by the driver and then never
+    # completes, so check the emitted TXN's DevGen rather than trusting the make flags.
+    target = getattr(args, "device", None) or "npu2"
+    sh(["make", "all", *NPU_TARGETS[target]["make"]], cwd=ddir, env=env)
+    _require_txn_devgen(ddir / "build" / "insts.bin", target)
+
+    if getattr(args, "chain", False):
+        if not (ddir / "test_chain_hrx.py").exists():
+            sys.exit(f"{design}: no chained testbench (patch 0003 only adds one for vector_scalar_add)")
+        testbench = [venv_py(), "test_chain_hrx.py"]
+    else:
+        testbench = [venv_py(), ROOT / "tests" / "npu" / "single_dispatch.py"]
+    sh(testbench + ["--xclbin", "build/final.xclbin", "--instr", "build/insts.bin",
+                    "--kernel", "MLIR_AIE"], cwd=ddir, env=env)
+    print(f"test-npu: ok ({design} ran on the NPU via hrx)")
+
+
 def cmd_deps(args):
     """Print the in-repo dependency manifest (self-contained)."""
     print((ROOT / "requirements.txt").read_text())
@@ -548,10 +1069,26 @@ def main():
     sub.add_parser("setup")
     sub.add_parser("fetch")
     b = sub.add_parser("build"); b.add_argument("what",
-        choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "all"])
+        choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "all"])
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     sub.add_parser("smoke")
+    sm = sub.add_parser("submodules"); sm.add_argument("names", nargs="+")
+    sm.add_argument("--reset", action="store_true", help="force-reset tracked files")
+    sm.add_argument("--clean", nargs="*", default=[],
+                    help="also remove untracked+ignored files (needed where a patch adds them)")
+    sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
+    sub.add_parser("package-npu-prereqs")
+    v = sub.add_parser("verify-npu-prereqs")
+    v.add_argument("--extracted", action="store_true",
+                   help="check an already-unpacked tree instead of the archive")
+    sub.add_parser("npu-probe")
+    c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
+    tn = sub.add_parser("test-npu"); tn.add_argument("design", nargs="?")
+    tn.add_argument("--device", choices=sorted(NPU_TARGETS), default="npu2",
+                    help="NPU generation to build the design for (default: npu2/Strix)")
+    tn.add_argument("--chain", action="store_true",
+                    help="run the chained testbench instead of the single-dispatch gate")
     sub.add_parser("deps")
     a = p.parse_args()
     if a.cmd == "doctor": sys.exit(cmd_doctor(a))
@@ -560,9 +1097,16 @@ def main():
     elif a.cmd == "deps": cmd_deps(a)
     elif a.cmd == "test": cmd_test(a)
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
+    elif a.cmd == "submodules": cmd_submodules(a)
+    elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
+    elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
+    elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))
+    elif a.cmd == "test-hrx-cts": sys.exit(cmd_test_hrx_cts(a))
+    elif a.cmd == "test-npu": cmd_test_npu(a)
     elif a.cmd == "build":
         {"llvm": cmd_build_llvm, "iron-tools": cmd_build_iron_tools,
          "hrx-xclbinutil": cmd_build_hrx_xclbinutil, "hrx": cmd_build_hrx,
+         "hrx-cts": cmd_build_hrx_cts,
          "all": cmd_build_all}[a.what](a)
 
 
