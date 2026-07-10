@@ -13,3 +13,5 @@ projects/*/build-*/
 **/version.h
 *.log
 *_aie_cdo_*.bin
+# run_e2e.py's functions are importable (and unit-testable); python caches the bytecode
+__pycache__/

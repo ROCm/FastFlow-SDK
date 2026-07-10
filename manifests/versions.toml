@@ -18,6 +18,7 @@ upstream   = "github.com/ROCm/llvm-project"              # remote 'amd' (fetch-o
 commit     = "46fcb339fb61119b337f973c7ca9e710a319fdd0"  # ROCm amd-llvm weekly snapshot
 branch     = "amd-compiler-ww-2026-17"                   # weekly snapshot the pin sits on (NOT the moving amd-staging)
 llvm_major = 23
+win_note   = "Built with the STATIC MSVC runtime on Windows (dev.py passes CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded): mlir-aie sets that unconditionally and lld-link rejects a mixed link. Same CRT upstream builds its own LLVM with (utils/mlir_wheels/setup.py). LLVM_USE_CRT_RELEASE is gone in LLVM 23."
 
 [iron_tools]                    # projects/iron-tools — built from source against [llvm]
 repo     = "github.com/Xilinx/mlir-aie"
@@ -25,6 +26,9 @@ commit   = "14273685bebf296798cc86facd3459b5a017cda7"    # nightly 2026-06-13 ("
 provides = ["aie-opt", "aie-translate", "aiecc.py", "IRON python", "bootgen", "aie_api", "aie-rt"]
 note     = "Builds cleanly against ROCm LLVM (46fcb339); its clone-llvm.sh nominally pins llvm.org ea2f5081 (also LLVM 23)."
 e2e_design = "programming_examples/basic/matrix_scalar_add"   # the design `dev.py test` builds
+e2e_device = "npu2"                                          # -d passed to that design
+patches  = ["patches/iron-tools/0001-eudsl-for-amd-llvm-23.patch", "patches/iron-tools/0002-windows-clang-cl.patch"]
+win_note = "0002 is Windows-only in effect (guards keyed on CMake's MSVC var, empty under gcc/clang): gives /EHsc to everything that throws (bootgen, all four test/CppTests, test_utils) because MSVC-style drivers default exceptions off and clang-cl rejects throw outright, and drops -Werror=sign-compare, which aie-rt trips only because MS-ABI enums are signed. Verified a no-op on Linux: build.ninja is byte-identical with and without it."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
 wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -34,14 +38,17 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
 branch     = "amdxdna-hal-native"                         # == ROCm/hrx-system PR #37 (+ follow-ups)
-commit     = "9d369966fbc9f798cea5115cb02de2ba833bea9d"
-hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ; own shim-xdna (no XRT)
+commit     = "a4cca35a38589c064acfabae3c001d51329c6d5f"
+hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
+note       = "Branch was rebased: the old pin (9d36996) is NOT an ancestor of this one; its single commit reappears rewritten as d9ce115. The bump also drops `iree_alignof(iree_max_align_t)` in hal/topology_builder.c, which expanded to `__alignof(16)` (iree_max_align_t is the literal 16 on Windows) -- a hard error under MSVC cl."
 
 [hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
 repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready
+branch     = "main"
+commit     = "f29b4c9190b7ef1c9d6764b3e064fc2c5db647ce"  # windows/clang-cl support (PR #2)
 status     = "transitional — may be upstreamed to mlir-aie / hrx / other later"
 xrt_source = "github.com/nod-ai/XRT @ a9fdf618ceba32d28bbf6715a5ee627a51a74b24"  # XRT 2.18.0
-note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, no XRT install)."
+note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, no XRT install). Builds on Windows with clang-cl ONLY: its vendored aie-pdi-transform sources use GNU extensions (__attribute__((aligned)), void* arithmetic) that MSVC cl rejects."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
