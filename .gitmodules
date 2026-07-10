@@ -9,13 +9,7 @@
 	path = projects/hrx
 	url = https://github.com/jtuyls/hrx.git
 	branch = amdxdna-hal-native
-	ignore = dirty
 [submodule "projects/hrx-xclbinutil"]
 	path = projects/hrx-xclbinutil
 	url = https://github.com/jtuyls/hrx-xclbinutil.git
 	branch = main
-[submodule "projects/FastFlowLM"]
-	path = projects/FastFlowLM
-	url = https://github.com/Abhishek-Varma/FastFlowLM_JT.git
-	branch = hrx_native_pr
-	ignore = dirty

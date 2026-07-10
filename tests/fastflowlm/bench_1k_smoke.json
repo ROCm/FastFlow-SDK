@@ -1,5 +1,0 @@
-{
-  "input_text": "Summarize this technical note: FastFlowLM is being validated through the HRX amdxdna runtime. The test should load a small model, run a one thousand token benchmark, and confirm that the generated benchmark CSV is written successfully.",
-  "iterations": 1,
-  "max_length": 1024
-}
