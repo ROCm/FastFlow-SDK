@@ -46,6 +46,30 @@ state N (error_index M, submit_index K)` reaches `dev.py test-npu` and the CTS.
 
 **Remove when:** fixed upstream in hrx (`libhrx/src/libhrx/semaphore.c`).
 
+### 0002-add-buffer-map-persistent-compat.patch
+Restores the removed `hrx_buffer_map_persistent` export as a compatibility wrapper
+around `hrx_buffer_map_with_mode(..., HRX_MAPPING_MODE_PERSISTENT, ...)`.
+
+**Why:** the pinned FastFlowLM PR's bundled engine libraries were built against the
+older libhrx ABI and still import `hrx_buffer_map_persistent`. The current pinned
+HRX has the generalized mapping API, so this keeps the staging stack link/runtime
+compatible without rebuilding all engine libraries.
+
+**Remove when:** FastFlowLM's bundled engine libraries are rebuilt against the
+current HRX mapping API, or HRX carries this compatibility wrapper upstream.
+
+## patches/FastFlowLM/
+
+### 0001-use-hrx-map-with-mode.patch
+Updates the FastFlowLM C++ HRX wrapper to call `hrx_buffer_map_with_mode` with
+`HRX_MAPPING_MODE_PERSISTENT` instead of the removed `hrx_buffer_map_persistent`
+helper.
+
+**Why:** the pinned HRX public header no longer declares `hrx_buffer_map_persistent`
+for new code.
+
+**Remove when:** FastFlowLM PR #602 is updated for the current HRX API.
+
 ## patches/iron-tools/
 
 ### 0003-add-hrx-iron-path.patch
