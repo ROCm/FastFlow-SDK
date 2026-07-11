@@ -18,6 +18,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py submodules NAME...    # init (and optionally reset/clean) submodules
   python dev.py package-npu-prereqs   # stage + tar what the NPU job needs (no NPU)
+  python dev.py unpack-npu-prereqs    # extract that archive (codec-agnostic; no NPU)
   python dev.py verify-npu-prereqs    # assert that archive is self-contained + imports (no NPU)
   python dev.py npu-probe             # is an NPU present + openable by libhrx? (needs an NPU)
   python dev.py test-hrx-cts [SUITE]  # amdxdna HAL conformance suites (needs an NPU)
@@ -27,7 +28,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, ctypes, os, shutil, subprocess, sys, tarfile
+import argparse, contextlib, ctypes, os, shutil, subprocess, sys, tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -380,13 +381,61 @@ def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
     return [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"] if cc and cxx else []
 
 
+def _ccache_flags():
+    """Route compiles through ccache when it is on PATH; nothing when it is not.
+
+    COMPILER_LAUNCHER rather than LLVM_CCACHE_BUILD, because that knob only exists in LLVM's
+    build and left iron-tools/hrx/hrx-xclbinutil uncached — ~3,800 objects in all, of which
+    LLVM is 3,265. Staying optional is deliberate: a plain dev box has no ccache, and
+    LLVM_CCACHE_BUILD=ON is a FATAL_ERROR when it cannot find one.
+
+    Caching only pays off if the cache OUTLIVES THE JOB. The CI runners are ephemeral, so the
+    workflows persist CCACHE_DIR through actions/cache; without that this is a no-op (which is
+    what it silently was: CCACHE_DIR pointed into the workspace and nothing preserved it)."""
+    if not shutil.which("ccache"):
+        return []
+    return [
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache", "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+        # PCH off whenever ccache is in play. LLVM's HandleLLVMOptions warns that ccache +
+        # precompiled headers on a non-Clang compiler "may lead to false positives" -- i.e. a
+        # cache hit that yields a WRONG object. LLVM keeps PCH off by default anyway, so this
+        # costs nothing, and a silently miscompiled build is not worth a marginal speedup.
+        "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON",
+    ]
+
+
+# What this stack actually consumes out of the LLVM build, and nothing else.
+#
+# `cmake --build` with no --target builds LLVM's default `all`: 133 binaries, 2.8 GB of
+# bin/ — mlir-opt (309 MB), mlir-rewrite, mlir-reduce, mlir-transform-opt, mlir-lsp-server,
+# mlir-query, llc, opt, lli, ... — and NOT ONE of them is ever run here. iron-tools links
+# the MLIR *libraries* and builds its own aie-opt/aie-translate. Ninja's own graph puts
+# `all` at 114 link steps against 9 for the list below, and the 105 it drops are the huge
+# ones. Measured: this list yields 11 binaries / 21 MB of bin/ instead of 133 / 2.8 GB.
+#
+#   {llvm,mlir}-libraries  the static libs iron-tools links. find_package(MLIR) resolves
+#                          IMPORTED targets to lib/*.a, so these must exist ON DISK — which
+#                          is why there is no smaller subset: we cannot know which .a the
+#                          downstream link will reach for.
+#   {llvm,mlir}-headers    the tablegen'd *.inc under the build tree's include dirs
+#   *tblgen, mlir-pdll,    build-time generators that MLIR's cmake functions invoke in the
+#   mlir-linalg-ods-*      downstream (iron-tools) build
+#   MLIRPythonModules,     AIE_ENABLE_BINDINGS_PYTHON builds on MLIR's python packages
+#   mlir-python-sources
+#   FileCheck, not, count  iron-tools' lit suites name these as DEPENDS
+#   llvm-config            queried by downstream cmake
+LLVM_BUILD_TARGETS = [
+    "llvm-libraries", "mlir-libraries", "llvm-headers", "mlir-headers",
+    "llvm-tblgen", "mlir-tblgen", "mlir-linalg-ods-yaml-gen", "mlir-pdll",
+    "MLIRPythonModules", "mlir-python-sources",
+    "FileCheck", "not", "count", "llvm-config",
+]
+
+
 def cmd_build_llvm(args):
     """LLVM+MLIR from the amd-llvm pin (mlir-aie's flags)."""
     OUT.mkdir(exist_ok=True)
     cc, cxx = _compilers()
-    # ccache is OPTIONAL: LLVM_CCACHE_BUILD=ON is a FATAL_ERROR if ccache isn't found, so
-    # only enable it when ccache is on PATH (Linux CI has it; a Windows runner may not).
-    ccache = ["-DLLVM_CCACHE_BUILD=ON"] if shutil.which("ccache") else []
     # Static MSVC runtime, matching what iron-tools expects: it does
     # `set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded...")` unconditionally, and lld-link
     # rejects a mixed link ("/failifmismatch: ... 'RuntimeLibrary'"). This is the same CRT
@@ -405,13 +454,18 @@ def cmd_build_llvm(args):
         "-DLLVM_ENABLE_PROJECTS=mlir", "-DLLVM_TARGETS_TO_BUILD=host",
         "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
         "-DMLIR_ENABLE_BINDINGS_PYTHON=ON", "-DCMAKE_BUILD_TYPE=Release",
-        "-DLLVM_INSTALL_UTILS=ON", *ccache,
+        "-DLLVM_INSTALL_UTILS=ON", *_ccache_flags(),
         # Nothing in this stack consumes the LLVM/MLIR examples or benchmarks, and the
         # default target builds them. Dropping them cuts build time, and it removes
         # mlir/examples (gated on LLVM_INCLUDE_EXAMPLES) whose long target names are what
         # first pushed the Windows rc.exe output path past MAX_PATH. Utils (FileCheck,
         # lit, ...) are separate and still built via LLVM_INSTALL_UTILS above.
         "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+        # We never run LLVM's or MLIR's own test suites, and iron-tools needs no test dialect
+        # (checked: no MLIRTest*/TestDialect reference in its cmake). FileCheck/not/count are
+        # gated on LLVM_INCLUDE_UTILS, NOT on this, so iron-tools' own lit suites keep the
+        # DEPENDS they name.
+        "-DLLVM_INCLUDE_TESTS=OFF", "-DMLIR_INCLUDE_TESTS=OFF",
         *_cc_flags(cc, cxx), *crt,
         f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
     ]
@@ -420,7 +474,8 @@ def cmd_build_llvm(args):
     if not IS_WINDOWS and "clang" in (cc or "") and shutil.which("ld.lld"):
         cfg.append("-DLLVM_USE_LINKER=lld")
     sh(cfg, env=cmake_env())
-    sh([cmake_bin(), "--build", cmake_path(LLVM_BUILD), "-j", NPROC], env=cmake_env())
+    sh([cmake_bin(), "--build", cmake_path(LLVM_BUILD), "-j", NPROC,
+        "--target", *LLVM_BUILD_TARGETS], env=cmake_env())
     print("build llvm: ok ->", LLVM_BUILD / "lib" / "cmake")
 
 
@@ -441,7 +496,7 @@ def cmd_build_iron_tools(args):
     cfg = [
         cmake_bin(), "-G", "Ninja",
         "-S", cmake_path(src), "-B", cmake_path(bdir), "-DCMAKE_BUILD_TYPE=Release",
-        *_cc_flags(cc, cxx),
+        *_cc_flags(cc, cxx), *_ccache_flags(),
         f"-DLLVM_DIR={cmake_path(LLVM_BUILD/'lib'/'cmake'/'llvm')}",
         f"-DMLIR_DIR={cmake_path(LLVM_BUILD/'lib'/'cmake'/'mlir')}",
         f"-DCMAKE_MODULE_PATH={cmake_path(src/'cmake'/'modulesXilinx')}",
@@ -460,7 +515,7 @@ def cmd_build_iron_tools(args):
 def cmd_build_hrx_xclbinutil(args):
     d = PROJ / "hrx-xclbinutil"
     sh([cmake_bin(), "-G", "Ninja", "-B", cmake_path(d / "bld"), "-S", cmake_path(d),
-        "-DCMAKE_BUILD_TYPE=Release"], env=cmake_env())
+        "-DCMAKE_BUILD_TYPE=Release", *_ccache_flags()], env=cmake_env())
     sh([cmake_bin(), "--build", cmake_path(d / "bld"), "--target", "hrx-xclbinutil",
         "-j", NPROC], env=cmake_env())
     # expose as `xclbinutil` for aiecc.py
@@ -492,7 +547,7 @@ def cmd_build_hrx(args):
     # IREE_BUILD_TESTS=ON only *declares* the test targets (iree_cc_test is a no-op
     # without it); nothing here builds them. `build hrx-cts` compiles the four the
     # NPU runner needs -- see cmd_build_hrx_cts.
-    sh([sys.executable, "dev.py", "cmake", "configure", *gen,
+    sh([sys.executable, "dev.py", "cmake", "configure", *gen, *_ccache_flags(),
         "-DIREE_HAL_DRIVER_AMDXDNA=ON", "-DIREE_BUILD_TESTS=ON"], cwd=d)
     # cmake_bin()/cmake_env(): the pip cmake lives in the venv and is not on PATH, so a
     # bare `cmake` here finds the system one on Linux and nothing at all on Windows.
@@ -694,7 +749,62 @@ def cmd_submodules(args):
 # aie-visualize are editor tools and are not shipped.
 NPU_PREREQ_TOOLS = ["aiecc", "aie-opt", "aie-translate", "bootgen",
                     "target_model", "target_model_rtti", "register_database"]
-NPU_PREREQ_ARCHIVE = BUILD / "artifacts" / "npu-prereqs.tar.gz"
+NPU_PREREQ_DIR = BUILD / "artifacts"
+
+
+def _prereq_codec():
+    """Codec for the run-prereqs archive: zstd when it is on PATH, gzip otherwise.
+
+    Measured on the real payload (1.2 GB staged): tarfile's default gzip -9 takes 98 s and
+    yields 324 MB; zstd -6 -T0 takes 3 s and yields 266 MB — faster AND smaller, so there is
+    no trade to weigh. gzip stays as the fallback and drops to level 6 (35 s, 327 MB): level
+    9 costs 3x the time for 1% of the size.
+
+    Probing rather than hardcoding is what keeps the two ends in agreement: the build job and
+    the NPU job run the same container image, so this resolves identically on both, and both
+    go through this module rather than naming a codec in YAML.
+    """
+    return "zst" if shutil.which("zstd") else "gz"
+
+
+def _prereq_archive():
+    """Where package-npu-prereqs writes: named for the codec this machine can actually use."""
+    return NPU_PREREQ_DIR / f"npu-prereqs.tar.{_prereq_codec()}"
+
+
+def _find_prereq_archive(where):
+    """The archive present under `where`, whichever codec produced it — read side, so trust
+    the file on disk over what this machine would have written. None if there is none."""
+    for ext in ("zst", "gz"):
+        p = where / f"npu-prereqs.tar.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+@contextlib.contextmanager
+def _prereq_tar(path):
+    """Read the archive. tarfile handles .gz natively; .zst goes through the zstd CLI, as the
+    stdlib has no zstd codec before Python 3.14 and this targets 3.12. Streamed ('r|'), so a
+    handle is a single forward pass — reopen for a second pass."""
+    if path.suffix != ".zst":
+        with tarfile.open(path) as tar:
+            yield tar
+        return
+    # The producer had zstd and we do not. Only reachable if the two ends stopped sharing a
+    # container image; say so, rather than dying on a bare FileNotFoundError from Popen.
+    if not shutil.which("zstd"):
+        sys.exit(f"{path.name} needs zstd to read, and zstd is not on PATH — install it, or "
+                 f"re-package where zstd is absent (dev.py then writes .tar.gz)")
+    proc = subprocess.Popen(["zstd", "-dc", str(path)], stdout=subprocess.PIPE)
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+            yield tar
+    finally:
+        proc.stdout.close()
+        # SIGPIPE (-13) is expected when the reader stopped early; anything else is a failure.
+        if proc.wait() not in (0, -13):
+            sys.exit(f"zstd -dc {path} failed (exit {proc.returncode})")
 
 
 def _tool(path):
@@ -744,7 +854,8 @@ def _strip(stage, cts_rel):
 
 
 def cmd_package_npu_prereqs(args):
-    """Stage exactly what npu_e2e executes and tar it (build/artifacts/npu-prereqs.tar.gz).
+    """Stage exactly what npu_e2e executes and tar it (build/artifacts/npu-prereqs.tar.{zst,gz}
+    — see _prereq_codec; npu_e2e reads it back via `dev.py unpack-npu-prereqs`).
 
     Not `tar -h`: staging with a dereferencing copy fails loudly on a dangling symlink,
     where tar would silently drop it."""
@@ -785,12 +896,27 @@ def cmd_package_npu_prereqs(args):
 
     _strip(stage, cts_rel)
 
-    NPU_PREREQ_ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(NPU_PREREQ_ARCHIVE, "w:gz") as tar:
-        tar.add(stage, arcname=".")
+    archive = _prereq_archive()
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    # Drop an archive of the other codec: _find_prereq_archive prefers .zst, so a stale one
+    # left by an earlier run would be picked over the .gz we are writing now.
+    for other in NPU_PREREQ_DIR.glob("npu-prereqs.tar.*"):
+        if other != archive:
+            other.unlink()
+    if archive.suffix == ".zst":
+        proc = subprocess.Popen(["zstd", "-6", "-T0", "-q", "-f", "-o", str(archive)],
+                                stdin=subprocess.PIPE)
+        with tarfile.open(fileobj=proc.stdin, mode="w|") as tar:
+            tar.add(stage, arcname=".")
+        proc.stdin.close()
+        if proc.wait() != 0:
+            sys.exit(f"zstd failed (exit {proc.returncode})")
+    else:
+        with tarfile.open(archive, "w:gz", compresslevel=6) as tar:
+            tar.add(stage, arcname=".")
     shutil.rmtree(stage)
-    mb = NPU_PREREQ_ARCHIVE.stat().st_size / 1e6
-    print(f"package-npu-prereqs: ok -> {NPU_PREREQ_ARCHIVE} ({mb:.0f} MB)")
+    mb = archive.stat().st_size / 1e6
+    print(f"package-npu-prereqs: ok -> {archive} ({mb:.0f} MB)")
 
 
 def _rehearse(python, pythonpath, hrx_dir, hrx_build):
@@ -887,9 +1013,10 @@ def cmd_verify_npu_prereqs(args):
         print(f"verify-npu-prereqs: ok (no symlinks under {len(roots)} roots)")
         return 0
 
-    if not NPU_PREREQ_ARCHIVE.exists():
-        sys.exit(f"{NPU_PREREQ_ARCHIVE} not found — run: python dev.py package-npu-prereqs")
-    with tarfile.open(NPU_PREREQ_ARCHIVE) as tar:
+    archive = _find_prereq_archive(NPU_PREREQ_DIR)
+    if archive is None:
+        sys.exit(f"no npu-prereqs.tar.* under {NPU_PREREQ_DIR} — run: python dev.py package-npu-prereqs")
+    with _prereq_tar(archive) as tar:
         members = tar.getmembers()
         links = [m.name for m in members if m.issym() or m.islnk()]
         if links:
@@ -903,13 +1030,28 @@ def cmd_verify_npu_prereqs(args):
     if rehearsal.exists():
         shutil.rmtree(rehearsal)
     rehearsal.mkdir(parents=True)
-    with tarfile.open(NPU_PREREQ_ARCHIVE) as tar:
+    with _prereq_tar(archive) as tar:   # streamed: a second pass needs a second handle
         tar.extractall(rehearsal, filter="data")
     _rehearse(venv_py(), rehearsal / "build" / "iron-tools" / "python",
               PROJ / "hrx", rehearsal / "projects" / "hrx" / "build" / "cmake")
     shutil.rmtree(rehearsal)
     print(f"verify-npu-prereqs: ok ({len(members)} entries, no links)")
     return 0
+
+
+def cmd_unpack_npu_prereqs(args):
+    """Extract the artifact the build job published, into the repo root.
+
+    Extraction lives here rather than as a `tar -xf` in the workflow for the same reason
+    packaging does: the two ends must agree on the codec, and only one of them gets to
+    choose. Keeping both in this module means they read the same _prereq_codec()."""
+    src = Path(args.dir)
+    archive = _find_prereq_archive(src)
+    if archive is None:
+        sys.exit(f"no npu-prereqs.tar.* under {src} — did the download-artifact step run?")
+    with _prereq_tar(archive) as tar:
+        tar.extractall(ROOT, filter="data")
+    print(f"unpack-npu-prereqs: ok ({archive.name} -> {ROOT})")
 
 
 def cmd_npu_probe(args):
@@ -1079,6 +1221,8 @@ def main():
                     help="also remove untracked+ignored files (needed where a patch adds them)")
     sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
     sub.add_parser("package-npu-prereqs")
+    u = sub.add_parser("unpack-npu-prereqs")
+    u.add_argument("--dir", default=".artifact", help="where download-artifact put it")
     v = sub.add_parser("verify-npu-prereqs")
     v.add_argument("--extracted", action="store_true",
                    help="check an already-unpacked tree instead of the archive")
@@ -1099,6 +1243,7 @@ def main():
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "submodules": cmd_submodules(a)
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
+    elif a.cmd == "unpack-npu-prereqs": cmd_unpack_npu_prereqs(a)
     elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
     elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))
     elif a.cmd == "test-hrx-cts": sys.exit(cmd_test_hrx_cts(a))

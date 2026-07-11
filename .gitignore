@@ -5,6 +5,8 @@
 /out/
 /tools-bin/
 /.cache/
+# vcpkg's binary-package store on the Windows CI (restored/saved by actions/cache)
+/.vcpkg-bincache/
 # per-project local build dirs (submodules are tracked only as gitlinks)
 projects/*/bld/
 projects/*/build/

@@ -19,6 +19,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded PR runs: they queue on the single gfx1151 NPU runner. main is exempt
+# (run_id makes the group unique), so every landed commit is still validated on its own.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     name: Linux
@@ -79,8 +85,9 @@ jobs:
           name: npu-prereqs
           path: .artifact
 
+      # Via dev.py, not tar: the producer picks the codec, so only it knows which one.
       - name: Extract build artifact (build/iron-tools, hrx build, tools)
-        run: tar -xzf .artifact/npu-prereqs.tar.gz -C "$PWD"
+        run: python3 dev.py unpack-npu-prereqs --dir .artifact
 
       # This job never checks out llvm-project, so a symlink into it dangles and surfaces
       # as an ImportError from inside the design's Makefile.

@@ -36,6 +36,7 @@ jobs:
     env:
       PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
+      CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -82,8 +83,23 @@ jobs:
       - name: Doctor
         run: .venv/bin/python dev.py doctor
 
+      # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/caches/ccache
+          key: ccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
-        run: .venv/bin/python dev.py build all
+        run: |
+          ccache -z
+          .venv/bin/python dev.py build all
+
+      # Hit rate is the whole point of the step above; print it rather than assume it.
+      - name: ccache stats
+        if: always()
+        run: ccache -s
 
       # Not part of `build all`: the conformance binaries only run on a machine with an
       # NPU. Built here so npu_e2e gets them from the artifact instead of a toolchain.
@@ -117,5 +133,5 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npu-prereqs
-          path: build/artifacts/npu-prereqs.tar.gz
+          path: build/artifacts/npu-prereqs.tar.*   # .zst where zstd exists, else .gz
           if-no-files-found: error
