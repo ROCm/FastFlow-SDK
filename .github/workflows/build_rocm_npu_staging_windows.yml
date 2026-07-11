@@ -9,11 +9,10 @@
 #
 # Only OS-forced differences: the azure-windows-scale-rocm runner (no manylinux
 # container); clang-cl (from the VS Developer environment, or LLVM) instead of the
-# gcc-toolset — NOT MSVC cl, which rejects the GNU extensions in hrx-xclbinutil's
-# vendored sources; OpenSSL from vcpkg instead of dnf openssl-devel (the only system
+# gcc-toolset; OpenSSL from vcpkg instead of dnf openssl-devel (the only system
 # library); Python via actions/setup-python; and Windows venv paths (.venv/Scripts).
-# cmake/ninja come from pip; ccache is optional (dev.py enables LLVM_CCACHE_BUILD only
-# if ccache is found).
+# cmake/ninja come from pip; ccache is installed below and persisted via actions/cache
+# (dev.py routes every compile through it when it is on PATH).
 #
 # Every submodule is public, so they are all fetched over anonymous HTTPS and the
 # workflow needs no secrets.
@@ -40,6 +39,7 @@ jobs:
     env:
       PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
+      CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
       # RNS_LLVM_BUILD_DIR is set in a step below (the `runner` context is not allowed in
       # a job-level env: block) — see "Point the LLVM build tree at the job-scoped temp".
       # OPENSSL_ROOT_DIR is set dynamically from the vcpkg install below (points
@@ -80,14 +80,13 @@ jobs:
         with:
           arch: x64
 
-      # clang-cl, NOT cl. hrx-xclbinutil's vendored sources use GNU-only syntax that cl
-      # rejects: __attribute__((aligned))/((visibility)) and __builtin_bswap64. Five sites
-      # in all, so `cl` support is a small follow-up in that repo -- everything else here
-      # already builds under both (the iron-tools patch guards key on CMake's MSVC var,
-      # true for cl and clang-cl alike). Setting CC/CXX makes dev.py pin the compiler for
-      # the CMake builds it drives (and CMake honours CC/CXX for the ones it does not).
-      # VS ships clang-cl when the "C++ Clang tools" component is installed; fall back
-      # to the LLVM toolchain package if it is not.
+      # clang-cl, by choice rather than necessity. The GNU-only syntax that used to rule out
+      # `cl` is gone from hrx-xclbinutil (xpdi_compiler.h now guards on _WIN32/__has_attribute),
+      # so cl is a live option -- but it is untested here and tends to compile LLVM slower than
+      # clang-cl, so we stay on clang-cl until someone measures it.
+      # Setting CC/CXX makes dev.py pin the compiler for the CMake builds it drives (and CMake
+      # honours CC/CXX for the ones it does not). VS ships clang-cl when the "C++ Clang tools"
+      # component is installed; fall back to the LLVM toolchain package if it is not.
       - name: Set up clang-cl
         run: |
           set -eu
@@ -120,47 +119,55 @@ jobs:
       - name: Point the LLVM build tree at the job-scoped temp
         run: echo "RNS_LLVM_BUILD_DIR=${RUNNER_TEMP//\\//}/llvm" >> "$GITHUB_ENV"
 
+      # vcpkg's openssl port builds from source (~3 min); persist its binary-package store so
+      # that happens once. `files` provider, not `x-gha`: x-gha uses the legacy cache API.
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-
+
       # OpenSSL (bootgen's find_package(OpenSSL)) is the ONLY system library dep — the
       # Linux job likewise installs just openssl-devel. Use vcpkg (not choco's openssl,
       # which fetches from slproweb.com — 404s on older versions, flaky in CI). Point
       # find_package(OpenSSL) at the vcpkg tree (forward-slashed so CMake reads it cleanly).
-      # cmake + ninja come from pip (the venv); ccache is optional (dev.py enables
-      # LLVM_CCACHE_BUILD only if ccache is on PATH), so no tool installs are needed here.
+      # cmake + ninja come from pip (the venv).
       - name: Install OpenSSL (vcpkg) for bootgen
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-bincache,readwrite
         run: |
           set -eu
-          # Release-only overlay triplet (same dynamic linkage as the stock x64-windows)
-          # so vcpkg builds OpenSSL ONCE instead of debug+release — ~halves the cold build.
-          mkdir -p .vcpkg-triplets
-          printf '%s\n' \
-            'set(VCPKG_TARGET_ARCHITECTURE x64)' \
-            'set(VCPKG_CRT_LINKAGE dynamic)' \
-            'set(VCPKG_LIBRARY_LINKAGE dynamic)' \
-            'set(VCPKG_BUILD_TYPE release)' > .vcpkg-triplets/x64-windows-rel.cmake
-          triplets="$PWD/.vcpkg-triplets"
+          mkdir -p .vcpkg-bincache
+          triplets="$PWD/.github/vcpkg-triplets"
           if command -v cygpath >/dev/null; then triplets="$(cygpath -m "$triplets")"; fi
 
-          # vcpkg's openssl port builds from source and needs Perl. With no Perl on the
-          # NATIVE PATH, vcpkg_find_acquire_program(PERL) downloads Strawberry Perl from
-          # GitHub releases — an extra hop that has failed here with HTTP 504. Provide Perl
-          # so vcpkg uses it and skips that download. Note Git Bash's /usr/bin/perl is an
-          # MSYS binary and is invisible to the native vcpkg.exe, so probe the real path.
-          if [ ! -x /c/Strawberry/perl/bin/perl.exe ]; then
-            choco install --no-progress -y strawberryperl
+          install_openssl() {
+            vcpkg install openssl --triplet x64-windows-rel --overlay-triplets="$triplets"
+          }
+
+          # An empty store means vcpkg WILL compile openssl, and that needs Perl on the NATIVE
+          # path (Git Bash's is an MSYS binary vcpkg.exe cannot see) -- left to itself vcpkg
+          # downloads its own, which has 504'd here. Install it up front in that case only:
+          # on a warm store vcpkg just unpacks and never asks for Perl.
+          if [ -z "$(ls -A .vcpkg-bincache 2>/dev/null)" ]; then
+            if [ ! -x /c/Strawberry/perl/bin/perl.exe ]; then
+              choco install --no-progress -y strawberryperl
+            fi
+            export PATH="/c/Strawberry/perl/bin:$PATH"
+            echo "C:/Strawberry/perl/bin" >> "$GITHUB_PATH"
           fi
-          export PATH="/c/Strawberry/perl/bin:$PATH"
-          echo "C:/Strawberry/perl/bin" >> "$GITHUB_PATH"
 
           # openssl's sources still come over the network; retry transient failures.
           ok=0
           for attempt in 1 2 3; do
-            if vcpkg install openssl --triplet x64-windows-rel --overlay-triplets="$triplets"; then
-              ok=1; break
-            fi
+            if install_openssl; then ok=1; break; fi
             echo "::warning::vcpkg install openssl failed (attempt $attempt/3) — retrying"
             sleep 20
           done
           [ "$ok" -eq 1 ]
+
           # Discover the vcpkg root from the binary on PATH: this runner does NOT set
           # VCPKG_INSTALLATION_ROOT, and VCPKG_ROOT may point at the VS-bundled vcpkg
           # rather than the one that installed the packages (vcpkg warns + uses its own
@@ -185,8 +192,30 @@ jobs:
       - name: Doctor
         run: .venv/Scripts/python.exe dev.py doctor
 
+      # ccache was never installed here, so dev.py silently compiled uncached. It supports
+      # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.
+      - name: Install ccache
+        run: choco install --no-progress -y ccache
+
+      # Ephemeral runners: without this CCACHE_DIR is empty every job and the hit rate is 0.
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/caches/ccache
+          key: ccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
-        run: .venv/Scripts/python.exe dev.py build all
+        run: |
+          ccache -z
+          .venv/Scripts/python.exe dev.py build all
+
+      # Print the hit rate rather than assume it. Watch this one: LLVM builds under
+      # $RUNNER_TEMP (MAX_PATH workaround), so if that path is not stable across jobs the -I
+      # flags differ and every compile misses. If this reads ~0%, that is the cause.
+      - name: ccache stats
+        if: always()
+        run: ccache -s
 
       # Build-level smoke (no NPU): hrx-xclbinutil packaging round-trip + aie-opt.
       - name: Smoke tests
