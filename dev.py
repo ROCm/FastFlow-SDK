@@ -30,7 +30,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, os, shutil, subprocess, sys, tarfile
+import argparse, contextlib, ctypes, os, shutil, stat, subprocess, sys, tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -642,7 +642,7 @@ def cmd_build_fastflowlm(args):
         cmake_bin(), "-G", "Ninja",
         "-S", cmake_path(flm_src), "-B", cmake_path(FASTFLOWLM_BUILD),
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DFLM_VERSION=0.9.44",
+        "-DFLM_VERSION=0.9.45",
         "-DNPU_VERSION=32.0.203.304",
         f"-DHRX_DIR={cmake_path(PROJ / 'hrx')}",
         f"-DHRX_BUILD={cmake_path(HRX_CMAKE_BUILD)}",
@@ -1171,6 +1171,67 @@ def _modinfo_field(field: str):
     return value if value else None
 
 
+def _sys_accel_nodes():
+    return sorted(SYS_ACCEL_DIR.glob("accel*")) if SYS_ACCEL_DIR.is_dir() else []
+
+
+def _probe_npu_devnodes():
+    rc = 0
+    usable = []
+    sys_nodes = _sys_accel_nodes()
+    if not sys_nodes:
+        print(f"  [MISS] no {SYS_ACCEL_DIR}/accel* sysfs node")
+        return 1, usable
+
+    for sys_node in sys_nodes:
+        dev_text = _read_sysfs_text(sys_node / "dev")
+        target = ACCEL_DIR / sys_node.name
+        if not dev_text or ":" not in dev_text:
+            print(f"  [MISS] {sys_node}/dev unavailable; cannot validate {target}")
+            rc = 1
+            continue
+        major_s, minor_s = dev_text.split(":", 1)
+        try:
+            major, minor = int(major_s), int(minor_s)
+        except ValueError:
+            print(f"  [MISS] {sys_node}/dev has unexpected value {dev_text!r}")
+            rc = 1
+            continue
+
+        if target.exists():
+            try:
+                st = target.stat()
+            except OSError as e:
+                print(f"  [MISS] cannot stat {target}: {e}")
+                rc = 1
+                continue
+            if not stat.S_ISCHR(st.st_mode):
+                print(f"  [MISS] {target} exists but is not a character device")
+                rc = 1
+                continue
+            if os.major(st.st_rdev) != major or os.minor(st.st_rdev) != minor:
+                have = f"{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
+                print(f"  [MISS] {target} has dev {have}, expected {dev_text}")
+                rc = 1
+                continue
+            if not (os.access(target, os.R_OK) and os.access(target, os.W_OK)):
+                print(f"  [MISS] {target} exists but is not read+write for this user")
+                print("         runner host must grant read/write access before this job runs")
+                rc = 1
+                continue
+            print(f"  [ok ] {target} ({dev_text})")
+            usable.append(target)
+            continue
+
+        print(f"  [MISS] missing {target} for {sys_node} ({dev_text})")
+        print("         runner host must provide this devtmpfs/udev node or pass it through")
+        print(f"         root repair example: install -d -m 755 {ACCEL_DIR}")
+        print(f"                              mknod -m 666 {target} c {major} {minor}")
+        rc = 1
+
+    return rc, usable
+
+
 def _print_npu_driver_info():
     try:
         kernel = " ".join(os.uname())
@@ -1197,7 +1258,7 @@ def _print_npu_driver_info():
         for line in fw_files.splitlines():
             print(f"    {line}")
 
-    sys_nodes = sorted(SYS_ACCEL_DIR.glob("accel*")) if SYS_ACCEL_DIR.is_dir() else []
+    sys_nodes = _sys_accel_nodes()
     if not sys_nodes:
         print(f"  [MISS] no {SYS_ACCEL_DIR}/accel* sysfs node")
         return
@@ -1232,21 +1293,18 @@ def cmd_npu_probe(args):
     _print_npu_driver_info()
 
     print("== NPU device / libhrx probe ==")
-    nodes = sorted(ACCEL_DIR.glob("accel*")) if ACCEL_DIR.is_dir() else []
-    if not nodes:
-        print(f"  [MISS] no {ACCEL_DIR}/accel* node — is the amdxdna driver loaded?")
-        rc = 1
-    for n in nodes:
-        ok = os.access(n, os.R_OK) and os.access(n, os.W_OK)
-        print(f"  [{'ok ' if ok else 'MISS'}] {n} (read+write={ok})")
-        if not ok:
-            rc = 1
+    devnode_rc, devnodes = _probe_npu_devnodes()
+    rc |= devnode_rc
 
     lib_path = _libhrx_path()
     if not lib_path:
         print("  [MISS] libhrx.so — run: python dev.py build hrx")
         return 1
     print(f"  [ok ] libhrx: {lib_path}")
+    if not devnodes:
+        print("  [MISS] skipping hrx_gpu_initialize because no usable NPU devnode was found")
+        print("npu-probe: FAIL")
+        return 1
 
     lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
     _bind_libhrx(lib)

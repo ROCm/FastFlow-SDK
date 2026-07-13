@@ -38,9 +38,9 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
 branch     = "amdxdna-hal-native"                         # == ROCm/hrx-system PR #37 (+ follow-ups)
-commit     = "a4cca35a38589c064acfabae3c001d51329c6d5f"
+commit     = "f1ce1ebab6c056cb1cf6f436a7707683ac291bd8"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
-note       = "Branch was rebased: the old pin (9d36996) is NOT an ancestor of this one; its single commit reappears rewritten as d9ce115. The bump also drops `iree_alignof(iree_max_align_t)` in hal/topology_builder.c, which expanded to `__alignof(16)` (iree_max_align_t is the literal 16 on Windows) -- a hard error under MSVC cl."
+note       = "Native amdxdna stack with command-chain capability reporting/fallback and Windows MCDM partial-ELF dispatch support. The staging patch stack is regenerated against this base."
 
 [hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
 repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready
@@ -53,10 +53,10 @@ note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, n
 [fastflowlm]                    # projects/FastFlowLM — HRX-native FastFlowLM PR #602
 repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
 upstream   = "github.com/FastFlowLM/FastFlowLM"
-branch     = "hrx_native_pr"
+branch     = "codex/hrx-native-windows"
 pr         = "FastFlowLM/FastFlowLM#602"
-commit     = "bea0185993e6b896ce726a2382732f4f4bb98f81"
-note       = "Pinned PR head for the HRX amdxdna app path. The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
+commit     = "d13391088b0218a731ae6c102c06a662ffb2bfb3"
+note       = "Pinned HRX-native app path with refreshed Linux HRX native libraries for FastFlowLM 0.9.45. The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
