@@ -71,8 +71,11 @@ jobs:
       # --shallow: llvm-project alone is >4 GB of history this build never reads.
       # Only iron-tools needs --clean: its patch adds gitignored files, and a leftover
       # copy makes `git apply` fail. See cmd_submodules.
+      # iron-ops is NOT in --clean: unlike iron-tools, its patches modify only tracked files,
+      # which --reset restores on its own. (-x would also delete the editable install's
+      # egg-info, which `dev.py setup` puts there.)
       - name: Initialize submodules
-        run: python3 dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools --reset --clean iron-tools --shallow
+        run: python3 dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools iron-ops --reset --clean iron-tools --shallow
       # setup creates .venv, installs the hash-pinned requirements.lock, applies the
       # temporary patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + hash-pinned deps + prefetch)
@@ -115,6 +118,14 @@ jobs:
       # artifact-contract check. Runs off-device (no NPU required).
       - name: e2e (xclbin + HAL PDI artifact-contract)
         run: .venv/bin/python dev.py test
+
+      # The same toolchain, driven by the iron-ops OPERATOR library instead of an iron-tools
+      # example: MLIR -> Peano (incl. the operator's own aie_kernels/*.cc) -> xclbin + insts.
+      # iron-ops is developed against the mlir_aie WHEEL, so this is where its drift from our
+      # source-built aie package shows up — on a CPU runner, minutes in, instead of an hour
+      # later on the single gfx1151 box. Which operators: tests/iron-ops/suite.py.
+      - name: iron-ops (build operators off-device)
+        run: .venv/bin/python dev.py test-iron-ops
 
       # Package + verify live in dev.py so the logic is testable off CI and shared with
       # any other consumer; see cmd_package_npu_prereqs / cmd_verify_npu_prereqs.

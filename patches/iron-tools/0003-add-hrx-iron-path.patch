@@ -2110,10 +2110,10 @@ index 0000000..2d3e293
 +    return find_libhrx() is not None
 diff --git a/python/utils/hostruntime/hrxruntime/hostruntime.py b/python/utils/hostruntime/hrxruntime/hostruntime.py
 new file mode 100644
-index 0000000..72bb577
+index 0000000..1d45497
 --- /dev/null
 +++ b/python/utils/hostruntime/hrxruntime/hostruntime.py
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,279 @@
 +# SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc.
 +# SPDX-License-Identifier: Apache-2.0
 +
@@ -2369,6 +2369,20 @@ index 0000000..72bb577
 +        from aie.iron.device import from_name
 +
 +        return from_name(self._device_gen, n_cols=None)
++
++    def cleanup(self):
++        """Release every cached executable (HostRuntime.cleanup for this backend).
++
++        load() caches executables and evicts by LRU with release_executable(); this is that
++        eviction applied to the whole cache. Without it, a caller that runs many kernels in
++        one process -- a test suite calling cleanup() between cases, say -- holds every
++        executable it has ever loaded on the device until the process exits.
++
++        Idempotent: the cache is emptied as it goes, so a second call finds nothing to do.
++        """
++        while self._exe_cache:
++            _, (exe, _) = self._exe_cache.popitem(last=False)
++            self._ctx.release_executable(exe)
 +
 +
 +class CachedHRXRuntime(HRXHostRuntime):

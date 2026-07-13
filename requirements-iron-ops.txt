@@ -1,0 +1,26 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# What iron-ops' OWN test suite needs, on top of requirements.txt. Installed only by
+# `dev.py setup --iron-ops-tests`, which only the NPU job runs (test-npu-iron-ops runs
+# those tests on the device).
+#
+# Kept out of requirements.txt so the two CPU build jobs do not download torch -- a ~200 MB
+# wheel they would install to satisfy an import and never call. The off-device operator
+# BUILD needs neither of these; that is what patches/iron-ops/0002 (lazy operator imports)
+# buys, since `import iron.operators.<any>.op` used to eagerly import mha, which imports
+# torch.
+#
+# torch: iron-ops' golden references and its test harness are written against it. CPU only
+# -- nothing here runs on a GPU.
+#
+# Pinned by exact wheel URL rather than `--extra-index-url https://download.pytorch.org/whl/cpu`
+# plus a version. Two reasons: a plain `torch` on Linux resolves to the CUDA wheel and drags
+# in ~2.5 GB of nvidia-* deps for kernels we never run; and that index ALSO publishes `cmake`
+# (3.25), which would shadow PyPI's for requirements.txt's `cmake>=3.30` -- uv refuses to
+# resolve at all, and pip is one `--index-strategy` away from silently picking it. A URL pin
+# puts torch on the path without giving a second index a say in anything else.
+# cp312: the stack pins Python 3.12 throughout (tomllib, setup-python, the lock).
+torch @ https://download.pytorch.org/whl/cpu/torch-2.9.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == "linux"
+torch @ https://download.pytorch.org/whl/cpu/torch-2.9.1%2Bcpu-cp312-cp312-win_amd64.whl ; sys_platform == "win32"
+
+pytest==8.4.2

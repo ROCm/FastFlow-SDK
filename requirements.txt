@@ -36,3 +36,12 @@ aiofiles
 # --- Peano: AIE hardware codegen (the only wheel-sourced toolchain piece) ---
 --find-links https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
 llvm-aie==21.0.0.2026061501+acc2a72c
+
+# --- iron-ops (projects/iron-ops, the IRON operator library) ---
+# The package itself is installed from the SUBMODULE, editable and --no-deps (see dev.py
+# install_iron_ops): its own pins would pull the mlir_aie + llvm-aie wheels, and a
+# wheel-built `aie` package in site-packages would shadow the source-built one this whole
+# stack exists to test. Its runtime deps are numpy + ml_dtypes, both already pinned above.
+#
+# What its own TESTS need (torch, pytest) is NOT here: see requirements-iron-ops.txt, which
+# only the NPU job installs.

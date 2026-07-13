@@ -1,0 +1,25 @@
+diff --git a/python/utils/hostruntime/hostruntime.py b/python/utils/hostruntime/hostruntime.py
+index 8e554ce..abbc23e 100644
+--- a/python/utils/hostruntime/hostruntime.py
++++ b/python/utils/hostruntime/hostruntime.py
+@@ -204,6 +204,20 @@ class HostRuntime(ABC):
+         """
+         pass
+ 
++    def cleanup(self):
++        """
++        Release cached device state (contexts, executables, instruction buffers).
++
++        Part of the interface, not an XRT extra: callers that run many kernels in one
++        process -- a test suite between cases, a serving loop between models -- must be
++        able to drop what the runtime cached without knowing which backend they got.
++        CachedXRTRuntime has always had this and callers reached for it directly, which
++        silently made them XRT-only.
++
++        Safe to call repeatedly, and on a runtime that caches nothing: the default is a
++        no-op.
++        """
++
+     # Read instruction stream from bin file and reformat it to be passed into the
+     # instruction buffer for the xrt.kernel call
+     @classmethod
