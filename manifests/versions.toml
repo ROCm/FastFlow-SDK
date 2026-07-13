@@ -48,9 +48,9 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
 branch     = "amdxdna-hal-native"                         # == ROCm/hrx-system PR #37 (+ follow-ups)
-commit     = "f1ce1ebab6c056cb1cf6f436a7707683ac291bd8"
+commit     = "835d2ab4778665091468fa62786c2eeb30292bb2"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
-note       = "Native amdxdna stack with command-chain capability reporting/fallback and Windows MCDM partial-ELF dispatch support. The staging patch stack is regenerated against this base."
+note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, and transaction-ordered resolution of reused buffer descriptors. The staging patch stack is regenerated against this base."
 
 [hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
 repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready

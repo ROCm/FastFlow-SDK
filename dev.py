@@ -6,7 +6,7 @@
 Builds the NPU stack together (everything except llvm-aie, which comes
 from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
-  python dev.py doctor                # check system (apt) prereqs + pins + prefetch
+  python dev.py doctor [PROFILE]      # validate compiler-stack (default), fastflowlm, or all
   python dev.py setup                 # venv + python deps (incl. pip cmake/ninja) + fetch
                                      #   --iron-ops-tests: + what iron-ops' own tests need
                                      #     (torch, pytest); the NPU job only
@@ -25,7 +25,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py package-npu-prereqs   # stage + tar what the NPU job needs (no NPU)
   python dev.py unpack-npu-prereqs    # extract that archive (codec-agnostic; no NPU)
   python dev.py verify-npu-prereqs    # assert that archive is self-contained + imports (no NPU)
-  python dev.py npu-probe             # Linux: print NPU driver/fw versions + check libhrx open
+  python dev.py npu-probe             # print NPU driver/fw versions + check libhrx open
   python dev.py test-hrx-cts [SUITE]  # amdxdna HAL conformance suites (needs an NPU)
   python dev.py test-npu [DESIGN]     # ON-DEVICE e2e: one dispatch of a design via hrx (needs an NPU)
                                      #   --device npu2|npu1   --chain (opt-in chained testbench)
@@ -35,7 +35,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, os, shutil, stat, subprocess, sys, tarfile
+import argparse, contextlib, ctypes, json, os, re, shutil, stat, subprocess, sys, tarfile, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +62,7 @@ FASTFLOWLM_MIN_RUSTC = (1, 80, 0)
 IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and MSVC differ on Windows
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
+_WINDOWS_BUILD_ENV = None
 
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -111,10 +112,93 @@ def cmake_path(p: Path) -> str:
     return p.as_posix()
 
 
+def _env_path(env=None):
+    e = env or os.environ
+    if IS_WINDOWS:
+        return e.get("Path") or e.get("PATH") or e.get("path") or ""
+    return e.get("PATH", "")
+
+
+def _set_env_path(env, value):
+    if IS_WINDOWS:
+        for key in list(env):
+            if key.lower() == "path":
+                del env[key]
+        env["Path"] = value
+    else:
+        env["PATH"] = value
+
+
+def _prepend_env_path(env, entries):
+    parts = [str(entry) for entry in entries if str(entry)]
+    current = _env_path(env)
+    if current:
+        parts.append(current)
+    _set_env_path(env, os.pathsep.join(parts))
+
+
+def _which(exe, env=None):
+    return shutil.which(exe, path=_env_path(env))
+
+
+def _windows_vcvars64_path():
+    if not IS_WINDOWS:
+        return None
+    for key in ("RNS_VCVARS64", "VCVARS64"):
+        value = os.environ.get(key)
+        if value and Path(value).is_file():
+            return Path(value)
+    candidates = []
+    for root in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
+        if not root:
+            continue
+        base = Path(root) / "Microsoft Visual Studio"
+        if base.exists():
+            candidates.extend(base.glob("*/*/VC/Auxiliary/Build/vcvars64.bat"))
+    return sorted(candidates, reverse=True)[0] if candidates else None
+
+
+def _windows_msvc_env():
+    """Return an environment with the installed VS x64 toolchain loaded."""
+    global _WINDOWS_BUILD_ENV
+    if not IS_WINDOWS:
+        return dict(os.environ)
+    if _WINDOWS_BUILD_ENV is not None:
+        return dict(_WINDOWS_BUILD_ENV)
+
+    env = dict(os.environ)
+    vcvars = _windows_vcvars64_path()
+    if not _which("cl", env) and vcvars:
+        # A wrapper avoids cmd.exe /c quoting edge cases for VS paths with spaces.
+        with tempfile.TemporaryDirectory(prefix="rns-vs-env-") as td:
+            wrapper = Path(td) / "load-vs.cmd"
+            wrapper.write_text(f'@echo off\r\ncall "{vcvars}" >nul\r\nset\r\n', encoding="utf-8")
+            result = subprocess.run([str(wrapper)], capture_output=True, text=True)
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.lower() == "path":
+                    _set_env_path(env, value)
+                else:
+                    env[key] = value
+        else:
+            print(f"warning: failed to load {vcvars}: {result.stderr.strip()}", file=sys.stderr)
+
+    cargo_bin = Path.home() / ".cargo" / "bin"
+    if cargo_bin.is_dir():
+        _prepend_env_path(env, [cargo_bin])
+    if not env.get("ASM") and _which("ml64", env):
+        env["ASM"] = "ml64"
+    _WINDOWS_BUILD_ENV = env
+    return dict(env)
+
+
 def cmake_env():
     """PATH with the venv bin first so the pip-provided cmake/ninja are used."""
-    e = dict(os.environ)
-    e["PATH"] = os.pathsep.join([str(VENV / _VBIN), e.get("PATH", "")])
+    e = _windows_msvc_env() if IS_WINDOWS else dict(os.environ)
+    _prepend_env_path(e, [VENV / _VBIN])
     return e
 
 
@@ -146,11 +230,11 @@ def _compilers():
     return None, None
 
 
-def _rustc_version():
-    rustc = shutil.which("rustc")
+def _rustc_version(env=None):
+    rustc = _which("rustc", env)
     if not rustc:
         return None
-    r = subprocess.run([rustc, "--version"], capture_output=True, text=True)
+    r = subprocess.run([rustc, "--version"], capture_output=True, text=True, env=env)
     if r.returncode != 0:
         return None
     parts = r.stdout.split()
@@ -177,8 +261,8 @@ def _have_header(hdr):
     return p.returncode == 0
 
 
-def check_system(verbose=True):
-    """Return (ok, missing_apt_packages). Reports tool/header presence."""
+def _check_compiler_stack_system(verbose):
+    """Return (ok, missing_apt_packages) for the LLVM/IRON compiler stack."""
     missing = []
     cc, cxx = _compilers()
     if IS_WINDOWS:
@@ -188,8 +272,9 @@ def check_system(verbose=True):
         # vendored sources (__attribute__((aligned))/((visibility)), __builtin_bswap64).
         # Finding only cl is a fail here rather than a confusing compile error later.
         # Relax this to "cl or clang-cl" once those five sites are made portable.
-        has_clang_cl = bool(shutil.which("clang-cl"))
-        has_git = bool(shutil.which("git"))
+        env = _windows_msvc_env()
+        has_clang_cl = bool(_which("clang-cl", env))
+        has_git = bool(_which("git", env))
         if verbose:
             print(f"  [{'ok ' if has_clang_cl else 'MISS'}] clang-cl (required; MSVC cl cannot build hrx-xclbinutil)")
             if not has_clang_cl and shutil.which("cl"):
@@ -216,6 +301,81 @@ def check_system(verbose=True):
         if not ok and pkg not in missing:
             missing.append(pkg)
     return (not missing, missing)
+
+
+def _check_fastflowlm_system(verbose):
+    """Return (ok, missing_apt_packages) for the minimal HRX/FLM build."""
+    missing = []
+    if IS_WINDOWS:
+        env = _windows_msvc_env()
+        compiler = _which("cl", env) or _which("clang-cl", env)
+        has_git = bool(_which("git", env))
+        roots = _fastflowlm_windows_roots()
+        dependency_errors = _fastflowlm_windows_dependency_errors(roots, env)
+        if verbose:
+            print(f"  [{'ok ' if compiler else 'MISS'}] C/C++ compiler: {Path(compiler).name if compiler else 'need MSVC cl or clang-cl'}")
+            print(f"  [{'ok ' if has_git else 'MISS'}] git")
+            for error in dependency_errors:
+                print(f"  [MISS] {error}")
+            if not dependency_errors:
+                print(f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}")
+                print(f"  [ok ] vcpkg FastFlowLM dependencies: {roots['vcpkg_root']}")
+        return (bool(compiler) and has_git and not dependency_errors, [])
+
+    cc, cxx = _compilers()
+    has_git = bool(shutil.which("git"))
+    has_pkg_config = bool(shutil.which("pkg-config"))
+    rustc_version = _rustc_version()
+    rust_ok = bool(shutil.which("cargo")) and rustc_version is not None and rustc_version >= FASTFLOWLM_MIN_RUSTC
+    if verbose:
+        print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: {(cc + '/' + cxx) if cc else 'need gcc/g++ (or set CC/CXX)'}")
+        print(f"  [{'ok ' if has_git else 'MISS'}] git")
+        print(f"  [{'ok ' if has_pkg_config else 'MISS'}] pkg-config")
+        got = ".".join(map(str, rustc_version)) if rustc_version else "missing/unknown"
+        print(f"  [{'ok ' if rust_ok else 'MISS'}] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))} (found {got})")
+    if not cc:
+        missing.append("build-essential")
+    if not has_git:
+        missing.append("git")
+    if not has_pkg_config:
+        missing.append("pkg-config")
+
+    headers = [
+        ("libdrm/drm.h", "libdrm-dev"),
+        ("boost/program_options.hpp", "libboost-program-options-dev"),
+        ("curl/curl.h", "libcurl4-openssl-dev"),
+        ("fftw3.h", "libfftw3-dev"),
+        ("libavcodec/avcodec.h", "libavcodec-dev"),
+        ("libavformat/avformat.h", "libavformat-dev"),
+        ("libavutil/avutil.h", "libavutil-dev"),
+        ("libswresample/swresample.h", "libswresample-dev"),
+        ("libswscale/swscale.h", "libswscale-dev"),
+        ("readline/readline.h", "libreadline-dev"),
+    ]
+    for header, package in headers:
+        ok = _have_header(header)
+        if verbose:
+            print(f"  [{'ok ' if ok else 'MISS'}] <{header}>")
+        if not ok:
+            missing.append(package)
+    return (bool(cc) and has_git and has_pkg_config and rust_ok and not missing, missing)
+
+
+def check_system(profile="compiler-stack", verbose=True):
+    """Return (ok, missing_apt_packages) for a doctor profile."""
+    if profile == "fastflowlm":
+        return _check_fastflowlm_system(verbose)
+    if profile == "compiler-stack":
+        return _check_compiler_stack_system(verbose)
+    if profile == "all":
+        if verbose:
+            print("  compiler-stack:")
+        compiler_ok, compiler_missing = _check_compiler_stack_system(verbose)
+        if verbose:
+            print("  fastflowlm:")
+        flm_ok, flm_missing = _check_fastflowlm_system(verbose)
+        return compiler_ok and flm_ok, sorted(set(compiler_missing + flm_missing))
+    raise ValueError(f"unknown doctor profile: {profile}")
 
 
 # NOTE: the IRON toolchain env (PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR + the
@@ -312,21 +472,35 @@ def cmd_fetch(args):
     print(f"fetch: ok -> {path} (sha256 verified)")
 
 
-def check_pins():
-    """Verify each submodule's checked-out commit == manifests/versions.toml (the
-    manifest is load-bearing: drift is reported)."""
+PIN_SECTION_TO_SUBMODULE = {
+    "llvm": "llvm-project",
+    "iron_tools": "iron-tools",
+    "hrx": "hrx",
+    "hrx_xclbinutil": "hrx-xclbinutil",
+    "fastflowlm": "FastFlowLM",
+    "iron_ops": "iron-ops",
+}
+DOCTOR_PROFILE_SUBMODULES = {
+    "compiler-stack": {"llvm-project", "iron-tools", "hrx", "hrx-xclbinutil", "iron-ops"},
+    "fastflowlm": {"hrx", "FastFlowLM"},
+    "all": set(PIN_SECTION_TO_SUBMODULE.values()),
+}
+
+
+def check_pins(submodules):
+    """Verify selected submodule checkouts against manifests/versions.toml."""
     man = _manifest()
-    sec_to_sub = {"llvm": "llvm-project", "iron_tools": "iron-tools", "hrx": "hrx",
-                  "hrx_xclbinutil": "hrx-xclbinutil", "fastflowlm": "FastFlowLM",
-                  "iron_ops": "iron-ops"}
-    drift = []
-    for sec, sub in sec_to_sub.items():
+    problems = []
+    for sec, sub in PIN_SECTION_TO_SUBMODULE.items():
+        if sub not in submodules:
+            continue
         pinned = man.get(sec, {}).get("commit")
         if not pinned:
             continue
         sub_dir = PROJ / sub
         if not (sub_dir / ".git").exists():   # not checked out — rev-parse here would walk up to the superproject
-            print(f"  [absent] {sub}: not checked out (skipped)")
+            print(f"  [ABSENT] {sub}: required by this doctor profile")
+            problems.append(sub)
             continue
         r = subprocess.run(["git", "-C", str(sub_dir), "rev-parse", "HEAD"],
                            capture_output=True, text=True)
@@ -334,35 +508,47 @@ def check_pins():
         match = head == pinned
         print(f"  [{'ok  ' if match else 'DRIFT'}] {sub}: manifest {pinned[:12]} vs HEAD {(head[:12] or '?')}")
         if not match:
-            drift.append(sub)
-    return drift
+            problems.append(sub)
+    return problems
 
 
 def cmd_doctor(args):
-    """Check system (apt) prereqs + that submodule checkouts match the manifest."""
+    """Check the selected build path's prerequisites, pins, patches, and fetches."""
+    profile = args.profile
+    selected_submodules = DOCTOR_PROFILE_SUBMODULES[profile]
+    print(f"doctor profile: {profile}")
     print("system prerequisites (cmake + ninja come from pip via `setup`):")
-    _, missing = check_system()
+    system_ok, missing = check_system(profile)
     print("\nsubmodule pins vs manifests/versions.toml:")
-    drift = check_pins()
-    print("\ntemporary submodule patches (patches/, applied by `dev.py fetch`):")
+    pin_bad = check_pins(selected_submodules)
+    print("\ntemporary submodule patches (patches/, applied by builds or `dev.py fetch`):")
     patch_bad = []
     for sub_dir in sorted(p for p in PATCHES.iterdir() if p.is_dir()) if PATCHES.exists() else []:
+        if sub_dir.name not in selected_submodules:
+            continue
+        submodule_dir = PROJ / sub_dir.name
+        if not (submodule_dir / ".git").exists():
+            print(f"  [ABSENT] {sub_dir.name}: cannot check patches")
+            continue
         for patch in sorted(sub_dir.glob("*.patch")):
-            st = _patch_state(patch, PROJ / sub_dir.name)
+            st = _patch_state(patch, submodule_dir)
             print(f"  [{'ok   ' if st == 'applied' else st.upper()}] {sub_dir.name}/{patch.name}")
             if st == "broken":
                 patch_bad.append(patch.name)
 
-    print("\nbuild-time prefetch (run `dev.py fetch` to populate):")
-    eudsl_ok = _eudsl_cache_ok()
-    print(f"  [{'ok  ' if eudsl_ok else 'MISS '}] eudsl sdist cached + sha256 verified")
-    # cross-check: the eudsl version lives in BOTH the patch and versions.toml — guard drift
-    import re
-    eudsl_ver = _manifest().get("eudsl", {}).get("version", "")
-    patch_f = PATCHES / "iron-tools" / "0001-eudsl-for-amd-llvm-23.patch"
-    pm = re.search(r"\+eudsl-python-extras==(\S+)", patch_f.read_text()) if patch_f.exists() else None
-    ver_ok = bool(eudsl_ver) and pm is not None and pm.group(1) == eudsl_ver
-    print(f"  [{'ok  ' if ver_ok else 'DRIFT'}] eudsl version: patch=={pm.group(1) if pm else '?'} == manifest=={eudsl_ver or '?'}")
+    needs_eudsl = profile in ("compiler-stack", "all")
+    eudsl_ok = True
+    ver_ok = True
+    if needs_eudsl:
+        print("\nbuild-time prefetch (run `dev.py fetch` to populate):")
+        eudsl_ok = _eudsl_cache_ok()
+        print(f"  [{'ok  ' if eudsl_ok else 'MISS '}] eudsl sdist cached + sha256 verified")
+        # Cross-check the two declarations so a pin change cannot silently use stale input.
+        eudsl_ver = _manifest().get("eudsl", {}).get("version", "")
+        patch_f = PATCHES / "iron-tools" / "0001-eudsl-for-amd-llvm-23.patch"
+        pm = re.search(r"\+eudsl-python-extras==(\S+)", patch_f.read_text()) if patch_f.exists() else None
+        ver_ok = bool(eudsl_ver) and pm is not None and pm.group(1) == eudsl_ver
+        print(f"  [{'ok  ' if ver_ok else 'DRIFT'}] eudsl version: patch=={pm.group(1) if pm else '?'} == manifest=={eudsl_ver or '?'}")
     rc = 0
     if not ver_ok:
         print("\neudsl version DRIFT: patches/iron-tools/0001-… and versions.toml [eudsl] disagree — sync them")
@@ -370,17 +556,20 @@ def cmd_doctor(args):
     if patch_bad:
         print(f"\nPATCH does not apply: {', '.join(patch_bad)} — regenerate against the current submodule")
         rc = 1
-    if missing:
-        print("\nMISSING system deps — install with:\n  sudo apt-get install -y " + " ".join(sorted(missing)))
+    if not system_ok:
+        if missing:
+            print("\nMISSING system deps — install with:\n  sudo apt-get install -y " + " ".join(sorted(set(missing))))
+        else:
+            print("\nMISSING system prerequisites shown above")
         rc = 1
-    if drift:
-        print(f"\nPIN DRIFT in: {', '.join(drift)} — `git -C projects/<x> checkout <manifest commit>` or update versions.toml")
+    if pin_bad:
+        print(f"\nSUBMODULE PIN problems in: {', '.join(pin_bad)} — initialize it or update its manifest pin")
         rc = 1
-    if not eudsl_ok:
+    if needs_eudsl and not eudsl_ok:
         print("\neudsl not prefetched — run: python dev.py fetch")
         rc = 1
     if rc == 0:
-        print("\nall good: prerequisites present, pins match the manifest, build-time pkgs prefetched.")
+        print(f"\nall good: {profile} prerequisites, pins, and patches are ready.")
     return rc
 
 
@@ -392,9 +581,12 @@ def cmd_setup(args):
     iron-tools/LLVM/bootgen/aie_api/aie-rt build from source; eudsl is prefetched (fetch)."""
     OUT.mkdir(exist_ok=True)
     ok, missing = check_system(verbose=False)
-    if missing:
-        print("WARNING: missing system deps (apt): " + " ".join(sorted(missing)))
-        print("  install them, then re-run; see `python dev.py doctor`")
+    if not ok:
+        if missing:
+            print("WARNING: missing system deps (apt): " + " ".join(sorted(missing)))
+        else:
+            print("WARNING: compiler-stack system prerequisites are missing")
+        print("  install them, then re-run; see `python dev.py doctor compiler-stack`")
     if not venv_py().exists():
         sh([sys.executable, "-m", "venv", str(VENV)])
     pip = [str(venv_py()), "-m", "pip", "install"]
@@ -447,6 +639,88 @@ def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
     unset, so CMake picks from the VS Developer environment rather than us hardcoding a
     compiler it may not have. On POSIX these pin gcc/clang exactly as before."""
     return [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"] if cc and cxx else []
+
+
+def _fastflowlm_windows_roots():
+    vcpkg_root = (os.environ.get("FASTFLOWLM_VCPKG_INSTALLED_DIR") or
+                  os.environ.get("VCPKG_INSTALLED_DIR"))
+    vcpkg_candidates = [Path(vcpkg_root)] if vcpkg_root else []
+    if os.environ.get("VCPKG_ROOT"):
+        vcpkg_candidates.append(Path(os.environ["VCPKG_ROOT"]) / "installed" / "x64-windows")
+    vcpkg_candidates += [
+        Path("C:/dev/vcpkg/installed/x64-windows"),
+        Path("C:/vcpkg/installed/x64-windows"),
+    ]
+    vcpkg = next((path for path in vcpkg_candidates if path.is_dir()),
+                 vcpkg_candidates[0] if vcpkg_candidates else None)
+
+    boost_root = (os.environ.get("FASTFLOWLM_BOOST_ROOT") or
+                  os.environ.get("BOOST_ROOT") or
+                  os.environ.get("BOOSTROOT"))
+    boost_candidates = [Path(boost_root)] if boost_root else []
+    boost_candidates += [
+        Path("C:/dev/boost_1_88_0"),
+        Path("C:/Program Files/boost/boost_1_88_0"),
+    ]
+    if vcpkg and (vcpkg / "include" / "boost").is_dir():
+        boost_candidates.append(vcpkg / "include")
+    boost = next((path for path in boost_candidates if (path / "boost").is_dir()),
+                 boost_candidates[0] if boost_candidates else None)
+
+    boost_stage = boost / "stage" / "lib" if boost else None
+    vcpkg_lib = vcpkg / "lib" if vcpkg else None
+    boost_lib = None
+    for lib_dir in (boost_stage, vcpkg_lib):
+        if lib_dir and lib_dir.is_dir() and any(lib_dir.glob("*boost_program_options*.lib")):
+            boost_lib = lib_dir
+            break
+    return {
+        "boost_root": boost,
+        "boost_lib": boost_lib,
+        "vcpkg_root": vcpkg,
+        "vcpkg_bin": vcpkg / "bin" if vcpkg else None,
+    }
+
+
+def _fastflowlm_windows_dependency_errors(roots, env):
+    missing = []
+    if not _which("cargo", env):
+        missing.append("Rust/Cargo (install with rustup; rustc >= 1.80 required)")
+    rustc_version = _rustc_version(env)
+    if rustc_version is None or rustc_version < FASTFLOWLM_MIN_RUSTC:
+        got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
+        need = ".".join(str(n) for n in FASTFLOWLM_MIN_RUSTC)
+        missing.append(f"rustc >= {need} (found {got})")
+    if (not roots["vcpkg_root"] or
+            not (roots["vcpkg_root"] / "include").is_dir() or
+            not (roots["vcpkg_root"] / "lib").is_dir()):
+        missing.append("FASTFLOWLM_VCPKG_INSTALLED_DIR / vcpkg installed/x64-windows with include+lib")
+    if not roots["boost_root"] or not (roots["boost_root"] / "boost").is_dir():
+        missing.append("Boost headers (set FASTFLOWLM_BOOST_ROOT or install boost-program-options:x64-windows with vcpkg)")
+    if not roots["boost_lib"]:
+        missing.append("Boost program_options library (vcpkg install boost-program-options:x64-windows or build Boost stage)")
+    vcpkg_lib = roots["vcpkg_root"] / "lib" if roots["vcpkg_root"] else None
+    required_libraries = {
+        "curl": (("libcurl.lib", "curl.lib"),),
+        "FFmpeg": (("avformat.lib",), ("avcodec.lib",), ("avutil.lib",),
+                   ("swscale.lib",), ("swresample.lib",)),
+        "FFTW": (("fftw3.lib",), ("fftw3f.lib",), ("fftw3l.lib",)),
+    }
+    if vcpkg_lib and vcpkg_lib.is_dir():
+        for label, alternatives in required_libraries.items():
+            absent = ["/".join(names) for names in alternatives
+                      if not any((vcpkg_lib / name).is_file() for name in names)]
+            if absent:
+                missing.append(f"{label} libraries in {vcpkg_lib} (missing {', '.join(absent)})")
+    return missing
+
+
+def _require_fastflowlm_windows_deps(env):
+    roots = _fastflowlm_windows_roots()
+    missing = _fastflowlm_windows_dependency_errors(roots, env)
+    if missing:
+        sys.exit("missing Windows FastFlowLM prerequisite(s):\n  - " + "\n  - ".join(missing))
+    return roots
 
 
 def _ccache_flags():
@@ -647,34 +921,54 @@ def cmd_build_hrx_cts(args):
     print(f"build hrx-cts: ok ({', '.join(HRX_CTS_TESTS)})")
 
 
+def _fastflowlm_artifacts():
+    if IS_WINDOWS:
+        flm_bin = PROJ / "FastFlowLM" / "src" / "build" / "flm.exe"
+        hrx_lib = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "hrx.lib"
+        hrx_dll = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "hrx.dll"
+        flatcc = HRX_CMAKE_BUILD / "flatcc_runtime.lib"
+    else:
+        flm_bin = PROJ / "FastFlowLM" / "src" / "build" / "flm"
+        hrx_lib = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "libhrx.so"
+        hrx_dll = hrx_lib
+        flatcc = HRX_CMAKE_BUILD / "libflatcc_runtime.a"
+    return flm_bin, hrx_lib, hrx_dll, flatcc
+
+
 def cmd_build_fastflowlm(args):
     """Build the pinned FastFlowLM app against `dev.py build hrx` output.
     This intentionally skips LLVM, iron-tools, and hrx-xclbinutil."""
-    if IS_WINDOWS:
-        sys.exit("build fastflowlm is currently wired for the Linux HRX smoke path")
     flm_src = PROJ / "FastFlowLM" / "src"
     if not (flm_src / "CMakeLists.txt").exists():
         sys.exit("missing projects/FastFlowLM (run: git submodule update --init --recursive projects/FastFlowLM)")
-    if not _have_header("libdrm/drm.h"):
-        sys.exit("missing libdrm/drm.h: FastFlowLM's amdxdna headers require libdrm "
-                 "(Ubuntu: sudo apt-get install libdrm-dev; Fedora: sudo dnf install libdrm-devel)")
-    if not shutil.which("cargo"):
-        sys.exit("missing cargo: FastFlowLM's tokenizers-cpp build requires Rust/Cargo "
-                 "(install a current toolchain with rustup)")
-    rustc_version = _rustc_version()
-    if rustc_version is None or rustc_version < FASTFLOWLM_MIN_RUSTC:
-        got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
-        need = ".".join(str(n) for n in FASTFLOWLM_MIN_RUSTC)
-        sys.exit(f"rustc >= {need} required for FastFlowLM's tokenizers-cpp build "
-                 f"(found {got}; install/update a current toolchain with rustup)")
+
+    env = cmake_env()
+    if IS_WINDOWS:
+        roots = _require_fastflowlm_windows_deps(env)
+    else:
+        if not _have_header("libdrm/drm.h"):
+            sys.exit("missing libdrm/drm.h: FastFlowLM's amdxdna headers require libdrm "
+                     "(Ubuntu: sudo apt-get install libdrm-dev; Fedora: sudo dnf install libdrm-devel)")
+        if not shutil.which("cargo"):
+            sys.exit("missing cargo: FastFlowLM's tokenizers-cpp build requires Rust/Cargo "
+                     "(install a current toolchain with rustup)")
+        rustc_version = _rustc_version(env)
+        if rustc_version is None or rustc_version < FASTFLOWLM_MIN_RUSTC:
+            got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
+            need = ".".join(str(n) for n in FASTFLOWLM_MIN_RUSTC)
+            sys.exit(f"rustc >= {need} required for FastFlowLM's tokenizers-cpp build "
+                     f"(found {got}; install/update a current toolchain with rustup)")
+        roots = None
+
     apply_patches({"FastFlowLM"})
-    if not (HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "libhrx.so").exists():
-        sys.exit("missing libhrx.so (run: python dev.py build hrx)")
-    if not (HRX_CMAKE_BUILD / "libflatcc_runtime.a").exists():
-        sys.exit("missing libflatcc_runtime.a (run: python dev.py build hrx)")
+    flm_bin, hrx_lib, hrx_dll, flatcc = _fastflowlm_artifacts()
+    if not hrx_lib.exists():
+        sys.exit(f"missing HRX library ({hrx_lib}) - run: python dev.py build hrx")
+    if not flatcc.exists():
+        sys.exit(f"missing flatcc runtime ({flatcc}) - run: python dev.py build hrx")
 
     cc, cxx = _compilers()
-    sh([
+    cfg = [
         cmake_bin(), "-G", "Ninja",
         "-S", cmake_path(flm_src), "-B", cmake_path(FASTFLOWLM_BUILD),
         "-DCMAKE_BUILD_TYPE=Release",
@@ -682,14 +976,37 @@ def cmd_build_fastflowlm(args):
         "-DNPU_VERSION=32.0.203.304",
         f"-DHRX_DIR={cmake_path(PROJ / 'hrx')}",
         f"-DHRX_BUILD={cmake_path(HRX_CMAKE_BUILD)}",
-        f"-DHRX_LIB={cmake_path(HRX_CMAKE_BUILD / 'libhrx' / 'src' / 'libhrx' / 'libhrx.so')}",
-        f"-DHRX_FLATCC_LIB={cmake_path(HRX_CMAKE_BUILD / 'libflatcc_runtime.a')}",
+        f"-DHRX_LIB={cmake_path(hrx_lib)}",
+        f"-DHRX_FLATCC_LIB={cmake_path(flatcc)}",
         f"-DCMAKE_INSTALL_PREFIX={cmake_path(FASTFLOWLM_INSTALL)}",
         f"-DCMAKE_XCLBIN_PREFIX={cmake_path(flm_src)}",
         *_cc_flags(cc, cxx),
-    ], env=cmake_env())
-    sh([cmake_bin(), "--build", cmake_path(FASTFLOWLM_BUILD), "-j", BUILD_JOBS], env=cmake_env())
-    print("build fastflowlm: ok ->", flm_src / "build" / f"flm{_EXE}")
+    ]
+    if IS_WINDOWS:
+        cfg += [
+            f"-DFASTFLOWLM_BOOST_ROOT={cmake_path(roots['boost_root'])}",
+            f"-DFASTFLOWLM_VCPKG_INSTALLED_DIR={cmake_path(roots['vcpkg_root'])}",
+        ]
+    sh(cfg, env=env)
+    sh([cmake_bin(), "--build", cmake_path(FASTFLOWLM_BUILD), "-j", BUILD_JOBS], env=env)
+
+    if IS_WINDOWS and flm_bin.parent.exists():
+        # This upstream CMake project writes flm.exe into src/build. Recreate its DLL set
+        # on every build so an older vcpkg/model build cannot remain earlier on PATH.
+        expected_runtime_dir = (flm_src / "build").resolve()
+        if flm_bin.parent.resolve() != expected_runtime_dir:
+            sys.exit(f"refusing to clean unexpected FastFlowLM runtime directory: {flm_bin.parent}")
+        for dll in flm_bin.parent.glob("*.dll"):
+            dll.unlink()
+        for dll in (flm_src / "lib").glob("*.dll"):
+            shutil.copy2(dll, flm_bin.parent / dll.name)
+        if hrx_dll.exists():
+            shutil.copy2(hrx_dll, flm_bin.parent / hrx_dll.name)
+        vcpkg_bin = roots.get("vcpkg_bin") if roots else None
+        if vcpkg_bin and vcpkg_bin.is_dir():
+            for dll in vcpkg_bin.glob("*.dll"):
+                shutil.copy2(dll, flm_bin.parent / dll.name)
+    print("build fastflowlm: ok ->", flm_bin)
 
 
 def cmd_build_all(args):
@@ -723,11 +1040,13 @@ def cmd_test(args):
 
 def cmd_test_fastflowlm(args):
     """Run the on-device FastFlowLM HRX smoke test."""
-    script = ROOT / "tests" / "fastflowlm" / "run_fastflowlm_hrx_smoke.sh"
+    script = ROOT / "tests" / "fastflowlm" / "run_fastflowlm_hrx_smoke.py"
     env = cmake_env()
     env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
-    sys.exit(sh(["bash", script], env=env, check=False).returncode)
+    sys.exit(sh([sys.executable, script], env=env, check=False).returncode)
+
+
 def _iron_ops_suite():
     """The operator table, from its single definition in tests/iron-ops/suite.py.
 
@@ -831,7 +1150,8 @@ def _iron_env():
 
 
 def _libhrx_path():
-    hits = sorted((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so"))
+    pattern = "hrx.dll" if IS_WINDOWS else "libhrx*.so"
+    hits = sorted((PROJ / "hrx" / "build" / "cmake").rglob(pattern))
     return hits[0] if hits else None
 
 
@@ -1359,18 +1679,158 @@ def _print_npu_driver_info():
         _print_probe_file("revision", n / "device" / "revision", indent="    ")
 
 
-def cmd_npu_probe(args):
-    """Print Linux NPU driver/firmware versions and check that libhrx can open the
-    NPU. Run before test-npu/test-hrx-cts so a missing or busy device is not
-    reported as a dispatch failure. Needs no artifact beyond libhrx.so."""
-    if IS_WINDOWS:
-        print("npu-probe: unsupported on Windows")
-        print("  This probe reads Linux amdxdna sysfs and DRM accel nodes:")
-        print(f"  - {AMDXDNA_MODULE_DIR}")
-        print(f"  - {SYS_ACCEL_DIR}")
-        print(f"  - {ACCEL_DIR}")
-        print("  Windows support would need a separate XRT/driver query path.")
+def _windows_npu_info():
+    """Returns PnP/driver metadata without opening or dispatching to the NPU."""
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+    if not powershell:
+        return None, "PowerShell was not found"
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$signed = Get-CimInstance Win32_PnPSignedDriver |
+  Where-Object {
+    $_.DeviceClass -eq 'COMPUTEACCELERATOR' -and
+    $_.DeviceID -like 'PCI\VEN_1022*'
+  } | Select-Object -First 1
+if (-not $signed) { throw 'AMD ComputeAccelerator device was not found' }
+$pnp = Get-PnpDevice -InstanceId $signed.DeviceID
+$service = (Get-PnpDeviceProperty -InstanceId $signed.DeviceID `
+  -KeyName 'DEVPKEY_Device_Service').Data
+$systemDriver = Get-CimInstance Win32_SystemDriver -Filter "Name='$service'"
+$driverPath = if ($systemDriver) { $systemDriver.PathName.Trim('"') } else { $null }
+if ($driverPath -and $driverPath.StartsWith('\SystemRoot\')) {
+  $driverPath = Join-Path $env:SystemRoot $driverPath.Substring(12)
+}
+$xrtSmi = if ($driverPath) {
+  Join-Path (Split-Path -Parent $driverPath) 'xrt-smi.exe'
+} else { $null }
+[PSCustomObject]@{
+  device_name = $signed.DeviceName
+  device_id = $signed.DeviceID
+  driver_version = $signed.DriverVersion
+  driver_date = $signed.DriverDate.ToString('yyyy-MM-dd')
+  driver_provider = $signed.DriverProviderName
+  inf_name = $signed.InfName
+  status = [string]$pnp.Status
+  problem = [string]$pnp.Problem
+  service = [string]$service
+  driver_path = [string]$driverPath
+  xrt_smi = if ($xrtSmi -and (Test-Path -LiteralPath $xrtSmi)) { [string]$xrtSmi } else { $null }
+} | ConvertTo-Json -Compress
+"""
+    p = subprocess.run(
+        [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    )
+    if p.returncode != 0:
+        detail = p.stderr.strip() or p.stdout.strip() or f"exit code {p.returncode}"
+        return None, detail
+    try:
+        return json.loads(p.stdout), None
+    except json.JSONDecodeError as e:
+        return None, f"could not parse PowerShell device query: {e}"
+
+
+def _xrt_smi_host_fields(executable):
+    """Queries driver/firmware metadata only; this does not submit NPU work."""
+    p = subprocess.run(
+        [str(executable), "examine", "--report", "host", "--batch"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    )
+    if p.returncode != 0:
+        detail = p.stderr.strip() or p.stdout.strip() or f"exit code {p.returncode}"
+        return None, detail
+    fields = {}
+    for label, value in re.findall(r"^\s{2}([^:]+?)\s*:\s*(.*?)\s*$", p.stdout, re.MULTILINE):
+        fields[label.strip()] = value.strip()
+    return fields, None
+
+
+def _print_windows_npu_driver_info():
+    print("== amdxdna driver / firmware ==")
+    info, error = _windows_npu_info()
+    if error:
+        print(f"  [MISS] Windows NPU device query failed: {error}")
         return 1
+
+    print(f"  [ok ] device: {info['device_name']}")
+    print(f"  [info] device id: {info['device_id']}")
+    print(f"  [info] driver: {info['driver_version']} ({info['driver_provider']}, "
+          f"{info['driver_date']}, {info['inf_name']})")
+    print(f"  [info] service: {info['service']} ({info['driver_path']})")
+    healthy = info["status"] == "OK" and info["problem"] == "CM_PROB_NONE"
+    state = "ok " if healthy else "MISS"
+    print(f"  [{state}] PnP status: {info['status']} / {info['problem']}")
+
+    xrt_smi = info.get("xrt_smi")
+    if not xrt_smi:
+        print("  [note] driver-packaged xrt-smi not found; active firmware version unavailable")
+        return 0 if healthy else 1
+    fields, error = _xrt_smi_host_fields(xrt_smi)
+    if error:
+        print(f"  [note] xrt-smi metadata query failed: {error}")
+        return 0 if healthy else 1
+    print(f"  [info] firmware: {fields.get('NPU Firmware Version', 'unknown')}")
+    print(f"  [info] packaged XRT: {fields.get('Version', 'unknown')} "
+          f"({fields.get('Hash', 'unknown')})")
+    queried_driver = fields.get("NPU Driver Version")
+    if queried_driver and queried_driver != info["driver_version"]:
+        print(f"  [MISS] xrt-smi reports driver {queried_driver}, PnP reports "
+              f"{info['driver_version']}")
+        return 1
+    return 0 if healthy else 1
+
+
+def _probe_libhrx():
+    lib_path = _libhrx_path()
+    library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
+    if not lib_path:
+        print(f"  [MISS] {library_name} - run: python dev.py build hrx")
+        return 1
+    print(f"  [ok ] {library_name}: {lib_path}")
+
+    with contextlib.ExitStack() as stack:
+        if IS_WINDOWS and hasattr(os, "add_dll_directory"):
+            stack.enter_context(os.add_dll_directory(str(lib_path.parent)))
+        load_args = {} if IS_WINDOWS else {"mode": ctypes.RTLD_GLOBAL}
+        try:
+            lib = ctypes.CDLL(str(lib_path), **load_args)
+        except OSError as e:
+            print(f"  [MISS] loading {library_name} failed: {e}")
+            return 1
+        _bind_libhrx(lib)
+        ok, msg = _hrx_check(lib, lib.hrx_gpu_initialize(0), "hrx_gpu_initialize")
+        if not ok:
+            print(f"  [MISS] {msg}")
+            return 1
+        print("  [ok ] hrx_gpu_initialize")
+
+        rc = 0
+        count = ctypes.c_int(0)
+        ok, msg = _hrx_check(
+            lib, lib.hrx_gpu_device_count(ctypes.byref(count)), "hrx_gpu_device_count"
+        )
+        if not ok:
+            print(f"  [MISS] {msg}")
+            rc = 1
+        else:
+            print(f"  [{'ok ' if count.value else 'MISS'}] hrx gpu devices: {count.value}")
+            if count.value == 0:
+                rc = 1
+        lib.hrx_status_ignore(lib.hrx_gpu_shutdown())
+        return rc
+
+
+def cmd_npu_probe(args):
+    """Print NPU driver/firmware versions and check that libhrx can open the NPU.
+
+    Run before on-device tests so a missing or busy device is not reported as a
+    dispatch failure. Needs no build artifact beyond libhrx."""
+    if IS_WINDOWS:
+        rc = _print_windows_npu_driver_info()
+        print("== NPU device / libhrx probe ==")
+        rc |= _probe_libhrx()
+        print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
+        return rc
 
     rc = 0
     _print_npu_driver_info()
@@ -1379,34 +1839,11 @@ def cmd_npu_probe(args):
     devnode_rc, devnodes = _probe_npu_devnodes()
     rc |= devnode_rc
 
-    lib_path = _libhrx_path()
-    if not lib_path:
-        print("  [MISS] libhrx.so — run: python dev.py build hrx")
-        return 1
-    print(f"  [ok ] libhrx: {lib_path}")
     if not devnodes:
         print("  [MISS] skipping hrx_gpu_initialize because no usable NPU devnode was found")
         print("npu-probe: FAIL")
         return 1
-
-    lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
-    _bind_libhrx(lib)
-    ok, msg = _hrx_check(lib, lib.hrx_gpu_initialize(0), "hrx_gpu_initialize")
-    if not ok:
-        print(f"  [MISS] {msg}")
-        return 1
-    print("  [ok ] hrx_gpu_initialize")
-
-    count = ctypes.c_int(0)
-    ok, msg = _hrx_check(lib, lib.hrx_gpu_device_count(ctypes.byref(count)), "hrx_gpu_device_count")
-    if not ok:
-        print(f"  [MISS] {msg}")
-        rc = 1
-    else:
-        print(f"  [{'ok ' if count.value else 'MISS'}] hrx gpu devices: {count.value}")
-        if count.value == 0:
-            rc = 1
-    lib.hrx_status_ignore(lib.hrx_gpu_shutdown())
+    rc |= _probe_libhrx()
 
     print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
     return rc
@@ -1580,7 +2017,9 @@ def cmd_deps(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("doctor")
+    d = sub.add_parser("doctor")
+    d.add_argument("profile", nargs="?", choices=sorted(DOCTOR_PROFILE_SUBMODULES),
+                   default="compiler-stack", help="dependency closure to validate")
     s = sub.add_parser("setup")
     s.add_argument("--iron-ops-tests", action="store_true",
                    help="also install what iron-ops' own tests need (torch, pytest); "

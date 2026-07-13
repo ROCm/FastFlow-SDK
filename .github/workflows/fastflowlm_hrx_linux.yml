@@ -106,6 +106,12 @@ jobs:
       - name: Initialize HRX and FastFlowLM submodules
         run: python3 dev.py submodules hrx FastFlowLM --reset --clean hrx FastFlowLM --shallow
 
+      - name: Validate FastFlowLM build prerequisites
+        run: python3 dev.py doctor fastflowlm
+
+      - name: Test cross-platform FastFlowLM smoke driver
+        run: python3 -m unittest discover -s tests/fastflowlm -p 'test_*.py'
+
       - name: Build minimal HRX amdxdna
         run: python3 dev.py build hrx
 

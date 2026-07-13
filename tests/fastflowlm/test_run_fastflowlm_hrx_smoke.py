@@ -1,0 +1,54 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+
+import importlib.util
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).with_name("run_fastflowlm_hrx_smoke.py")
+SPEC = importlib.util.spec_from_file_location("fastflowlm_smoke", SCRIPT)
+smoke = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(smoke)
+
+
+class FastFlowLMSmokeTest(unittest.TestCase):
+    def test_extract_raw_output(self):
+        transcript = "before\nModel RAW Output:\ncoherent text\n>>> prompt\nafter\n"
+        self.assertEqual(smoke.extract_raw_output(transcript), "coherent text")
+
+    def test_extract_benchmark_raw_output_stops_before_metrics(self):
+        transcript = "Model RAW Output:\ncoherent text\n[FLM]  TTFT: 1.0s\n"
+        self.assertEqual(smoke.extract_raw_output(transcript), "coherent text")
+
+    def test_parse_duration(self):
+        self.assertEqual(smoke.parse_duration_seconds("250ms", 9), 0.25)
+        self.assertEqual(smoke.parse_duration_seconds("2m", 9), 120.0)
+        self.assertEqual(smoke.parse_duration_seconds("bad", 9), 9)
+
+    def test_csv_has_1k_row(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "bench.csv"
+            path.write_text("Prompt Length,TTFT\n1,2.5\n", encoding="utf-8")
+            self.assertTrue(smoke.csv_has_1k_row(path))
+
+    def test_run_tee_redirects_input_and_writes_log(self):
+        child = "import sys; print('ready', flush=True); print(sys.stdin.readline().strip(), flush=True)"
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "child.log"
+            output = smoke.run_tee(
+                [sys.executable, "-u", "-c", child],
+                env=dict(os.environ),
+                input_text="hello\n",
+                timeout=5,
+                output_path=log,
+            )
+            self.assertEqual(output, "ready\nhello\n")
+            self.assertEqual(log.read_text(encoding="utf-8"), output)
+
+
+if __name__ == "__main__":
+    unittest.main()
