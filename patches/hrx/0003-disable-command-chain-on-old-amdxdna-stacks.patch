@@ -540,19 +540,10 @@ index d0a682251..402136796 100644
    const bool poolable_start_npu =
        opcode == IREE_HAL_AMDXDNA_NATIVE_C_COMMAND_OPCODE_START_NPU;
 diff --git a/runtime/src/iree/hal/drivers/amdxdna/native_windows_mcdm.cc b/runtime/src/iree/hal/drivers/amdxdna/native_windows_mcdm.cc
-index 7e32934f3..5c6f26eaf 100644
+index 62f361e75..ba63776bf 100644
 --- a/runtime/src/iree/hal/drivers/amdxdna/native_windows_mcdm.cc
 +++ b/runtime/src/iree/hal/drivers/amdxdna/native_windows_mcdm.cc
-@@ -1825,7 +1825,7 @@ iree_status_t iree_hal_amdxdna_native_device_query_caps(
-     iree_hal_amdxdna_native_c_device_caps_t* out_caps) {
-   IREE_ASSERT_ARGUMENT(device);
-   IREE_ASSERT_ARGUMENT(out_caps);
--  iree_hal_amdxdna_native_c_device_caps_t caps;
-+  iree_hal_amdxdna_native_c_device_caps_t caps = {};
-   caps.ddi_version = 1;
-   caps.max_effective_queues = 1;
-   const size_t chain_exec_bo_size =
-@@ -1853,6 +1853,8 @@ iree_status_t iree_hal_amdxdna_native_device_query_caps(
+@@ -2237,6 +2237,8 @@ iree_status_t iree_hal_amdxdna_native_device_query_caps(
    caps.supports_real_multi_queue = false;
    caps.default_dispatch_opcode =
        IREE_HAL_AMDXDNA_NATIVE_C_COMMAND_OPCODE_START_NPU;

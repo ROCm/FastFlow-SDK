@@ -20,5 +20,5 @@
 [submodule "projects/FastFlowLM"]
 	path = projects/FastFlowLM
 	url = https://github.com/Abhishek-Varma/FastFlowLM_JT.git
-	branch = hrx_native_pr
+	branch = codex/hrx-native-windows
 	ignore = dirty
