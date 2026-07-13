@@ -11,7 +11,8 @@ orchestrated by [dev.py](dev.py).
 
 `projects/` are git submodules: `hrx`, `FastFlowLM`, `llvm-project`
 (jtuyls/llvm-project @ the ROCm amd-llvm pin), `iron-tools`
-(Xilinx/mlir-aie), and `hrx-xclbinutil` (transitional).
+(Xilinx/mlir-aie), `iron-ops` (amd/IRON — the operator library, built and run
+against the source toolchain), and `hrx-xclbinutil` (transitional).
 
 ## FastFlowLM HRX Quickstart
 
@@ -81,6 +82,7 @@ python3 dev.py build iron-tools   # aie-opt/aie-translate/bootgen against build/
 python3 dev.py build hrx          # the amdxdna HAL (IREE runtime)
 python3 dev.py build all          # all of the above, in order
 python3 dev.py test [DESIGN]      # e2e build test, no NPU run
+python3 dev.py test-iron-ops [OP] # build the iron-ops operators, no NPU run
 python3 dev.py deps               # print requirements.txt
 ```
 
@@ -93,3 +95,16 @@ needs the amdxdna driver and an NPU.
 Another design can be passed as `DESIGN`, but it must be Peano-capable and use
 `makefile-common`'s `jit_xclbin` rule; the `jit_xclbin_elf` designs
 additionally emit `insts.elf`, which needs `aiebu-asm` (not part of this stack).
+
+**`test-iron-ops`** builds the same chain from the other direction: the `iron-ops`
+operator library (`ElementwiseAdd`, …) rather than an iron-tools example, compiling the
+operator's own `aie_kernels/*.cc` through Peano. iron-ops is developed against the
+`mlir_aie` *wheel*, so this is what catches its drift from our source pin — on a CPU
+runner rather than on the NPU. Which operators it covers is
+[tests/iron-ops/suite.py](tests/iron-ops/suite.py); adding a row extends it.
+
+On a machine **with** an NPU, `dev.py test-npu` dispatches an iron-tools design through
+the HAL, and `dev.py test-npu-iron-ops` runs the iron-ops operators' own tests on the
+device (their references, their tolerances) with `IRON_RUNTIME=hrx`. The latter needs
+their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
+[requirements-iron-ops.txt](requirements-iron-ops.txt); the build path does not need them).

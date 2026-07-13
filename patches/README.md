@@ -83,6 +83,22 @@ for new code.
 
 **Remove when:** FastFlowLM PR #602 is updated for the current HRX API.
 
+## patches/iron-ops/
+
+### 0001-xrt-free-host-stack.patch
+Keeps the operator test path importable without XRT by making `pyxrt` optional,
+using the active `IRON_RUNTIME` tensor class in `run_test`, and failing only the
+XRT-specific sequence dispatch policies when they are constructed.
+
+**Remove when:** iron-ops supports non-XRT host runtimes upstream.
+
+### 0002-lazy-operator-imports.patch
+Makes `iron.operators` re-export operator classes lazily. This prevents importing
+one operator, such as `ElementwiseAdd`, from importing sequence-only operators
+that require XRT.
+
+**Remove when:** iron-ops avoids eager cross-operator imports upstream.
+
 ## patches/iron-tools/
 
 ### 0003-add-hrx-iron-path.patch

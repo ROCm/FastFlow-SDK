@@ -181,7 +181,7 @@ jobs:
       # markedly slower on this runner than on Linux. The build needs the pinned trees,
       # not history; check_pins/patches work on shallow checkouts.
       - name: Initialize submodules
-        run: python dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools --shallow
+        run: python dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools iron-ops --shallow
       # setup creates .venv, installs the pinned requirements, applies the temporary
       # patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + pinned deps + prefetch)
@@ -225,3 +225,9 @@ jobs:
       # artifact-contract check. Runs off-device (no NPU required). Same driver as Linux.
       - name: e2e (xclbin + HAL PDI artifact-contract)
         run: .venv/Scripts/python.exe dev.py test
+
+      # Same iron-ops operator build as Linux, same driver. This is the only place the
+      # operator library is compiled on Windows at all, so it is also what would catch a
+      # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).
+      - name: iron-ops (build operators off-device)
+        run: .venv/Scripts/python.exe dev.py test-iron-ops

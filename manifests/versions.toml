@@ -27,8 +27,18 @@ provides = ["aie-opt", "aie-translate", "aiecc.py", "IRON python", "bootgen", "a
 note     = "Builds cleanly against ROCm LLVM (46fcb339); its clone-llvm.sh nominally pins llvm.org ea2f5081 (also LLVM 23)."
 e2e_design = "programming_examples/basic/matrix_scalar_add"   # the design `dev.py test` builds
 e2e_device = "npu2"                                          # -d passed to that design
-patches  = ["patches/iron-tools/0001-eudsl-for-amd-llvm-23.patch", "patches/iron-tools/0002-windows-clang-cl.patch"]
+patches  = ["patches/iron-tools/0001-eudsl-for-amd-llvm-23.patch", "patches/iron-tools/0002-windows-clang-cl.patch", "patches/iron-tools/0003-add-hrx-iron-path.patch", "patches/iron-tools/0004-hostruntime-cleanup.patch"]
+hrx_note = "0003 adds the HRX IRON host-runtime (aie.utils.hostruntime.hrxruntime) — it is what IRON_RUNTIME=hrx selects. 0004 makes cleanup() part of the HostRuntime interface (a no-op by default, real on HRX, where it releases the cached executables): it existed only on CachedXRTRuntime, and callers reached for it directly — iron-ops' conftest does, per test — which silently made them XRT-only."
 win_note = "0002 is Windows-only in effect (guards keyed on CMake's MSVC var, empty under gcc/clang): gives /EHsc to everything that throws (bootgen, all four test/CppTests, test_utils) because MSVC-style drivers default exceptions off and clang-cl rejects throw outright, and drops -Werror=sign-compare, which aie-rt trips only because MS-ABI enums are signed. Verified a no-op on Linux: build.ninja is byte-identical with and without it."
+
+[iron_ops]                      # projects/iron-ops — the IRON operator library (pure Python)
+repo     = "github.com/amd/IRON"
+commit   = "17769b86a9a7dc68fb04ec6636a233b2adb4d543"
+provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, ...)", "aie_kernels C++ sources"]
+note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==v1.3.4); here it runs against the SOURCE-built iron-tools ([iron_tools] above) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: tests/iron-ops/suite.py."
+patches  = ["patches/iron-ops/0001-xrt-free-host-stack.patch", "patches/iron-ops/0002-lazy-operator-imports.patch"]
+xrt_note = "0001 is what lets IRON run without XRT at all: iron/common/{utils,sequence}.py did `import pyxrt` at module scope (so even COMPILING an operator needed XRT installed), and test_utils.py named XRTTensor directly + sized buffers with pyxrt's `bo.size()`. The patch makes the pyxrt imports optional, routes test buffers through aie.utils.DEFAULT_TENSOR_CLASS (HRXTensor here), and takes byte counts from the numpy view. The XRT-native OperatorSequence dispatch policies now raise a clear error instead of failing at import."
+lazy_note = "0002 makes iron.operators re-export lazily (PEP 562). Eagerly, importing ANY operator imported ALL of them — including mha (torch) and swiglu (pyxrt) — so the CPU build jobs would have had to install torch just to compile an elementwise add. See requirements-iron-ops.txt."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
 wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"

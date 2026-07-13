@@ -16,7 +16,8 @@
 	branch = main
 [submodule "projects/iron-ops"]
 	path = projects/iron-ops
-	url = git@github.com:amd/IRON.git
+	url = https://github.com/amd/IRON.git
+	ignore = dirty
 [submodule "projects/FastFlowLM"]
 	path = projects/FastFlowLM
 	url = https://github.com/Abhishek-Varma/FastFlowLM_JT.git

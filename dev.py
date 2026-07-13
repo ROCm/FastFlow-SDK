@@ -8,6 +8,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
   python dev.py doctor                # check system (apt) prereqs + pins + prefetch
   python dev.py setup                 # venv + python deps (incl. pip cmake/ninja) + fetch
+                                     #   --iron-ops-tests: + what iron-ops' own tests need
+                                     #     (torch, pytest); the NPU job only
   python dev.py fetch                 # apply temp patches + prefetch eudsl (verified) — offline-ready
   python dev.py build llvm            # LLVM+MLIR from projects/llvm-project (amd-llvm pin)
   python dev.py build iron-tools      # aie-opt/aie-translate against build/llvm
@@ -17,6 +19,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build fastflowlm      # HRX amdxdna + FastFlowLM app only
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
+  python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
+                                     #   Linux + Windows; suite: tests/iron-ops/suite.py
   python dev.py submodules NAME...    # init (and optionally reset/clean) submodules
   python dev.py package-npu-prereqs   # stage + tar what the NPU job needs (no NPU)
   python dev.py unpack-npu-prereqs    # extract that archive (codec-agnostic; no NPU)
@@ -26,6 +30,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py test-npu [DESIGN]     # ON-DEVICE e2e: one dispatch of a design via hrx (needs an NPU)
                                      #   --device npu2|npu1   --chain (opt-in chained testbench)
   python dev.py test-fastflowlm       # pull qwen3:0.6b + run a 1k HRX benchmark
+  python dev.py test-npu-iron-ops [OP] # ON-DEVICE e2e: an iron-ops operator, numerics checked (needs an NPU)
   python dev.py deps                  # print the dependency overview
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
@@ -312,7 +317,8 @@ def check_pins():
     manifest is load-bearing: drift is reported)."""
     man = _manifest()
     sec_to_sub = {"llvm": "llvm-project", "iron_tools": "iron-tools", "hrx": "hrx",
-                  "hrx_xclbinutil": "hrx-xclbinutil", "fastflowlm": "FastFlowLM"}
+                  "hrx_xclbinutil": "hrx-xclbinutil", "fastflowlm": "FastFlowLM",
+                  "iron_ops": "iron-ops"}
     drift = []
     for sec, sub in sec_to_sub.items():
         pinned = man.get(sec, {}).get("commit")
@@ -403,7 +409,37 @@ def cmd_setup(args):
         src = lock if lock.exists() else ROOT / "requirements.txt"   # lock = reproducible (hashes)
     sh(pip + ["-r", str(src)])
     cmd_fetch(args)   # group all network here: prefetch build-time pkgs so `build` is offline
+    install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
     print("setup: ok (deps + prefetched build-time pkgs; everything else builds from source)")
+
+
+def install_iron_ops(pip, with_tests=False):
+    """Put `iron` (the operator library) on the venv's path, WITHOUT its dependencies.
+
+    --no-deps is the whole point. iron-ops' pyproject pins the mlir_aie and llvm-aie WHEELS;
+    installing those would put a second, wheel-built `aie` package in site-packages, where it
+    would shadow the source-built one this stack exists to test (for an installed
+    distribution, site-packages beats PYTHONPATH). Its real deps are ours to pin, and
+    requirements.txt does.
+
+    Editable: the checkout IS the source of truth -- its aie_kernels/*.cc are what the
+    operator build compiles -- and it keeps the venv valid when the submodule pin moves.
+
+    with_tests adds what iron-ops' OWN tests need (torch, for the golden references), which
+    only the NPU job runs. The build jobs deliberately do without: torch is a ~200 MB wheel
+    they would download to import and never call. Compiling an operator does not need it --
+    but only because patches/iron-ops/0002 made iron.operators import lazily. Before that,
+    `import iron.operators.elementwise_add.op` eagerly imported mha, and mha imports torch."""
+    if not (PROJ / "iron-ops" / "pyproject.toml").exists():
+        print("setup: projects/iron-ops not checked out; skipping the `iron` install")
+        return
+    sh(pip + ["--no-deps", "-e", str(PROJ / "iron-ops")])
+    if with_tests:
+        # Same lock-vs-txt split as the base deps above: the lock's hashes are for the Linux
+        # wheels, and the NPU job is Linux, so this is the reproducible path in practice.
+        lock = ROOT / "requirements-iron-ops.lock"
+        src = ROOT / "requirements-iron-ops.txt" if IS_WINDOWS or not lock.exists() else lock
+        sh(pip + ["-r", str(src)])
 
 
 def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
@@ -692,6 +728,43 @@ def cmd_test_fastflowlm(args):
     env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
     sys.exit(sh(["bash", script], env=env, check=False).returncode)
+def _iron_ops_suite():
+    """The operator table, from its single definition in tests/iron-ops/suite.py.
+
+    Imported by path rather than restated here (and rather than living in versions.toml,
+    which is the pin authority, not a test matrix): dev.py routes the gates, suite.py says
+    what they cover, and adding an operator touches only suite.py."""
+    sys.path.insert(0, str(ROOT / "tests" / "iron-ops"))
+    import suite
+    return suite
+
+
+def cmd_test_iron_ops(args):
+    """Build the iron-ops operators through the source-built toolchain (no NPU run). Runs on
+    Linux and Windows; this is the CPU-side gate.
+
+    Distinct from `dev.py test`, which builds an iron-tools programming example: that proves
+    the emit->Peano->bootgen->xclbin chain, while this proves the SOURCE-built aie package
+    still satisfies the IRON operator library, which upstream develops against the mlir_aie
+    WHEEL (v1.3.4) rather than our nightly source pin. That is exactly where API drift shows
+    up, and it shows up here as a compile failure rather than an hour later on the NPU
+    runner. It also compiles each operator's C++ kernel (aie_kernels/*.cc) through Peano,
+    which the iron-tools examples' jit path does not do.
+
+    Builds every operator in tests/iron-ops/suite.py; OPERATOR builds just one, and --device
+    overrides the NPU generation the suite pins for it."""
+    if not venv_py().exists():
+        sys.exit(f"no venv at {VENV} (run: python dev.py setup)")
+    cmd = [venv_py(), ROOT / "tests" / "iron-ops" / "build_operator.py"]
+    if getattr(args, "operator", None):
+        cmd += ["--operator", args.operator]
+    if getattr(args, "device", None):
+        cmd += ["--device", args.device]
+    # env= here, unlike cmd_test: run_e2e.py only hands the toolchain env to the design
+    # subprocesses it spawns, while build_operator.py imports `aie` in-process, so PYTHONPATH
+    # and PEANO_INSTALL_DIR must already be set when the interpreter starts. _iron_env() is
+    # run_e2e.toolchain_env(), so both commands still resolve the toolchain the same way.
+    sys.exit(sh(cmd, env=_iron_env(), check=False).returncode)
 
 
 def cmd_smoke(args):
@@ -958,7 +1031,11 @@ def cmd_package_npu_prereqs(args):
     for t in NPU_PREREQ_TOOLS:
         tool = _tool(it / "bin" / t)
         _stage(tool, stage / "build" / "iron-tools" / "bin" / tool.name)
-    for d in ("python", "lib", "runtime_lib"):
+    # include/ + aie_runtime_lib/ are the kernel-compile headers: iron-ops compiles its own
+    # aie_kernels/*.cc on the NPU runner (`-I <root>/include -I <root>/aie_runtime_lib/AIE2P`,
+    # see IRON's KernelCompilationRule), where the iron-tools examples ship a prebuilt design
+    # and never needed them. 22 MB on a 1.2 GB stage.
+    for d in ("python", "lib", "runtime_lib", "include", "aie_runtime_lib"):
         _stage(it / d, stage / "build" / "iron-tools" / d)
 
     # hrx: the runtime library plus exactly what build_xadx_helper.sh compiles and links
@@ -1084,7 +1161,13 @@ def cmd_verify_npu_prereqs(args):
                 f"{hrxruntime}/build_xadx_helper.sh",
                 f"{hrxruntime}/iron_hrx_xadx.cpp",
                 "projects/hrx/build/cmake/libhrx/src/libhrx/libhrx.so",
-                "projects/hrx/build/cmake/libflatcc_runtime.a"]
+                "projects/hrx/build/cmake/libflatcc_runtime.a",
+                # The kernel-compile headers test-npu-iron-ops compiles aie_kernels/*.cc
+                # against. One header from each of the two -I roots: without them Peano
+                # fails on the NPU runner with a missing-include error that says nothing
+                # about packaging. See cmd_package_npu_prereqs.
+                "build/iron-tools/include/aie_api/aie.hpp",
+                "build/iron-tools/aie_runtime_lib/AIE2P/vec_math.h"]
     if args.extracted:
         # `find`/rglob over a missing root yields nothing, so assert the roots exist
         # before concluding anything from the absence of symlinks.
@@ -1344,12 +1427,7 @@ def cmd_test_npu(args):
         sys.exit(f"{design}: no such design under programming_examples/basic")
     # The hrx IRON host-runtime is added by patch 0003 and registered in the built
     # package by its python/CMakeLists.txt hunk; without both, IRON_RUNTIME=hrx raises.
-    if not (BUILD / "iron-tools" / "python" / "aie" / "utils" / "hostruntime"
-            / "hrxruntime" / "discovery.py").exists():
-        sys.exit("hrxruntime missing from the built aie package — "
-                 "is patches/iron-tools/0003 applied? (run: python dev.py fetch, then build iron-tools)")
-    if not list((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so")):
-        sys.exit("libhrx.so not found — run: python dev.py build hrx")
+    _require_hrx_runtime()
 
     env = _iron_env()
     env["HRX_DIR"] = str(PROJ / "hrx")
@@ -1373,6 +1451,69 @@ def cmd_test_npu(args):
     print(f"test-npu: ok ({design} ran on the NPU via hrx)")
 
 
+def _require_hrx_runtime():
+    """The two things IRON_RUNTIME=hrx needs, named separately so the failure says which."""
+    if not (BUILD / "iron-tools" / "python" / "aie" / "utils" / "hostruntime"
+            / "hrxruntime" / "discovery.py").exists():
+        sys.exit("hrxruntime missing from the built aie package — "
+                 "is patches/iron-tools/0003 applied? (run: python dev.py fetch, then build iron-tools)")
+    if not list((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so")):
+        sys.exit("libhrx.so not found — run: python dev.py build hrx")
+
+
+def cmd_test_npu_iron_ops(args):
+    """ON-DEVICE e2e (REQUIRES an NPU): run an iron-ops operator's own test suite on the
+    NPU through the hrx HAL, with its numerics checked against the CPU reference.
+
+    Where `test-npu` proves ONE hand-written dispatch reaches the device, this proves the
+    IRON operator library -- the layer a model actually calls -- computes the right answer
+    on it. The operator is compiled here (the design is small; no LLVM is needed) and run
+    with IRON_RUNTIME=hrx, so the buffers are HRXTensors and dispatch goes through libhrx,
+    not XRT. That path only exists because of patches/iron-ops/0001.
+
+    We run the operators' OWN tests rather than a testbench of our own: they already own the
+    reference implementations and the tolerances, and they stay current as iron-ops grows.
+    `-m "not extensive"` is upstream's small tier; suite.py's `hrx_pytest_filter`
+    narrows it to out-of-box HRX smoke cases. --iterations 1 because the 5 that conftest
+    defaults to exist to fill its perf CSV, and this is a correctness gate.
+
+    Covers every operator in tests/iron-ops/suite.py; OPERATOR runs just one."""
+    suite = _iron_ops_suite()
+    try:
+        operators = suite.select(getattr(args, "operator", None))
+    except KeyError as e:
+        sys.exit(e.args[0])   # KeyError stringifies to its repr; the message is the argument
+    _require_hrx_runtime()
+    if not (VENV / _VBIN / f"pytest{_EXE}").exists():
+        sys.exit("pytest not in the venv — the NPU job installs the iron-ops test deps: "
+                 "python dev.py setup --iron-ops-tests")
+
+    ops_dir = PROJ / "iron-ops"
+    test_dirs = []
+    for op in operators:
+        test_dir = ops_dir / "iron" / "operators" / op.name
+        if not (test_dir / "test.py").exists():
+            sys.exit(f"{op.name}: no test.py under projects/iron-ops/iron/operators")
+        test_dirs.append(str(test_dir))
+
+    env = _iron_env()
+    env["HRX_DIR"] = str(PROJ / "hrx")
+    env["HRX_BUILD"] = str(PROJ / "hrx" / "build" / "cmake")
+    env["IRON_RUNTIME"] = "hrx"
+    filters = [op.hrx_pytest_filter for op in operators if op.hrx_pytest_filter]
+    pytest_filter = ["-k", " or ".join(f"({f})" for f in filters)] if filters else []
+    # cwd is the iron-ops checkout: pytest.ini and conftest.py live there, and conftest picks
+    # the device off the LIVE runtime -- it is what skips cases this NPU does not support.
+    rc = subprocess.run(
+        [str(venv_py()), "-m", "pytest", *test_dirs, "-m", "not extensive",
+         *pytest_filter, "--iterations", "1", "--csv-output", str(OUT / "iron-ops.csv")],
+        cwd=ops_dir, env=env).returncode
+    names = ", ".join(op.name for op in operators)
+    if rc != 0:
+        sys.exit(f"test-npu-iron-ops: FAIL ({names})")
+    print(f"test-npu-iron-ops: ok ({names} ran on the NPU via hrx, numerics verified)")
+
+
 def cmd_deps(args):
     """Print the in-repo dependency manifest (self-contained)."""
     print((ROOT / "requirements.txt").read_text())
@@ -1382,13 +1523,20 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("doctor")
-    sub.add_parser("setup")
+    s = sub.add_parser("setup")
+    s.add_argument("--iron-ops-tests", action="store_true",
+                   help="also install what iron-ops' own tests need (torch, pytest); "
+                        "the NPU job does, the build jobs do not")
     sub.add_parser("fetch")
     b = sub.add_parser("build"); b.add_argument("what",
         choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "fastflowlm", "all"])
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     sub.add_parser("test-fastflowlm")
+    to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
+        help="operator to build (default: every one in tests/iron-ops/suite.py)")
+    to.add_argument("--device", choices=sorted(NPU_TARGETS),
+                    help="override the NPU generation the suite pins for the operator")
     sub.add_parser("smoke")
     sm = sub.add_parser("submodules"); sm.add_argument("names", nargs="+")
     sm.add_argument("--reset", action="store_true", help="force-reset tracked files")
@@ -1403,6 +1551,8 @@ def main():
                    help="check an already-unpacked tree instead of the archive")
     sub.add_parser("npu-probe")
     c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
+    tno = sub.add_parser("test-npu-iron-ops"); tno.add_argument("operator", nargs="?",
+        help="operator to run on the NPU (default: every one in tests/iron-ops/suite.py)")
     tn = sub.add_parser("test-npu"); tn.add_argument("design", nargs="?")
     tn.add_argument("--device", choices=sorted(NPU_TARGETS), default="npu2",
                     help="NPU generation to build the design for (default: npu2/Strix)")
@@ -1416,6 +1566,8 @@ def main():
     elif a.cmd == "deps": cmd_deps(a)
     elif a.cmd == "test": cmd_test(a)
     elif a.cmd == "test-fastflowlm": cmd_test_fastflowlm(a)
+    elif a.cmd == "test-iron-ops": cmd_test_iron_ops(a)
+    elif a.cmd == "test-npu-iron-ops": cmd_test_npu_iron_ops(a)
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "submodules": cmd_submodules(a)
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
