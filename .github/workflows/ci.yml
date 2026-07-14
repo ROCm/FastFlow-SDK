@@ -86,13 +86,14 @@ jobs:
       # --reset --clean because this runner is self-hosted; see cmd_submodules.
       - name: Initialize submodules
         run: python3 dev.py submodules hrx iron-tools iron-ops --reset --clean hrx iron-tools --shallow
-      # venv + apply the temporary patches (so the example + hrxruntime source exist) +
-      # prefetch eudsl. The heavy compile is skipped — it comes from the artifact.
+      # venv + apply the compiler-stack patches (so the example + hrxruntime source exist)
+      # + prefetch eudsl. FastFlowLM is outside this job's dependency closure. The heavy
+      # compile is skipped — it comes from the artifact.
       # --iron-ops-tests: this is the ONLY job that runs iron-ops' own tests, so it is the
       # only one that installs torch (their golden references) + pytest. The build jobs
       # deliberately do not; see requirements-iron-ops.txt.
       - name: Setup (venv + patches + prefetch + iron-ops test deps)
-        run: python3 dev.py setup --iron-ops-tests
+        run: python3 dev.py setup --profile npu-e2e --iron-ops-tests
 
       - name: Download build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

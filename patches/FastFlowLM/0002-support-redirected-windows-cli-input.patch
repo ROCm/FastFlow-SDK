@@ -1,0 +1,72 @@
+diff --git a/src/runner/cli_wide.cpp b/src/runner/cli_wide.cpp
+index a90c391..b9aaac8 100644
+--- a/src/runner/cli_wide.cpp
++++ b/src/runner/cli_wide.cpp
+@@ -23,28 +23,32 @@ CLIWide::CLIWide() {
+     hConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+     
+     // Store original modes
+-    GetConsoleMode(hConsoleInput, &originalInputMode);
+-    GetConsoleMode(hConsoleOutput, &originalOutputMode);
++    inputIsConsole = GetConsoleMode(hConsoleInput, &originalInputMode) != 0;
++    outputIsConsole = GetConsoleMode(hConsoleOutput, &originalOutputMode) != 0;
+     
+     // Set input mode for raw input to capture all Unicode characters
+     // But keep ENABLE_PROCESSED_INPUT to handle Ctrl+C properly
+-    DWORD inputMode = ENABLE_PROCESSED_INPUT | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS;
+-    SetConsoleMode(hConsoleInput, inputMode);
++    if (inputIsConsole) {
++        DWORD inputMode = ENABLE_PROCESSED_INPUT | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS;
++        SetConsoleMode(hConsoleInput, inputMode);
++    }
+     
+     // Set output mode for UTF-8
+-    DWORD outputMode = ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+-    SetConsoleMode(hConsoleOutput, outputMode);
++    if (outputIsConsole) {
++        DWORD outputMode = ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
++        SetConsoleMode(hConsoleOutput, outputMode);
++    }
+     
+     // Set console to UTF-8 mode
+-    SetConsoleOutputCP(CP_UTF8);
+-    SetConsoleCP(CP_UTF8);
++    if (outputIsConsole) SetConsoleOutputCP(CP_UTF8);
++    if (inputIsConsole) SetConsoleCP(CP_UTF8);
+ }
+ 
+ /// \brief Destructor - Restore console modes
+ CLIWide::~CLIWide() {
+     // Restore original console modes
+-    SetConsoleMode(hConsoleInput, originalInputMode);
+-    SetConsoleMode(hConsoleOutput, originalOutputMode);
++    if (inputIsConsole) SetConsoleMode(hConsoleInput, originalInputMode);
++    if (outputIsConsole) SetConsoleMode(hConsoleOutput, originalOutputMode);
+ }
+ 
+ /// \brief Convert wide char to UTF-8
+@@ -97,6 +101,11 @@ bool CLIWide::is_paste_operation() {
+ 
+ /// \brief Get interactive input with arrow key support
+ std::string CLIWide::get_interactive_input() {
++    if (!inputIsConsole) {
++        std::string input;
++        return std::getline(std::cin, input) ? input : "/bye";
++    }
++
+     InputState state;
+     state.lines.push_back("");  // Start with one empty line
+     state.is_wrapped_line.push_back(false);  // First line is not wrapped
+diff --git a/src/runner/cli_wide.hpp b/src/runner/cli_wide.hpp
+index 6b5774e..a9777a2 100644
+--- a/src/runner/cli_wide.hpp
++++ b/src/runner/cli_wide.hpp
+@@ -38,6 +38,8 @@ class CLIWide {
+         HANDLE hConsoleOutput;
+         DWORD originalInputMode;
+         DWORD originalOutputMode;
++        bool inputIsConsole;
++        bool outputIsConsole;
+         
+         /// \brief Input state structure
+         struct InputState {

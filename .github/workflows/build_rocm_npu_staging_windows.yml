@@ -190,7 +190,10 @@ jobs:
       # Gate: system prereqs (clang-cl/git) + submodule-pins-vs-manifest + patches
       # + prefetch + version drift.
       - name: Doctor
-        run: .venv/Scripts/python.exe dev.py doctor
+        run: .venv/Scripts/python.exe dev.py doctor compiler-stack
+
+      - name: Test cross-platform FastFlowLM smoke driver
+        run: .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
       # ccache was never installed here, so dev.py silently compiled uncached. It supports
       # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.
@@ -215,7 +218,12 @@ jobs:
       # flags differ and every compile misses. If this reads ~0%, that is the cause.
       - name: ccache stats
         if: always()
-        run: ccache -s
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s
+          else
+            echo "ccache unavailable; an earlier setup step did not complete"
+          fi
 
       # Build-level smoke (no NPU): hrx-xclbinutil packaging round-trip + aie-opt.
       - name: Smoke tests

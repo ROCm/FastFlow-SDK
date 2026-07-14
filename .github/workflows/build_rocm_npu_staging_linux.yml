@@ -84,7 +84,10 @@ jobs:
       # Gate: system prereqs (clang/lld/python3-dev) + submodule-pins-vs-manifest
       # + patches + prefetch + version drift.
       - name: Doctor
-        run: .venv/bin/python dev.py doctor
+        run: .venv/bin/python dev.py doctor compiler-stack
+
+      - name: Test cross-platform FastFlowLM smoke driver
+        run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
       # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
       - name: Cache ccache
@@ -102,7 +105,12 @@ jobs:
       # Hit rate is the whole point of the step above; print it rather than assume it.
       - name: ccache stats
         if: always()
-        run: ccache -s
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s
+          else
+            echo "ccache unavailable; an earlier setup step did not complete"
+          fi
 
       # Not part of `build all`: the conformance binaries only run on a machine with an
       # NPU. Built here so npu_e2e gets them from the artifact instead of a toolchain.

@@ -7,7 +7,9 @@ underlying issue is fixed upstream. Layout: `patches/<submodule>/NNNN-*.patch`.
 
 Application is idempotent (already-applied patches are skipped). The patched
 submodules carry `ignore = dirty` in `.gitmodules`, so applying a patch does not
-show up as submodule drift.
+show up as submodule drift. Patch files are normalized to LF. `dev.py` first
+checks exact context, then tolerates whitespace-only context differences so a
+plain LF patch can also target an upstream file tracked as CRLF.
 
 Because they are upstreamable, a patch carries only changes that belong upstream.
 CI-only scaffolding belongs in `tests/` here, not inside a patch.
@@ -82,6 +84,18 @@ helper.
 for new code.
 
 **Remove when:** FastFlowLM PR #602 is updated for the current HRX API.
+
+### 0002-support-redirected-windows-cli-input.patch
+Keeps FastFlowLM's Unicode console editor for an interactive Windows console,
+but reads from `std::cin` when stdin is redirected. It also changes console modes
+only when `GetConsoleMode` confirms that the corresponding standard handle is a
+console.
+
+**Why:** the native NPU smoke supplies a prompt through stdin. The Windows CLI
+previously called `ReadConsoleInput` on that pipe, which fails immediately and
+causes a busy loop at the prompt. The POSIX CLI already treats EOF as `/bye`.
+
+**Remove when:** equivalent redirected-input handling lands in FastFlowLM.
 
 ## patches/iron-ops/
 

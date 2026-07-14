@@ -32,25 +32,50 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
+Windows prerequisites (PowerShell, no WSL):
+
+```powershell
+winget install --exact --id Microsoft.VisualStudio.2022.BuildTools `
+  --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --exact --id Python.Python.3.12
+winget install --exact --id Git.Git
+winget install --exact --id Kitware.CMake
+winget install --exact --id Ninja-build.Ninja
+winget install --exact --id Rustlang.Rustup
+rustup default stable
+
+git clone https://github.com/microsoft/vcpkg.git C:\dev\vcpkg
+C:\dev\vcpkg\bootstrap-vcpkg.bat
+C:\dev\vcpkg\vcpkg.exe install boost-program-options:x64-windows `
+  curl:x64-windows ffmpeg:x64-windows fftw3:x64-windows
+git config --global core.longpaths true
+```
+
+`dev.py` discovers the Visual Studio x64 environment and the conventional
+`C:\dev\vcpkg\installed\x64-windows` dependency tree automatically. A custom
+vcpkg location can be selected with `VCPKG_ROOT` or
+`FASTFLOWLM_VCPKG_INSTALLED_DIR`.
+
 FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
 No special runtime environment needs to be sourced; `dev.py test-fastflowlm`
 sets the HRX library path and runtime variables for the smoke run.
+
+Run the same workflow on both platforms. Use `python3` on Ubuntu and `python`
+on Windows:
 
 ```bash
 git submodule update --init projects/hrx
 git submodule update --init --recursive projects/FastFlowLM
 
-RNS_BUILD_JOBS=8 python3 dev.py build hrx
-RNS_BUILD_JOBS=8 python3 dev.py build fastflowlm
+python3 dev.py doctor fastflowlm
+python3 dev.py build hrx
+python3 dev.py build fastflowlm
 python3 dev.py test-fastflowlm
 ```
 
-Use `RNS_BUILD_JOBS=8` on shared local machines if full parallelism is
-disruptive. CI uses the runner's default parallelism.
-
 The smoke test requires the amdxdna driver and an NPU. It prints the FastFlowLM
-transcript, rejects HRX runtime errors, validates that the raw model output
-contains the smoke phrase, and writes the benchmark CSV under
+transcript, rejects HRX runtime errors, requires the exact raw smoke phrase and
+a coherent benchmark summary, and validates the benchmark CSV under
 `build/FastFlowLM-smoke/`.
 
 ## Full Compiler-Stack Quickstart
@@ -74,7 +99,7 @@ pinned manylinux gcc-toolset). To build with clang locally instead, install
 `clang lld` and set `CC=clang CXX=clang++`.
 
 ```bash
-python3 dev.py doctor             # check system prereqs
+python3 dev.py doctor compiler-stack # check system prereqs, pins, patches, and prefetch
 python3 dev.py setup              # .venv + Python deps; cmake/ninja/Peano via pip
 python3 dev.py build hrx-xclbinutil
 python3 dev.py build llvm         # LLVM+MLIR from the amd-llvm pin
