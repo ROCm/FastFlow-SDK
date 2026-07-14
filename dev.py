@@ -7,7 +7,7 @@ Builds the NPU stack together (everything except llvm-aie, which comes
 from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
   python dev.py doctor [PROFILE]      # validate compiler-stack (default), fastflowlm, or all
-  python dev.py setup                 # venv + python deps (incl. pip cmake/ninja) + fetch
+  python dev.py setup [--profile P]   # venv + python deps (incl. pip cmake/ninja) + fetch
                                      #   --iron-ops-tests: + what iron-ops' own tests need
                                      #     (torch, pytest); the NPU job only
   python dev.py fetch                 # apply temp patches + prefetch eudsl (verified) — offline-ready
@@ -247,15 +247,20 @@ def _rustc_version(env=None):
         return None
 
 
-def _have_header(hdr):
+def _have_header(hdr, language="c"):
     if hdr == "Python.h":  # lives under the python include dir, not a default search path
         import sysconfig
         inc = sysconfig.get_path("include")
         return bool(inc) and (Path(inc) / "Python.h").exists()
-    cc = shutil.which("clang") or shutil.which("cc") or shutil.which("gcc")
-    if not cc:
+    if language == "c++":
+        compiler = (os.environ.get("CXX") or shutil.which("clang++") or
+                    shutil.which("c++") or shutil.which("g++"))
+    else:
+        compiler = (os.environ.get("CC") or shutil.which("clang") or
+                    shutil.which("cc") or shutil.which("gcc"))
+    if not compiler:
         return False
-    p = subprocess.run([cc, "-fsyntax-only", "-x", "c", "-"],
+    p = subprocess.run([compiler, "-fsyntax-only", "-x", language, "-"],
                        input=f"#include <{hdr}>\nint main(){{return 0;}}\n".encode(),
                        capture_output=True)
     return p.returncode == 0
@@ -341,19 +346,19 @@ def _check_fastflowlm_system(verbose):
         missing.append("pkg-config")
 
     headers = [
-        ("libdrm/drm.h", "libdrm-dev"),
-        ("boost/program_options.hpp", "libboost-program-options-dev"),
-        ("curl/curl.h", "libcurl4-openssl-dev"),
-        ("fftw3.h", "libfftw3-dev"),
-        ("libavcodec/avcodec.h", "libavcodec-dev"),
-        ("libavformat/avformat.h", "libavformat-dev"),
-        ("libavutil/avutil.h", "libavutil-dev"),
-        ("libswresample/swresample.h", "libswresample-dev"),
-        ("libswscale/swscale.h", "libswscale-dev"),
-        ("readline/readline.h", "libreadline-dev"),
+        ("libdrm/drm.h", "libdrm-dev", "c"),
+        ("boost/program_options.hpp", "libboost-program-options-dev", "c++"),
+        ("curl/curl.h", "libcurl4-openssl-dev", "c"),
+        ("fftw3.h", "libfftw3-dev", "c"),
+        ("libavcodec/avcodec.h", "libavcodec-dev", "c"),
+        ("libavformat/avformat.h", "libavformat-dev", "c"),
+        ("libavutil/avutil.h", "libavutil-dev", "c"),
+        ("libswresample/swresample.h", "libswresample-dev", "c"),
+        ("libswscale/swscale.h", "libswscale-dev", "c"),
+        ("readline/readline.h", "libreadline-dev", "c"),
     ]
-    for header, package in headers:
-        ok = _have_header(header)
+    for header, package, language in headers:
+        ok = _have_header(header, language)
         if verbose:
             print(f"  [{'ok ' if ok else 'MISS'}] <{header}>")
         if not ok:
@@ -417,14 +422,26 @@ def _eudsl_cache_ok():
 
 
 def _patch_state(patch, sub):
-    """'applied' | 'appliable' | 'broken' for a patch against submodule dir `sub`."""
-    rev = subprocess.run(["git", "-C", str(sub), "apply", "--reverse", "--check", str(patch)],
-                         capture_output=True)
-    if rev.returncode == 0:
-        return "applied"
-    fwd = subprocess.run(["git", "-C", str(sub), "apply", "--check", str(patch)],
-                         capture_output=True)
-    return "appliable" if fwd.returncode == 0 else "broken"
+    """Return (state, apply options) for a patch against submodule dir `sub`.
+
+    Patches are normalized to LF. Some upstream files are tracked as CRLF, so if
+    strict matching fails, retry context matching without treating line-ending
+    whitespace as semantic. Non-whitespace source drift still fails.
+    """
+    for options in ((), ("--ignore-space-change",)):
+        rev = subprocess.run(
+            ["git", "-C", str(sub), "apply", "--reverse", "--check", *options, str(patch)],
+            capture_output=True,
+        )
+        if rev.returncode == 0:
+            return "applied", options
+        fwd = subprocess.run(
+            ["git", "-C", str(sub), "apply", "--check", *options, str(patch)],
+            capture_output=True,
+        )
+        if fwd.returncode == 0:
+            return "appliable", options
+    return "broken", ()
 
 
 def apply_patches(submodule_names=None):
@@ -440,21 +457,21 @@ def apply_patches(submodule_names=None):
         if not sub.exists():
             sys.exit(f"submodule missing for patches/{sub_dir.name} (run: git submodule update --init projects/{sub_dir.name})")
         for patch in sorted(sub_dir.glob("*.patch")):
-            st = _patch_state(patch, sub)
+            st, options = _patch_state(patch, sub)
             if st == "applied":
                 print(f"patch: {sub_dir.name}/{patch.name} already applied")
             elif st == "appliable":
-                sh(["git", "-C", str(sub), "apply", str(patch)])
+                sh(["git", "-C", str(sub), "apply", *options, str(patch)])
                 print(f"patch: applied {sub_dir.name}/{patch.name}")
             else:
                 sys.exit(f"patch does not apply cleanly: {patch} (submodule moved? regenerate it)")
 
 
-def cmd_fetch(args):
+def cmd_fetch(args, submodule_names=None):
     """Prepare sources for an offline build (the single network step): apply temporary
     patches + prefetch the build-time-fetched eudsl sdist into a gitignored,
     hash-verified cache. Idempotent."""
-    apply_patches()
+    apply_patches(submodule_names)
     path, pin = _eudsl_sdist()
     if not pin:
         sys.exit("manifests/versions.toml has no [eudsl] section")
@@ -484,6 +501,10 @@ DOCTOR_PROFILE_SUBMODULES = {
     "compiler-stack": {"llvm-project", "iron-tools", "hrx", "hrx-xclbinutil", "iron-ops"},
     "fastflowlm": {"hrx", "FastFlowLM"},
     "all": set(PIN_SECTION_TO_SUBMODULE.values()),
+}
+SETUP_PROFILE_SUBMODULES = {
+    "compiler-stack": DOCTOR_PROFILE_SUBMODULES["compiler-stack"],
+    "npu-e2e": {"hrx", "iron-tools", "iron-ops"},
 }
 
 
@@ -531,7 +552,7 @@ def cmd_doctor(args):
             print(f"  [ABSENT] {sub_dir.name}: cannot check patches")
             continue
         for patch in sorted(sub_dir.glob("*.patch")):
-            st = _patch_state(patch, submodule_dir)
+            st, _ = _patch_state(patch, submodule_dir)
             print(f"  [{'ok   ' if st == 'applied' else st.upper()}] {sub_dir.name}/{patch.name}")
             if st == "broken":
                 patch_bad.append(patch.name)
@@ -580,13 +601,14 @@ def cmd_setup(args):
           --emit-find-links --python-version 3.12 -o requirements.lock
     iron-tools/LLVM/bootgen/aie_api/aie-rt build from source; eudsl is prefetched (fetch)."""
     OUT.mkdir(exist_ok=True)
-    ok, missing = check_system(verbose=False)
-    if not ok:
-        if missing:
-            print("WARNING: missing system deps (apt): " + " ".join(sorted(missing)))
-        else:
-            print("WARNING: compiler-stack system prerequisites are missing")
-        print("  install them, then re-run; see `python dev.py doctor compiler-stack`")
+    if args.profile == "compiler-stack":
+        ok, missing = check_system(verbose=False)
+        if not ok:
+            if missing:
+                print("WARNING: missing system deps (apt): " + " ".join(sorted(missing)))
+            else:
+                print("WARNING: compiler-stack system prerequisites are missing")
+            print("  install them, then re-run; see `python dev.py doctor compiler-stack`")
     if not venv_py().exists():
         sh([sys.executable, "-m", "venv", str(VENV)])
     pip = [str(venv_py()), "-m", "pip", "install"]
@@ -600,7 +622,7 @@ def cmd_setup(args):
     else:
         src = lock if lock.exists() else ROOT / "requirements.txt"   # lock = reproducible (hashes)
     sh(pip + ["-r", str(src)])
-    cmd_fetch(args)   # group all network here: prefetch build-time pkgs so `build` is offline
+    cmd_fetch(args, SETUP_PROFILE_SUBMODULES[args.profile])
     install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
     print("setup: ok (deps + prefetched build-time pkgs; everything else builds from source)")
 
@@ -2021,6 +2043,8 @@ def main():
     d.add_argument("profile", nargs="?", choices=sorted(DOCTOR_PROFILE_SUBMODULES),
                    default="compiler-stack", help="dependency closure to validate")
     s = sub.add_parser("setup")
+    s.add_argument("--profile", choices=sorted(SETUP_PROFILE_SUBMODULES),
+                   default="compiler-stack", help="dependency closure to prepare")
     s.add_argument("--iron-ops-tests", action="store_true",
                    help="also install what iron-ops' own tests need (torch, pytest); "
                         "the NPU job does, the build jobs do not")

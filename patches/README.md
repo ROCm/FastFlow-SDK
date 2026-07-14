@@ -7,7 +7,9 @@ underlying issue is fixed upstream. Layout: `patches/<submodule>/NNNN-*.patch`.
 
 Application is idempotent (already-applied patches are skipped). The patched
 submodules carry `ignore = dirty` in `.gitmodules`, so applying a patch does not
-show up as submodule drift.
+show up as submodule drift. Patch files are normalized to LF. `dev.py` first
+checks exact context, then tolerates whitespace-only context differences so a
+plain LF patch can also target an upstream file tracked as CRLF.
 
 Because they are upstreamable, a patch carries only changes that belong upstream.
 CI-only scaffolding belongs in `tests/` here, not inside a patch.
