@@ -79,25 +79,26 @@ a coherent benchmark summary, and validates the benchmark CSV under
 ### Windows driver compatibility
 
 The following Windows MCDM packages have been validated on a Strix
-`PCI\VEN_1022&DEV_17F0&REV_10` NPU with Windows build `26200`. A passing row
-means HRX initialization, checked single dispatches, checked native command
-chains, and coherent Qwen3 0.6B FastFlowLM-to-HRX execution all passed.
+`PCI\VEN_1022&DEV_17F0` NPU with Windows build `26200`. A passing row means
+HRX initialization, checked single dispatches, checked native command chains,
+and coherent Qwen3 0.6B FastFlowLM-to-HRX execution all passed.
 
-| AMD XDNA driver | Loaded firmware (`xrt-smi`) | HRX single | HRX chain | FLM Qwen3 0.6B |
+| AMD XDNA driver | Firmware evidence | HRX single | HRX chain | FLM Qwen3 0.6B |
 | --- | --- | --- | --- | --- |
-| `32.0.203.314` | `1.0.21.43` | Pass | Pass | Pass |
-| `32.0.203.329` | `1.0.21.43` | Pass | Pass | Pass |
-| `32.0.20101.3760` | `1.1.2.64` | Pass | Pass | Pass |
+| `32.0.203.314` | loaded `1.0.21.43` (`xrt-smi`) | Pass | Pass | Pass |
+| `32.0.203.329` | loaded `1.0.21.43` (`xrt-smi`) | Pass | Pass | Pass |
+| `32.0.20101.3760` | loaded `1.1.2.64` (`xrt-smi`) | Pass | Pass | Pass |
+| `32.0.20102.3930` | package candidates `1.1.2.64`, `1.1.2.65`, `1.1.2.73`, `1.5.5.391` (`npu-probe`) | Pass | Pass | Pass |
 
 Reboot after changing the driver before validating the NPU. A hot package
 switch can leave device execution unhealthy even when Windows reports the new
 driver and a healthy PnP status. Run `python dev.py npu-probe` after reboot to
 record the active driver and the packaged firmware hashes before issuing NPU
 work. This probe deliberately has no XRT dependency, so on Windows it reports
-the firmware candidates found beside the active KMD. The package's
-`xrt-smi examine` performs a live XRT device query and reports the loaded
-firmware version shown in the table; that value comes from the XRT/KMD device
-interface, not from Windows PnP metadata.
+the firmware candidates found beside the active KMD. When available, the
+package's `xrt-smi examine` performs a live XRT device query and reports the
+loaded firmware version; that value comes from the XRT/KMD device interface,
+not from Windows PnP metadata.
 
 ## Full Compiler-Stack Quickstart
 

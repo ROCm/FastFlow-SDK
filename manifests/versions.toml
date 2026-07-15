@@ -48,7 +48,7 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
 branch     = "amdxdna-hal-native"                         # == ROCm/hrx-system PR #37 (+ follow-ups)
-commit     = "a2fa943c0183c157dd2e3fcade6f26e07560c232"
+commit     = "0d9f1a38fe8ad081706d5db2b8a41e827a410aa0"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
 note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, negotiated legacy/compact Windows MCDM contracts, legacy protocol revision 3 support, and minimal-build dependency gating."
 
