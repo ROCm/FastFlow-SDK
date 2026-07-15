@@ -62,7 +62,8 @@ jobs:
               libswscale-dev \
               ninja-build \
               pkg-config \
-              python3
+              python3 \
+              python3-venv
           elif command -v dnf >/dev/null 2>&1; then
             "${sudo_cmd[@]}" dnf install -y \
               boost-devel \
@@ -83,43 +84,31 @@ jobs:
             echo "No supported package manager found; assuming build dependencies are preinstalled."
           fi
 
-      - name: Install Rust toolchain
-        shell: bash
-        env:
-          RUST_TOOLCHAIN: stable
-        run: |
-          set -euo pipefail
-          if ! command -v rustup >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-              sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
-            export PATH="$HOME/.cargo/bin:$PATH"
-          fi
-          rustup_bin="$(command -v rustup)"
-          "$rustup_bin" toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
-          "$rustup_bin" default "$RUST_TOOLCHAIN"
-          rustc_bin="$("$rustup_bin" which rustc)"
-          cargo_bin="$("$rustup_bin" which cargo)"
-          echo "$(dirname "$cargo_bin")" >> "$GITHUB_PATH"
-          "$rustc_bin" --version
-          "$cargo_bin" --version
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable, pinned
+        with:
+          toolchain: 1.97.0
 
       - name: Initialize HRX and FastFlowLM submodules
         run: python3 dev.py submodules hrx FastFlowLM --reset --clean hrx FastFlowLM --shallow
 
+      - name: Set up FastFlowLM dependencies
+        run: python3 dev.py setup --profile fastflowlm
+
       - name: Validate FastFlowLM build prerequisites
-        run: python3 dev.py doctor fastflowlm
+        run: .venv/bin/python dev.py doctor fastflowlm
 
       - name: Test cross-platform FastFlowLM smoke driver
-        run: python3 -m unittest discover -s tests/fastflowlm -p 'test_*.py'
+        run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
       - name: Build minimal HRX amdxdna
-        run: python3 dev.py build hrx
+        run: .venv/bin/python dev.py build hrx
 
       - name: Probe NPU driver and firmware
-        run: python3 dev.py npu-probe
+        run: .venv/bin/python dev.py npu-probe
 
       - name: Build FastFlowLM
-        run: python3 dev.py build fastflowlm
+        run: .venv/bin/python dev.py build fastflowlm
 
       - name: Run FastFlowLM HRX smoke
-        run: python3 dev.py test-fastflowlm
+        run: .venv/bin/python dev.py test-fastflowlm

@@ -63,9 +63,11 @@ jobs:
 
       # Python 3.12 for dev.py (tomllib); the manylinux image ships it on Linux.
       - name: Set up Python
-        uses: actions/setup-python@v5   # TODO: SHA-pin
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.12'
+          # Newer 3.12 patch releases have no Windows assets in the official
+          # actions/python-versions manifest.
+          python-version: '3.12.10'
 
       # VS Developer environment: puts the MSVC headers/libs + toolchain on PATH.
       # F821 only: see the Linux workflow. `python`, not `python3`: this job uses the
@@ -125,9 +127,9 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.vcpkg-bincache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-${{ github.run_id }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake') }}-${{ github.run_id }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-
+            vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake') }}-
 
       # OpenSSL (bootgen's find_package(OpenSSL)) is the ONLY system library dep — the
       # Linux job likewise installs just openssl-devel. Use vcpkg (not choco's openssl,
@@ -140,7 +142,7 @@ jobs:
         run: |
           set -eu
           mkdir -p .vcpkg-bincache
-          triplets="$PWD/.github/vcpkg-triplets"
+          triplets="$PWD/.github/vcpkg/triplets"
           if command -v cygpath >/dev/null; then triplets="$(cygpath -m "$triplets")"; fi
 
           install_openssl() {
@@ -194,6 +196,9 @@ jobs:
 
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p 'test_*.py'
+
+      - name: Run Windows unit tests
+        run: .venv/Scripts/python.exe -m unittest discover -s tests/windows -p 'test_*.py'
 
       # ccache was never installed here, so dev.py silently compiled uncached. It supports
       # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.

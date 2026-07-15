@@ -28,7 +28,7 @@ sudo apt-get install -y \
   libboost-program-options-dev libcurl4-openssl-dev libdrm-dev libfftw3-dev \
   libreadline-dev libswresample-dev libswscale-dev ninja-build pkg-config python3
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-  sh -s -- -y --profile minimal --default-toolchain stable
+  sh -s -- -y --profile minimal --default-toolchain 1.97.0
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
@@ -42,19 +42,16 @@ winget install --exact --id Git.Git
 winget install --exact --id Kitware.CMake
 winget install --exact --id Ninja-build.Ninja
 winget install --exact --id Rustlang.Rustup
-rustup default stable
-
-git clone https://github.com/microsoft/vcpkg.git C:\dev\vcpkg
-C:\dev\vcpkg\bootstrap-vcpkg.bat
-C:\dev\vcpkg\vcpkg.exe install boost-program-options:x64-windows `
-  curl:x64-windows ffmpeg:x64-windows fftw3:x64-windows
+rustup toolchain install 1.97.0 --profile minimal
+rustup default 1.97.0
 git config --global core.longpaths true
 ```
 
-`dev.py` discovers the Visual Studio x64 environment and the conventional
-`C:\dev\vcpkg\installed\x64-windows` dependency tree automatically. A custom
-vcpkg location can be selected with `VCPKG_ROOT` or
-`FASTFLOWLM_VCPKG_INSTALLED_DIR`.
+On Windows, `dev.py setup --profile fastflowlm` installs the exact native
+dependency set from `.github/vcpkg/fastflowlm/vcpkg.json` into the repository's
+gitignored cache using the release-only triplet. Explicit
+`FASTFLOWLM_VCPKG_INSTALLED_DIR` or `VCPKG_ROOT` settings remain supported and
+take precedence over the managed tree.
 
 FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
 No special runtime environment needs to be sourced; `dev.py test-fastflowlm`
@@ -67,6 +64,7 @@ on Windows:
 git submodule update --init projects/hrx
 git submodule update --init --recursive projects/FastFlowLM
 
+python3 dev.py setup --profile fastflowlm
 python3 dev.py doctor fastflowlm
 python3 dev.py build hrx
 python3 dev.py build fastflowlm
@@ -77,6 +75,29 @@ The smoke test requires the amdxdna driver and an NPU. It prints the FastFlowLM
 transcript, rejects HRX runtime errors, requires the exact raw smoke phrase and
 a coherent benchmark summary, and validates the benchmark CSV under
 `build/FastFlowLM-smoke/`.
+
+### Windows driver compatibility
+
+The following Windows MCDM packages have been validated on a Strix
+`PCI\VEN_1022&DEV_17F0&REV_10` NPU with Windows build `26200`. A passing row
+means HRX initialization, checked single dispatches, checked native command
+chains, and coherent Qwen3 0.6B FastFlowLM-to-HRX execution all passed.
+
+| AMD XDNA driver | Loaded firmware (`xrt-smi`) | HRX single | HRX chain | FLM Qwen3 0.6B |
+| --- | --- | --- | --- | --- |
+| `32.0.203.314` | `1.0.21.43` | Pass | Pass | Pass |
+| `32.0.203.329` | `1.0.21.43` | Pass | Pass | Pass |
+| `32.0.20101.3760` | `1.1.2.64` | Pass | Pass | Pass |
+
+Reboot after changing the driver before validating the NPU. A hot package
+switch can leave device execution unhealthy even when Windows reports the new
+driver and a healthy PnP status. Run `python dev.py npu-probe` after reboot to
+record the active driver and the packaged firmware hashes before issuing NPU
+work. This probe deliberately has no XRT dependency, so on Windows it reports
+the firmware candidates found beside the active KMD. The package's
+`xrt-smi examine` performs a live XRT device query and reports the loaded
+firmware version shown in the table; that value comes from the XRT/KMD device
+interface, not from Windows PnP metadata.
 
 ## Full Compiler-Stack Quickstart
 

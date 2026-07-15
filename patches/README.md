@@ -73,6 +73,23 @@ firmware keeps command chains enabled by default.
 **Remove when:** Linux KMQ command chains are validated on stock Ubuntu firmware,
 or upstream hrx carries equivalent driver/firmware capability gating.
 
+### 0004-add-amdxdna-executable-extension.patch
+Adds a public `hrx_amdxdna_executable_create` extension that accepts generic,
+borrowed xclbin, entry-point, and XAie transaction-run descriptions. The
+top-level, entry-point, and run records are ABI-versioned and length-delimited.
+The API supports multiple xclbins, entry points, runs, data payloads, context
+creation/reuse, and source locations. libHRX derives DDR relocation metadata,
+owns XADX serialization, and loads the resulting executable. Negative wire
+sentinels, patch-table triples, FlatCC, and the generated schema remain private
+HRX implementation details; callers need only `hrx_amdxdna.h` and the public
+HRX library.
+
+The implementation and header are platform-neutral. Builds without the amdxdna
+HAL retain the public symbol and return `HRX_STATUS_UNIMPLEMENTED`.
+
+**Remove when:** the extension lands upstream in HRX and the submodule pin includes
+it. The separate iron-tools XADX helper is not migrated by this patch.
+
 ## patches/FastFlowLM/
 
 ### 0001-use-hrx-map-with-mode.patch
@@ -96,6 +113,15 @@ previously called `ReadConsoleInput` on that pipe, which fails immediately and
 causes a busy loop at the prompt. The POSIX CLI already treats EOF as `/bye`.
 
 **Remove when:** equivalent redirected-input handling lands in FastFlowLM.
+
+### 0003-use-public-hrx-amdxdna-extension.patch
+Replaces FastFlowLM's private XADX/FlatCC builder with
+`hrx_amdxdna_executable_create`. FLM no longer includes HRX runtime internals or
+generated schema headers and no longer links FlatCC directly; its HRX dependency
+is reduced to the public headers and library. FLM also no longer derives or
+passes command-chain patch tables; HRX derives those from the XAie transaction.
+
+**Remove when:** FastFlowLM consumes the upstream HRX amdxdna extension directly.
 
 ## patches/iron-ops/
 
