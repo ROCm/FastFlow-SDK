@@ -1,0 +1,8 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# Python build tools needed by the minimal HRX + FastFlowLM path.
+# Regenerate requirements-fastflowlm.lock with:
+#   uv pip compile requirements-fastflowlm.txt --generate-hashes \
+#     --python-version 3.12 --output-file requirements-fastflowlm.lock
+cmake==4.3.4
+ninja==1.13.0

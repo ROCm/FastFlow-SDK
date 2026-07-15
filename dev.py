@@ -35,8 +35,21 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, json, os, re, shutil, stat, subprocess, sys, tarfile, tempfile
+import argparse, contextlib, ctypes, hashlib, json, os, re, shutil, stat, subprocess, sys, tarfile, tempfile
 from pathlib import Path
+
+from build_tools.fastflowlm_deps import (
+    MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
+    VCPKG_COMMIT as FASTFLOWLM_VCPKG_COMMIT,
+    VCPKG_TRIPLET as FASTFLOWLM_VCPKG_TRIPLET,
+    resolve_windows_roots,
+    windows_dependency_errors,
+)
+from build_tools.windows_npu import (
+    device_is_healthy,
+    driver_firmware_packages,
+    parse_device_query,
+)
 
 ROOT = Path(__file__).resolve().parent
 PROJ = ROOT / "projects"
@@ -58,7 +71,6 @@ PATCHES = ROOT / "patches"                      # temporary submodule patches (s
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
 NPROC = str(os.cpu_count() or 8)
 BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or NPROC
-FASTFLOWLM_MIN_RUSTC = (1, 80, 0)
 IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and MSVC differ on Windows
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -110,6 +122,17 @@ def cmake_path(p: Path) -> str:
     which fails the compiler-ABI check before any of our code is compiled.
     """
     return p.as_posix()
+
+
+def _cmake_source_override(name: str):
+    """Forwards an explicitly prepared FetchContent source into CMake."""
+    value = os.environ.get(name)
+    if not value:
+        return []
+    source = Path(value).resolve()
+    if not source.is_dir():
+        sys.exit(f"{name} is not a directory: {source}")
+    return [f"-D{name}={cmake_path(source)}"]
 
 
 def _env_path(env=None):
@@ -472,6 +495,9 @@ def cmd_fetch(args, submodule_names=None):
     patches + prefetch the build-time-fetched eudsl sdist into a gitignored,
     hash-verified cache. Idempotent."""
     apply_patches(submodule_names)
+    if submodule_names is not None and "iron-tools" not in submodule_names:
+        print("fetch: selected source patches are ready (no compiler-stack prefetch needed)")
+        return
     path, pin = _eudsl_sdist()
     if not pin:
         sys.exit("manifests/versions.toml has no [eudsl] section")
@@ -504,6 +530,7 @@ DOCTOR_PROFILE_SUBMODULES = {
 }
 SETUP_PROFILE_SUBMODULES = {
     "compiler-stack": DOCTOR_PROFILE_SUBMODULES["compiler-stack"],
+    "fastflowlm": DOCTOR_PROFILE_SUBMODULES["fastflowlm"],
     "npu-e2e": {"hrx", "iron-tools", "iron-ops"},
 }
 
@@ -594,8 +621,70 @@ def cmd_doctor(args):
     return rc
 
 
+def _install_fastflowlm_windows_deps():
+    """Installs the manifest-defined native dependencies into the managed cache."""
+    source = ROOT / ".cache" / "vcpkg-src"
+    install_root = ROOT / ".cache" / "vcpkg-installed"
+    binary_cache = ROOT / ".cache" / "vcpkg-bincache"
+    downloads = ROOT / ".cache" / "vcpkg-downloads"
+    for path in (source.parent, install_root, binary_cache, downloads):
+        path.mkdir(parents=True, exist_ok=True)
+
+    source_changed = False
+    if not (source / ".git").is_dir():
+        sh(["git", "init", str(source)])
+        sh(["git", "-C", str(source), "remote", "add", "origin",
+            "https://github.com/microsoft/vcpkg.git"])
+        source_changed = True
+    else:
+        sh(["git", "-C", str(source), "remote", "set-url", "origin",
+            "https://github.com/microsoft/vcpkg.git"])
+    head = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    if head != FASTFLOWLM_VCPKG_COMMIT:
+        sh(["git", "-C", str(source), "fetch", "--depth", "1", "origin",
+            FASTFLOWLM_VCPKG_COMMIT])
+        sh(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
+        source_changed = True
+    if source_changed or not (source / "vcpkg.exe").is_file():
+        sh(["cmd.exe", "/d", "/c", str(source / "bootstrap-vcpkg.bat"),
+            "-disableMetrics"])
+
+    env = os.environ.copy()
+    env["VCPKG_BINARY_SOURCES"] = (
+        f"clear;files,{cmake_path(binary_cache)},readwrite"
+    )
+    env["VCPKG_DOWNLOADS"] = str(downloads)
+    powershell = shutil.which("powershell.exe")
+    downloader = ROOT / ".github" / "scripts" / "vcpkg-download.ps1"
+    if powershell and downloader.is_file():
+        template = (
+            f'"{powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+            f'-File "{downloader}" -Url {{url}} -Sha512 {{sha512}} '
+            '-Destination {dst}'
+        )
+        env["X_VCPKG_ASSET_SOURCES"] = f"clear;x-script,{template}"
+
+    sh([
+        source / "vcpkg.exe", "install",
+        "--triplet", FASTFLOWLM_VCPKG_TRIPLET,
+        f"--overlay-triplets={ROOT / '.github' / 'vcpkg' / 'triplets'}",
+        f"--x-manifest-root={ROOT / '.github' / 'vcpkg' / 'fastflowlm'}",
+        f"--x-install-root={install_root}",
+    ], env=env)
+    print("setup: FastFlowLM native dependencies ->",
+          install_root / FASTFLOWLM_VCPKG_TRIPLET)
+
+
 def cmd_setup(args):
-    """venv + all Python deps from the HASH-PINNED requirements.lock (reproducible).
+    """Prepare the selected dependency closure in the repository-local cache.
+
+    Compiler-stack Python deps come from the hash-pinned requirements.lock;
+    FastFlowLM installs only its pinned CMake/Ninja tooling and, on Windows, the
+    manifest-defined native dependencies.
+
     requirements.txt is the human-edited input; regenerate the lock after editing it:
       .venv/bin/uv pip compile requirements.txt --generate-hashes --emit-index-url \\
           --emit-find-links --python-version 3.12 -o requirements.lock
@@ -612,19 +701,26 @@ def cmd_setup(args):
     if not venv_py().exists():
         sh([sys.executable, "-m", "venv", str(VENV)])
     pip = [str(venv_py()), "-m", "pip", "install"]
-    sh(pip + ["--upgrade", "pip"])
+    if args.profile != "fastflowlm":
+        sh(pip + ["--upgrade", "pip"])
     lock = ROOT / "requirements.lock"
+    if args.profile == "fastflowlm":
+        src = ROOT / "requirements-fastflowlm.lock"
     # requirements.lock is hash-pinned for LINUX wheels; on Windows the platform-specific
     # wheels (llvm-aie, cmake, ...) have different sha256s, so those hashes can't match.
     # Use the unpinned requirements.txt there — same version pins + find-links, no hashes.
-    if IS_WINDOWS:
+    elif IS_WINDOWS:
         src = ROOT / "requirements.txt"
     else:
         src = lock if lock.exists() else ROOT / "requirements.txt"   # lock = reproducible (hashes)
-    sh(pip + ["-r", str(src)])
+    pip_args = ["--require-hashes"] if args.profile == "fastflowlm" else []
+    sh(pip + pip_args + ["-r", str(src)])
     cmd_fetch(args, SETUP_PROFILE_SUBMODULES[args.profile])
-    install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
-    print("setup: ok (deps + prefetched build-time pkgs; everything else builds from source)")
+    if args.profile != "fastflowlm":
+        install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
+    if args.profile == "fastflowlm" and IS_WINDOWS:
+        _install_fastflowlm_windows_deps()
+    print(f"setup: ok ({args.profile} dependencies are ready)")
 
 
 def install_iron_ops(pip, with_tests=False):
@@ -664,77 +760,15 @@ def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
 
 
 def _fastflowlm_windows_roots():
-    vcpkg_root = (os.environ.get("FASTFLOWLM_VCPKG_INSTALLED_DIR") or
-                  os.environ.get("VCPKG_INSTALLED_DIR"))
-    vcpkg_candidates = [Path(vcpkg_root)] if vcpkg_root else []
-    if os.environ.get("VCPKG_ROOT"):
-        vcpkg_candidates.append(Path(os.environ["VCPKG_ROOT"]) / "installed" / "x64-windows")
-    vcpkg_candidates += [
-        Path("C:/dev/vcpkg/installed/x64-windows"),
-        Path("C:/vcpkg/installed/x64-windows"),
-    ]
-    vcpkg = next((path for path in vcpkg_candidates if path.is_dir()),
-                 vcpkg_candidates[0] if vcpkg_candidates else None)
-
-    boost_root = (os.environ.get("FASTFLOWLM_BOOST_ROOT") or
-                  os.environ.get("BOOST_ROOT") or
-                  os.environ.get("BOOSTROOT"))
-    boost_candidates = [Path(boost_root)] if boost_root else []
-    boost_candidates += [
-        Path("C:/dev/boost_1_88_0"),
-        Path("C:/Program Files/boost/boost_1_88_0"),
-    ]
-    if vcpkg and (vcpkg / "include" / "boost").is_dir():
-        boost_candidates.append(vcpkg / "include")
-    boost = next((path for path in boost_candidates if (path / "boost").is_dir()),
-                 boost_candidates[0] if boost_candidates else None)
-
-    boost_stage = boost / "stage" / "lib" if boost else None
-    vcpkg_lib = vcpkg / "lib" if vcpkg else None
-    boost_lib = None
-    for lib_dir in (boost_stage, vcpkg_lib):
-        if lib_dir and lib_dir.is_dir() and any(lib_dir.glob("*boost_program_options*.lib")):
-            boost_lib = lib_dir
-            break
-    return {
-        "boost_root": boost,
-        "boost_lib": boost_lib,
-        "vcpkg_root": vcpkg,
-        "vcpkg_bin": vcpkg / "bin" if vcpkg else None,
-    }
+    return resolve_windows_roots(ROOT, os.environ)
 
 
 def _fastflowlm_windows_dependency_errors(roots, env):
-    missing = []
-    if not _which("cargo", env):
-        missing.append("Rust/Cargo (install with rustup; rustc >= 1.80 required)")
-    rustc_version = _rustc_version(env)
-    if rustc_version is None or rustc_version < FASTFLOWLM_MIN_RUSTC:
-        got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
-        need = ".".join(str(n) for n in FASTFLOWLM_MIN_RUSTC)
-        missing.append(f"rustc >= {need} (found {got})")
-    if (not roots["vcpkg_root"] or
-            not (roots["vcpkg_root"] / "include").is_dir() or
-            not (roots["vcpkg_root"] / "lib").is_dir()):
-        missing.append("FASTFLOWLM_VCPKG_INSTALLED_DIR / vcpkg installed/x64-windows with include+lib")
-    if not roots["boost_root"] or not (roots["boost_root"] / "boost").is_dir():
-        missing.append("Boost headers (set FASTFLOWLM_BOOST_ROOT or install boost-program-options:x64-windows with vcpkg)")
-    if not roots["boost_lib"]:
-        missing.append("Boost program_options library (vcpkg install boost-program-options:x64-windows or build Boost stage)")
-    vcpkg_lib = roots["vcpkg_root"] / "lib" if roots["vcpkg_root"] else None
-    required_libraries = {
-        "curl": (("libcurl.lib", "curl.lib"),),
-        "FFmpeg": (("avformat.lib",), ("avcodec.lib",), ("avutil.lib",),
-                   ("swscale.lib",), ("swresample.lib",)),
-        "FFTW": (("fftw3.lib",), ("fftw3f.lib",), ("fftw3l.lib",)),
-    }
-    if vcpkg_lib and vcpkg_lib.is_dir():
-        for label, alternatives in required_libraries.items():
-            absent = ["/".join(names) for names in alternatives
-                      if not any((vcpkg_lib / name).is_file() for name in names)]
-            if absent:
-                missing.append(f"{label} libraries in {vcpkg_lib} (missing {', '.join(absent)})")
-    return missing
+    return windows_dependency_errors(
+        roots,
+        cargo_available=bool(_which("cargo", env)),
+        rustc_version=_rustc_version(env),
+    )
 
 
 def _require_fastflowlm_windows_deps(env):
@@ -910,9 +944,11 @@ def cmd_build_hrx(args):
         "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
         "-DIREE_HAL_DRIVER_AMDGPU=OFF",
         "-DIREE_HAL_DRIVER_AMDXDNA=ON",
-        # Declare test targets so `build hrx-cts` can compile them later, but
-        # the normal HRX build below only asks CMake for the runtime targets.
-        "-DIREE_BUILD_TESTS=ON",
+        # Keep the runtime-only build free of test-only downloads. `build
+        # hrx-cts` explicitly reconfigures with tests enabled before requesting
+        # those targets.
+        "-DIREE_BUILD_TESTS=OFF",
+        "-DIREE_BUILD_BENCHMARKS=OFF",
         "-DLIBHRX_BUILD_CTS=OFF",
         "-DHRX_INSTALL_TESTS=OFF",
         "-DLIBHRX_BUILD_PASSTHROUGH=OFF",
@@ -921,6 +957,7 @@ def cmd_build_hrx(args):
         # until HRX makes that dependency conditional.
         "-DIREE_HAL_DRIVER_LOCAL_SYNC=OFF",
         "-DIREE_HAL_DRIVER_NULL=OFF",
+        *_cmake_source_override("FETCHCONTENT_SOURCE_DIR_FLATCC"),
         *_cc_flags(cc, cxx), *_ccache_flags(),
     ], env=cmake_env())
     sh([
@@ -933,10 +970,14 @@ def cmd_build_hrx(args):
 
 def cmd_build_hrx_cts(args):
     """The amdxdna HAL conformance binaries. Separate from `build hrx` (and from
-    `build all`) because they are only useful on a machine with an NPU; `build hrx`
-    configures with IREE_BUILD_TESTS=ON, which merely declares the targets."""
+    `build all`) because they are only useful on a machine with an NPU. Enabling
+    tests here keeps the normal runtime build from fetching GoogleTest."""
     if not (HRX_CMAKE_BUILD / "CMakeCache.txt").exists():
         sys.exit("hrx not configured — run: python dev.py build hrx")
+    sh([cmake_bin(), "-S", cmake_path(PROJ / "hrx"),
+        "-B", cmake_path(HRX_CMAKE_BUILD),
+        "-DIREE_BUILD_TESTS=ON", "-DIREE_BUILD_BENCHMARKS=ON"],
+       env=cmake_env())
     sh([cmake_bin(), "--build", cmake_path(HRX_CMAKE_BUILD),
         *[f"--target=iree_hal_drivers_amdxdna_cts_{t}" for t in HRX_CTS_TESTS], "-j", BUILD_JOBS],
        env=cmake_env())
@@ -948,13 +989,11 @@ def _fastflowlm_artifacts():
         flm_bin = PROJ / "FastFlowLM" / "src" / "build" / "flm.exe"
         hrx_lib = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "hrx.lib"
         hrx_dll = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "hrx.dll"
-        flatcc = HRX_CMAKE_BUILD / "flatcc_runtime.lib"
     else:
         flm_bin = PROJ / "FastFlowLM" / "src" / "build" / "flm"
         hrx_lib = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "libhrx.so"
         hrx_dll = hrx_lib
-        flatcc = HRX_CMAKE_BUILD / "libflatcc_runtime.a"
-    return flm_bin, hrx_lib, hrx_dll, flatcc
+    return flm_bin, hrx_lib, hrx_dll
 
 
 def cmd_build_fastflowlm(args):
@@ -983,11 +1022,9 @@ def cmd_build_fastflowlm(args):
         roots = None
 
     apply_patches({"FastFlowLM"})
-    flm_bin, hrx_lib, hrx_dll, flatcc = _fastflowlm_artifacts()
+    flm_bin, hrx_lib, hrx_dll = _fastflowlm_artifacts()
     if not hrx_lib.exists():
         sys.exit(f"missing HRX library ({hrx_lib}) - run: python dev.py build hrx")
-    if not flatcc.exists():
-        sys.exit(f"missing flatcc runtime ({flatcc}) - run: python dev.py build hrx")
 
     cc, cxx = _compilers()
     cfg = [
@@ -999,7 +1036,6 @@ def cmd_build_fastflowlm(args):
         f"-DHRX_DIR={cmake_path(PROJ / 'hrx')}",
         f"-DHRX_BUILD={cmake_path(HRX_CMAKE_BUILD)}",
         f"-DHRX_LIB={cmake_path(hrx_lib)}",
-        f"-DHRX_FLATCC_LIB={cmake_path(flatcc)}",
         f"-DCMAKE_INSTALL_PREFIX={cmake_path(FASTFLOWLM_INSTALL)}",
         f"-DCMAKE_XCLBIN_PREFIX={cmake_path(flm_src)}",
         *_cc_flags(cc, cxx),
@@ -1702,42 +1738,56 @@ def _print_npu_driver_info():
 
 
 def _windows_npu_info():
-    """Returns PnP/driver metadata without opening or dispatching to the NPU."""
+    """Returns every amdxdna MCDM device without opening or dispatching it."""
     powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
     if not powershell:
         return None, "PowerShell was not found"
     script = r"""
 $ErrorActionPreference = 'Stop'
-$signed = Get-CimInstance Win32_PnPSignedDriver |
+$candidates = @(Get-PnpDevice -PresentOnly |
   Where-Object {
-    $_.DeviceClass -eq 'COMPUTEACCELERATOR' -and
-    $_.DeviceID -like 'PCI\VEN_1022*'
-  } | Select-Object -First 1
-if (-not $signed) { throw 'AMD ComputeAccelerator device was not found' }
-$pnp = Get-PnpDevice -InstanceId $signed.DeviceID
-$service = (Get-PnpDeviceProperty -InstanceId $signed.DeviceID `
+    $_.Class -eq 'ComputeAccelerator' -and
+    $_.InstanceId -like 'PCI\VEN_1022*'
+  })
+$devices = @($candidates | ForEach-Object {
+$pnp = $_
+$deviceId = $pnp.InstanceId
+$service = (Get-PnpDeviceProperty -InstanceId $deviceId `
   -KeyName 'DEVPKEY_Device_Service').Data
+if ($service -ne 'IpuMcdmDriver') { return }
+$driverVersion = (Get-PnpDeviceProperty -InstanceId $deviceId `
+  -KeyName 'DEVPKEY_Device_DriverVersion').Data
+$driverDateValue = (Get-PnpDeviceProperty -InstanceId $deviceId `
+  -KeyName 'DEVPKEY_Device_DriverDate').Data
+$driverDate = if ($driverDateValue -is [DateTime]) {
+  $driverDateValue.ToString('yyyy-MM-dd')
+} else {
+  [string]$driverDateValue
+}
+$driverProvider = (Get-PnpDeviceProperty -InstanceId $deviceId `
+  -KeyName 'DEVPKEY_Device_DriverProvider').Data
+$infName = (Get-PnpDeviceProperty -InstanceId $deviceId `
+  -KeyName 'DEVPKEY_Device_DriverInfPath').Data
 $systemDriver = Get-CimInstance Win32_SystemDriver -Filter "Name='$service'"
 $driverPath = if ($systemDriver) { $systemDriver.PathName.Trim('"') } else { $null }
 if ($driverPath -and $driverPath.StartsWith('\SystemRoot\')) {
   $driverPath = Join-Path $env:SystemRoot $driverPath.Substring(12)
 }
-$xrtSmi = if ($driverPath) {
-  Join-Path (Split-Path -Parent $driverPath) 'xrt-smi.exe'
-} else { $null }
 [PSCustomObject]@{
-  device_name = $signed.DeviceName
-  device_id = $signed.DeviceID
-  driver_version = $signed.DriverVersion
-  driver_date = $signed.DriverDate.ToString('yyyy-MM-dd')
-  driver_provider = $signed.DriverProviderName
-  inf_name = $signed.InfName
+  device_name = $pnp.FriendlyName
+  device_id = $deviceId
+  driver_version = [string]$driverVersion
+  driver_date = $driverDate
+  driver_provider = [string]$driverProvider
+  inf_name = [string]$infName
   status = [string]$pnp.Status
   problem = [string]$pnp.Problem
   service = [string]$service
   driver_path = [string]$driverPath
-  xrt_smi = if ($xrtSmi -and (Test-Path -LiteralPath $xrtSmi)) { [string]$xrtSmi } else { $null }
-} | ConvertTo-Json -Compress
+}
+})
+if ($devices.Count -eq 0) { throw 'amdxdna MCDM device was not found' }
+ConvertTo-Json -InputObject $devices -Compress
 """
     p = subprocess.run(
         [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -1747,59 +1797,48 @@ $xrtSmi = if ($driverPath) {
         detail = p.stderr.strip() or p.stdout.strip() or f"exit code {p.returncode}"
         return None, detail
     try:
-        return json.loads(p.stdout), None
-    except json.JSONDecodeError as e:
+        return parse_device_query(p.stdout), None
+    except (json.JSONDecodeError, ValueError) as e:
         return None, f"could not parse PowerShell device query: {e}"
 
 
-def _xrt_smi_host_fields(executable):
-    """Queries driver/firmware metadata only; this does not submit NPU work."""
-    p = subprocess.run(
-        [str(executable), "examine", "--report", "host", "--batch"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
-    )
-    if p.returncode != 0:
-        detail = p.stderr.strip() or p.stdout.strip() or f"exit code {p.returncode}"
-        return None, detail
-    fields = {}
-    for label, value in re.findall(r"^\s{2}([^:]+?)\s*:\s*(.*?)\s*$", p.stdout, re.MULTILINE):
-        fields[label.strip()] = value.strip()
-    return fields, None
+def _windows_driver_firmware_packages(driver_path):
+    return driver_firmware_packages(driver_path)
 
 
 def _print_windows_npu_driver_info():
     print("== amdxdna driver / firmware ==")
-    info, error = _windows_npu_info()
+    devices, error = _windows_npu_info()
     if error:
         print(f"  [MISS] Windows NPU device query failed: {error}")
         return 1
 
-    print(f"  [ok ] device: {info['device_name']}")
-    print(f"  [info] device id: {info['device_id']}")
-    print(f"  [info] driver: {info['driver_version']} ({info['driver_provider']}, "
-          f"{info['driver_date']}, {info['inf_name']})")
-    print(f"  [info] service: {info['service']} ({info['driver_path']})")
-    healthy = info["status"] == "OK" and info["problem"] == "CM_PROB_NONE"
-    state = "ok " if healthy else "MISS"
-    print(f"  [{state}] PnP status: {info['status']} / {info['problem']}")
+    all_healthy = True
+    for index, info in enumerate(devices):
+        prefix = f"device {index}: " if len(devices) > 1 else "device: "
+        print(f"  [ok ] {prefix}{info['device_name']}")
+        print(f"  [info] device id: {info['device_id']}")
+        print(f"  [info] driver: {info['driver_version']} ({info['driver_provider']}, "
+              f"{info['driver_date']}, {info['inf_name']})")
+        print(f"  [info] service: {info['service']} ({info['driver_path']})")
+        healthy = device_is_healthy(info)
+        all_healthy &= healthy
+        state = "ok " if healthy else "MISS"
+        print(f"  [{state}] PnP status: {info['status']} / {info['problem']}")
 
-    xrt_smi = info.get("xrt_smi")
-    if not xrt_smi:
-        print("  [note] driver-packaged xrt-smi not found; active firmware version unavailable")
-        return 0 if healthy else 1
-    fields, error = _xrt_smi_host_fields(xrt_smi)
-    if error:
-        print(f"  [note] xrt-smi metadata query failed: {error}")
-        return 0 if healthy else 1
-    print(f"  [info] firmware: {fields.get('NPU Firmware Version', 'unknown')}")
-    print(f"  [info] packaged XRT: {fields.get('Version', 'unknown')} "
-          f"({fields.get('Hash', 'unknown')})")
-    queried_driver = fields.get("NPU Driver Version")
-    if queried_driver and queried_driver != info["driver_version"]:
-        print(f"  [MISS] xrt-smi reports driver {queried_driver}, PnP reports "
-              f"{info['driver_version']}")
-        return 1
-    return 0 if healthy else 1
+        packages = _windows_driver_firmware_packages(info.get("driver_path"))
+        if packages:
+            print("  [info] driver-package firmware candidates:")
+            for package in packages:
+                if error := package.get("error"):
+                    print(f"    {package['name']}: unreadable ({error})")
+                else:
+                    print(f"    {package['name']}: release {package['release']}, "
+                          f"sha256 {package['sha256']}")
+            print("  [note] Windows PnP does not expose which firmware candidate the KMD loaded")
+        else:
+            print("  [note] no firmware package metadata found beside the active KMD")
+    return 0 if all_healthy else 1
 
 
 def _probe_libhrx():

@@ -3,7 +3,7 @@
 #
 # Entry workflow: builds + validates the rocm-npu-staging stack via reusable
 # workflows — Linux (ROCm scale runner + TheRock manylinux), Windows
-# (azure-windows-scale-rocm + clang-cl), and Linux FLM on the gfx1151 NPU runner.
+# (azure-windows-scale-rocm + clang-cl), and Linux/Windows FLM on gfx1151 NPU runners.
 # Every submodule is public, so none needs secrets.
 # The Linux build also publishes a run-prerequisites artifact; npu_e2e consumes it and
 # runs both an iron-tools design and the iron-ops operators on the NPU through the hrx
@@ -47,6 +47,14 @@ jobs:
   linux_flm:
     name: Linux FLM
     uses: ./.github/workflows/fastflowlm_hrx_linux.yml
+    permissions:
+      contents: read
+    with:
+      name: NPU e2e
+
+  windows_flm:
+    name: Windows FLM
+    uses: ./.github/workflows/fastflowlm_hrx_windows.yml
     permissions:
       contents: read
     with:

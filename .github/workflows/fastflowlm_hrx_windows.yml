@@ -1,0 +1,138 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Reusable on-device FastFlowLM smoke for the pinned HRX amdxdna runtime. This
+# intentionally builds only projects/hrx and projects/FastFlowLM, then pulls a
+# small model and runs the smoke inference and 1k benchmark on the NPU runner.
+name: FLM Windows NPU e2e
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        type: string
+        default: FLM Windows NPU e2e
+  workflow_dispatch:
+    inputs:
+      name:
+        description: Job display name
+        required: false
+        default: FLM Windows NPU e2e
+
+permissions:
+  contents: read
+
+jobs:
+  fastflowlm_hrx_windows:
+    name: ${{ inputs.name }}
+    runs-on: windows-gfx1151-gpu-rocm
+    timeout-minutes: 120
+
+    steps:
+      - name: Configure git for LF checkouts
+        shell: powershell
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          git config --global core.longpaths true
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Adjust git config
+        run: git config --global --add safe.directory "$PWD"
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          # Newer 3.12 patch releases have no Windows assets in the official
+          # actions/python-versions manifest.
+          python-version: '3.12.10'
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+
+      - name: Install CMake and Ninja
+        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-fastflowlm.lock
+
+      - name: Initialize HRX submodule
+        run: python dev.py submodules hrx --reset --clean hrx --shallow
+
+      # CMake's Windows curl cannot reach this runner's certificate-revocation
+      # service. Git already fetched HRX successfully, so use the same verified
+      # transport for the one required HRX dependency and hand its source to
+      # CMake through the standard FetchContent override. Derive the commit from
+      # HRX's lock file so this workflow cannot silently drift from the HRX pin.
+      - name: Prepare pinned FlatCC source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content projects/hrx/MODULE.cmake.lock -Raw
+          $match = [regex]::Match(
+            $lock,
+            'dvidelabs/flatcc/archive/([0-9a-f]{40})\.tar\.gz')
+          if (-not $match.Success) {
+            throw 'Could not find the pinned FlatCC commit in HRX MODULE.cmake.lock'
+          }
+
+          $commit = $match.Groups[1].Value
+          $source = Join-Path $env:RUNNER_TEMP "hrx-flatcc-$commit-$PID"
+          git init $source
+          git -C $source remote add origin https://github.com/dvidelabs/flatcc.git
+          git -C $source fetch --depth 1 origin $commit
+          git -C $source checkout --detach FETCH_HEAD
+          $head = (git -C $source rev-parse HEAD).Trim()
+          if ($head -ne $commit) {
+            throw "FlatCC checkout mismatch: expected $commit, got $head"
+          }
+
+          "FETCHCONTENT_SOURCE_DIR_FLATCC=$($source.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build minimal HRX amdxdna
+        run: python dev.py build hrx
+
+      - name: Probe NPU and report driver/firmware
+        run: python dev.py npu-probe
+
+      - name: Initialize FastFlowLM submodule
+        run: python dev.py submodules FastFlowLM --reset --clean FastFlowLM --shallow
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable, pinned
+        with:
+          toolchain: 1.97.0
+
+      - name: Restore vcpkg caches
+        id: vcpkg-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/vcpkg-bincache
+            ${{ github.workspace }}/.cache/vcpkg-downloads
+          key: fastflowlm-vcpkg-${{ hashFiles('build_tools/fastflowlm_deps.py', '.github/vcpkg/fastflowlm/vcpkg.json', '.github/vcpkg/triplets/x64-windows-rel.cmake') }}
+          restore-keys: |
+            fastflowlm-vcpkg-
+
+      - name: Set up FastFlowLM dependencies
+        run: python dev.py setup --profile fastflowlm
+
+      - name: Save vcpkg caches
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/vcpkg-bincache
+            ${{ github.workspace }}/.cache/vcpkg-downloads
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      - name: Validate FastFlowLM build prerequisites
+        run: .venv/Scripts/python.exe dev.py doctor fastflowlm
+
+      - name: Build FastFlowLM
+        run: .venv/Scripts/python.exe dev.py build fastflowlm
+
+      - name: Run FastFlowLM HRX smoke
+        run: .venv/Scripts/python.exe dev.py test-fastflowlm
