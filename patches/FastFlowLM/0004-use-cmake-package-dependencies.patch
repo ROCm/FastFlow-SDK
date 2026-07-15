@@ -1,0 +1,235 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 5c69e2f..aab02ad 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -82,25 +82,16 @@ endif()
+ 
+ add_executable(flm ${SOURCES} ${HEADERS})
+ 
++find_package(Boost CONFIG REQUIRED COMPONENTS program_options)
++find_package(CURL CONFIG REQUIRED)
++find_package(FFMPEG REQUIRED)
++find_package(FFTW3 CONFIG REQUIRED)
++find_package(FFTW3f CONFIG REQUIRED)
++find_package(FFTW3l CONFIG REQUIRED)
+ if(NOT WIN32)
+     find_package(Threads REQUIRED)
+-    find_package(Boost REQUIRED COMPONENTS program_options)
+-    find_package(CURL REQUIRED)
+-    find_package(PkgConfig)
+-    if(PkgConfig_FOUND)
+-        pkg_check_modules(FFTW3_PKG fftw3)
+-        pkg_check_modules(FFTW3F_PKG fftw3f)
+-        pkg_check_modules(FFTW3L_PKG fftw3l)
+-        pkg_check_modules(AVFORMAT_PKG libavformat)
+-        pkg_check_modules(AVCODEC_PKG libavcodec)
+-        pkg_check_modules(AVUTIL_PKG libavutil)
+-        pkg_check_modules(SWSCALE_PKG libswscale)
+-        pkg_check_modules(SWRESAMPLE_PKG libswresample)
+-    endif()
+-    find_path(READLINE_INCLUDE_DIR readline/readline.h)
+-    find_library(READLINE_LIBRARY readline)
+-    find_library(READLINE_TINFO_LIBRARY tinfo)
+-    find_library(READLINE_NCURSES_LIBRARY ncurses)
++    find_package(PkgConfig REQUIRED)
++    pkg_check_modules(readline REQUIRED IMPORTED_TARGET readline)
+ endif()
+ 
+ # ———————————————————————————————————————————————
+@@ -111,53 +102,9 @@ target_include_directories(flm PUBLIC
+     ${CMAKE_SOURCE_DIR}/runner
+     ${CMAKE_SOURCE_DIR}/server
+     ${CMAKE_SOURCE_DIR}/pull
++    ${FFMPEG_INCLUDE_DIRS}
+ )
+ 
+-if(WIN32)
+-    set(FASTFLOWLM_VCPKG_INSTALLED_DIR "$ENV{FASTFLOWLM_VCPKG_INSTALLED_DIR}" CACHE PATH "vcpkg installed/x64-windows root")
+-    if(NOT FASTFLOWLM_VCPKG_INSTALLED_DIR AND DEFINED ENV{VCPKG_INSTALLED_DIR})
+-        set(FASTFLOWLM_VCPKG_INSTALLED_DIR "$ENV{VCPKG_INSTALLED_DIR}")
+-    endif()
+-    if(NOT FASTFLOWLM_VCPKG_INSTALLED_DIR AND DEFINED ENV{VCPKG_ROOT})
+-        set(FASTFLOWLM_VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed/x64-windows")
+-    endif()
+-    if(NOT FASTFLOWLM_VCPKG_INSTALLED_DIR)
+-        set(FASTFLOWLM_VCPKG_INSTALLED_DIR "C:/dev/vcpkg/installed/x64-windows")
+-    endif()
+-    file(TO_CMAKE_PATH "${FASTFLOWLM_VCPKG_INSTALLED_DIR}" FASTFLOWLM_VCPKG_INSTALLED_DIR)
+-
+-    set(FASTFLOWLM_BOOST_ROOT "$ENV{FASTFLOWLM_BOOST_ROOT}" CACHE PATH "Boost root for Windows FastFlowLM builds")
+-    if(NOT FASTFLOWLM_BOOST_ROOT AND DEFINED ENV{BOOST_ROOT})
+-        set(FASTFLOWLM_BOOST_ROOT "$ENV{BOOST_ROOT}")
+-    endif()
+-    if(NOT FASTFLOWLM_BOOST_ROOT AND DEFINED ENV{BOOSTROOT})
+-        set(FASTFLOWLM_BOOST_ROOT "$ENV{BOOSTROOT}")
+-    endif()
+-    if(NOT FASTFLOWLM_BOOST_ROOT)
+-        if(EXISTS "C:/dev/boost_1_88_0")
+-            set(FASTFLOWLM_BOOST_ROOT "C:/dev/boost_1_88_0")
+-        elseif(EXISTS "C:/Program Files/boost/boost_1_88_0")
+-            set(FASTFLOWLM_BOOST_ROOT "C:/Program Files/boost/boost_1_88_0")
+-        elseif(EXISTS "${FASTFLOWLM_VCPKG_INSTALLED_DIR}/include/boost")
+-            set(FASTFLOWLM_BOOST_ROOT "${FASTFLOWLM_VCPKG_INSTALLED_DIR}/include")
+-        endif()
+-    endif()
+-    file(TO_CMAKE_PATH "${FASTFLOWLM_BOOST_ROOT}" FASTFLOWLM_BOOST_ROOT)
+-
+-    set(_fastflowlm_windows_lib_dirs)
+-    if(FASTFLOWLM_BOOST_ROOT AND EXISTS "${FASTFLOWLM_BOOST_ROOT}/stage/lib")
+-        list(APPEND _fastflowlm_windows_lib_dirs "${FASTFLOWLM_BOOST_ROOT}/stage/lib")
+-    endif()
+-    if(FASTFLOWLM_VCPKG_INSTALLED_DIR AND EXISTS "${FASTFLOWLM_VCPKG_INSTALLED_DIR}/lib")
+-        list(APPEND _fastflowlm_windows_lib_dirs "${FASTFLOWLM_VCPKG_INSTALLED_DIR}/lib")
+-    endif()
+-
+-    target_include_directories(flm PUBLIC
+-        ${FASTFLOWLM_BOOST_ROOT}
+-        ${FASTFLOWLM_VCPKG_INSTALLED_DIR}/include
+-    )
+-endif()
+-
+ target_compile_definitions(flm PUBLIC
+     DISABLE_ABI_CHECK=1
+     CMAKE_INSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}"
+@@ -170,10 +117,6 @@ if(WIN32)
+     target_compile_definitions(flm PUBLIC
+         WIN32_LEAN_AND_MEAN
+         NOMINMAX
+-        # Additional definitions for static linking
+-        CURL_STATICLIB
+-        BOOST_ALL_NO_LIB
+-        BOOST_ALL_STATIC_LINK
+         # Handle legacy stdio functions
+         _CRT_SECURE_NO_WARNINGS
+         _CRT_NONSTDC_NO_DEPRECATE
+@@ -183,33 +126,9 @@ endif()
+ 
+ target_link_directories(flm PUBLIC
+     ${CMAKE_SOURCE_DIR}/lib
++    ${FFMPEG_LIBRARY_DIRS}
+ )
+ 
+-if(WIN32)
+-    target_link_directories(flm PUBLIC ${_fastflowlm_windows_lib_dirs})
+-    find_library(FASTFLOWLM_CURL_LIB NAMES libcurl curl PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_BOOST_PROGRAM_OPTIONS_LIB
+-        NAMES libboost_program_options-vc143-mt-x64-1_91 boost_program_options-vc143-mt-x64-1_91 libboost_program_options-vc143-mt-x64-1_88 boost_program_options-vc143-mt-x64-1_88 boost_program_options
+-        PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_FFTW3_LIB  NAMES libfftw3-3 fftw3  PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_FFTW3F_LIB NAMES libfftw3f-3 fftw3f PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_FFTW3L_LIB NAMES libfftw3l-3 fftw3l PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_AVFORMAT_LIB   NAMES avformat   PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_AVCODEC_LIB    NAMES avcodec    PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_AVUTIL_LIB     NAMES avutil     PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_SWSCALE_LIB    NAMES swscale    PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    find_library(FASTFLOWLM_SWRESAMPLE_LIB NAMES swresample PATHS ${_fastflowlm_windows_lib_dirs} NO_DEFAULT_PATH)
+-    foreach(_fastflowlm_required_lib
+-            FASTFLOWLM_CURL_LIB FASTFLOWLM_BOOST_PROGRAM_OPTIONS_LIB
+-            FASTFLOWLM_FFTW3_LIB FASTFLOWLM_FFTW3F_LIB FASTFLOWLM_FFTW3L_LIB
+-            FASTFLOWLM_AVFORMAT_LIB FASTFLOWLM_AVCODEC_LIB FASTFLOWLM_AVUTIL_LIB
+-            FASTFLOWLM_SWSCALE_LIB FASTFLOWLM_SWRESAMPLE_LIB)
+-        if(NOT ${_fastflowlm_required_lib})
+-            message(FATAL_ERROR "${_fastflowlm_required_lib} not found in: ${_fastflowlm_windows_lib_dirs}")
+-        endif()
+-    endforeach()
+-endif()
+-
+ # Link static libraries first
+ if(MSVC)
+     target_link_libraries(flm PUBLIC ${STATIC_LIBS})
+@@ -248,84 +167,20 @@ if(NOT WIN32)
+         BUILD_RPATH "$<TARGET_FILE_DIR:hrx::hrx>;${CMAKE_SOURCE_DIR}/lib")
+ endif()
+ 
+-if(WIN32)
+-    target_link_libraries(flm PUBLIC
+-        ${FASTFLOWLM_AVFORMAT_LIB}
+-        ${FASTFLOWLM_AVCODEC_LIB}
+-        ${FASTFLOWLM_AVUTIL_LIB}
+-        ${FASTFLOWLM_SWSCALE_LIB}
+-        ${FASTFLOWLM_SWRESAMPLE_LIB}
+-        ${FASTFLOWLM_CURL_LIB}
+-        ${FASTFLOWLM_BOOST_PROGRAM_OPTIONS_LIB}
+-        ${FASTFLOWLM_FFTW3_LIB}
+-        ${FASTFLOWLM_FFTW3F_LIB}
+-        ${FASTFLOWLM_FFTW3L_LIB}
+-    )
+-else()
+-    target_link_libraries(flm PUBLIC
+-        avformat
+-        avcodec
+-        avutil
+-        swscale
+-        swresample
+-        CURL::libcurl
+-        Boost::program_options
+-    )
++target_link_libraries(flm PUBLIC
++    ${FFMPEG_LIBRARIES}
++    Boost::program_options
++    CURL::libcurl
++    FFTW3::fftw3
++    FFTW3::fftw3f
++    FFTW3::fftw3l
++)
+ 
++if(NOT WIN32)
+     target_compile_options(flm PUBLIC -mavx -mavx2)
+ 
+-    if(FFTW3_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${FFTW3_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${FFTW3_PKG_LIBRARIES})
+-    else()
+-        target_link_libraries(flm PUBLIC fftw3)
+-    endif()
+-    if(FFTW3F_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${FFTW3F_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${FFTW3F_PKG_LIBRARIES})
+-    else()
+-        target_link_libraries(flm PUBLIC fftw3f)
+-    endif()
+-    if(FFTW3L_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${FFTW3L_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${FFTW3L_PKG_LIBRARIES})
+-    else()
+-        target_link_libraries(flm PUBLIC fftw3l)
+-    endif()
+-
+-    if(AVFORMAT_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${AVFORMAT_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${AVFORMAT_PKG_LIBRARIES})
+-    endif()
+-    if(AVCODEC_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${AVCODEC_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${AVCODEC_PKG_LIBRARIES})
+-    endif()
+-    if(AVUTIL_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${AVUTIL_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${AVUTIL_PKG_LIBRARIES})
+-    endif()
+-    if(SWSCALE_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${SWSCALE_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${SWSCALE_PKG_LIBRARIES})
+-    endif()
+-    if(SWRESAMPLE_PKG_FOUND)
+-        target_include_directories(flm PUBLIC ${SWRESAMPLE_PKG_INCLUDE_DIRS})
+-        target_link_libraries(flm PUBLIC ${SWRESAMPLE_PKG_LIBRARIES})
+-    endif()
+-
+-    if(READLINE_LIBRARY)
+-        target_compile_definitions(flm PUBLIC FASTFLOWLM_USE_READLINE=1)
+-        if(READLINE_INCLUDE_DIR)
+-            target_include_directories(flm PUBLIC ${READLINE_INCLUDE_DIR})
+-        endif()
+-        target_link_libraries(flm PUBLIC ${READLINE_LIBRARY})
+-        if(READLINE_TINFO_LIBRARY)
+-            target_link_libraries(flm PUBLIC ${READLINE_TINFO_LIBRARY})
+-        elseif(READLINE_NCURSES_LIBRARY)
+-            target_link_libraries(flm PUBLIC ${READLINE_NCURSES_LIBRARY})
+-        endif()
+-    endif()
++    target_compile_definitions(flm PUBLIC FASTFLOWLM_USE_READLINE=1)
++    target_link_libraries(flm PUBLIC PkgConfig::readline)
+ 
+     # Link with dl library for dlopen() support (used for preloading bundled libraries)
+     target_link_libraries(flm PUBLIC dl)

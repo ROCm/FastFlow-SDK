@@ -1,0 +1,148 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index aab02ad..4e03cb9 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1,6 +1,10 @@
+ cmake_minimum_required(VERSION 3.22)
+ project(flm LANGUAGES CXX VERSION 0.1.0)
+ 
++if(POLICY CMP0207)
++    cmake_policy(SET CMP0207 NEW)
++endif()
++
+ if(NOT DEFINED FLM_VERSION)
+     message(FATAL_ERROR "FLM_VERSION must be specified externally. Use -DFLM_VERSION=<version> when running cmake.")
+ endif()
+@@ -232,28 +236,41 @@ else()
+         set(CMAKE_INSTALL_LIBDIR "lib")
+     endif()
+ 
+-    file(GLOB so_libs "${CMAKE_SOURCE_DIR}/lib/*.so")
++    file(GLOB so_libs "${CMAKE_SOURCE_DIR}/lib/*.so*")
+     install(FILES ${so_libs} DESTINATION "${CMAKE_INSTALL_LIBDIR}/flm")
+     set_target_properties(flm PROPERTIES
+-        INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/flm")
++        INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/flm;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
++endif()
++if(WIN32)
++    install(TARGETS flm
++        RUNTIME_DEPENDENCY_SET fastflowlm_runtime_dependencies
++        RUNTIME DESTINATION bin)
++    install(RUNTIME_DEPENDENCY_SET fastflowlm_runtime_dependencies
++        DESTINATION bin
++        DIRECTORIES
++            "${CMAKE_SOURCE_DIR}/lib"
++            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
++            "$<TARGET_FILE_DIR:hrx::hrx>"
++        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
++        POST_EXCLUDE_REGEXES ".*[Ww]indows[/\\\\][Ss]ystem32[/\\\\].*")
++else()
++    install(TARGETS flm
++        RUNTIME_DEPENDENCY_SET fastflowlm_runtime_dependencies
++        RUNTIME DESTINATION bin)
++    install(RUNTIME_DEPENDENCY_SET fastflowlm_runtime_dependencies
++        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
++        DIRECTORIES
++            "${CMAKE_SOURCE_DIR}/lib"
++            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
++            "$<TARGET_FILE_DIR:hrx::hrx>"
++        PRE_EXCLUDE_REGEXES
++            "linux-vdso\\.so.*"
++            "ld-linux.*"
++            "lib(c|dl|m|pthread|rt)\\.so.*")
+ endif()
+-install(TARGETS flm
+-    RUNTIME DESTINATION bin
+-    BUNDLE DESTINATION .
+-)
+ 
+ install(FILES model_list.json DESTINATION share/flm)
+ 
+ # xclbins, which are loaded by shared libraries need to be in location
+ # relative to the executable, so we install them to bin/xclbins
+ install(DIRECTORY xclbins DESTINATION share/flm)
+-
+-if(NOT WIN32 AND NOT CMAKE_INSTALL_PREFIX STREQUAL "/usr" AND NOT CMAKE_INSTALL_PREFIX STREQUAL "/usr/local")
+-    install(CODE "
+-        message(STATUS \"Creating symlink for flm\")
+-        file(MAKE_DIRECTORY \"$ENV{DESTDIR}/usr/local/bin\")
+-        execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
+-            \"${CMAKE_INSTALL_PREFIX}/bin/flm\"
+-            \"$ENV{DESTDIR}/usr/local/bin/flm\")"
+-    )
+-endif()
+diff --git a/src/common/utils.cpp b/src/common/utils.cpp
+index be76293..5fd1da8 100644
+--- a/src/common/utils.cpp
++++ b/src/common/utils.cpp
+@@ -31,25 +31,23 @@ std::string find_model_list() {
+         }
+     }
+ 
+-#ifndef _WIN32
+-    // Linux: Portable
++    // Portable development-tree location.
+     if (std::filesystem::exists("model_list.json")) {
+         return "model_list.json";
+     }
+ 
+-    // Linux: install
++    // Relocatable installed bundle, independent of its original prefix.
++    std::string exe_dir = get_executable_directory();
++    std::string bundle_path = exe_dir + "/../share/flm/model_list.json";
++    if (std::filesystem::exists(bundle_path)) {
++        return bundle_path;
++    }
++
++    // Legacy configured prefix.
+     std::string installed_path = install_prefix + "/share/flm/model_list.json";
+     if (std::filesystem::exists(installed_path)) {
+         return installed_path;
+     }
+-#else
+-    // Windows: Check relative to executable
+-    std::string exe_dir = get_executable_directory();
+-    std::string exe_relative_path = exe_dir + "/model_list.json";
+-    if (std::filesystem::exists(exe_relative_path)) {
+-        return exe_relative_path;
+-    }
+-#endif
+ 
+     // If not found, throw an error
+     throw std::runtime_error("model_list.json not found. Please set FLM_CONFIG_PATH or place it next to the executable.");
+@@ -78,25 +76,23 @@ std::string find_xclbin_path() {
+         }
+     }
+ 
+-#ifndef _WIN32
+-    // Linux: Portable
++    // Portable development-tree location.
+     if (std::filesystem::exists("xclbins")) {
+         return ".";
+     }
+ 
+-    // Linux: install
++    // Relocatable installed bundle. The caller appends /xclbins.
++    std::string exe_dir = get_executable_directory();
++    std::string bundle_path = exe_dir + "/../share/flm";
++    if (std::filesystem::exists(bundle_path + "/xclbins")) {
++        return bundle_path;
++    }
++
++    // Legacy configured prefix.
+     std::string installed_path = xclbin_prefix;
+-    if (std::filesystem::exists(installed_path)) {
++    if (std::filesystem::exists(installed_path + "/xclbins")) {
+         return installed_path;
+     }
+-#else
+-    // Windows: Check relative to executable
+-    std::string exe_dir = get_executable_directory();
+-    std::string exe_relative_path = exe_dir;
+-    if (std::filesystem::exists(exe_relative_path)) {
+-        return exe_relative_path;
+-    }
+-#endif
+ 
+     // If not found, throw an error
+     throw std::runtime_error("xclbins not found. Please set FLM_XCLBIN_PATH or place it next to the executable.");

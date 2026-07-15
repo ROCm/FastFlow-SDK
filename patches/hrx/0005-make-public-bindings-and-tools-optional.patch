@@ -1,0 +1,37 @@
+diff --git a/libhrx/CMakeLists.txt b/libhrx/CMakeLists.txt
+--- a/libhrx/CMakeLists.txt
++++ b/libhrx/CMakeLists.txt
+@@ -42,10 +42,17 @@ function(hrx_cc_test)
+ endfunction()
+ 
+ add_subdirectory(src/libhrx)
+-add_subdirectory(src/binding/common)
+-add_subdirectory(src/binding/hip)
+-add_subdirectory(tools)
++if(LIBHRX_BUILD_TOOLS)
++  add_subdirectory(tools)
++endif()
+ 
++if(LIBHRX_BUILD_HIP_BINDING OR LIBHRX_BUILD_CUDA_BINDING)
++  add_subdirectory(src/binding/common)
++endif()
++if(LIBHRX_BUILD_HIP_BINDING)
++  add_subdirectory(src/binding/hip)
++endif()
++
+ if(LIBHRX_BUILD_CUDA_BINDING)
+   add_subdirectory(src/binding/cuda)
+ endif()
+diff --git a/libhrx/project.cmake b/libhrx/project.cmake
+--- a/libhrx/project.cmake
++++ b/libhrx/project.cmake
+@@ -15,5 +15,9 @@ endif()
+ option(LIBHRX_BUILD_PASSTHROUGH
+   "Build libhrx HIP passthrough/interception tools." ON)
++option(LIBHRX_BUILD_HIP_BINDING
++  "Build the libhrx HIP runtime API compatibility binding." ON)
++option(LIBHRX_BUILD_TOOLS
++  "Build libhrx command-line tools." ON)
+ option(LIBHRX_BUILD_CUDA_BINDING
+   "Build libhrx CUDA runtime/driver API compatibility binding." OFF)
+ option(LIBHRX_BUILD_CTS

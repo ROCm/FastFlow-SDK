@@ -84,11 +84,26 @@ sentinels, patch-table triples, FlatCC, and the generated schema remain private
 HRX implementation details; callers need only `hrx_amdxdna.h` and the public
 HRX library.
 
+XAie BLOCKWRITE/DDR_PATCH interpretation lives in the amdxdna
+direct-command-buffer planning module beside the existing transaction-size and
+dynamic-field helpers. libHRX requests a semantic host-patch table and owns only
+XADX serialization. Focused planning tests cover successful extraction,
+unmatched DDR patches, impossible operation counts, null outputs, and trailing
+transaction data.
+
 The implementation and header are platform-neutral. Builds without the amdxdna
 HAL retain the public symbol and return `HRX_STATUS_UNIMPLEMENTED`.
 
 **Remove when:** the extension lands upstream in HRX and the submodule pin includes
 it. The separate iron-tools XADX helper is not migrated by this patch.
+
+### 0005-make-public-bindings-and-tools-optional.patch
+Adds default-on CMake options for the optional HIP compatibility binding and HRX
+command-line tools. The staging runtime sets both options off so its installed
+HRX package contains only libHRX and the amdxdna HAL selected at the top level;
+standalone HRX builds retain their existing defaults.
+
+**Remove when:** equivalent component options land upstream in HRX.
 
 ## patches/FastFlowLM/
 
@@ -118,10 +133,32 @@ causes a busy loop at the prompt. The POSIX CLI already treats EOF as `/bye`.
 Replaces FastFlowLM's private XADX/FlatCC builder with
 `hrx_amdxdna_executable_create`. FLM no longer includes HRX runtime internals or
 generated schema headers and no longer links FlatCC directly; its HRX dependency
-is reduced to the public headers and library. FLM also no longer derives or
-passes command-chain patch tables; HRX derives those from the XAie transaction.
+is reduced to `find_package(hrx CONFIG REQUIRED)` and `hrx::hrx`. FLM also no
+longer derives or passes command-chain patch tables; HRX derives those from the
+XAie transaction. This patch contains only the HRX API migration.
 
-**Remove when:** FastFlowLM consumes the upstream HRX amdxdna extension directly.
+**Remove when:** FastFlowLM consumes the upstream HRX amdxdna extension and
+installed HRX package directly.
+
+### 0004-use-cmake-package-dependencies.patch
+Replaces FastFlowLM's platform-specific dependency paths, hardcoded Boost
+versions, and manual library searches with CMake package targets supplied by the
+configured toolchain. Boost, CURL, FFmpeg, and all FFTW precisions are required
+on both platforms. Linux readline is required through its documented pkg-config
+imported target instead of being silently disabled or combined with independently
+discovered system terminal libraries.
+
+**Remove when:** equivalent package-target consumption lands in FastFlowLM.
+
+### 0005-install-relocatable-runtime.patch
+Adds normal install rules for the executable, prebuilt model libraries, runtime
+dependency closure, model metadata, and xclbins. Runtime data is discovered
+relative to the executable on both platforms, while the old configured-prefix
+locations remain as a development fallback. The staging packager subsequently
+sets relative RPATHs on every Linux ELF and verifies the complete `DT_NEEDED`
+graph.
+
+**Remove when:** equivalent relocatable install rules land in FastFlowLM.
 
 ## patches/iron-ops/
 

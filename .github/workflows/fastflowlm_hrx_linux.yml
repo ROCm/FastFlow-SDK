@@ -1,9 +1,5 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-#
-# Reusable on-device FastFlowLM smoke for the pinned HRX amdxdna runtime. This
-# intentionally builds only projects/hrx and projects/FastFlowLM, then pulls a
-# small model and runs a 1k benchmark on the NPU runner.
 name: FLM Linux NPU e2e
 
 on:
@@ -23,92 +19,152 @@ permissions:
   contents: read
 
 jobs:
-  fastflowlm_hrx_linux:
-    name: ${{ inputs.name }}
-    runs-on: linux-gfx1151-gpu-rocm
+  build:
+    name: Build FLM + HRX artifact (Linux)
+    runs-on: aws-linux-scale-rocm-prod
     timeout-minutes: 120
-
+    container:
+      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
+    env:
+      RNS_BUILD_IMAGE: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Adjust git config
+      - name: Trust the job checkout
         run: git config --global --add safe.directory "$PWD"
+
+      - name: Validate container Python
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
 
       - name: Install system build dependencies
         shell: bash
         run: |
-          set -euo pipefail
-          sudo_cmd=()
-          if [[ "$(id -u)" != "0" ]]; then
-            sudo_cmd=(sudo)
-          fi
-          if command -v apt-get >/dev/null 2>&1; then
-            "${sudo_cmd[@]}" apt-get update
-            "${sudo_cmd[@]}" apt-get install -y \
-              build-essential \
-              cmake \
-              curl \
-              git \
-              libavcodec-dev \
-              libavformat-dev \
-              libavutil-dev \
-              libboost-program-options-dev \
-              libcurl4-openssl-dev \
-              libdrm-dev \
-              libfftw3-dev \
-              libreadline-dev \
-              libswresample-dev \
-              libswscale-dev \
-              ninja-build \
-              pkg-config \
-              python3 \
-              python3-venv
-          elif command -v dnf >/dev/null 2>&1; then
-            "${sudo_cmd[@]}" dnf install -y \
-              boost-devel \
-              cmake \
-              curl \
-              fftw-devel \
-              ffmpeg-devel \
-              gcc \
-              gcc-c++ \
-              git \
-              libcurl-devel \
-              libdrm-devel \
-              ninja-build \
-              pkgconf-pkg-config \
-              python3 \
-              readline-devel
-          else
-            echo "No supported package manager found; assuming build dependencies are preinstalled."
-          fi
+          dnf install -y bash ca-certificates curl gcc gcc-c++ git \
+            kernel-headers libdrm-devel make nasm patchelf perl perl-IPC-Cmd \
+            pkgconf-pkg-config tar unzip which zip zstd
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable, pinned
         with:
           toolchain: 1.97.0
 
-      - name: Initialize HRX and FastFlowLM submodules
+      - name: Initialize source pins
         run: python3 dev.py submodules hrx FastFlowLM --reset --clean hrx FastFlowLM --shallow
 
+      - name: Compute vcpkg ABI scope
+        id: vcpkg-abi
+        shell: bash
+        run: |
+          identity="${RNS_BUILD_IMAGE}|$(gcc -dumpmachine)|$(gcc -dumpfullversion -dumpversion)|$(ldd --version | head -n 1)"
+          echo "identity=${identity}"
+          echo "key=$(printf '%s' "${identity}" | sha256sum | cut -d' ' -f1)" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore vcpkg download cache
+        id: vcpkg-downloads
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-downloads
+          key: fastflowlm-vcpkg-v2-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/vcpkg/fastflowlm/vcpkg.json') }}
+
+      - name: Restore vcpkg binary cache
+        id: vcpkg-binaries
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-bincache
+          key: fastflowlm-vcpkg-v2-binaries-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-abi.outputs.key }}-${{ hashFiles('.github/vcpkg/fastflowlm/vcpkg.json', '.github/vcpkg/triplets/x64-linux-rel.cmake') }}
+          restore-keys: |
+            fastflowlm-vcpkg-v2-binaries-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-abi.outputs.key }}-
+            fastflowlm-vcpkg-v2-binaries-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Set up FastFlowLM dependencies
+        id: fastflowlm-deps
         run: python3 dev.py setup --profile fastflowlm
 
-      - name: Validate FastFlowLM build prerequisites
-        run: .venv/bin/python dev.py doctor fastflowlm
+      - name: Save vcpkg download cache
+        if: success() && steps.fastflowlm-deps.outcome == 'success' && steps.vcpkg-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-downloads
+          key: ${{ steps.vcpkg-downloads.outputs.cache-primary-key }}
 
-      - name: Test cross-platform FastFlowLM smoke driver
-        run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
+      - name: Save vcpkg binary cache
+        if: success() && steps.fastflowlm-deps.outcome == 'success' && steps.vcpkg-binaries.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-bincache
+          key: ${{ steps.vcpkg-binaries.outputs.cache-primary-key }}
 
-      - name: Build minimal HRX amdxdna
-        run: .venv/bin/python dev.py build hrx
+      - name: Validate and test build tooling
+        run: |
+          .venv/bin/python dev.py doctor fastflowlm
+          .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
-      - name: Probe NPU driver and firmware
-        run: .venv/bin/python dev.py npu-probe
+      - name: Build HRX
+        run: .venv/bin/python dev.py build hrx --fresh
 
       - name: Build FastFlowLM
-        run: .venv/bin/python dev.py build fastflowlm
+        run: .venv/bin/python dev.py build fastflowlm --fresh
 
-      - name: Run FastFlowLM HRX smoke
-        run: .venv/bin/python dev.py test-fastflowlm
+      - name: Package runtime
+        run: .venv/bin/python dev.py package-fastflowlm
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fastflowlm-hrx-linux-x86_64
+          path: build/artifacts/fastflowlm-hrx-linux-x86_64.tar.zst*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  npu:
+    name: ${{ inputs.name }}
+    needs: build
+    runs-on: linux-gfx1151-gpu-rocm
+    timeout-minutes: 45
+    steps:
+      - name: Checkout test harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Trust the job checkout
+        run: git config --global --add safe.directory "$PWD"
+
+      - name: Validate system Python
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 11), sys.version"
+
+      - name: Download runtime artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflowlm-hrx-linux-x86_64
+          path: .artifact
+
+      - name: Ensure zstd is available
+        shell: bash
+        run: |
+          if ! command -v zstd >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y zstd
+            elif command -v dnf >/dev/null 2>&1; then
+              sudo dnf install -y zstd
+            else
+              echo "zstd is required to verify the runtime artifact" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Extract and verify runtime artifact
+        run: |
+          python3 dev.py unpack-fastflowlm --dir .artifact
+          python3 dev.py verify-fastflowlm
+
+      - name: Probe NPU driver, firmware, and packaged libHRX
+        run: python3 dev.py npu-probe --bundle build/FastFlowLM-extracted/fastflowlm-hrx-linux-x86_64
+
+      - name: Run packaged FastFlowLM HRX smoke
+        run: python3 dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hrx-linux-x86_64

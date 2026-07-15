@@ -24,9 +24,9 @@ Ubuntu prerequisites:
 
 ```bash
 sudo apt-get install -y \
-  build-essential cmake curl git libavcodec-dev libavformat-dev libavutil-dev \
-  libboost-program-options-dev libcurl4-openssl-dev libdrm-dev libfftw3-dev \
-  libreadline-dev libswresample-dev libswscale-dev ninja-build pkg-config python3
+  bash build-essential ca-certificates curl git libdrm-dev libipc-cmd-perl \
+  linux-libc-dev make nasm patchelf perl pkg-config python3 python3-venv unzip \
+  zip zstd
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
   sh -s -- -y --profile minimal --default-toolchain 1.97.0
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -39,23 +39,26 @@ winget install --exact --id Microsoft.VisualStudio.2022.BuildTools `
   --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install --exact --id Python.Python.3.12
 winget install --exact --id Git.Git
-winget install --exact --id Kitware.CMake
-winget install --exact --id Ninja-build.Ninja
 winget install --exact --id Rustlang.Rustup
 rustup toolchain install 1.97.0 --profile minimal
 rustup default 1.97.0
 git config --global core.longpaths true
 ```
 
-On Windows, `dev.py setup --profile fastflowlm` installs the exact native
-dependency set from `.github/vcpkg/fastflowlm/vcpkg.json` into the repository's
-gitignored cache using the release-only triplet. Explicit
-`FASTFLOWLM_VCPKG_INSTALLED_DIR` or `VCPKG_ROOT` settings remain supported and
-take precedence over the managed tree.
+On Linux and Windows, `dev.py setup --profile fastflowlm` installs the same
+native dependency graph from `.github/vcpkg/fastflowlm/vcpkg.json` into the
+repository's gitignored cache. Each installation is isolated by a hash of the
+manifest and platform triplet, so an older local dependency tree cannot affect
+a later build. The pinned vcpkg checkout and release-only, dynamic platform
+triplets own Boost, CURL, FFmpeg, FFTW, and Linux readline;
+the host package manager supplies only build tools and platform interfaces such
+as Linux libdrm, Linux UAPI headers, NASM, and Perl modules required by native
+build systems. CMake and Ninja come from `requirements-fastflowlm.lock`.
 
 FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
-No special runtime environment needs to be sourced; `dev.py test-fastflowlm`
-sets the HRX library path and runtime variables for the smoke run.
+HRX is installed to a clean prefix and FastFlowLM consumes its exported
+`hrx::hrx` CMake target. No HRX source or build-tree paths are part of the FLM
+build contract.
 
 Run the same workflow on both platforms. Use `python3` on Ubuntu and `python`
 on Windows:
@@ -66,10 +69,41 @@ git submodule update --init --recursive projects/FastFlowLM
 
 python3 dev.py setup --profile fastflowlm
 python3 dev.py doctor fastflowlm
-python3 dev.py build hrx
-python3 dev.py build fastflowlm
+python3 dev.py build hrx --fresh
+python3 dev.py build fastflowlm --fresh
+python3 dev.py package-fastflowlm
 python3 dev.py test-fastflowlm
 ```
+
+`package-fastflowlm` creates a Windows `.zip` or Linux `.tar.zst`, verifies its
+hash manifest, and re-extracts it under `build/FastFlowLM-extracted/`. The
+manifest records source pins and actual source deltas, patch hashes, complete
+build configuration, dependency/package inventories, toolchain versions,
+licenses, and every payload file. Linux packaging normalizes relative ELF
+RPATHs and rejects an incomplete runtime dependency closure. A relocated bundle
+can be tested directly with:
+
+```bash
+python3 dev.py verify-fastflowlm
+python3 dev.py npu-probe --bundle build/FastFlowLM-extracted/fastflowlm-hrx-linux-x86_64
+python3 dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hrx-linux-x86_64
+```
+
+Use the corresponding `fastflowlm-hrx-windows-x86_64` directory on Windows.
+Bundle execution discovers `model_list.json`, xclbins, HRX, and model-engine
+libraries relative to the executable; no build-tree path variables are needed.
+The Linux and Windows CI workflows build this archive on CPU runners, then
+download it into a separate gfx1151 job with no initialized submodules, build
+trees, install prefixes, or development dependency setup.
+
+CI persists vcpkg's verified source/tool downloads separately from its compiled
+binary-package archives. Binary cache keys include the OS, architecture,
+compiler ABI fingerprint, vcpkg policy, manifest, and platform triplet. The
+installed prefix is always reconstructed and is never cached directly.
+On managed Windows runners, vcpkg asset downloads use a SHA-512-verifying
+transport adapter that tries both Windows HTTP and system curl to accommodate
+runner certificate-revocation policy. It does not change package selection or
+accept unverified content.
 
 The smoke test requires the amdxdna driver and an NPU. It prints the FastFlowLM
 transcript, rejects HRX runtime errors, requires the exact raw smoke phrase and

@@ -17,6 +17,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build hrx             # the amdxdna HAL (IREE runtime)
   python dev.py build hrx-cts         # amdxdna HAL conformance binaries (need an NPU to run)
   python dev.py build fastflowlm      # HRX amdxdna + FastFlowLM app only
+  python dev.py package-fastflowlm    # relocatable .zip/.tar.zst + manifest
+  python dev.py unpack-fastflowlm     # checksum, extract, and verify the bundle
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
@@ -40,10 +42,19 @@ from pathlib import Path
 
 from build_tools.fastflowlm_deps import (
     MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
-    VCPKG_COMMIT as FASTFLOWLM_VCPKG_COMMIT,
-    VCPKG_TRIPLET as FASTFLOWLM_VCPKG_TRIPLET,
-    resolve_windows_roots,
-    windows_dependency_errors,
+    dependency_errors as fastflowlm_dependency_errors,
+    dependency_paths as fastflowlm_dependency_paths,
+    vcpkg_commit as fastflowlm_vcpkg_commit,
+)
+from build_tools.fastflowlm_artifact import (
+    create_archive as create_fastflowlm_archive,
+    directory_state,
+    extract_archive as extract_fastflowlm_archive,
+    git_source_state,
+    sha256_file,
+    stage_runtime_bundle,
+    validate_source_policy,
+    verify_bundle as verify_fastflowlm_bundle,
 )
 from build_tools.windows_npu import (
     device_is_healthy,
@@ -64,9 +75,15 @@ VENV = ROOT / ".venv"
 # job-scoped $RUNNER_TEMP. Unset -> build/llvm.
 LLVM_BUILD = Path(os.environ.get("RNS_LLVM_BUILD_DIR") or (BUILD / "llvm"))
 HRX_CMAKE_BUILD = PROJ / "hrx" / "build" / "cmake"
+HRX_INSTALL = BUILD / "hrx-install"
+HRX_PACKAGE_SMOKE_BUILD = BUILD / "hrx-package-smoke"
 FASTFLOWLM_BUILD = BUILD / "FastFlowLM"
 FASTFLOWLM_INSTALL = BUILD / "FastFlowLM-install"
 FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
+FASTFLOWLM_BUNDLE_STAGE = BUILD / "FastFlowLM-bundle"
+FASTFLOWLM_ARTIFACTS = BUILD / "artifacts"
+FASTFLOWLM_EXTRACTED = BUILD / "FastFlowLM-extracted"
+FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 PATCHES = ROOT / "patches"                      # temporary submodule patches (see patches/README.md)
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
 NPROC = str(os.cpu_count() or 8)
@@ -289,6 +306,45 @@ def _have_header(hdr, language="c"):
     return p.returncode == 0
 
 
+def _have_perl_module(module):
+    perl = shutil.which("perl")
+    if not perl:
+        return False
+    return subprocess.run(
+        [perl, f"-M{module}", "-e", "1"], capture_output=True
+    ).returncode == 0
+
+
+def _check_fastflowlm_linux_host(verbose):
+    """Checks host tools/interfaces needed before vcpkg can build FLM deps."""
+    missing = []
+    cc, cxx = _compilers()
+    checks = [
+        ("bash", bool(shutil.which("bash")), "bash"),
+        ("git", bool(shutil.which("git")), "git"),
+        ("make", bool(shutil.which("make")), "build-essential"),
+        ("nasm", bool(shutil.which("nasm")), "nasm"),
+        ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
+        ("tar", bool(shutil.which("tar")), "tar"),
+        ("unzip", bool(shutil.which("unzip")), "unzip"),
+        ("curl or wget", bool(shutil.which("curl") or shutil.which("wget")), "curl"),
+        ("Perl IPC::Cmd", _have_perl_module("IPC::Cmd"), "libipc-cmd-perl"),
+        ("<linux/types.h>", _have_header("linux/types.h"), "linux-libc-dev"),
+        ("<libdrm/drm.h>", _have_header("libdrm/drm.h"), "libdrm-dev"),
+    ]
+    if verbose:
+        print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: "
+              f"{(cc + '/' + cxx) if cc else 'need gcc/g++ (or set CC/CXX)'}")
+    if not cc:
+        missing.append("build-essential")
+    for label, ok, package in checks:
+        if verbose:
+            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
+        if not ok and package not in missing:
+            missing.append(package)
+    return not missing, missing
+
+
 def _check_compiler_stack_system(verbose):
     """Return (ok, missing_apt_packages) for the LLVM/IRON compiler stack."""
     missing = []
@@ -334,59 +390,34 @@ def _check_compiler_stack_system(verbose):
 def _check_fastflowlm_system(verbose):
     """Return (ok, missing_apt_packages) for the minimal HRX/FLM build."""
     missing = []
+    env = _windows_msvc_env() if IS_WINDOWS else dict(os.environ)
+    paths = fastflowlm_dependency_paths(ROOT)
+    native_errors = fastflowlm_dependency_errors(
+        paths,
+        cargo_available=bool(_which("cargo", env)),
+        rustc_version=_rustc_version(env),
+    )
     if IS_WINDOWS:
-        env = _windows_msvc_env()
         compiler = _which("cl", env) or _which("clang-cl", env)
         has_git = bool(_which("git", env))
-        roots = _fastflowlm_windows_roots()
-        dependency_errors = _fastflowlm_windows_dependency_errors(roots, env)
         if verbose:
             print(f"  [{'ok ' if compiler else 'MISS'}] C/C++ compiler: {Path(compiler).name if compiler else 'need MSVC cl or clang-cl'}")
             print(f"  [{'ok ' if has_git else 'MISS'}] git")
-            for error in dependency_errors:
+            for error in native_errors:
                 print(f"  [MISS] {error}")
-            if not dependency_errors:
+            if not native_errors:
                 print(f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}")
-                print(f"  [ok ] vcpkg FastFlowLM dependencies: {roots['vcpkg_root']}")
-        return (bool(compiler) and has_git and not dependency_errors, [])
+                print(f"  [ok ] vcpkg FastFlowLM dependencies: {paths['triplet_root']}")
+        return (bool(compiler) and has_git and not native_errors, [])
 
-    cc, cxx = _compilers()
-    has_git = bool(shutil.which("git"))
-    has_pkg_config = bool(shutil.which("pkg-config"))
-    rustc_version = _rustc_version()
-    rust_ok = bool(shutil.which("cargo")) and rustc_version is not None and rustc_version >= FASTFLOWLM_MIN_RUSTC
+    host_ok, missing = _check_fastflowlm_linux_host(verbose)
     if verbose:
-        print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: {(cc + '/' + cxx) if cc else 'need gcc/g++ (or set CC/CXX)'}")
-        print(f"  [{'ok ' if has_git else 'MISS'}] git")
-        print(f"  [{'ok ' if has_pkg_config else 'MISS'}] pkg-config")
-        got = ".".join(map(str, rustc_version)) if rustc_version else "missing/unknown"
-        print(f"  [{'ok ' if rust_ok else 'MISS'}] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))} (found {got})")
-    if not cc:
-        missing.append("build-essential")
-    if not has_git:
-        missing.append("git")
-    if not has_pkg_config:
-        missing.append("pkg-config")
-
-    headers = [
-        ("libdrm/drm.h", "libdrm-dev", "c"),
-        ("boost/program_options.hpp", "libboost-program-options-dev", "c++"),
-        ("curl/curl.h", "libcurl4-openssl-dev", "c"),
-        ("fftw3.h", "libfftw3-dev", "c"),
-        ("libavcodec/avcodec.h", "libavcodec-dev", "c"),
-        ("libavformat/avformat.h", "libavformat-dev", "c"),
-        ("libavutil/avutil.h", "libavutil-dev", "c"),
-        ("libswresample/swresample.h", "libswresample-dev", "c"),
-        ("libswscale/swscale.h", "libswscale-dev", "c"),
-        ("readline/readline.h", "libreadline-dev", "c"),
-    ]
-    for header, package, language in headers:
-        ok = _have_header(header, language)
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] <{header}>")
-        if not ok:
-            missing.append(package)
-    return (bool(cc) and has_git and has_pkg_config and rust_ok and not missing, missing)
+        for error in native_errors:
+            print(f"  [MISS] {error}")
+        if not native_errors:
+            print(f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}")
+            print(f"  [ok ] vcpkg FastFlowLM dependencies: {paths['triplet_root']}")
+    return (host_ok and not native_errors, missing)
 
 
 def check_system(profile="compiler-stack", verbose=True):
@@ -479,7 +510,19 @@ def apply_patches(submodule_names=None):
         sub = PROJ / sub_dir.name
         if not sub.exists():
             sys.exit(f"submodule missing for patches/{sub_dir.name} (run: git submodule update --init projects/{sub_dir.name})")
-        for patch in sorted(sub_dir.glob("*.patch")):
+        patches = sorted(sub_dir.glob("*.patch"))
+        states = [_patch_state(patch, sub) for patch in patches]
+        if any(state == "broken" for state, _ in states):
+            try:
+                exact = git_source_state(sub) == _declared_patch_expected_state(
+                    sub_dir.name, sub)
+            except RuntimeError:
+                exact = False
+            if exact:
+                for patch in patches:
+                    print(f"patch: {sub_dir.name}/{patch.name} already applied")
+                continue
+        for patch in patches:
             st, options = _patch_state(patch, sub)
             if st == "applied":
                 print(f"patch: {sub_dir.name}/{patch.name} already applied")
@@ -488,6 +531,47 @@ def apply_patches(submodule_names=None):
                 print(f"patch: applied {sub_dir.name}/{patch.name}")
             else:
                 sys.exit(f"patch does not apply cleanly: {patch} (submodule moved? regenerate it)")
+
+
+def _declared_patch_expected_state(component, source):
+    """Builds the expected source state from the pin and ordered patch series."""
+    BUILD.mkdir(parents=True, exist_ok=True)
+    temporary_parent = Path(tempfile.mkdtemp(
+        prefix=f"patch-state-{component}-", dir=BUILD))
+    worktree = temporary_parent / "source"
+    try:
+        subprocess.run(
+            ["git", "-C", str(source), "worktree", "add", "--quiet",
+             "--detach", str(worktree), "HEAD"], check=True)
+        for patch in sorted((PATCHES / component).glob("*.patch")):
+            state, options = _patch_state(patch, worktree)
+            if state == "appliable":
+                subprocess.run(
+                    ["git", "-C", str(worktree), "apply", *options, str(patch)],
+                    check=True)
+            elif state != "applied":
+                raise RuntimeError(f"declared patch does not apply: {patch}")
+        return git_source_state(worktree)
+    finally:
+        subprocess.run(
+            ["git", "-C", str(source), "worktree", "remove", "--force",
+             str(worktree)], capture_output=True)
+        shutil.rmtree(temporary_parent, ignore_errors=True)
+
+
+def _validate_declared_patch_state(component, source):
+    """Proves the source tree equals its pin plus the ordered patch sequence."""
+    expected = _declared_patch_expected_state(component, source)
+    actual = git_source_state(source)
+    if actual != expected:
+        expected_files = {item["path"]: item for item in expected["changed_files"]}
+        actual_files = {item["path"]: item for item in actual["changed_files"]}
+        differing = sorted(
+            path for path in set(expected_files) | set(actual_files)
+            if expected_files.get(path) != actual_files.get(path))
+        raise RuntimeError(
+            f"{component} source differs from its pin plus declared patches: "
+            f"{', '.join(differing) or 'tracked diff metadata'}")
 
 
 def cmd_fetch(args, submodule_names=None):
@@ -578,8 +662,25 @@ def cmd_doctor(args):
         if not (submodule_dir / ".git").exists():
             print(f"  [ABSENT] {sub_dir.name}: cannot check patches")
             continue
-        for patch in sorted(sub_dir.glob("*.patch")):
-            st, _ = _patch_state(patch, submodule_dir)
+        patches = sorted(sub_dir.glob("*.patch"))
+        states = [_patch_state(patch, submodule_dir)[0] for patch in patches]
+        try:
+            exact = git_source_state(
+                submodule_dir) == _declared_patch_expected_state(
+                    sub_dir.name, submodule_dir)
+            series_valid = True
+        except RuntimeError:
+            exact = False
+            series_valid = False
+        if exact:
+            states = ["applied"] * len(patches)
+        elif series_valid:
+            # A later patch may overlap an earlier patch's reverse context.
+            # The clean ordered replay above is authoritative; "pending" means
+            # setup/fetch still needs to apply that valid sequence.
+            states = ["pending" if state == "broken" else state
+                      for state in states]
+        for patch, st in zip(patches, states):
             print(f"  [{'ok   ' if st == 'applied' else st.upper()}] {sub_dir.name}/{patch.name}")
             if st == "broken":
                 patch_bad.append(patch.name)
@@ -621,10 +722,18 @@ def cmd_doctor(args):
     return rc
 
 
-def _install_fastflowlm_windows_deps():
+def _install_fastflowlm_deps():
     """Installs the manifest-defined native dependencies into the managed cache."""
-    source = ROOT / ".cache" / "vcpkg-src"
-    install_root = ROOT / ".cache" / "vcpkg-installed"
+    if not IS_WINDOWS:
+        host_ok, missing = _check_fastflowlm_linux_host(verbose=False)
+        if not host_ok:
+            sys.exit(
+                "FastFlowLM host build prerequisites are missing; install: "
+                "sudo apt-get install -y " + " ".join(sorted(set(missing)))
+            )
+    paths = fastflowlm_dependency_paths(ROOT)
+    source = Path(paths["source"])
+    install_root = Path(paths["install_root"])
     binary_cache = ROOT / ".cache" / "vcpkg-bincache"
     downloads = ROOT / ".cache" / "vcpkg-downloads"
     for path in (source.parent, install_root, binary_cache, downloads):
@@ -643,21 +752,30 @@ def _install_fastflowlm_windows_deps():
         ["git", "-C", str(source), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=False,
     ).stdout.strip()
-    if head != FASTFLOWLM_VCPKG_COMMIT:
+    vcpkg_commit = fastflowlm_vcpkg_commit(ROOT)
+    if head != vcpkg_commit:
         sh(["git", "-C", str(source), "fetch", "--depth", "1", "origin",
-            FASTFLOWLM_VCPKG_COMMIT])
+            vcpkg_commit])
         sh(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
         source_changed = True
-    if source_changed or not (source / "vcpkg.exe").is_file():
-        sh(["cmd.exe", "/d", "/c", str(source / "bootstrap-vcpkg.bat"),
-            "-disableMetrics"])
+    executable = Path(paths["executable"])
+    if source_changed or not executable.is_file():
+        if IS_WINDOWS:
+            sh(["cmd.exe", "/d", "/c", str(source / "bootstrap-vcpkg.bat"),
+                "-disableMetrics"])
+        else:
+            sh([str(source / "bootstrap-vcpkg.sh"), "-disableMetrics"])
 
     env = os.environ.copy()
     env["VCPKG_BINARY_SOURCES"] = (
         f"clear;files,{cmake_path(binary_cache)},readwrite"
     )
     env["VCPKG_DOWNLOADS"] = str(downloads)
-    powershell = shutil.which("powershell.exe")
+    # Some managed Windows runners expose different TLS/revocation behavior
+    # through WinHTTP and system curl. This transport adapter tries both and
+    # preserves vcpkg's required SHA-512 verification; dependency policy and
+    # package resolution remain entirely owned by vcpkg.
+    powershell = shutil.which("powershell.exe") if IS_WINDOWS else None
     downloader = ROOT / ".github" / "scripts" / "vcpkg-download.ps1"
     if powershell and downloader.is_file():
         template = (
@@ -668,22 +786,29 @@ def _install_fastflowlm_windows_deps():
         env["X_VCPKG_ASSET_SOURCES"] = f"clear;x-script,{template}"
 
     sh([
-        source / "vcpkg.exe", "install",
-        "--triplet", FASTFLOWLM_VCPKG_TRIPLET,
+        executable, "install",
+        "--triplet", paths["triplet"],
         f"--overlay-triplets={ROOT / '.github' / 'vcpkg' / 'triplets'}",
         f"--x-manifest-root={ROOT / '.github' / 'vcpkg' / 'fastflowlm'}",
         f"--x-install-root={install_root}",
     ], env=env)
+    marker = Path(paths["marker"])
+    marker_tmp = marker.with_suffix(".tmp")
+    marker_tmp.write_text(
+        json.dumps(paths["policy"], indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    marker_tmp.replace(marker)
     print("setup: FastFlowLM native dependencies ->",
-          install_root / FASTFLOWLM_VCPKG_TRIPLET)
+          paths["triplet_root"])
 
 
 def cmd_setup(args):
     """Prepare the selected dependency closure in the repository-local cache.
 
     Compiler-stack Python deps come from the hash-pinned requirements.lock;
-    FastFlowLM installs only its pinned CMake/Ninja tooling and, on Windows, the
-    manifest-defined native dependencies.
+    FastFlowLM installs its pinned CMake/Ninja tooling and the same
+    manifest-defined native dependency graph on Linux and Windows.
 
     requirements.txt is the human-edited input; regenerate the lock after editing it:
       .venv/bin/uv pip compile requirements.txt --generate-hashes --emit-index-url \\
@@ -718,8 +843,8 @@ def cmd_setup(args):
     cmd_fetch(args, SETUP_PROFILE_SUBMODULES[args.profile])
     if args.profile != "fastflowlm":
         install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
-    if args.profile == "fastflowlm" and IS_WINDOWS:
-        _install_fastflowlm_windows_deps()
+    if args.profile == "fastflowlm":
+        _install_fastflowlm_deps()
     print(f"setup: ok ({args.profile} dependencies are ready)")
 
 
@@ -759,24 +884,14 @@ def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
     return [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"] if cc and cxx else []
 
 
-def _fastflowlm_windows_roots():
-    return resolve_windows_roots(ROOT, os.environ)
-
-
-def _fastflowlm_windows_dependency_errors(roots, env):
-    return windows_dependency_errors(
-        roots,
-        cargo_available=bool(_which("cargo", env)),
-        rustc_version=_rustc_version(env),
-    )
-
-
-def _require_fastflowlm_windows_deps(env):
-    roots = _fastflowlm_windows_roots()
-    missing = _fastflowlm_windows_dependency_errors(roots, env)
+def _require_fastflowlm_deps(env):
+    paths = fastflowlm_dependency_paths(ROOT)
+    missing = fastflowlm_dependency_errors(
+        paths, cargo_available=bool(_which("cargo", env)),
+        rustc_version=_rustc_version(env))
     if missing:
-        sys.exit("missing Windows FastFlowLM prerequisite(s):\n  - " + "\n  - ".join(missing))
-    return roots
+        sys.exit("missing FastFlowLM prerequisite(s):\n  - " + "\n  - ".join(missing))
+    return paths
 
 
 def _ccache_flags():
@@ -929,19 +1044,39 @@ def cmd_build_hrx_xclbinutil(args):
     print("build hrx-xclbinutil: ok ->", link)
 
 
+def _prepare_fresh_cmake_tree(path):
+    """Clears all generated CMake and FetchContent state."""
+    allowed = {HRX_CMAKE_BUILD.resolve(), FASTFLOWLM_BUILD.resolve()}
+    if path.resolve() not in allowed:
+        raise RuntimeError(f"refusing to clear unexpected build directory: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def cmd_build_hrx(args):
     d = PROJ / "hrx"
     cc, cxx = _compilers()
     if not (d / "CMakeLists.txt").exists():
         sys.exit("missing projects/hrx (run: git submodule update --init projects/hrx)")
     apply_patches({"hrx"})
+    fresh = getattr(args, "fresh", False)
+    if fresh:
+        _validate_declared_patch_state("hrx", d)
+        _prepare_fresh_cmake_tree(HRX_CMAKE_BUILD)
 
     # Configure HRX directly with Ninja. This keeps Windows off the Visual Studio
     # generator default and lets staging apply its temporary HRX patches first.
     sh([
-        cmake_bin(), "-G", "Ninja",
+        cmake_bin(), *(["--fresh"] if fresh else []), "-G", "Ninja",
         "-S", cmake_path(d), "-B", cmake_path(HRX_CMAKE_BUILD),
         "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        # Runtime artifacts use one deterministic layout on every distro.
+        # GNUInstallDirs otherwise selects lib64 on some Linux hosts.
+        "-DCMAKE_INSTALL_LIBDIR=lib",
         "-DIREE_HAL_DRIVER_AMDGPU=OFF",
         "-DIREE_HAL_DRIVER_AMDXDNA=ON",
         # Keep the runtime-only build free of test-only downloads. `build
@@ -952,6 +1087,8 @@ def cmd_build_hrx(args):
         "-DLIBHRX_BUILD_CTS=OFF",
         "-DHRX_INSTALL_TESTS=OFF",
         "-DLIBHRX_BUILD_PASSTHROUGH=OFF",
+        "-DLIBHRX_BUILD_HIP_BINDING=OFF",
+        "-DLIBHRX_BUILD_TOOLS=OFF",
         "-DLOOM_BUILD=OFF",
         # libhrx currently links local-task support unconditionally; keep it enabled
         # until HRX makes that dependency conditional.
@@ -962,10 +1099,47 @@ def cmd_build_hrx(args):
     ], env=cmake_env())
     sh([
         cmake_bin(), "--build", cmake_path(HRX_CMAKE_BUILD),
+        *(["--clean-first"] if fresh else []),
         "--target", "iree_hal_drivers_amdxdna_registration_registration", "hrx", "flatcc_runtime",
         "-j", BUILD_JOBS,
     ], env=cmake_env())
-    print("build hrx (minimal amdxdna HAL + libhrx): ok ->", HRX_CMAKE_BUILD)
+    shutil.rmtree(HRX_INSTALL, ignore_errors=True)
+    sh([
+        cmake_bin(), "--install", cmake_path(HRX_CMAKE_BUILD),
+        "--prefix", cmake_path(HRX_INSTALL),
+        "--component", "HrxPublicDist",
+    ], env=cmake_env())
+
+    # Exercise the installed package from an unrelated build tree. This catches
+    # absolute build paths, missing headers, and incomplete imported targets.
+    shutil.rmtree(HRX_PACKAGE_SMOKE_BUILD, ignore_errors=True)
+    package_smoke = d / "libhrx" / "cts" / "package_smoke"
+    sh([
+        cmake_bin(), "-G", "Ninja",
+        "-S", cmake_path(package_smoke), "-B", cmake_path(HRX_PACKAGE_SMOKE_BUILD),
+        f"-DCMAKE_BUILD_TYPE=Release",
+        f"-DCMAKE_PREFIX_PATH={cmake_path(HRX_INSTALL)}",
+        *_cc_flags(cc, cxx),
+    ], env=cmake_env())
+    sh([cmake_bin(), "--build", cmake_path(HRX_PACKAGE_SMOKE_BUILD), "-j", BUILD_JOBS],
+       env=cmake_env())
+    smoke_env = cmake_env()
+    if IS_WINDOWS:
+        smoke_env["PATH"] = str(HRX_INSTALL / "bin") + os.pathsep + smoke_env.get("PATH", "")
+    else:
+        smoke_env["LD_LIBRARY_PATH"] = (str(HRX_INSTALL / "lib") + os.pathsep +
+                                         smoke_env.get("LD_LIBRARY_PATH", ""))
+    sh([HRX_PACKAGE_SMOKE_BUILD / f"hrx_package_smoke{_EXE}"], env=smoke_env)
+    sh([HRX_PACKAGE_SMOKE_BUILD / f"hrx_package_smoke_cxx{_EXE}"], env=smoke_env)
+    if fresh:
+        marker = {
+            "source": git_source_state(d),
+            "install": directory_state(HRX_INSTALL,
+                                       exclude_names=(FRESH_BUILD_MARKER,)),
+        }
+        (HRX_INSTALL / FRESH_BUILD_MARKER).write_text(
+            json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
+    print("build hrx (minimal amdxdna HAL + installed package): ok ->", HRX_INSTALL)
 
 
 def cmd_build_hrx_cts(args):
@@ -984,87 +1158,152 @@ def cmd_build_hrx_cts(args):
     print(f"build hrx-cts: ok ({', '.join(HRX_CTS_TESTS)})")
 
 
-def _fastflowlm_artifacts():
-    if IS_WINDOWS:
-        flm_bin = PROJ / "FastFlowLM" / "src" / "build" / "flm.exe"
-        hrx_lib = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "hrx.lib"
-        hrx_dll = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "hrx.dll"
-    else:
-        flm_bin = PROJ / "FastFlowLM" / "src" / "build" / "flm"
-        hrx_lib = HRX_CMAKE_BUILD / "libhrx" / "src" / "libhrx" / "libhrx.so"
-        hrx_dll = hrx_lib
-    return flm_bin, hrx_lib, hrx_dll
-
-
 def cmd_build_fastflowlm(args):
-    """Build the pinned FastFlowLM app against `dev.py build hrx` output.
+    """Build the pinned FastFlowLM app against the installed HRX package.
     This intentionally skips LLVM, iron-tools, and hrx-xclbinutil."""
     flm_src = PROJ / "FastFlowLM" / "src"
     if not (flm_src / "CMakeLists.txt").exists():
         sys.exit("missing projects/FastFlowLM (run: git submodule update --init --recursive projects/FastFlowLM)")
 
     env = cmake_env()
-    if IS_WINDOWS:
-        roots = _require_fastflowlm_windows_deps(env)
-    else:
+    dependencies = _require_fastflowlm_deps(env)
+    if not IS_WINDOWS:
         if not _have_header("libdrm/drm.h"):
             sys.exit("missing libdrm/drm.h: FastFlowLM's amdxdna headers require libdrm "
                      "(Ubuntu: sudo apt-get install libdrm-dev; Fedora: sudo dnf install libdrm-devel)")
-        if not shutil.which("cargo"):
-            sys.exit("missing cargo: FastFlowLM's tokenizers-cpp build requires Rust/Cargo "
-                     "(install a current toolchain with rustup)")
-        rustc_version = _rustc_version(env)
-        if rustc_version is None or rustc_version < FASTFLOWLM_MIN_RUSTC:
-            got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
-            need = ".".join(str(n) for n in FASTFLOWLM_MIN_RUSTC)
-            sys.exit(f"rustc >= {need} required for FastFlowLM's tokenizers-cpp build "
-                     f"(found {got}; install/update a current toolchain with rustup)")
-        roots = None
 
     apply_patches({"FastFlowLM"})
-    flm_bin, hrx_lib, hrx_dll = _fastflowlm_artifacts()
-    if not hrx_lib.exists():
-        sys.exit(f"missing HRX library ({hrx_lib}) - run: python dev.py build hrx")
+    fresh = getattr(args, "fresh", False)
+    if fresh:
+        _validate_declared_patch_state("FastFlowLM", PROJ / "FastFlowLM")
+        _prepare_fresh_cmake_tree(FASTFLOWLM_BUILD)
+        shutil.rmtree(flm_src / "build", ignore_errors=True)
+    hrx_config = HRX_INSTALL / "lib" / "cmake" / "hrx" / "hrx-config.cmake"
+    if not hrx_config.exists():
+        sys.exit(f"missing installed HRX package ({hrx_config}) - run: python dev.py build hrx")
 
     cc, cxx = _compilers()
     cfg = [
-        cmake_bin(), "-G", "Ninja",
+        cmake_bin(), *(["--fresh"] if fresh else []), "-G", "Ninja",
         "-S", cmake_path(flm_src), "-B", cmake_path(FASTFLOWLM_BUILD),
         "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_LIBDIR=lib",
         "-DFLM_VERSION=0.9.45",
         "-DNPU_VERSION=32.0.203.304",
-        f"-DHRX_DIR={cmake_path(PROJ / 'hrx')}",
-        f"-DHRX_BUILD={cmake_path(HRX_CMAKE_BUILD)}",
-        f"-DHRX_LIB={cmake_path(hrx_lib)}",
+        f"-DCMAKE_PREFIX_PATH={cmake_path(HRX_INSTALL)}",
+        f"-DCMAKE_TOOLCHAIN_FILE={cmake_path(Path(dependencies['toolchain']))}",
+        f"-DVCPKG_TARGET_TRIPLET={dependencies['triplet']}",
+        f"-DVCPKG_INSTALLED_DIR={cmake_path(Path(dependencies['install_root']))}",
+        f"-DVCPKG_MANIFEST_DIR={cmake_path(ROOT / '.github' / 'vcpkg' / 'fastflowlm')}",
+        "-DVCPKG_MANIFEST_INSTALL=OFF",
         f"-DCMAKE_INSTALL_PREFIX={cmake_path(FASTFLOWLM_INSTALL)}",
         f"-DCMAKE_XCLBIN_PREFIX={cmake_path(flm_src)}",
         *_cc_flags(cc, cxx),
     ]
-    if IS_WINDOWS:
-        cfg += [
-            f"-DFASTFLOWLM_BOOST_ROOT={cmake_path(roots['boost_root'])}",
-            f"-DFASTFLOWLM_VCPKG_INSTALLED_DIR={cmake_path(roots['vcpkg_root'])}",
-        ]
     sh(cfg, env=env)
-    sh([cmake_bin(), "--build", cmake_path(FASTFLOWLM_BUILD), "-j", BUILD_JOBS], env=env)
+    sh([cmake_bin(), "--build", cmake_path(FASTFLOWLM_BUILD),
+        *(["--clean-first"] if fresh else []), "-j", BUILD_JOBS], env=env)
+    shutil.rmtree(FASTFLOWLM_INSTALL, ignore_errors=True)
+    sh([cmake_bin(), "--install", cmake_path(FASTFLOWLM_BUILD)], env=env)
+    installed_flm = FASTFLOWLM_INSTALL / "bin" / f"flm{_EXE}"
+    if not installed_flm.exists():
+        sys.exit(f"FastFlowLM install did not produce {installed_flm}")
+    if fresh:
+        marker = {
+            "source": git_source_state(PROJ / "FastFlowLM"),
+            "hrx": json.loads((HRX_INSTALL / FRESH_BUILD_MARKER).read_text(
+                encoding="utf-8")),
+            "install": directory_state(FASTFLOWLM_INSTALL,
+                                       exclude_names=(FRESH_BUILD_MARKER,)),
+        }
+        (FASTFLOWLM_INSTALL / FRESH_BUILD_MARKER).write_text(
+            json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
+    print("build fastflowlm: ok ->", installed_flm)
 
-    if IS_WINDOWS and flm_bin.parent.exists():
-        # This upstream CMake project writes flm.exe into src/build. Recreate its DLL set
-        # on every build so an older vcpkg/model build cannot remain earlier on PATH.
-        expected_runtime_dir = (flm_src / "build").resolve()
-        if flm_bin.parent.resolve() != expected_runtime_dir:
-            sys.exit(f"refusing to clean unexpected FastFlowLM runtime directory: {flm_bin.parent}")
-        for dll in flm_bin.parent.glob("*.dll"):
-            dll.unlink()
-        for dll in (flm_src / "lib").glob("*.dll"):
-            shutil.copy2(dll, flm_bin.parent / dll.name)
-        if hrx_dll.exists():
-            shutil.copy2(hrx_dll, flm_bin.parent / hrx_dll.name)
-        vcpkg_bin = roots.get("vcpkg_bin") if roots else None
-        if vcpkg_bin and vcpkg_bin.is_dir():
-            for dll in vcpkg_bin.glob("*.dll"):
-                shutil.copy2(dll, flm_bin.parent / dll.name)
-    print("build fastflowlm: ok ->", flm_bin)
+
+def cmd_package_fastflowlm(args):
+    """Create and independently re-extract the relocatable FLM + HRX runtime."""
+    if not (FASTFLOWLM_INSTALL / "bin" / f"flm{_EXE}").is_file():
+        sys.exit("FastFlowLM is not installed - run: python dev.py build fastflowlm")
+    markers = {}
+    for name, install, source in (
+            ("HRX", HRX_INSTALL, PROJ / "hrx"),
+            ("FastFlowLM", FASTFLOWLM_INSTALL, PROJ / "FastFlowLM")):
+        marker = install / FRESH_BUILD_MARKER
+        if not marker.is_file():
+            sys.exit(f"{name} was not built with --fresh")
+        recorded = json.loads(marker.read_text(encoding="utf-8"))
+        if recorded.get("source") != git_source_state(source):
+            sys.exit(f"{name} sources changed after the fresh build; rebuild with --fresh")
+        if recorded.get("install") != directory_state(
+                install, exclude_names=(FRESH_BUILD_MARKER,)):
+            sys.exit(f"{name} install changed after the fresh build; rebuild with --fresh")
+        markers[name] = recorded
+    if markers["FastFlowLM"].get("hrx") != markers["HRX"]:
+        sys.exit("FastFlowLM was built against a different HRX install; rebuild with --fresh")
+    bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
+                                  FASTFLOWLM_BUNDLE_STAGE)
+    archive = create_fastflowlm_archive(bundle, FASTFLOWLM_ARTIFACTS)
+    extracted = extract_fastflowlm_archive(
+        archive, FASTFLOWLM_EXTRACTED, allowed_root=BUILD)
+    print("package fastflowlm: ok")
+    print("  archive:  ", archive)
+    print("  extracted:", extracted)
+
+
+def _find_fastflowlm_archive(directory):
+    directory = Path(directory)
+    archives = sorted([*directory.glob("fastflowlm-hrx-*.zip"),
+                       *directory.glob("fastflowlm-hrx-*.tar.zst")])
+    if len(archives) != 1:
+        sys.exit(f"expected exactly one FastFlowLM artifact in {directory}, found {len(archives)}")
+    archive = archives[0]
+    checksum_path = archive.with_name(archive.name + ".sha256")
+    if not checksum_path.is_file():
+        sys.exit(f"artifact checksum missing: {checksum_path}")
+    fields = checksum_path.read_text(encoding="ascii").strip().split()
+    if (len(fields) != 2 or fields[1] != archive.name or
+            not re.fullmatch(r"[0-9a-f]{64}", fields[0])):
+        sys.exit(f"malformed artifact checksum: {checksum_path}")
+    if sha256_file(archive) != fields[0]:
+        sys.exit(f"artifact checksum mismatch: {archive}")
+    return archive
+
+
+def cmd_unpack_fastflowlm(args):
+    archive = _find_fastflowlm_archive(args.dir)
+    bundle = extract_fastflowlm_archive(
+        archive, FASTFLOWLM_EXTRACTED, allowed_root=BUILD)
+    print("unpack fastflowlm: ok ->", bundle)
+
+
+def cmd_verify_fastflowlm(args):
+    location = Path(args.dir)
+    if not location.is_dir():
+        sys.exit(f"extracted FastFlowLM bundle directory not found: {location}")
+    candidates = ([location] if (location / "manifest.json").is_file() else
+                  [path for path in location.iterdir()
+                   if path.is_dir() and (path / "manifest.json").is_file()])
+    if len(candidates) != 1:
+        sys.exit(f"expected exactly one extracted FastFlowLM bundle in {location}")
+    manifest = verify_fastflowlm_bundle(candidates[0])
+    try:
+        validate_source_policy(manifest, ROOT)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    current_revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+        capture_output=True, text=True).stdout.strip()
+    source_revision = (manifest.get("sources", {})
+                       .get("rocm-npu-staging", {}).get("revision"))
+    if source_revision != current_revision:
+        sys.exit("FastFlowLM artifact source revision does not match this checkout")
+    for record in manifest.get("patches", []):
+        patch_path = ROOT / record["path"]
+        if (not patch_path.is_file() or patch_path.stat().st_size != record["size"] or
+                sha256_file(patch_path) != record["sha256"]):
+            sys.exit(f"FastFlowLM artifact patch identity mismatch: {record['path']}")
+    print(f"verify fastflowlm: ok ({len(manifest['files'])} files) -> {candidates[0]}")
 
 
 def cmd_build_all(args):
@@ -1100,7 +1339,10 @@ def cmd_test_fastflowlm(args):
     """Run the on-device FastFlowLM HRX smoke test."""
     script = ROOT / "tests" / "fastflowlm" / "run_fastflowlm_hrx_smoke.py"
     env = cmake_env()
-    env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
+    if args.bundle:
+        env["FASTFLOWLM_BUNDLE"] = str(Path(args.bundle).resolve())
+    else:
+        env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
     sys.exit(sh([sys.executable, script], env=env, check=False).returncode)
 
@@ -1207,7 +1449,10 @@ def _iron_env():
         sys.exit(str(e))
 
 
-def _libhrx_path():
+def _libhrx_path(bundle=None):
+    if bundle:
+        candidate = (Path(bundle) / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")).resolve()
+        return candidate if candidate.is_file() else None
     pattern = "hrx.dll" if IS_WINDOWS else "libhrx*.so"
     hits = sorted((PROJ / "hrx" / "build" / "cmake").rglob(pattern))
     return hits[0] if hits else None
@@ -1841,8 +2086,8 @@ def _print_windows_npu_driver_info():
     return 0 if all_healthy else 1
 
 
-def _probe_libhrx():
-    lib_path = _libhrx_path()
+def _probe_libhrx(bundle=None):
+    lib_path = _libhrx_path(bundle)
     library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
     if not lib_path:
         print(f"  [MISS] {library_name} - run: python dev.py build hrx")
@@ -1889,7 +2134,7 @@ def cmd_npu_probe(args):
     if IS_WINDOWS:
         rc = _print_windows_npu_driver_info()
         print("== NPU device / libhrx probe ==")
-        rc |= _probe_libhrx()
+        rc |= _probe_libhrx(args.bundle)
         print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
         return rc
 
@@ -1904,7 +2149,7 @@ def cmd_npu_probe(args):
         print("  [MISS] skipping hrx_gpu_initialize because no usable NPU devnode was found")
         print("npu-probe: FAIL")
         return 1
-    rc |= _probe_libhrx()
+    rc |= _probe_libhrx(args.bundle)
 
     print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
     return rc
@@ -2090,9 +2335,12 @@ def main():
     sub.add_parser("fetch")
     b = sub.add_parser("build"); b.add_argument("what",
         choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "fastflowlm", "all"])
+    b.add_argument("--fresh", action="store_true",
+                   help="clear generated CMake state and outputs before configuring")
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
-    sub.add_parser("test-fastflowlm")
+    tf = sub.add_parser("test-fastflowlm")
+    tf.add_argument("--bundle", help="run only from an extracted runtime bundle")
     to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
     to.add_argument("--device", choices=sorted(NPU_TARGETS),
@@ -2104,12 +2352,19 @@ def main():
                     help="also remove untracked+ignored files (needed where a patch adds them)")
     sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
     sub.add_parser("package-npu-prereqs")
+    sub.add_parser("package-fastflowlm")
+    uf = sub.add_parser("unpack-fastflowlm")
+    uf.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
+    vf = sub.add_parser("verify-fastflowlm")
+    vf.add_argument("--dir", default=str(FASTFLOWLM_EXTRACTED),
+                    help="extracted bundle root or its parent directory")
     u = sub.add_parser("unpack-npu-prereqs")
     u.add_argument("--dir", default=".artifact", help="where download-artifact put it")
     v = sub.add_parser("verify-npu-prereqs")
     v.add_argument("--extracted", action="store_true",
                    help="check an already-unpacked tree instead of the archive")
-    sub.add_parser("npu-probe")
+    np = sub.add_parser("npu-probe")
+    np.add_argument("--bundle", help="probe libHRX from an extracted runtime bundle")
     c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
     tno = sub.add_parser("test-npu-iron-ops"); tno.add_argument("operator", nargs="?",
         help="operator to run on the NPU (default: every one in tests/iron-ops/suite.py)")
@@ -2131,6 +2386,9 @@ def main():
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "submodules": cmd_submodules(a)
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
+    elif a.cmd == "package-fastflowlm": cmd_package_fastflowlm(a)
+    elif a.cmd == "unpack-fastflowlm": cmd_unpack_fastflowlm(a)
+    elif a.cmd == "verify-fastflowlm": cmd_verify_fastflowlm(a)
     elif a.cmd == "unpack-npu-prereqs": cmd_unpack_npu_prereqs(a)
     elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
     elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))
