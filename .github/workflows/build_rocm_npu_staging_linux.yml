@@ -37,6 +37,7 @@ jobs:
       PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
       CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
+      RNS_LLVM_BUILD_DIR: ${{ github.workspace }}/build/llvm-cache/gcc
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -81,13 +82,30 @@ jobs:
       - name: Setup (venv + hash-pinned deps + prefetch)
         run: python3 dev.py setup
 
-      # Gate: system prereqs (clang/lld/python3-dev) + submodule-pins-vs-manifest
+      # Gate: system prereqs (gcc/python3-dev) + submodule-pins-vs-manifest
       # + patches + prefetch + version drift.
       - name: Doctor
-        run: .venv/bin/python dev.py doctor compiler-stack
+        run: .venv/bin/python dev.py doctor --toolchain gcc compiler-stack
 
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
+
+      - name: Compute LLVM cache key
+        id: llvm-cache-key
+        run: |
+          set -eu
+          llvm_sha="$(git rev-parse HEAD:projects/llvm-project)"
+          recipe="$("${PWD}/.venv/bin/python" dev.py llvm-cache-fingerprint --toolchain gcc)"
+          {
+            echo "sha=$llvm_sha"
+            echo "key=llvm-build-${{ runner.os }}-gcc-$llvm_sha-$recipe"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cache LLVM build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.RNS_LLVM_BUILD_DIR }}
+          key: ${{ steps.llvm-cache-key.outputs.key }}
 
       # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
       - name: Cache ccache
@@ -100,7 +118,7 @@ jobs:
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
         run: |
           ccache -z
-          .venv/bin/python dev.py build all
+          .venv/bin/python dev.py build --toolchain gcc all
 
       # Hit rate is the whole point of the step above; print it rather than assume it.
       - name: ccache stats
@@ -116,7 +134,7 @@ jobs:
       # NPU. Built here so npu_e2e gets them from the artifact instead of a toolchain.
       - name: Build amdxdna HAL conformance binaries
         if: ${{ inputs.upload_artifact }}
-        run: .venv/bin/python dev.py build hrx-cts
+        run: .venv/bin/python dev.py build --toolchain gcc hrx-cts
 
       # Build-level smoke (no NPU): hrx-xclbinutil packaging round-trip + aie-opt.
       - name: Smoke tests
@@ -125,7 +143,7 @@ jobs:
       # e2e: build an iron-tools IRON design's xclbin through Peano + the HAL PDI
       # artifact-contract check. Runs off-device (no NPU required).
       - name: e2e (xclbin + HAL PDI artifact-contract)
-        run: .venv/bin/python dev.py test
+        run: .venv/bin/python dev.py test --toolchain gcc
 
       # The same toolchain, driven by the iron-ops OPERATOR library instead of an iron-tools
       # example: MLIR -> Peano (incl. the operator's own aie_kernels/*.cc) -> xclbin + insts.
@@ -133,7 +151,7 @@ jobs:
       # source-built aie package shows up — on a CPU runner, minutes in, instead of an hour
       # later on the single gfx1151 box. Which operators: tests/iron-ops/suite.py.
       - name: iron-ops (build operators off-device)
-        run: .venv/bin/python dev.py test-iron-ops
+        run: .venv/bin/python dev.py test-iron-ops --toolchain gcc
 
       # Package + verify live in dev.py so the logic is testable off CI and shared with
       # any other consumer; see cmd_package_npu_prereqs / cmd_verify_npu_prereqs.

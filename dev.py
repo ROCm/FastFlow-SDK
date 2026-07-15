@@ -18,6 +18,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build hrx-cts         # amdxdna HAL conformance binaries (need an NPU to run)
   python dev.py build fastflowlm      # HRX amdxdna + FastFlowLM app only
   python dev.py build all             # everything above, in dependency order
+                                     #   --toolchain auto|gcc|clang|msvc|clang-cl
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
                                      #   Linux + Windows; suite: tests/iron-ops/suite.py
@@ -32,6 +33,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py test-fastflowlm       # pull qwen3:0.6b + run a 1k HRX benchmark
   python dev.py test-npu-iron-ops [OP] # ON-DEVICE e2e: an iron-ops operator, numerics checked (needs an NPU)
   python dev.py deps                  # print the dependency overview
+  python dev.py llvm-cache-fingerprint # print the LLVM build-tree cache recipe hash
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
@@ -75,6 +77,8 @@ IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and 
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
 _WINDOWS_BUILD_ENV = None
+TOOLCHAIN_CHOICES = ("auto", "gcc", "clang", "msvc", "clang-cl")
+_TOOLCHAIN = "auto"
 
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -232,19 +236,32 @@ _SYS_HEADERS = [
 ]
 
 
+def _selected_toolchain_compilers():
+    if _TOOLCHAIN == "gcc":
+        return "gcc", "g++"
+    if _TOOLCHAIN == "clang":
+        return "clang", "clang++"
+    if _TOOLCHAIN == "msvc":
+        return "cl", "cl"
+    if _TOOLCHAIN == "clang-cl":
+        return "clang-cl", "clang-cl"
+    return None
+
+
 def _compilers():
     """(cc, cxx) for the build. Canonical toolchain is gcc — matching TheRock, whose
     manylinux image pins a gcc-toolset to build amd-llvm. Override locally with the
     standard CC/CXX env vars (e.g. `CC=clang CXX=clang++ python dev.py build llvm`).
     Falls back to clang only if gcc is unavailable."""
+    selected = _selected_toolchain_compilers()
+    if selected:
+        return selected
     cc, cxx = os.environ.get("CC"), os.environ.get("CXX")
     if cc and cxx:
         return cc, cxx
     if IS_WINDOWS:
-        # Windows wants clang-cl (see check_system): MSVC cl rejects the GNU-only syntax
-        # in hrx-xclbinutil's vendored sources. CC/CXX are handled above; with neither set,
-        # return None rather than hardcode -DCMAKE_*_COMPILER, and let CMake pick from the
-        # VS Developer environment. doctor flags a missing clang-cl.
+        # CC/CXX are handled above; with neither set, return None rather than hardcode
+        # -DCMAKE_*_COMPILER, and let CMake pick from the VS Developer environment.
         return None, None
     if shutil.which("gcc") and shutil.which("g++"):
         return "gcc", "g++"
@@ -268,6 +285,27 @@ def _rustc_version(env=None):
         return tuple(int(n) for n in nums[:3])
     except ValueError:
         return None
+
+
+def _tool_version(cmd):
+    exe = _which(cmd, cmake_env()) or shutil.which(cmd)
+    if not exe:
+        return None
+    result = subprocess.run([exe, "--version"], capture_output=True, text=True, env=cmake_env())
+    if result.returncode != 0:
+        return None
+    return result.stdout.splitlines()[0].strip() if result.stdout else None
+
+
+def _compiler_version(compiler):
+    if not compiler:
+        return None
+    env = cmake_env()
+    exe = _which(compiler, env) or shutil.which(compiler) or compiler
+    flag = "/Bv" if Path(compiler).name.lower() in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"} else "--version"
+    result = subprocess.run([exe, flag], capture_output=True, text=True, env=env)
+    text = (result.stdout or "") + (result.stderr or "")
+    return text.splitlines()[0].strip() if result.returncode == 0 and text else None
 
 
 def _have_header(hdr, language="c"):
@@ -295,22 +333,22 @@ def _check_compiler_stack_system(verbose):
     cc, cxx = _compilers()
     if IS_WINDOWS:
         # Windows deps come from the VS toolchain + choco/vcpkg, not apt; _compilers()
-        # returns None by design, so probe the toolchain directly. clang-cl is REQUIRED,
-        # not merely preferred: MSVC cl rejects the GNU-only syntax in hrx-xclbinutil's
-        # vendored sources (__attribute__((aligned))/((visibility)), __builtin_bswap64).
-        # Finding only cl is a fail here rather than a confusing compile error later.
-        # Relax this to "cl or clang-cl" once those five sites are made portable.
+        # returns None by design, so probe the toolchain directly.
         env = _windows_msvc_env()
-        has_clang_cl = bool(_which("clang-cl", env))
+        selected = _selected_toolchain_compilers()
+        if selected:
+            compiler = _which(selected[0], env)
+            compiler_label = selected[0]
+        else:
+            compiler = _which("cl", env) or _which("clang-cl", env)
+            compiler_label = "MSVC cl or clang-cl"
         has_git = bool(_which("git", env))
         if verbose:
-            print(f"  [{'ok ' if has_clang_cl else 'MISS'}] clang-cl (required; MSVC cl cannot build hrx-xclbinutil)")
-            if not has_clang_cl and shutil.which("cl"):
-                print("         found MSVC cl but not clang-cl — install the VS 'C++ Clang tools' component")
+            print(f"  [{'ok ' if compiler else 'MISS'}] C/C++ compiler: {Path(compiler).name if compiler else 'need ' + compiler_label}")
             print(f"  [{'ok ' if has_git else 'MISS'}] git")
-            print("  [note] set CC=CXX=clang-cl so the builds dev.py drives pin the compiler")
+            print("  [note] use --toolchain or set CC/CXX to pin the compiler")
             print("  [note] OpenSSL (bootgen) comes from choco/vcpkg on Windows; no apt package list")
-        return (has_clang_cl and has_git, [])   # apt package names are not meaningful on Windows
+        return (bool(compiler) and has_git, [])   # apt package names are not meaningful on Windows
     if verbose:
         print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: {(cc + '/' + cxx) if cc else 'need gcc (or set CC/CXX)'} (canonical: gcc; set CC/CXX for clang)")
         print(f"  [{'ok ' if shutil.which('ld.lld') else '--  '}] ld.lld (optional; used with clang)")
@@ -759,6 +797,40 @@ def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
     return [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"] if cc and cxx else []
 
 
+def _hrx_xclbinutil_build_dir(toolchain: str | None = None) -> Path:
+    """Build hrx-xclbinutil in a per-toolchain cache when the compiler is explicit."""
+    toolchain = _TOOLCHAIN if toolchain is None else toolchain
+    suffix = "" if toolchain == "auto" else f"-{toolchain}"
+    return PROJ / "hrx-xclbinutil" / f"bld{suffix}"
+
+
+def _hrx_xclbinutil_existing_build_dir() -> Path | None:
+    candidates = []
+    if _TOOLCHAIN != "auto":
+        candidates.append(_hrx_xclbinutil_build_dir())
+    candidates.extend(
+        PROJ / "hrx-xclbinutil" / name
+        for name in ("bld", "bld-msvc", "bld-clang-cl", "bld-gcc", "bld-clang")
+    )
+    existing = [d for d in candidates if (d / "CMakeCache.txt").exists()]
+    return max(existing, key=lambda d: (d / "CMakeCache.txt").stat().st_mtime) if existing else None
+
+
+def _git_bash_path(path: Path) -> str:
+    """Translate a Windows path to the /c/... spelling Git Bash accepts."""
+    if not IS_WINDOWS:
+        return str(path)
+    cygpath = shutil.which("cygpath")
+    if cygpath:
+        converted = subprocess.run([cygpath, "-u", str(path)], capture_output=True, text=True)
+        if converted.returncode == 0:
+            return converted.stdout.strip()
+    s = str(path).replace("\\", "/")
+    if len(s) >= 2 and s[1] == ":":
+        return f"/{s[0].lower()}{s[2:]}"
+    return s
+
+
 def _fastflowlm_windows_roots():
     return resolve_windows_roots(ROOT, os.environ)
 
@@ -792,6 +864,15 @@ def _ccache_flags():
     what it silently was: CCACHE_DIR pointed into the workspace and nothing preserved it)."""
     if not shutil.which("ccache"):
         return []
+    cc, cxx = _compilers()
+    if IS_WINDOWS:
+        # Keep MSVC cl on the normal CMake/Ninja path. ccache's Windows/MSVC support is a
+        # separate compatibility surface from the toolchain switch this job is trying to
+        # validate; in practice ccache+cl+Ninja can race on vc*.pdb despite /FS. With
+        # auto toolchain selection CMake picks cl from the VS Developer environment, so only
+        # enable the launcher when the caller explicitly selected clang-cl.
+        if not (cc and cxx and all(Path(c).name.lower() in {"clang-cl", "clang-cl.exe"} for c in (cc, cxx))):
+            return []
     return [
         "-DCMAKE_C_COMPILER_LAUNCHER=ccache", "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
         # PCH off whenever ccache is in play. LLVM's HandleLLVMOptions warns that ccache +
@@ -820,14 +901,67 @@ def _ccache_flags():
 #   mlir-linalg-ods-*      downstream (iron-tools) build
 #   MLIRPythonModules,     AIE_ENABLE_BINDINGS_PYTHON builds on MLIR's python packages
 #   mlir-python-sources
+#   MLIRCAPI*              imported MLIRPythonSources advertise these as aggregate object
+#                          libraries. Downstream AIEAggregateCAPI embeds those objects
+#                          directly, so they must exist in the LLVM build tree even if
+#                          LLVM's own MLIRPythonModules target did not need to link them.
 #   FileCheck, not, count  iron-tools' lit suites name these as DEPENDS
 #   llvm-config            queried by downstream cmake
 LLVM_BUILD_TARGETS = [
     "llvm-libraries", "mlir-libraries", "llvm-headers", "mlir-headers",
     "llvm-tblgen", "mlir-tblgen", "mlir-linalg-ods-yaml-gen", "mlir-pdll",
     "MLIRPythonModules", "mlir-python-sources",
+    "MLIRCAPIAMDGPU", "MLIRCAPIAsync", "MLIRCAPIConversion", "MLIRCAPIDebug",
+    "MLIRCAPIExecutionEngine", "MLIRCAPIExportSMTLIB", "MLIRCAPIFunc",
+    "MLIRCAPIGPU", "MLIRCAPIInterfaces", "MLIRCAPIIR", "MLIRCAPIIRDL",
+    "MLIRCAPILinalg", "MLIRCAPILLVM", "MLIRCAPINVGPU", "MLIRCAPIPDL",
+    "MLIRCAPIQuant", "MLIRCAPIRegisterEverything", "MLIRCAPISMT",
+    "MLIRCAPISparseTensor", "MLIRCAPITarget", "MLIRCAPITransformDialect",
+    "MLIRCAPITransformDialectTransforms", "MLIRCAPITransforms",
     "FileCheck", "not", "count", "llvm-config",
 ]
+
+
+def _llvm_cmake_options(cc, cxx):
+    crt = ["-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>"] if IS_WINDOWS else []
+    opts = [
+        "-DLLVM_ENABLE_PROJECTS=mlir", "-DLLVM_TARGETS_TO_BUILD=host",
+        "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
+        "-DMLIR_ENABLE_BINDINGS_PYTHON=ON", "-DCMAKE_BUILD_TYPE=Release",
+        "-DLLVM_INSTALL_UTILS=ON", *_ccache_flags(),
+        "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+        "-DLLVM_INCLUDE_TESTS=OFF", "-DMLIR_INCLUDE_TESTS=OFF",
+        *_cc_flags(cc, cxx), *crt,
+        f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
+    ]
+    if not IS_WINDOWS and "clang" in (cc or "") and shutil.which("ld.lld"):
+        opts.append("-DLLVM_USE_LINKER=lld")
+    return opts
+
+
+def _llvm_cache_fingerprint():
+    cc, cxx = _compilers()
+    venv_python = cmake_path(venv_py())
+    cmake_options = [
+        opt.replace(venv_python, "<venv-python>")
+        for opt in _llvm_cmake_options(cc, cxx)
+    ]
+    recipe = {
+        "schema": 1,
+        "toolchain": _TOOLCHAIN,
+        "platform": "windows" if IS_WINDOWS else "posix",
+        "cc": cc,
+        "cxx": cxx,
+        "cc_version": _compiler_version(cc),
+        "cxx_version": _compiler_version(cxx if cxx != cc else None),
+        "cmake_version": _tool_version("cmake"),
+        "ninja_version": _tool_version("ninja"),
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "cmake_options": cmake_options,
+        "build_targets": LLVM_BUILD_TARGETS,
+    }
+    data = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(data).hexdigest()
 
 
 def cmd_build_llvm(args):
@@ -845,32 +979,20 @@ def cmd_build_llvm(args):
     # it selects the debug static CRT (/MTd) there and the release one (/MT) everywhere
     # else. We always configure Release so it evaluates to plain "MultiThreaded", but it is
     # the same expression iron-tools uses for itself, so the two agree in *any* config.
-    crt = ["-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>"] if IS_WINDOWS else []
     cfg = [
         cmake_bin(), "-G", "Ninja",
         "-S", cmake_path(PROJ / "llvm-project" / "llvm"), "-B", cmake_path(LLVM_BUILD),
-        "-DLLVM_ENABLE_PROJECTS=mlir", "-DLLVM_TARGETS_TO_BUILD=host",
-        "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
-        "-DMLIR_ENABLE_BINDINGS_PYTHON=ON", "-DCMAKE_BUILD_TYPE=Release",
-        "-DLLVM_INSTALL_UTILS=ON", *_ccache_flags(),
         # Nothing in this stack consumes the LLVM/MLIR examples or benchmarks, and the
         # default target builds them. Dropping them cuts build time, and it removes
         # mlir/examples (gated on LLVM_INCLUDE_EXAMPLES) whose long target names are what
         # first pushed the Windows rc.exe output path past MAX_PATH. Utils (FileCheck,
         # lit, ...) are separate and still built via LLVM_INSTALL_UTILS above.
-        "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_INCLUDE_BENCHMARKS=OFF",
         # We never run LLVM's or MLIR's own test suites, and iron-tools needs no test dialect
         # (checked: no MLIRTest*/TestDialect reference in its cmake). FileCheck/not/count are
         # gated on LLVM_INCLUDE_UTILS, NOT on this, so iron-tools' own lit suites keep the
         # DEPENDS they name.
-        "-DLLVM_INCLUDE_TESTS=OFF", "-DMLIR_INCLUDE_TESTS=OFF",
-        *_cc_flags(cc, cxx), *crt,
-        f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
+        *_llvm_cmake_options(cc, cxx),
     ]
-    # clang+lld; gcc uses its default linker. Skipped on Windows: "clang" matches
-    # "clang-cl" there, but the MSVC-style driver picks its own linker (link/lld-link).
-    if not IS_WINDOWS and "clang" in (cc or "") and shutil.which("ld.lld"):
-        cfg.append("-DLLVM_USE_LINKER=lld")
     sh(cfg, env=cmake_env())
     sh([cmake_bin(), "--build", cmake_path(LLVM_BUILD), "-j", NPROC,
         "--target", *LLVM_BUILD_TARGETS], env=cmake_env())
@@ -912,13 +1034,13 @@ def cmd_build_iron_tools(args):
 
 def cmd_build_hrx_xclbinutil(args):
     d = PROJ / "hrx-xclbinutil"
-    sh([cmake_bin(), "-G", "Ninja", "-B", cmake_path(d / "bld"), "-S", cmake_path(d),
+    bdir = _hrx_xclbinutil_build_dir()
+    sh([cmake_bin(), "-G", "Ninja", "-B", cmake_path(bdir), "-S", cmake_path(d),
         "-DCMAKE_BUILD_TYPE=Release", *_ccache_flags()], env=cmake_env())
-    sh([cmake_bin(), "--build", cmake_path(d / "bld"), "--target", "hrx-xclbinutil",
-        "-j", NPROC], env=cmake_env())
+    sh([cmake_bin(), "--build", cmake_path(bdir), "-j", NPROC], env=cmake_env())
     # expose as `xclbinutil` for aiecc.py
     tb = ROOT / "tools-bin"; tb.mkdir(exist_ok=True)
-    built = d / "bld" / "tools" / f"hrx-xclbinutil{_EXE}"
+    built = bdir / "tools" / f"hrx-xclbinutil{_EXE}"
     link = tb / f"xclbinutil{_EXE}"
     if link.exists() or link.is_symlink():
         link.unlink()
@@ -1151,11 +1273,30 @@ def cmd_smoke(args):
       - iron-tools: aie-opt reports its version and parses a trivial NPU device.
     Cheaper than the full e2e, which additionally builds a design through Peano."""
     rc = 0
-    xbld = PROJ / "hrx-xclbinutil" / "bld"
-    if (xbld / "CMakeCache.txt").exists():
+    xbld = _hrx_xclbinutil_existing_build_dir()
+    if xbld:
         print("== hrx-xclbinutil smoke (ctest) ==")
-        rc |= subprocess.run(["ctest", "--test-dir", str(xbld), "--output-on-failure"],
-                             env=cmake_env()).returncode
+        if IS_WINDOWS:
+            # The submodule's CTest entry spells the bash script as C:/..., which Git Bash
+            # does not execute reliably. Run the same script with /c/... paths, then still
+            # let CTest drive the native pdi_transform executable.
+            bash = shutil.which("bash")
+            script = PROJ / "hrx-xclbinutil" / "test" / "run_tests.sh"
+            xclbinutil = xbld / "tools" / f"hrx-xclbinutil{_EXE}"
+            if not bash:
+                print("smoke: bash not found for hrx-xclbinutil smoke"); rc = 1
+            else:
+                rc |= subprocess.run(
+                    [bash, _git_bash_path(script), _git_bash_path(xclbinutil)],
+                    env=cmake_env(),
+                ).returncode
+            rc |= subprocess.run(
+                ["ctest", "--test-dir", str(xbld), "--output-on-failure", "-R", "^pdi_transform$"],
+                env=cmake_env(),
+            ).returncode
+        else:
+            rc |= subprocess.run(["ctest", "--test-dir", str(xbld), "--output-on-failure"],
+                                 env=cmake_env()).returncode
     else:
         print("smoke: hrx-xclbinutil not built (run: python dev.py build hrx-xclbinutil)"); rc = 1
     aieopt = BUILD / "iron-tools" / "bin" / f"aie-opt{_EXE}"
@@ -2075,12 +2216,31 @@ def cmd_deps(args):
     print((ROOT / "requirements.txt").read_text())
 
 
+def add_toolchain_arg(parser):
+    parser.add_argument(
+        "--toolchain",
+        choices=TOOLCHAIN_CHOICES,
+        default="auto",
+        help="compiler toolchain to use for CMake builds (default: auto/CC/CXX)",
+    )
+
+
+def apply_toolchain_arg(args):
+    global _TOOLCHAIN
+    toolchain = getattr(args, "toolchain", "auto")
+    _TOOLCHAIN = toolchain
+    selected = _selected_toolchain_compilers()
+    if selected:
+        os.environ["CC"], os.environ["CXX"] = selected
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("doctor")
     d.add_argument("profile", nargs="?", choices=sorted(DOCTOR_PROFILE_SUBMODULES),
                    default="compiler-stack", help="dependency closure to validate")
+    add_toolchain_arg(d)
     s = sub.add_parser("setup")
     s.add_argument("--profile", choices=sorted(SETUP_PROFILE_SUBMODULES),
                    default="compiler-stack", help="dependency closure to prepare")
@@ -2088,12 +2248,18 @@ def main():
                    help="also install what iron-ops' own tests need (torch, pytest); "
                         "the NPU job does, the build jobs do not")
     sub.add_parser("fetch")
-    b = sub.add_parser("build"); b.add_argument("what",
+    b = sub.add_parser("build")
+    add_toolchain_arg(b)
+    b.add_argument("what",
         choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "fastflowlm", "all"])
-    t = sub.add_parser("test"); t.add_argument("design", nargs="?")
+    t = sub.add_parser("test")
+    add_toolchain_arg(t)
+    t.add_argument("design", nargs="?")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     sub.add_parser("test-fastflowlm")
-    to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
+    to = sub.add_parser("test-iron-ops")
+    add_toolchain_arg(to)
+    to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
     to.add_argument("--device", choices=sorted(NPU_TARGETS),
                     help="override the NPU generation the suite pins for the operator")
@@ -2119,11 +2285,15 @@ def main():
     tn.add_argument("--chain", action="store_true",
                     help="run the chained testbench instead of the single-dispatch gate")
     sub.add_parser("deps")
+    lf = sub.add_parser("llvm-cache-fingerprint")
+    add_toolchain_arg(lf)
     a = p.parse_args()
+    apply_toolchain_arg(a)
     if a.cmd == "doctor": sys.exit(cmd_doctor(a))
     elif a.cmd == "setup": cmd_setup(a)
     elif a.cmd == "fetch": cmd_fetch(a)
     elif a.cmd == "deps": cmd_deps(a)
+    elif a.cmd == "llvm-cache-fingerprint": print(_llvm_cache_fingerprint())
     elif a.cmd == "test": cmd_test(a)
     elif a.cmd == "test-fastflowlm": cmd_test_fastflowlm(a)
     elif a.cmd == "test-iron-ops": cmd_test_iron_ops(a)
