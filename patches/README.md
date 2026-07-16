@@ -73,38 +73,6 @@ firmware keeps command chains enabled by default.
 **Remove when:** Linux KMQ command chains are validated on stock Ubuntu firmware,
 or upstream hrx carries equivalent driver/firmware capability gating.
 
-### 0004-add-amdxdna-executable-extension.patch
-Adds a public `hrx_amdxdna_executable_create` extension that accepts generic,
-borrowed xclbin, entry-point, and XAie transaction-run descriptions. The
-top-level, entry-point, and run records are ABI-versioned and length-delimited.
-The API supports multiple xclbins, entry points, runs, data payloads, context
-creation/reuse, and source locations. libHRX derives DDR relocation metadata,
-owns XADX serialization, and loads the resulting executable. Negative wire
-sentinels, patch-table triples, FlatCC, and the generated schema remain private
-HRX implementation details; callers need only `hrx_amdxdna.h` and the public
-HRX library.
-
-XAie BLOCKWRITE/DDR_PATCH interpretation lives in the amdxdna
-direct-command-buffer planning module beside the existing transaction-size and
-dynamic-field helpers. libHRX requests a semantic host-patch table and owns only
-XADX serialization. Focused planning tests cover successful extraction,
-unmatched DDR patches, impossible operation counts, null outputs, and trailing
-transaction data.
-
-The implementation and header are platform-neutral. Builds without the amdxdna
-HAL retain the public symbol and return `HRX_STATUS_UNIMPLEMENTED`.
-
-**Remove when:** the extension lands upstream in HRX and the submodule pin includes
-it. The separate iron-tools XADX helper is not migrated by this patch.
-
-### 0005-make-public-bindings-and-tools-optional.patch
-Adds default-on CMake options for the optional HIP compatibility binding and HRX
-command-line tools. The staging runtime sets both options off so its installed
-HRX package contains only libHRX and the amdxdna HAL selected at the top level;
-standalone HRX builds retain their existing defaults.
-
-**Remove when:** equivalent component options land upstream in HRX.
-
 ## patches/FastFlowLM/
 
 ### 0001-use-hrx-map-with-mode.patch
