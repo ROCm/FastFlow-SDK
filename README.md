@@ -72,18 +72,13 @@ python3 dev.py test-fastflowlm
 ```
 
 `package-fastflowlm` creates a relocatable Windows `.zip` or Linux `.tar.zst`,
-verifies it, and re-extracts it under `build/FastFlowLM-extracted/`. A relocated
-bundle can be tested directly with:
+verifies it, and re-extracts it under `build/FastFlowLM-extracted/`. To recheck
+the extracted archive later, run:
 
 ```bash
 python3 dev.py verify-fastflowlm
-python3 dev.py npu-probe --bundle build/FastFlowLM-extracted/fastflowlm-hrx-linux-x86_64
-python3 dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hrx-linux-x86_64
 ```
 
-Use the corresponding `fastflowlm-hrx-windows-x86_64` directory on Windows.
-Bundle execution discovers `model_list.json`, xclbins, HRX, and model-engine
-libraries relative to the executable; no build-tree path variables are needed.
 CI uses the same archive to hand off from CPU build runners to separate NPU test
 runners.
 
