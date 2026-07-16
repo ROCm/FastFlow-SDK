@@ -65,8 +65,8 @@ repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
 upstream   = "github.com/FastFlowLM/FastFlowLM"
 branch     = "codex/manylinux-228-engines"
 pr         = "FastFlowLM/FastFlowLM#602"
-commit     = "1f2a30c33006f47ca9542edd87faf186d281bfbd"
-note       = "Pinned HRX-native app path for FastFlowLM 0.9.45 with all 22 Linux engine libraries rebuilt for manylinux_2_28 (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
+commit     = "72cd41de6829e1226fd1aa7741c0d65a0630a2d3"
+note       = "Pinned HRX-native app path for FastFlowLM 0.9.45 with all 22 Linux engine libraries rebuilt for manylinux_2_28 without Boost runtime dependencies (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
