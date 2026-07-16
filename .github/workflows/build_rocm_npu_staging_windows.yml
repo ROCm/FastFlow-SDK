@@ -8,11 +8,10 @@
 # so the git/dev.py steps are identical to Linux.
 #
 # Only OS-forced differences: the azure-windows-scale-rocm runner (no manylinux
-# container); clang-cl (from the VS Developer environment, or LLVM) instead of the
+# container); MSVC cl from the VS Developer environment instead of the
 # gcc-toolset; OpenSSL from vcpkg instead of dnf openssl-devel (the only system
 # library); Python via actions/setup-python; and Windows venv paths (.venv/Scripts).
-# cmake/ninja come from pip; ccache is installed below and persisted via actions/cache
-# (dev.py routes every compile through it when it is on PATH).
+# cmake/ninja come from pip.
 #
 # Every submodule is public, so they are all fetched over anonymous HTTPS and the
 # workflow needs no secrets.
@@ -33,17 +32,14 @@ jobs:
   build_rocm_npu_staging_windows:
     name: ${{ inputs.name }}
     runs-on: azure-windows-scale-rocm
-    # Cold build compiles LLVM 23 + iron-tools + the amdxdna HAL from source; ccache
-    # (CCACHE_DIR) speeds up warm runs but the first run is long.
+    # Cold build compiles LLVM 23 + iron-tools + the amdxdna HAL from source.
     timeout-minutes: 180
     env:
       PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
-      CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
-      CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
       # RNS_LLVM_BUILD_DIR is set in a step below (the `runner` context is not allowed in
-      # a job-level env: block) — see "Point the LLVM build tree at the job-scoped temp".
+      # a job-level env: block) -- see "Compute LLVM cache key".
       # OPENSSL_ROOT_DIR is set dynamically from the vcpkg install below (points
-      # CMake's find_package(OpenSSL) at it) — see "Install OpenSSL (vcpkg)".
+      # CMake's find_package(OpenSSL) at it) -- see "Install OpenSSL (vcpkg)".
     steps:
       # Git for Windows defaults to core.autocrlf=true, checking files out with CRLF. The
       # patches/ series AND the iron-tools sources they patch are LF, so CRLF makes
@@ -81,45 +77,6 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1   # TODO: SHA-pin
         with:
           arch: x64
-
-      # clang-cl, by choice rather than necessity. The GNU-only syntax that used to rule out
-      # `cl` is gone from hrx-xclbinutil (xpdi_compiler.h now guards on _WIN32/__has_attribute),
-      # so cl is a live option -- but it is untested here and tends to compile LLVM slower than
-      # clang-cl, so we stay on clang-cl until someone measures it.
-      # Setting CC/CXX makes dev.py pin the compiler for the CMake builds it drives (and CMake
-      # honours CC/CXX for the ones it does not). VS ships clang-cl when the "C++ Clang tools"
-      # component is installed; fall back to the LLVM toolchain package if it is not.
-      - name: Set up clang-cl
-        run: |
-          set -eu
-          if ! command -v clang-cl >/dev/null 2>&1; then
-            vsllvm="$(cygpath -u "${VSINSTALLDIR:-C:/}")VC/Tools/Llvm/x64/bin"
-            if [ -x "$vsllvm/clang-cl.exe" ]; then
-              cygpath -m "$vsllvm" >> "$GITHUB_PATH"
-            else
-              choco install --no-progress -y llvm
-              echo "C:/Program Files/LLVM/bin" >> "$GITHUB_PATH"
-            fi
-          fi
-          echo "CC=clang-cl"  >> "$GITHUB_ENV"
-          echo "CXX=clang-cl" >> "$GITHUB_ENV"
-
-      # Build LLVM in the runner's job-scoped temp dir rather than under the workspace.
-      # LLVM unconditionally attaches a Windows version resource to every executable
-      # (AddLLVM.cmake gates it only on MSVC, which clang-cl also sets), CMake mangles the
-      # absolute path of that out-of-tree .rc into the object dir, and the SDK's rc.exe is
-      # not long-path aware. Under the workspace the longest target
-      # (mlir-bytecode-parser-fuzzer, 88-char object dir) lands at 277 chars -> exceeds
-      # MAX_PATH (260) -> "fatal error RC1109: error creating ...". RUNNER_TEMP keeps it at
-      # 243, is unique per job and is cleaned up by the runner, so a reused (non-container)
-      # host cannot leave a stale tree behind nor two jobs collide. ccache stays in the
-      # workspace, so warm rebuilds still work.
-      #
-      # This must be a step: the `runner` context is rejected in a job-level env: block
-      # ("Unrecognized named-value: 'runner'" -> the workflow never runs). Use the
-      # RUNNER_TEMP env var instead, forward-slashed so CMake/Python read it cleanly.
-      - name: Point the LLVM build tree at the job-scoped temp
-        run: echo "RNS_LLVM_BUILD_DIR=${RUNNER_TEMP//\\//}/llvm" >> "$GITHUB_ENV"
 
       # vcpkg's openssl port builds from source (~3 min); persist its binary-package store so
       # that happens once. `files` provider, not `x-gha`: x-gha uses the legacy cache API.
@@ -189,10 +146,10 @@ jobs:
       - name: Setup (venv + pinned deps + prefetch)
         run: python dev.py setup
 
-      # Gate: system prereqs (clang-cl/git) + submodule-pins-vs-manifest + patches
+      # Gate: system prereqs (cl/git) + submodule-pins-vs-manifest + patches
       # + prefetch + version drift.
       - name: Doctor
-        run: .venv/Scripts/python.exe dev.py doctor compiler-stack
+        run: .venv/Scripts/python.exe dev.py doctor --toolchain msvc compiler-stack
 
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p 'test_*.py'
@@ -200,35 +157,47 @@ jobs:
       - name: Run Windows unit tests
         run: .venv/Scripts/python.exe -m unittest discover -s tests/windows -p 'test_*.py'
 
-      # ccache was never installed here, so dev.py silently compiled uncached. It supports
-      # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.
-      - name: Install ccache
-        run: choco install --no-progress -y ccache
+      # Build LLVM in a short, cache-keyed path rather than under the workspace.
+      # LLVM unconditionally attaches a Windows version resource to every executable
+      # (AddLLVM.cmake gates it only on MSVC, which clang-cl also sets), CMake mangles the
+      # absolute path of that out-of-tree .rc into the object dir, and the SDK's rc.exe is
+      # not long-path aware. Under the workspace the longest target
+      # (mlir-bytecode-parser-fuzzer, 88-char object dir) lands at 277 chars -> exceeds
+      # MAX_PATH (260) -> "fatal error RC1109: error creating ...". C:/ci/llvm/h-...
+      # keeps it short while staying stable enough for a CMake build-tree cache.
+      #
+      # Keep every path component clear of CMake backslash escapes after Windows
+      # normalization. In particular, C:/rns-llvm can become C:\rns-llvm in exported
+      # target metadata, and \r is a carriage-return escape in CMake language.
+      #
+      # Include the LLVM gitlink and the LLVM configure/build recipe in the key. The
+      # directory name derives from the key hash so a stale cache with different CMake flags
+      # cannot be accidentally reused from a previous job on a non-container Windows host.
+      - name: Compute LLVM cache key
+        id: llvm-cache-key
+        run: |
+          set -eu
+          llvm_sha="$(git rev-parse HEAD:projects/llvm-project)"
+          recipe="$("${PWD}/.venv/Scripts/python.exe" dev.py llvm-cache-fingerprint --toolchain msvc)"
+          key="llvm-build-${{ runner.os }}-msvc-${llvm_sha}-${recipe}"
+          path_hash="$(printf '%s' "$key" | sha256sum | cut -c1-16)"
+          path="C:/ci/llvm/h-$path_hash"
+          mkdir -p "$(dirname "$path")"
+          {
+            echo "sha=$llvm_sha"
+            echo "key=$key"
+            echo "path=$path"
+          } >> "$GITHUB_OUTPUT"
+          echo "RNS_LLVM_BUILD_DIR=$path" >> "$GITHUB_ENV"
 
-      # Ephemeral runners: without this CCACHE_DIR is empty every job and the hit rate is 0.
-      - name: Cache ccache
+      - name: Cache LLVM build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: ${{ github.workspace }}/build/caches/ccache
-          key: ccache-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-
+          path: ${{ steps.llvm-cache-key.outputs.path }}
+          key: ${{ steps.llvm-cache-key.outputs.key }}
 
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
-        run: |
-          ccache -z
-          .venv/Scripts/python.exe dev.py build all
-
-      # Print the hit rate rather than assume it. Watch this one: LLVM builds under
-      # $RUNNER_TEMP (MAX_PATH workaround), so if that path is not stable across jobs the -I
-      # flags differ and every compile misses. If this reads ~0%, that is the cause.
-      - name: ccache stats
-        if: always()
-        run: |
-          if command -v ccache >/dev/null 2>&1; then
-            ccache -s
-          else
-            echo "ccache unavailable; an earlier setup step did not complete"
-          fi
+        run: .venv/Scripts/python.exe dev.py build --toolchain msvc all
 
       # Build-level smoke (no NPU): hrx-xclbinutil packaging round-trip + aie-opt.
       - name: Smoke tests
@@ -237,10 +206,10 @@ jobs:
       # e2e: build an iron-tools IRON design's xclbin through Peano + the HAL PDI
       # artifact-contract check. Runs off-device (no NPU required). Same driver as Linux.
       - name: e2e (xclbin + HAL PDI artifact-contract)
-        run: .venv/Scripts/python.exe dev.py test
+        run: .venv/Scripts/python.exe dev.py test --toolchain msvc
 
       # Same iron-ops operator build as Linux, same driver. This is the only place the
       # operator library is compiled on Windows at all, so it is also what would catch a
       # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).
       - name: iron-ops (build operators off-device)
-        run: .venv/Scripts/python.exe dev.py test-iron-ops
+        run: .venv/Scripts/python.exe dev.py test-iron-ops --toolchain msvc

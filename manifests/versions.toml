@@ -55,10 +55,10 @@ note       = "Native amdxdna stack with command-chain capability reporting/fallb
 [hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
 repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready
 branch     = "main"
-commit     = "f29b4c9190b7ef1c9d6764b3e064fc2c5db647ce"  # windows/clang-cl support (PR #2)
+commit     = "3940dd23bda7a941df9f2d10015fd66c9410b7af"  # Windows MSVC cl + clang-cl support (PR #4)
 status     = "transitional — may be upstreamed to mlir-aie / hrx / other later"
 xrt_source = "github.com/nod-ai/XRT @ a9fdf618ceba32d28bbf6715a5ee627a51a74b24"  # XRT 2.18.0
-note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, no XRT install). Builds on Windows with clang-cl ONLY: its vendored aie-pdi-transform sources use GNU extensions (__attribute__((aligned)), void* arithmetic) that MSVC cl rejects."
+note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, no XRT install). Builds on Windows with MSVC cl and clang-cl; the vendored aie-pdi-transform sources now guard the Windows-incompatible GNU extensions."
 
 [fastflowlm]                    # projects/FastFlowLM — HRX-native FastFlowLM PR #602
 repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"

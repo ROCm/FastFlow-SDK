@@ -263,7 +263,7 @@ def build_loader(env: dict[str, str]) -> Path:
 
     build_dir = OUT / "hal-contract"
     # hal_pdi_loader is a C target; honour $CC when the caller pinned one (the Windows
-    # CI pins clang-cl) and otherwise let CMake pick, as dev.py's own builds do.
+    # CI pins cl) and otherwise let CMake pick, as dev.py's own builds do.
     cc = os.environ.get("CC")
     configure = [
         cmake_exe(),

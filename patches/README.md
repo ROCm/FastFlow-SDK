@@ -183,9 +183,8 @@ which point mlir-aie's own eudsl pin works and this override is unnecessary. Unt
 then, also worth upstreaming to mlir-aie as a build-against-newer-LLVM compatibility note.
 
 ### 0002-windows-clang-cl.patch
-Lets the submodule build under **clang-cl** (the Windows toolchain; see the
-`[hrx_xclbinutil]` note in `manifests/versions.toml` for why not `cl`). Four files,
-two root causes.
+Lets the submodule build under MSVC-style Windows drivers, including **clang-cl**.
+Four files, two root causes.
 
 **A. MSVC-style drivers default C++ exceptions OFF, and clang-cl makes `throw` a hard
 error** (`cl` only warns, C4530). GCC/Clang enable exceptions by default, so every
@@ -239,8 +238,26 @@ Deliberately **not** touched: the `cdo_driver_mlir_aie` blocks lower in
 `build.ninja` with and without the patch (same cmake) produces a **byte-identical**
 file. `MSVC` is empty under gcc and clang, so `-Werror=sign-compare` is still added
 and no `/EHsc` appears anywhere. Under real `cl`, hunk A only *adds* correct unwind
-semantics where C4530 previously warned. clang-cl is the only configuration whose
-build actually changes.
+semantics where C4530 previously warned. clang-cl remains the configuration that
+turns the missing `/EHsc` into a hard failure.
 
 **Remove when:** upstreamed to mlir-aie. All hunks are upstreamable as-is; none is
 specific to this stack.
+
+### 0005-msvc-python-capi-link.patch
+Lets the full Windows staging stack build with **MSVC cl**.
+
+mlir-aie's standard Python binding path asks MLIR's common-CAPI aggregate
+(`AIEAggregateCAPI`) to embed `AIECAPI` as raw `obj.AIECAPI` object files. Under
+MSVC/Ninja, the generated link response can lose the `lib/CAPI/` prefix for those
+objects, so `link.exe` fails with `LNK1181` on paths like
+`CMakeFiles\obj.AIECAPI.dir\Translation.cpp.obj`.
+
+The patch keeps the normal aggregate behavior for non-MSVC builds. For MSVC only,
+it links `AIECAPI` directly into the `_aie` Python extension and leaves
+`AIEAggregateCAPI` to aggregate the upstream MLIR CAPI libraries. This avoids the
+cross-directory object-library path expansion while still building the Python
+extension against `AIECAPI`.
+
+**Remove when:** mlir-aie/MLIR no longer emits the bad object path for this
+aggregate on MSVC/Ninja, or when mlir-aie adopts an equivalent MSVC link fix.
