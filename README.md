@@ -45,15 +45,11 @@ rustup default 1.97.0
 git config --global core.longpaths true
 ```
 
-On Linux and Windows, `dev.py setup --profile fastflowlm` installs the same
-native dependency graph from `.github/vcpkg/fastflowlm/vcpkg.json` into the
-repository's gitignored cache. Each installation is isolated by a hash of the
-manifest and platform triplet, so an older local dependency tree cannot affect
-a later build. The pinned vcpkg checkout and release-only, dynamic platform
-triplets own Boost, CURL, FFmpeg, FFTW, and Linux readline;
-the host package manager supplies only build tools and platform interfaces such
-as Linux libdrm, Linux UAPI headers, NASM, and Perl modules required by native
-build systems. CMake and Ninja come from `requirements-fastflowlm.lock`.
+On Linux and Windows, `dev.py setup --profile fastflowlm` installs the pinned
+Python and native dependencies into gitignored repository caches. The host
+package manager supplies only build tools and platform interfaces such as Linux
+libdrm, Linux UAPI headers, NASM, and Perl modules required by native build
+systems. CMake and Ninja come from `requirements-fastflowlm.lock`.
 
 FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
 HRX is installed to a clean prefix and FastFlowLM consumes its exported
@@ -75,13 +71,9 @@ python3 dev.py package-fastflowlm
 python3 dev.py test-fastflowlm
 ```
 
-`package-fastflowlm` creates a Windows `.zip` or Linux `.tar.zst`, verifies its
-hash manifest, and re-extracts it under `build/FastFlowLM-extracted/`. The
-manifest records source pins and actual source deltas, patch hashes, complete
-build configuration, dependency/package inventories, toolchain versions,
-licenses, and every payload file. Linux packaging normalizes relative ELF
-RPATHs and rejects an incomplete runtime dependency closure. A relocated bundle
-can be tested directly with:
+`package-fastflowlm` creates a relocatable Windows `.zip` or Linux `.tar.zst`,
+verifies it, and re-extracts it under `build/FastFlowLM-extracted/`. A relocated
+bundle can be tested directly with:
 
 ```bash
 python3 dev.py verify-fastflowlm
@@ -92,18 +84,8 @@ python3 dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hr
 Use the corresponding `fastflowlm-hrx-windows-x86_64` directory on Windows.
 Bundle execution discovers `model_list.json`, xclbins, HRX, and model-engine
 libraries relative to the executable; no build-tree path variables are needed.
-The Linux and Windows CI workflows build this archive on CPU runners, then
-download it into a separate gfx1151 job with no initialized submodules, build
-trees, install prefixes, or development dependency setup.
-
-CI persists vcpkg's verified source/tool downloads separately from its compiled
-binary-package archives. Binary cache keys include the OS, architecture,
-compiler ABI fingerprint, vcpkg policy, manifest, and platform triplet. The
-installed prefix is always reconstructed and is never cached directly.
-On managed Windows runners, vcpkg asset downloads use a SHA-512-verifying
-transport adapter that tries both Windows HTTP and system curl to accommodate
-runner certificate-revocation policy. It does not change package selection or
-accept unverified content.
+CI uses the same archive to hand off from CPU build runners to separate NPU test
+runners.
 
 The smoke test requires the amdxdna driver and an NPU. It prints the FastFlowLM
 transcript, rejects HRX runtime errors, requires the exact raw smoke phrase and
