@@ -2,7 +2,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 5c69e2f..aab02ad 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -82,25 +82,16 @@ endif()
+@@ -82,25 +82,17 @@ endif()
  
  add_executable(flm ${SOURCES} ${HEADERS})
  
@@ -33,10 +33,11 @@ index 5c69e2f..aab02ad 100644
 -    find_library(READLINE_NCURSES_LIBRARY ncurses)
 +    find_package(PkgConfig REQUIRED)
 +    pkg_check_modules(readline REQUIRED IMPORTED_TARGET readline)
++    pkg_check_modules(ncurses REQUIRED IMPORTED_TARGET ncursesw)
  endif()
  
  # ———————————————————————————————————————————————
-@@ -111,53 +102,9 @@ target_include_directories(flm PUBLIC
+@@ -111,53 +103,9 @@ target_include_directories(flm PUBLIC
      ${CMAKE_SOURCE_DIR}/runner
      ${CMAKE_SOURCE_DIR}/server
      ${CMAKE_SOURCE_DIR}/pull
@@ -91,7 +92,7 @@ index 5c69e2f..aab02ad 100644
  target_compile_definitions(flm PUBLIC
      DISABLE_ABI_CHECK=1
      CMAKE_INSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}"
-@@ -170,10 +117,6 @@ if(WIN32)
+@@ -170,10 +118,6 @@ if(WIN32)
      target_compile_definitions(flm PUBLIC
          WIN32_LEAN_AND_MEAN
          NOMINMAX
@@ -102,7 +103,7 @@ index 5c69e2f..aab02ad 100644
          # Handle legacy stdio functions
          _CRT_SECURE_NO_WARNINGS
          _CRT_NONSTDC_NO_DEPRECATE
-@@ -183,33 +126,9 @@ endif()
+@@ -183,33 +127,9 @@ endif()
  
  target_link_directories(flm PUBLIC
      ${CMAKE_SOURCE_DIR}/lib
@@ -137,7 +138,7 @@ index 5c69e2f..aab02ad 100644
  # Link static libraries first
  if(MSVC)
      target_link_libraries(flm PUBLIC ${STATIC_LIBS})
-@@ -248,84 +167,20 @@ if(NOT WIN32)
+@@ -248,84 +168,20 @@ if(NOT WIN32)
          BUILD_RPATH "$<TARGET_FILE_DIR:hrx::hrx>;${CMAKE_SOURCE_DIR}/lib")
  endif()
  
@@ -229,7 +230,7 @@ index 5c69e2f..aab02ad 100644
 -        endif()
 -    endif()
 +    target_compile_definitions(flm PUBLIC FASTFLOWLM_USE_READLINE=1)
-+    target_link_libraries(flm PUBLIC PkgConfig::readline)
++    target_link_libraries(flm PUBLIC PkgConfig::readline PkgConfig::ncurses)
  
      # Link with dl library for dlopen() support (used for preloading bundled libraries)
      target_link_libraries(flm PUBLIC dl)
