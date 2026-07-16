@@ -358,6 +358,104 @@ def _linux_elf_files(bundle: Path) -> list[Path]:
     return sorted(path for path in candidates if path.is_file())
 
 
+def _is_linux_license_document(path: str, package: str) -> bool:
+    normalized = path.replace("\\", "/")
+    if "/usr/share/licenses/" in normalized:
+        return True
+    doc_marker = f"/usr/share/doc/{package}/"
+    if doc_marker not in normalized:
+        return False
+    name = PurePosixPath(normalized).name.lower()
+    return name.startswith(("copying", "copyright", "licence", "license", "notice"))
+
+
+def _system_license_destination(bundle: Path, package: str, source: Path,
+                                source_package: str | None = None) -> Path:
+    normalized = source.as_posix()
+    marker = "/usr/share/licenses/"
+    if marker in normalized:
+        return bundle / "licenses" / "system" / normalized.split(marker, 1)[1]
+    doc_package = source_package or package
+    doc_marker = f"/usr/share/doc/{doc_package}/"
+    if doc_marker in normalized:
+        destination = bundle / "licenses" / "system" / package
+        if doc_package != package:
+            destination /= doc_package
+        return destination / normalized.split(doc_marker, 1)[1]
+    return bundle / "licenses" / "system" / package / source.name
+
+
+_RPM_LICENSE_METADATA_QUERY = (
+    "Name: %{NAME}\n"
+    "Version: %{VERSION}\n"
+    "Release: %{RELEASE}\n"
+    "Architecture: %{ARCH}\n"
+    "License: %{LICENSE}\n"
+    "Source RPM: %{SOURCERPM}\n"
+    "URL: %{URL}\n"
+    "Summary: %{SUMMARY}\n"
+)
+
+
+def _rpm_license_metadata(package: str) -> str | None:
+    result = subprocess.run(
+        ["rpm", "-q", "--qf", _RPM_LICENSE_METADATA_QUERY, package],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return (
+        "This RPM-owned runtime package did not install a standalone license "
+        "file in a location known to the artifact packager. The RPM database "
+        "reported this license metadata at packaging time:\n\n"
+        f"{result.stdout.strip()}\n"
+    )
+
+
+def _rpm_license_entries(package: str) -> list[tuple[Path, str]]:
+    listing = subprocess.run(["rpm", "-ql", package], check=True,
+                             capture_output=True, text=True).stdout
+    return [(Path(line), package) for line in listing.splitlines()
+            if _is_linux_license_document(line, package)]
+
+
+def _rpm_query_field(package: str, field: str) -> str | None:
+    result = subprocess.run(["rpm", "-q", "--qf", f"%{{{field}}}", package],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value if value and value != "(none)" else None
+
+
+def _rpm_packages_from_source(source_rpm: str) -> list[str]:
+    result = subprocess.run(["rpm", "-qa", "--qf", "%{NAME}\t%{SOURCERPM}\n"],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    packages = []
+    for line in result.stdout.splitlines():
+        try:
+            package, source = line.split("\t", 1)
+        except ValueError:
+            continue
+        if source == source_rpm:
+            packages.append(package)
+    return sorted(set(packages))
+
+
+def _linux_soname(path: Path) -> str | None:
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        return None
+    result = subprocess.run([patchelf, "--print-soname", str(path)],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    soname = result.stdout.strip()
+    return soname or None
+
+
 def _is_linux_system_runtime(name: str) -> bool:
     return bool(re.match(
         r"^(ld-linux|linux-vdso|lib(c|dl|m|pthread|rt)\.so)([.-].*)?$", name))
@@ -399,8 +497,9 @@ def _normalize_and_verify_linux_elf(bundle: Path) -> dict[str, list[str]]:
     return graph
 
 
-def _linux_dependencies_and_licenses(bundle: Path,
-                                     vcpkg_runtime_files: set[str]) -> dict[str, object]:
+def _linux_dependencies_and_licenses(
+        bundle: Path, vcpkg_runtime_files: set[str],
+        internal_runtime_files: set[str] | None = None) -> dict[str, object]:
     ldconfig = shutil.which("ldconfig")
     library_sources = {}
     if ldconfig:
@@ -411,16 +510,22 @@ def _linux_dependencies_and_licenses(bundle: Path,
             if match:
                 library_sources.setdefault(match.group(1), Path(match.group(2)))
 
-    package_files: dict[str, list[Path]] = {}
+    package_files: dict[str, list[tuple[Path, str]]] = {}
     package_versions: dict[str, str] = {}
+    package_license_source_packages: dict[str, list[str]] = {}
     rpm = shutil.which("rpm")
     dpkg_query = shutil.which("dpkg-query")
     mapped_libraries = {}
     unmapped_libraries = []
+    internal_runtime_files = internal_runtime_files or set()
     for library in sorted(bundle.glob("lib/*.so*")):
-        if library.name in vcpkg_runtime_files:
+        if library.name in vcpkg_runtime_files or library.name in internal_runtime_files:
             continue
         source = library_sources.get(library.name)
+        if not source:
+            soname = _linux_soname(library)
+            if soname:
+                source = library_sources.get(soname)
         package = None
         if source and rpm:
             query = subprocess.run([rpm, "-qf", "--qf", "%{NAME}\n", str(source)],
@@ -428,10 +533,18 @@ def _linux_dependencies_and_licenses(bundle: Path,
             if query.returncode == 0:
                 package = query.stdout.strip()
                 package_versions[package] = _run_text([rpm, "-q", package])
-                listing = subprocess.run([rpm, "-ql", package], check=True,
-                                         capture_output=True, text=True).stdout
-                package_files[package] = [Path(line) for line in listing.splitlines()
-                                          if line.startswith("/usr/share/licenses/")]
+                package_files[package] = _rpm_license_entries(package)
+                if not package_files[package]:
+                    source_rpm = _rpm_query_field(package, "SOURCERPM")
+                    if source_rpm:
+                        for source_package in _rpm_packages_from_source(source_rpm):
+                            if source_package == package:
+                                continue
+                            entries = _rpm_license_entries(source_package)
+                            if entries:
+                                package_files[package].extend(entries)
+                                package_license_source_packages.setdefault(
+                                    package, []).append(source_package)
         elif source and dpkg_query:
             query = subprocess.run([dpkg_query, "-S", str(source)],
                                    capture_output=True, text=True)
@@ -440,7 +553,7 @@ def _linux_dependencies_and_licenses(bundle: Path,
                 package_versions[package] = _run_text(
                     [dpkg_query, "-W", "-f=${Package}=${Version}", package])
                 copyright_file = Path("/usr/share/doc") / package / "copyright"
-                package_files[package] = [copyright_file]
+                package_files[package] = [(copyright_file, package)]
         if package:
             mapped_libraries[library.name] = package
         else:
@@ -449,26 +562,34 @@ def _linux_dependencies_and_licenses(bundle: Path,
     copied_licenses = 0
     packages_with_licenses = set()
     for package, files in sorted(package_files.items()):
-        for source in files:
+        for source, source_package in files:
             if source.is_file():
-                license_root = Path("/usr/share/licenses")
-                if license_root in source.parents:
-                    destination = (bundle / "licenses" / "system" /
-                                   source.relative_to(license_root))
-                else:
-                    destination = (bundle / "licenses" / "system" / package /
-                                   source.name)
+                destination = _system_license_destination(
+                    bundle, package, source, source_package)
                 _copy_checked(source, destination)
                 copied_licenses += 1
                 packages_with_licenses.add(package)
+    generated_license_records = {}
+    if rpm:
+        for package in sorted(set(package_versions) - packages_with_licenses):
+            metadata = _rpm_license_metadata(package)
+            if not metadata:
+                continue
+            destination = (bundle / "licenses" / "system" / package /
+                           "RPM-LICENSE-METADATA.txt")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(metadata, encoding="utf-8")
+            copied_licenses += 1
+            packages_with_licenses.add(package)
+            generated_license_records[package] = destination.relative_to(
+                bundle).as_posix()
     if package_versions and not copied_licenses:
         raise RuntimeError("no licenses found for bundled Linux system packages")
     missing_package_licenses = sorted(set(package_versions) - packages_with_licenses)
     if missing_package_licenses:
         raise RuntimeError("bundled Linux packages are missing license records: " +
                            ", ".join(missing_package_licenses))
-    unexpected_unmapped = sorted(
-        name for name in unmapped_libraries if not name.startswith("libhrx.so"))
+    unexpected_unmapped = sorted(unmapped_libraries)
     if unexpected_unmapped:
         raise RuntimeError("bundled Linux libraries have no package owner: " +
                            ", ".join(unexpected_unmapped))
@@ -479,6 +600,12 @@ def _linux_dependencies_and_licenses(bundle: Path,
         "library_packages": mapped_libraries,
         "unmapped_libraries": unmapped_libraries,
         "packages_without_license_files": missing_package_licenses,
+        "license_source_packages": {
+            package: sorted(set(source_packages))
+            for package, source_packages in sorted(
+                package_license_source_packages.items())
+        },
+        "generated_license_records": generated_license_records,
     }
 
 
@@ -590,8 +717,14 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
     if os.name == "nt":
         dependencies = vcpkg_dependencies
     else:
+        internal_runtime_files = {
+            path.name for path in (bundle / "lib" / "flm").glob("*.so*")
+        }
+        internal_runtime_files.update(
+            path.name for path in (bundle / "lib").glob("libhrx.so*"))
         system_dependencies = _linux_dependencies_and_licenses(
-            bundle, set(vcpkg_dependencies["runtime_file_packages"]))
+            bundle, set(vcpkg_dependencies["runtime_file_packages"]),
+            internal_runtime_files)
         dependencies = {
             "provider": "vcpkg+system",
             "vcpkg": vcpkg_dependencies,

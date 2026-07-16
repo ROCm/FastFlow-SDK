@@ -12,8 +12,10 @@ import unittest
 import warnings
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from build_tools.fastflowlm_artifact import (
+    _linux_dependencies_and_licenses,
     _is_linux_system_runtime,
     _pe_imports,
     create_archive,
@@ -87,6 +89,70 @@ class FastFlowLMArtifactTest(unittest.TestCase):
                      "ld-linux-x86-64.so.2", "linux-vdso.so.1"):
             self.assertTrue(_is_linux_system_runtime(name), name)
         self.assertFalse(_is_linux_system_runtime("libcurl.so.4"))
+
+    def test_linux_system_dependency_uses_source_rpm_license_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)
+            (bundle / "lib").mkdir()
+            (bundle / "lib" / "libstdc++.so.6.0.25").write_bytes(b"")
+            license_source = bundle / "rpm-root" / "usr" / "share" / "doc" / "gcc" / "COPYING.RUNTIME"
+            license_source.parent.mkdir(parents=True)
+            license_source.write_text("runtime exception\n", encoding="utf-8")
+
+            def fake_which(name):
+                return {
+                    "ldconfig": "/sbin/ldconfig",
+                    "patchelf": "/bin/patchelf",
+                    "rpm": "/bin/rpm",
+                }.get(name)
+
+            def fake_run(command, **kwargs):
+                normalized = [Path(command[0]).name, *command[1:]]
+                if normalized == ["ldconfig", "-p"]:
+                    return subprocess.CompletedProcess(
+                        command, 0,
+                        stdout="  libstdc++.so.6 (libc6,x86-64) => /lib64/libstdc++.so.6\n",
+                    )
+                if normalized[:2] == ["patchelf", "--print-soname"]:
+                    return subprocess.CompletedProcess(command, 0, stdout="libstdc++.so.6\n")
+                if normalized[:4] == ["rpm", "-qf", "--qf", "%{NAME}\n"]:
+                    return subprocess.CompletedProcess(command, 0, stdout="libstdc++\n")
+                if normalized == ["rpm", "-q", "libstdc++"]:
+                    return subprocess.CompletedProcess(command, 0, stdout="libstdc++-8.5.0\n")
+                if normalized == ["rpm", "-ql", "libstdc++"]:
+                    return subprocess.CompletedProcess(command, 0, stdout="/lib64/libstdc++.so.6\n")
+                if normalized == ["rpm", "-q", "--qf", "%{SOURCERPM}", "libstdc++"]:
+                    return subprocess.CompletedProcess(command, 0, stdout="gcc-8.5.0.src.rpm")
+                if normalized == ["rpm", "-qa", "--qf", "%{NAME}\t%{SOURCERPM}\n"]:
+                    return subprocess.CompletedProcess(
+                        command, 0,
+                        stdout="libstdc++\tgcc-8.5.0.src.rpm\ngcc\tgcc-8.5.0.src.rpm\n",
+                    )
+                if normalized == ["rpm", "-ql", "gcc"]:
+                    return subprocess.CompletedProcess(command, 0, stdout=f"{license_source}\n")
+                raise AssertionError(f"unexpected command: {command!r}")
+
+            with mock.patch("build_tools.fastflowlm_artifact.shutil.which", fake_which), \
+                 mock.patch("build_tools.fastflowlm_artifact.subprocess.run", fake_run):
+                dependencies = _linux_dependencies_and_licenses(bundle, set())
+
+            copied = bundle / "licenses" / "system" / "libstdc++" / "gcc" / "COPYING.RUNTIME"
+            self.assertEqual(copied.read_text(encoding="utf-8"), "runtime exception\n")
+            self.assertEqual(dependencies["license_source_packages"], {"libstdc++": ["gcc"]})
+            self.assertEqual(dependencies["generated_license_records"], {})
+            self.assertEqual(dependencies["packages_without_license_files"], [])
+
+    def test_linux_system_dependency_skips_internal_runtime_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)
+            (bundle / "lib").mkdir()
+            (bundle / "lib" / "libq4_npu_eXpress.so").write_bytes(b"")
+            with mock.patch("build_tools.fastflowlm_artifact.shutil.which",
+                            lambda name: None):
+                dependencies = _linux_dependencies_and_licenses(
+                    bundle, set(), {"libq4_npu_eXpress.so"})
+            self.assertEqual(dependencies["packages"], [])
+            self.assertEqual(dependencies["unmapped_libraries"], [])
 
     @unittest.skipUnless(os.name == "nt", "PE fixture is built on Windows")
     def test_parse_pe_imports(self):
