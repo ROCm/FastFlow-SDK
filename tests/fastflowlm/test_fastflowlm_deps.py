@@ -90,12 +90,13 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
             self.assertNotIn("if: always() && steps.vcpkg", workflow)
 
     def test_linux_runtime_uses_cmake_dependency_sets(self):
-        patch = (
-            ROOT / "patches/FastFlowLM/0005-install-relocatable-runtime.patch"
-        ).read_text()
-        self.assertNotIn("install(RUNTIME_DEPENDENCIES", patch)
+        cmake = ROOT / "projects/FastFlowLM/src/CMakeLists.txt"
+        if not cmake.exists():
+            self.skipTest("FastFlowLM submodule is not initialized")
+        contents = cmake.read_text()
+        self.assertNotIn("install(RUNTIME_DEPENDENCIES", contents)
         self.assertGreaterEqual(
-            patch.count("install(RUNTIME_DEPENDENCY_SET"), 2
+            contents.count("install(RUNTIME_DEPENDENCY_SET"), 2
         )
 
     def test_windows_and_linux_use_repository_managed_trees(self):
