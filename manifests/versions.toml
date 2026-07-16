@@ -63,10 +63,10 @@ note       = "Derived build tool: NPU-minimal xclbinutil + hrx util (no Boost, n
 [fastflowlm]                    # projects/FastFlowLM — HRX-native FastFlowLM PR #602
 repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
 upstream   = "github.com/FastFlowLM/FastFlowLM"
-branch     = "codex/hrx-native-windows"
+branch     = "codex/manylinux-228-engines"
 pr         = "FastFlowLM/FastFlowLM#602"
-commit     = "d13391088b0218a731ae6c102c06a662ffb2bfb3"
-note       = "Pinned HRX-native app path with refreshed Linux HRX native libraries for FastFlowLM 0.9.45. The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
+commit     = "1f2a30c33006f47ca9542edd87faf186d281bfbd"
+note       = "Pinned HRX-native app path for FastFlowLM 0.9.45 with all 22 Linux engine libraries rebuilt for manylinux_2_28 (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
