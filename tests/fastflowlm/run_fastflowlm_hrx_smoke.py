@@ -181,15 +181,20 @@ def require_file(path, label):
 
 
 def main():
+    bundle = Path(os.environ["FASTFLOWLM_BUNDLE"]) if os.environ.get("FASTFLOWLM_BUNDLE") else None
     fastflowlm_dir = Path(os.environ.get("FASTFLOWLM_DIR") or (ROOT / "projects" / "FastFlowLM"))
     flm_src = fastflowlm_dir / "src"
     hrx_build = Path(os.environ.get("HRX_BUILD") or (ROOT / "projects" / "hrx" / "build" / "cmake"))
-    flm_bin = Path(os.environ.get("FLM_BIN") or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm")))
-    hrx_runtime = hrx_build / "libhrx" / "src" / "libhrx" / ("hrx.dll" if IS_WINDOWS else "libhrx.so")
+    flm_bin = (bundle / "bin" / ("flm.exe" if IS_WINDOWS else "flm") if bundle else
+               Path(os.environ.get("FLM_BIN") or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm"))))
+    hrx_runtime = (bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so") if bundle else
+                   hrx_build / "libhrx" / "src" / "libhrx" / ("hrx.dll" if IS_WINDOWS else "libhrx.so"))
     model = os.environ.get("FLM_MODEL") or "qwen3:0.6b"
     model_cache = Path(os.environ.get("FLM_MODEL_PATH") or (ROOT / "build" / "FastFlowLM-models"))
-    config_path = Path(os.environ.get("FLM_CONFIG_PATH") or (flm_src / "model_list.json"))
-    xclbin_prefix = Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src)
+    config_path = (bundle / "share" / "flm" / "model_list.json" if bundle else
+                   Path(os.environ.get("FLM_CONFIG_PATH") or (flm_src / "model_list.json")))
+    xclbin_prefix = (bundle / "share" / "flm" if bundle else
+                     Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src))
     bench_config = Path(os.environ.get("FLM_BENCH_CONFIG") or (ROOT / "tests" / "fastflowlm" / "bench_1k_smoke.json"))
     work_dir = Path(os.environ.get("FLM_SMOKE_WORK_DIR") or (ROOT / "build" / "FastFlowLM-smoke"))
     smoke_prompt = os.environ.get("FLM_SMOKE_PROMPT") or "Repeat exactly: HRX runtime smoke test."
@@ -209,19 +214,21 @@ def main():
     model_cache.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    env.setdefault("HRX_GPU_DRIVER", "amdxdna")
-    env["FLM_CONFIG_PATH"] = str(config_path)
-    env["FLM_XCLBIN_PATH"] = str(xclbin_prefix)
+    if not bundle:
+        env.setdefault("HRX_GPU_DRIVER", "amdxdna")
+        env["FLM_CONFIG_PATH"] = str(config_path)
+        env["FLM_XCLBIN_PATH"] = str(xclbin_prefix)
     env["FLM_MODEL_PATH"] = str(model_cache)
-    if IS_WINDOWS:
-        prepend_search_path(env, "PATH", [flm_bin.parent, hrx_runtime.parent, flm_src / "lib"])
-    else:
-        prepend_search_path(env, "LD_LIBRARY_PATH", [hrx_runtime.parent, flm_src / "lib"])
+    if not bundle:
+        if IS_WINDOWS:
+            prepend_search_path(env, "PATH", [flm_bin.parent, hrx_runtime.parent, flm_src / "lib"])
+        else:
+            prepend_search_path(env, "LD_LIBRARY_PATH", [hrx_runtime.parent, flm_src / "lib"])
 
     print("FastFlowLM HRX smoke")
     print(f"  model:       {model}")
     print(f"  flm:         {flm_bin}")
-    print(f"  hrx build:   {hrx_build}")
+    print(f"  hrx runtime: {hrx_runtime}")
     print(f"  model cache: {model_cache}")
 
     run_tee([flm_bin, "pull", model], env=env)

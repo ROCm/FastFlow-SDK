@@ -47,10 +47,10 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
-branch     = "amdxdna-hal-native"                         # == ROCm/hrx-system PR #37 (+ follow-ups)
-commit     = "0d9f1a38fe8ad081706d5db2b8a41e827a410aa0"
+branch     = "amdxdna-hal-native-rel"                     # == amdxdna-hal-native + relocatable FLM runtime hooks
+commit     = "d8c634f58f6afa3850004cdd303b0cc08f69348f"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
-note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, negotiated legacy/compact Windows MCDM contracts, legacy protocol revision 3 support, and minimal-build dependency gating."
+note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, negotiated legacy/compact Windows MCDM contracts, legacy protocol revision 3 support, public HRX-owned amdxdna XADX executable creation, and minimal/relocatable runtime component gating."
 
 [hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
 repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready
@@ -65,8 +65,8 @@ repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
 upstream   = "github.com/FastFlowLM/FastFlowLM"
 branch     = "codex/hrx-native-windows"
 pr         = "FastFlowLM/FastFlowLM#602"
-commit     = "d13391088b0218a731ae6c102c06a662ffb2bfb3"
-note       = "Pinned HRX-native app path with refreshed Linux HRX native libraries for FastFlowLM 0.9.45. The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
+commit     = "649608436f242892d85daded4956016c0241e874"
+note       = "Pinned HRX-native app path for FastFlowLM 0.9.45 with public HRX amdxdna executable API consumption and all 22 Linux engine libraries rebuilt for manylinux_2_28 without Boost runtime dependencies (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"

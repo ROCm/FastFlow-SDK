@@ -8,7 +8,7 @@
 [submodule "projects/hrx"]
 	path = projects/hrx
 	url = https://github.com/jtuyls/hrx.git
-	branch = amdxdna-hal-native
+	branch = amdxdna-hal-native-rel
 	ignore = dirty
 [submodule "projects/hrx-xclbinutil"]
 	path = projects/hrx-xclbinutil
