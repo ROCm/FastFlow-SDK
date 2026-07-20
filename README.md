@@ -15,10 +15,10 @@ applications on AMD XDNA Neural Processing Engines (NPUs). It consists of:
 Note that these top-level components will recursively pull in additional 
 requirements; each sub-project has more information on these.
 
-[^1]: ROCm-NPU: ROCm for Neural Processing Units; ROCm is a proper name
+[^1]: ROCm-NPU: ROCm for Neural Processing Units
 [^2]: FastFlowLM: Fast Flow Language Models
 [^3]: HRX: HIP Runtime Extended, HIP: Heterogeneous-compute Interface for Portability
-[^4]: MLIR-AIE: Multi-level Intermediate Representation for Adaptable Intelligent Engines
+[^4]: MLIR-AIE: Multi-Level Intermediate Representation for AI Engines
 
 
 ## Getting Started
@@ -133,8 +133,8 @@ not from Windows PnP metadata.
 ## Develop your own Models and Applications Using *iron-tools*
 
 *iron-tools* provides programming abstractions and a compiler toolchain that 
-target the Adaptable Intelligent Engine (AIE) array in the AMD NPU. A guide 
-and programming examples document how to build your own applications. 
+target the AI Engine (AIE) array in the AMD NPU. A guide and programming 
+examples document how to build your own applications. 
 *FastFlowLM* was built using *iron-tools*. 
 
 - The **[MLIR-AIE documentation](https://xilinx.github.io/mlir-aie/dev/)**
