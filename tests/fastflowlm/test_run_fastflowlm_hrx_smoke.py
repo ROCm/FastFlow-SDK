@@ -1,6 +1,7 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
+import argparse
 import importlib.util
 import os
 import sys
@@ -28,6 +29,19 @@ class FastFlowLMSmokeTest(unittest.TestCase):
         self.assertEqual(smoke.parse_duration_seconds("250ms", 9), 0.25)
         self.assertEqual(smoke.parse_duration_seconds("2m", 9), 120.0)
         self.assertEqual(smoke.parse_duration_seconds("bad", 9), 9)
+
+    def test_positive_inference_iterations(self):
+        self.assertEqual(smoke.positive_int("5"), 5)
+        for value in ("0", "-1", "invalid"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                smoke.positive_int(value)
+
+    def test_parse_inference_iterations(self):
+        self.assertEqual(smoke.parse_args([]).inference_iterations, 1)
+        self.assertEqual(
+            smoke.parse_args(["--inference-iterations", "5"]).inference_iterations,
+            5,
+        )
 
     def test_csv_has_1k_row(self):
         with tempfile.TemporaryDirectory() as td:

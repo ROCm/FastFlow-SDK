@@ -1353,7 +1353,13 @@ def cmd_test_fastflowlm(args):
     else:
         env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
-    sys.exit(sh([sys.executable, script], env=env, check=False).returncode)
+    command = [
+        sys.executable,
+        script,
+        "--inference-iterations",
+        str(args.inference_iterations),
+    ]
+    sys.exit(sh(command, env=env, check=False).returncode)
 
 
 def _iron_ops_suite():
@@ -2655,6 +2661,16 @@ def cmd_deps(args):
     print((ROOT / "requirements.txt").read_text())
 
 
+def argparse_positive_int(value):
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2678,6 +2694,13 @@ def main():
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     tf = sub.add_parser("test-fastflowlm")
     tf.add_argument("--bundle", help="run only from an extracted runtime bundle")
+    tf.add_argument(
+        "--inference-iterations",
+        type=argparse_positive_int,
+        default=1,
+        metavar="N",
+        help="run N independent FLM inference processes before the benchmark",
+    )
     to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
     to.add_argument("--compiler-prefix",
