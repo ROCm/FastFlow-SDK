@@ -17,10 +17,9 @@ on:
         type: string
         default: Build + smoke
       upload_artifact:
-        # Upload the run-prerequisites (built iron-tools + hrx + tools) so a downstream
-        # NPU job can run without recompiling. build/llvm is excluded: the iron-tools
-        # binaries are statically linked. The Python bindings are not; see the
-        # packaging step.
+        # Upload the run-prerequisites and rocm-npu-compiler product so a downstream NPU
+        # job can run without recompiling. build/llvm is excluded: the compiler product
+        # carries the installed tools, Python package, headers, xclbinutil, and Peano.
         type: boolean
         default: false
 
@@ -89,6 +88,9 @@ jobs:
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
+      - name: Test compiler product artifact helpers
+        run: .venv/bin/python -m unittest discover -s tests/compiler -p 'test_*.py'
+
       # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
       - name: Cache ccache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -127,13 +129,22 @@ jobs:
       - name: e2e (xclbin + HAL PDI artifact-contract)
         run: .venv/bin/python dev.py test
 
+      - name: Package compiler product
+        run: .venv/bin/python dev.py package-compiler-product
+
+      - name: Unpack compiler product
+        run: .venv/bin/python dev.py unpack-compiler-product --dir build/artifacts
+
+      - name: Verify compiler product relocation
+        run: .venv/bin/python dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted --relocate
+
       # The same toolchain, driven by the iron-ops OPERATOR library instead of an iron-tools
       # example: MLIR -> Peano (incl. the operator's own aie_kernels/*.cc) -> xclbin + insts.
       # iron-ops is developed against the mlir_aie WHEEL, so this is where its drift from our
       # source-built aie package shows up — on a CPU runner, minutes in, instead of an hour
       # later on the single gfx1151 box. Which operators: tests/iron-ops/suite.py.
       - name: iron-ops (build operators off-device)
-        run: .venv/bin/python dev.py test-iron-ops
+        run: .venv/bin/python dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-linux-x86_64
 
       # Package + verify live in dev.py so the logic is testable off CI and shared with
       # any other consumer; see cmd_package_npu_prereqs / cmd_verify_npu_prereqs.
@@ -153,4 +164,12 @@ jobs:
         with:
           name: npu-prereqs
           path: build/artifacts/npu-prereqs.tar.*   # .zst where zstd exists, else .gz
+          if-no-files-found: error
+
+      - name: Upload compiler product
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-compiler-linux-x86_64
+          path: build/artifacts/rocm-npu-compiler-linux-x86_64.tar.gz*
           if-no-files-found: error

@@ -147,7 +147,10 @@ def build(operator_spec: suite.Operator, device: str, build_root: Path) -> None:
     # The same two checks run_e2e makes of an iron-tools design: hrx-xclbinutil really
     # packaged the NPU sections, and the instruction stream targets the device we asked for
     # (a mismatched DevGen is accepted by the driver and then never completes).
-    run_e2e.check_sections(run_e2e.require_xclbinutil(), xclbin, dict(os.environ))
+    run_e2e.check_sections(
+        run_e2e.require_xclbinutil(run_e2e.compiler_prefix_from_env()),
+        xclbin,
+    )
     dev._require_txn_devgen(insts, device)
 
 

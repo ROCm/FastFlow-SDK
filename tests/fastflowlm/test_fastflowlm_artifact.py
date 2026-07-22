@@ -33,6 +33,8 @@ class FastFlowLMArtifactTest(unittest.TestCase):
         payload = bundle / "bin" / ("flm.exe" if os.name == "nt" else "flm")
         payload.parent.mkdir(parents=True)
         payload.write_bytes(b"runtime")
+        if os.name != "nt":
+            payload.chmod(0o755)
         manifest = {
             "schema_version": 1,
             "files": [{"path": payload.relative_to(bundle).as_posix(),
@@ -222,6 +224,8 @@ class FastFlowLMArtifactTest(unittest.TestCase):
             extracted = extract_archive(archive, root / "extracted", allowed_root=root)
             executable = "flm.exe" if os.name == "nt" else "flm"
             self.assertEqual((extracted / "bin" / executable).read_bytes(), b"runtime")
+            if os.name != "nt":
+                self.assertTrue(os.access(extracted / "bin" / executable, os.X_OK))
 
     def test_archive_is_reproducible(self):
         if os.name != "nt" and not shutil.which("zstd"):
