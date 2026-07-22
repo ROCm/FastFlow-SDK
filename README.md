@@ -43,7 +43,7 @@ Ubuntu prerequisites:
 
 ```bash
 sudo apt-get install -y \
-  bash build-essential ca-certificates curl git libdrm-dev libipc-cmd-perl \
+  bash binutils build-essential ca-certificates curl git libdrm-dev libipc-cmd-perl \
   linux-libc-dev make nasm patchelf perl pkg-config python3 python3-venv unzip \
   zip zstd
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \

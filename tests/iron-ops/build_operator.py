@@ -20,7 +20,7 @@ Which operators, at what size: tests/iron-ops/suite.py. Runs on Linux and Window
 
 Must be run BY the stack's venv python, WITH the IRON toolchain env (PYTHONPATH ->
 build/iron-tools/python, PEANO_INSTALL_DIR, tools-bin on PATH). `dev.py test-iron-ops` does
-both; it takes that env from run_e2e.toolchain_env(), the single definition.
+both; it takes that env from run_e2e's Toolchain resolver.
 """
 
 import argparse
@@ -147,10 +147,8 @@ def build(operator_spec: suite.Operator, device: str, build_root: Path) -> None:
     # The same two checks run_e2e makes of an iron-tools design: hrx-xclbinutil really
     # packaged the NPU sections, and the instruction stream targets the device we asked for
     # (a mismatched DevGen is accepted by the driver and then never completes).
-    run_e2e.check_sections(
-        run_e2e.require_xclbinutil(run_e2e.compiler_prefix_from_env()),
-        xclbin,
-    )
+    toolchain = run_e2e.resolve_toolchain(run_e2e.compiler_prefix_from_env())
+    run_e2e.check_sections(toolchain.xclbinutil, xclbin, env=toolchain.process_env())
     dev._require_txn_devgen(insts, device)
 
 

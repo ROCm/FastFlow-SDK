@@ -77,9 +77,82 @@ class DesignArtifacts(NamedTuple):
     pdi: Path
 
 
+class Toolchain(NamedTuple):
+    """Resolved IRON compiler toolchain paths.
+
+    Environment variables here are process contracts for current upstream tools. Keep
+    callers on explicit paths where possible, and only materialize env when spawning
+    those tools.
+    """
+
+    compiler_prefix: Path | None
+    xclbinutil: Path
+    aie_bin: Path
+    aie_python: Path
+    peano: Path
+    aieopt_dir: Path
+    library_dir: Path | None = None
+
+    @property
+    def aie_opt(self) -> Path:
+        return self.aie_bin / f"aie-opt{EXE}"
+
+    @property
+    def is_relocated(self) -> bool:
+        return self.compiler_prefix is not None
+
+    def validate(self) -> None:
+        if not self.xclbinutil.exists():
+            if self.is_relocated:
+                raise E2EError(f"compiler product is missing xclbinutil\n  {self.xclbinutil}")
+            raise E2EError(
+                "xclbinutil not published (run: python dev.py build hrx-xclbinutil)\n"
+                f"  {self.xclbinutil}"
+            )
+        if not self.aie_opt.exists():
+            if self.is_relocated:
+                raise E2EError(f"compiler product is missing aie-opt\n  {self.aie_opt}")
+            raise E2EError(
+                "iron-tools not built from source (run: python dev.py build iron-tools)"
+            )
+        if not (self.aie_python / "aie" / "compiler" / "aiecc" / "main.py").exists():
+            if self.is_relocated:
+                raise E2EError(
+                    "compiler product is missing iron-tools python bindings\n"
+                    f"  {self.aie_python}"
+                )
+            raise E2EError(
+                "iron-tools python bindings not built (run: python dev.py build iron-tools)"
+            )
+        if not self.peano.is_dir():
+            raise E2EError(f"Peano not available to this toolchain\n  {self.peano}")
+        if not self.aieopt_dir.is_dir():
+            raise E2EError(f"aie_api not available to this toolchain\n  {self.aieopt_dir}")
+
+    def process_env(self, base_env: dict[str, str] | None = None) -> dict[str, str]:
+        env = dict(os.environ if base_env is None else base_env)
+        _prepend_env_path(env, "PATH", [self.xclbinutil.parent, self.aie_bin, VENV_BIN])
+        if self.library_dir and os.name == "nt":
+            _prepend_env_path(env, "PATH", [self.library_dir])
+        env["PYTHONPATH"] = str(self.aie_python)
+        env["PEANO_INSTALL_DIR"] = str(self.peano)
+        env["AIEOPT_DIR"] = str(self.aieopt_dir)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if self.compiler_prefix:
+            env["ROCM_NPU_COMPILER_PREFIX"] = str(self.compiler_prefix)
+        return env
+
+
 def run_process(cmd: list[str | Path], **kwargs: object) -> subprocess.CompletedProcess:
     """Run cmd, streaming output unless redirected. Never raises; callers check."""
     return subprocess.run([str(c) for c in cmd], **kwargs)
+
+
+def _prepend_env_path(env: dict[str, str], name: str, entries: list[Path]) -> None:
+    values = [str(entry) for entry in entries]
+    if env.get(name):
+        values.append(env[name])
+    env[name] = os.pathsep.join(values)
 
 
 def cmake_path(path: Path) -> str:
@@ -131,15 +204,19 @@ def compiler_prefix_from_env() -> Path | None:
     return Path(value).resolve() if value else None
 
 
+def _xclbinutil_path(compiler_prefix: Path | None = None) -> Path:
+    return ((compiler_prefix / "bin" / f"xclbinutil{EXE}")
+            if compiler_prefix else
+            ROOT / "tools-bin" / f"xclbinutil{EXE}")
+
+
 def require_xclbinutil(compiler_prefix: Path | None = None) -> Path:
     """aiecc invokes plain `xclbinutil`; `dev.py build hrx-xclbinutil` publishes ours
     under that name in tools-bin/. Depend on it rather than re-publish it here: the
     test should not mutate shared state, and duplicating the symlink-vs-copy logic
     invites drift.
     """
-    xclbinutil = ((compiler_prefix / "bin" / f"xclbinutil{EXE}")
-                  if compiler_prefix else
-                  ROOT / "tools-bin" / f"xclbinutil{EXE}")
+    xclbinutil = _xclbinutil_path(compiler_prefix)
     if not xclbinutil.exists():
         raise E2EError(
             "xclbinutil not published (run: python dev.py build hrx-xclbinutil)\n"
@@ -148,53 +225,63 @@ def require_xclbinutil(compiler_prefix: Path | None = None) -> Path:
     return xclbinutil
 
 
-def toolchain_env(xclbinutil: Path,
-                  compiler_prefix: Path | None = None) -> dict[str, str]:
-    """IRON toolchain env from either build trees or a relocated rocm-npu-compiler product."""
+def resolve_toolchain(
+    compiler_prefix: Path | None = None,
+    *,
+    xclbinutil: Path | None = None,
+) -> Toolchain:
+    """Resolve paths for either build trees or a relocated rocm-npu-compiler product."""
     if compiler_prefix:
+        compiler_prefix = compiler_prefix.resolve()
         aie_bin = compiler_prefix / "bin"
         aie_python = compiler_prefix / "python"
         peano = compiler_prefix / "peano" / "llvm-aie"
         aieopt_dir = compiler_prefix / "third_party" / "aie_api"
+        library_dir = compiler_prefix / "lib"
     else:
         aie_bin = ROOT / "build" / "iron-tools" / "bin"
         aie_python = ROOT / "build" / "iron-tools" / "python"
         peano = SITE / "llvm-aie"
         aieopt_dir = PROJ / "iron-tools" / "third_party" / "aie_api"
-    if not (aie_bin / f"aie-opt{EXE}").exists():
-        raise E2EError(
-            "iron-tools not built from source (run: python dev.py build iron-tools)"
-        )
-    if not (aie_python / "aie" / "compiler" / "aiecc" / "main.py").exists():
-        raise E2EError(
-            "iron-tools python bindings not built (run: python dev.py build iron-tools)"
-        )
-    if not peano.is_dir():
-        raise E2EError(f"Peano not available to this toolchain\n  {peano}")
-    if not aieopt_dir.is_dir():
-        raise E2EError(f"aie_api not available to this toolchain\n  {aieopt_dir}")
+        library_dir = None
+    resolved_xclbinutil = Path(xclbinutil).resolve() if xclbinutil else _xclbinutil_path(
+        compiler_prefix
+    )
+    toolchain = Toolchain(
+        compiler_prefix=compiler_prefix,
+        xclbinutil=resolved_xclbinutil,
+        aie_bin=aie_bin,
+        aie_python=aie_python,
+        peano=peano,
+        aieopt_dir=aieopt_dir,
+        library_dir=library_dir,
+    )
+    toolchain.validate()
+    return toolchain
 
-    env = dict(os.environ)
-    path_entries = [xclbinutil.parent, aie_bin, VENV_BIN]
-    if compiler_prefix and os.name == "nt":
-        path_entries.append(compiler_prefix / "lib")
-    env["PATH"] = os.pathsep.join([*(str(entry) for entry in path_entries),
-                                   env.get("PATH", "")])
-    if compiler_prefix and os.name != "nt":
-        env["LD_LIBRARY_PATH"] = os.pathsep.join(
-            [str(compiler_prefix / "lib"), env.get("LD_LIBRARY_PATH", "")]
+
+def toolchain_env(
+    xclbinutil: Path | None = None,
+    compiler_prefix: Path | None = None,
+) -> dict[str, str]:
+    """IRON toolchain env for subprocesses that still consume upstream env contracts."""
+    toolchain = resolve_toolchain(compiler_prefix, xclbinutil=xclbinutil)
+    env = toolchain.process_env()
+    print_toolchain(toolchain)
+    return env
+
+
+def print_toolchain(toolchain: Toolchain) -> None:
+    """Identify which resolved toolchain is under test."""
+    if toolchain.compiler_prefix:
+        print(
+            "== toolchain: relocated rocm-npu compiler product "
+            f"({toolchain.compiler_prefix}) =="
         )
-    env["PYTHONPATH"] = str(aie_python)
-    env["PEANO_INSTALL_DIR"] = str(peano)
-    env["AIEOPT_DIR"] = str(aieopt_dir)
-    if compiler_prefix:
-        env["ROCM_NPU_COMPILER_PREFIX"] = str(compiler_prefix)
-        print(f"== toolchain: relocated rocm-npu compiler product ({compiler_prefix}) ==")
     else:
         print(
             "== toolchain: SOURCE iron-tools (built against ROCm amd-llvm) + Peano wheel =="
         )
-    return env
 
 
 def build_design(
@@ -364,15 +451,16 @@ def main(argv: list[str]) -> int:
 
         OUT.mkdir(exist_ok=True)
         compiler_prefix = args.compiler_prefix.resolve() if args.compiler_prefix else None
-        xclbinutil = require_xclbinutil(compiler_prefix)
-        env = toolchain_env(xclbinutil, compiler_prefix)
+        toolchain = resolve_toolchain(compiler_prefix)
+        env = toolchain.process_env()
+        print_toolchain(toolchain)
         artifacts = build_design(
             design_dir=design_dir,
             device=pin.device,
             design_args=args.design_args,
             env=env,
         )
-        check_sections(xclbinutil=xclbinutil, xclbin=artifacts.xclbin, env=env)
+        check_sections(xclbinutil=toolchain.xclbinutil, xclbin=artifacts.xclbin, env=env)
 
         print("== HAL artifact-contract check ==")
         loader = build_loader(env)

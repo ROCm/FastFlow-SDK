@@ -21,6 +21,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py unpack-fastflowlm     # checksum, extract, and verify the bundle
   python dev.py package-compiler-product # relocatable rocm-npu-compiler product artifact
   python dev.py verify-compiler-product  # verify compiler product and relocation smoke
+  python dev.py audit-compiler-product   # compiler product binary/path audit
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
@@ -99,6 +100,8 @@ IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and 
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
 _WINDOWS_BUILD_ENV = None
+COMPILER_PRODUCT_LINUX_PACKAGE_TOOLS = ("patchelf", "strip")
+COMPILER_PRODUCT_LINUX_AUDIT_TOOLS = ("readelf", "ldd")
 
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -444,11 +447,10 @@ def check_system(profile="compiler-stack", verbose=True):
     raise ValueError(f"unknown doctor profile: {profile}")
 
 
-# NOTE: the IRON toolchain env (PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR + the
-# "is iron-tools built?" check) lives in tests/e2e/run_e2e.py, its only consumer. It used
-# to be duplicated here as build_env(); the copy drifted — it looked for `aie-opt` with no
+# NOTE: IRON toolchain resolution lives in tests/e2e/run_e2e.py. It used to be
+# duplicated here as build_env(); the copy drifted — it looked for `aie-opt` with no
 # `.exe` and put `.venv/bin` (not Scripts) on PATH, so `dev.py test` aborted on Windows
-# before run_e2e.py ever ran. One definition, in the place that uses it.
+# before run_e2e.py ever ran. Keep one definition for paths and subprocess env.
 
 
 # ---- commands ----
@@ -887,8 +889,35 @@ def install_iron_ops(pip, with_tests=False):
 def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
     """CMake compiler flags. Empty when _compilers() found none — on Windows with CC/CXX
     unset, so CMake picks from the VS Developer environment rather than us hardcoding a
-    compiler it may not have. On POSIX these pin gcc/clang exactly as before."""
-    return [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"] if cc and cxx else []
+    compiler it may not have. On POSIX these pin gcc/clang and keep compiled-in source
+    locations from pointing back at the checkout or build tree."""
+    if not cc or not cxx:
+        return []
+    flags = [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"]
+    flags.extend(_compiler_product_source_path_map_flags())
+    return flags
+
+
+def _compiler_product_source_path_map_flags() -> list[str]:
+    if IS_WINDOWS:
+        return []
+    path_maps = [
+        (ROOT, "."),
+        (PROJ, "projects"),
+        (BUILD, "build"),
+        (LLVM_BUILD, "build/llvm"),
+    ]
+    compiler_flags = []
+    for source, replacement in path_maps:
+        source = source.resolve().as_posix()
+        for option in ("-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map"):
+            compiler_flags.append(f"{option}={source}={replacement}")
+    unique = []
+    for flag in compiler_flags:
+        if flag not in unique:
+            unique.append(flag)
+    joined = " ".join(unique)
+    return [f"-DCMAKE_C_FLAGS_INIT={joined}", f"-DCMAKE_CXX_FLAGS_INIT={joined}"]
 
 
 def _require_fastflowlm_deps(env):
@@ -1034,8 +1063,10 @@ def cmd_build_iron_tools(args):
 
 def cmd_build_hrx_xclbinutil(args):
     d = PROJ / "hrx-xclbinutil"
+    cc, cxx = _compilers()
     sh([cmake_bin(), "-G", "Ninja", "-B", cmake_path(d / "bld"), "-S", cmake_path(d),
-        "-DCMAKE_BUILD_TYPE=Release", *_ccache_flags()], env=cmake_env())
+        "-DCMAKE_BUILD_TYPE=Release", *_cc_flags(cc, cxx), *_ccache_flags()],
+       env=cmake_env())
     sh([cmake_bin(), "--build", cmake_path(d / "bld"), "--target", "hrx-xclbinutil",
         "-j", NPROC], env=cmake_env())
     # expose as `xclbinutil` for aiecc.py
@@ -1396,8 +1427,8 @@ def cmd_test_iron_ops(args):
         cmd += ["--device", args.device]
     # env= here, unlike cmd_test: run_e2e.py only hands the toolchain env to the design
     # subprocesses it spawns, while build_operator.py imports `aie` in-process, so PYTHONPATH
-    # and PEANO_INSTALL_DIR must already be set when the interpreter starts. _iron_env() is
-    # run_e2e.toolchain_env(), so both commands still resolve the toolchain the same way.
+    # and PEANO_INSTALL_DIR must already be set when the interpreter starts. _iron_env()
+    # resolves the same Toolchain as run_e2e.py, then materializes its process env.
     sys.exit(sh(cmd, env=_iron_env(getattr(args, "compiler_prefix", None)),
                 check=False).returncode)
 
@@ -1451,17 +1482,18 @@ def _require_txn_devgen(insts, target):
 
 
 def _iron_env(compiler_prefix=None):
-    """The IRON toolchain env, from its single definition in tests/e2e/run_e2e.py.
+    """The IRON toolchain env, from its single resolver in tests/e2e/run_e2e.py.
 
-    That module owns PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR and the "is iron-tools
-    built?" check, and it puts tools-bin first on PATH so aiecc's bare `xclbinutil`
-    resolves to hrx-xclbinutil. Imported by path rather than duplicated here: the old
-    build_env() copy drifted, which is why it was removed."""
+    That module owns the "is iron-tools built?" check and the temporary upstream process
+    contracts: PATH, PYTHONPATH, PEANO_INSTALL_DIR and AIEOPT_DIR. Relocated Linux
+    products must instead carry self-contained ELF RUNPATHs."""
     sys.path.insert(0, str(ROOT / "tests" / "e2e"))
     import run_e2e
     prefix = Path(compiler_prefix).resolve() if compiler_prefix else run_e2e.compiler_prefix_from_env()
     try:
-        return run_e2e.toolchain_env(run_e2e.require_xclbinutil(prefix), prefix)
+        toolchain = run_e2e.resolve_toolchain(prefix)
+        run_e2e.print_toolchain(toolchain)
+        return toolchain.process_env()
     except run_e2e.E2EError as e:
         sys.exit(str(e))
 
@@ -1683,6 +1715,341 @@ def _assert_no_symlinks(root):
                            "\n  ".join(str(p) for p in links[:20]))
 
 
+def _prune_python_bytecode(root):
+    for path in sorted(root.rglob("*.py[co]")):
+        if path.is_file():
+            path.unlink()
+    for path in sorted(root.rglob("__pycache__"), reverse=True):
+        if path.is_dir():
+            shutil.rmtree(path)
+
+
+def _prune_compiler_product_build_metadata(product):
+    removed = []
+    for path in sorted(product.rglob("*"), reverse=True):
+        if not path.is_dir():
+            continue
+        if path.name in ("CMakeFiles", "xaiengineTmp"):
+            removed.append(path.relative_to(product).as_posix() + "/")
+            shutil.rmtree(path)
+
+    build_files = {
+        ".ninja_deps",
+        ".ninja_log",
+        "build.ninja",
+        "CMakeCache.txt",
+        "cmake_install.cmake",
+        "install_manifest.txt",
+    }
+    for path in sorted(product.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.name in build_files or path.suffix in (".o", ".obj"):
+            removed.append(path.relative_to(product).as_posix())
+            path.unlink()
+
+    # The copied mlir-aie CMake package files are generated for the build tree and import
+    # targets that are not part of this product. Do not ship a find_package(AIE) config
+    # until it has a real install/relocation test.
+    aie_cmake = product / "lib" / "cmake" / "aie"
+    if aie_cmake.exists():
+        removed.append(aie_cmake.relative_to(product).as_posix() + "/")
+        shutil.rmtree(aie_cmake)
+    return sorted(removed)
+
+
+def _is_elf(path):
+    try:
+        with path.open("rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def _is_ar_archive(path):
+    try:
+        with path.open("rb") as f:
+            return f.read(8) == b"!<arch>\n"
+    except OSError:
+        return False
+
+
+def _compiler_product_linux_elf_files(product):
+    if IS_WINDOWS:
+        return []
+    return sorted(path for path in product.rglob("*") if path.is_file() and _is_elf(path))
+
+
+def _compiler_product_strip_debug_targets(product):
+    if IS_WINDOWS:
+        return []
+    roots = [
+        product / "bin",
+        product / "lib",
+        product / "runtime_lib",
+        product / "python" / "aie" / "_mlir_libs",
+    ]
+    targets = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and (_is_elf(path) or _is_ar_archive(path)):
+                targets.append(path)
+    return sorted(set(targets))
+
+
+def _compiler_product_linux_tools(names):
+    if IS_WINDOWS:
+        return {}
+    found = {}
+    missing = []
+    for name in names:
+        path = shutil.which(name)
+        if path:
+            found[name] = path
+        else:
+            missing.append(name)
+    if missing:
+        raise RuntimeError(
+            "missing Linux compiler product tool(s): " + ", ".join(missing) +
+            "\n  AlmaLinux/RHEL: dnf install -y binutils patchelf"
+            "\n  Ubuntu/Debian: sudo apt-get install -y binutils libc-bin patchelf")
+    return found
+
+
+def _strip_compiler_product_linux_debug(product):
+    if IS_WINDOWS:
+        return {"stripped": 0}
+    strip = _compiler_product_linux_tools(["strip"])["strip"]
+    targets = _compiler_product_strip_debug_targets(product)
+    if targets:
+        subprocess.run([strip, "--strip-debug", *[str(t) for t in targets]], check=True)
+    return {"stripped": len(targets)}
+
+
+def _split_rpath(value):
+    return [entry for entry in value.split(os.pathsep) if entry]
+
+
+def _dedupe(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _compiler_product_default_rpath_entries(product, path):
+    relative = path.relative_to(product)
+    parts = relative.parts
+    if parts[0] == "bin":
+        return ["$ORIGIN/../lib"]
+    if parts[0] == "lib":
+        return ["$ORIGIN"]
+    if len(parts) >= 3 and parts[:3] == ("python", "aie", "_mlir_libs"):
+        return ["$ORIGIN", "$ORIGIN/../../../lib"]
+    return []
+
+
+def _compiler_product_repaired_rpath(product, path, current):
+    defaults = _compiler_product_default_rpath_entries(product, path)
+    kept = [entry for entry in _split_rpath(current) if not Path(entry).is_absolute()]
+    return os.pathsep.join(_dedupe([*defaults, *kept]))
+
+
+def _patchelf_print_rpath(path, patchelf=None):
+    patchelf = patchelf or _compiler_product_linux_tools(["patchelf"])["patchelf"]
+    result = subprocess.run([patchelf, "--print-rpath", str(path)],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _readelf_rpath(path, readelf=None):
+    readelf = readelf or _compiler_product_linux_tools(["readelf"])["readelf"]
+    result = subprocess.run([readelf, "-d", str(path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    entries = []
+    for line in result.stdout.splitlines():
+        if "RPATH" not in line and "RUNPATH" not in line:
+            continue
+        if "[" in line and "]" in line:
+            entries.extend(_split_rpath(line.split("[", 1)[1].split("]", 1)[0]))
+    return os.pathsep.join(entries)
+
+
+def _repair_compiler_product_linux_elf(product):
+    if IS_WINDOWS:
+        return {"elf_files": 0, "patched": []}
+    patchelf = _compiler_product_linux_tools(["patchelf"])["patchelf"]
+    patched = []
+    for path in _compiler_product_linux_elf_files(product):
+        current = _patchelf_print_rpath(path, patchelf)
+        if current is None:
+            continue
+        repaired = _compiler_product_repaired_rpath(product, path, current)
+        if repaired == current:
+            continue
+        command = ([patchelf, "--set-rpath", repaired, str(path)] if repaired else
+                   [patchelf, "--remove-rpath", str(path)])
+        subprocess.run(command, check=True)
+        patched.append(path.relative_to(product).as_posix())
+    return {"elf_files": len(_compiler_product_linux_elf_files(product)),
+            "patched": patched}
+
+
+def _is_system_library_path(path):
+    normalized = path.as_posix()
+    return normalized.startswith(("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/"))
+
+
+def _audit_compiler_product_linux_elf(product):
+    if IS_WINDOWS:
+        return {"elf_files": 0, "absolute_runpaths": [], "missing": [], "outside": [],
+                "ldd_errors": []}
+    tools = _compiler_product_linux_tools(COMPILER_PRODUCT_LINUX_AUDIT_TOOLS)
+    absolute_runpaths = []
+    missing = []
+    outside = []
+    ldd_errors = []
+    product = product.resolve()
+    elf_files = _compiler_product_linux_elf_files(product)
+    for path in elf_files:
+        relative = path.relative_to(product).as_posix()
+        rpath = _readelf_rpath(path, tools["readelf"])
+        if rpath is not None:
+            for entry in _split_rpath(rpath):
+                if Path(entry).is_absolute():
+                    absolute_runpaths.append(f"{relative}: {entry}")
+
+        env = dict(os.environ)
+        env.pop("LD_LIBRARY_PATH", None)
+        result = subprocess.run([tools["ldd"], str(path)], capture_output=True, text=True,
+                                env=env)
+        combined = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0 and "not a dynamic executable" in combined:
+            continue
+        if result.returncode != 0:
+            ldd_errors.append(f"{relative}: {combined.strip()}")
+            continue
+        for line in combined.splitlines():
+            stripped = line.strip()
+            if "not found" in stripped:
+                missing.append(f"{relative}: {stripped}")
+                continue
+            if "=>" not in stripped:
+                continue
+            target = stripped.split("=>", 1)[1].strip().split(" ", 1)[0]
+            if not target.startswith("/"):
+                continue
+            target_path = Path(target).resolve()
+            if target_path.is_relative_to(product) or _is_system_library_path(target_path):
+                continue
+            outside.append(f"{relative}: {target}")
+    return {
+        "elf_files": len(elf_files),
+        "absolute_runpaths": sorted(absolute_runpaths),
+        "missing": sorted(missing),
+        "outside": sorted(outside),
+        "ldd_errors": sorted(ldd_errors),
+    }
+
+
+def _verify_compiler_product_linux_elf(product):
+    audit = _audit_compiler_product_linux_elf(product)
+    failures = []
+    labels = {
+        "absolute_runpaths": "absolute RPATH/RUNPATH entries",
+        "missing": "missing dynamic dependencies without LD_LIBRARY_PATH",
+        "outside": "non-system dependencies resolving outside the product",
+        "ldd_errors": "ldd failures",
+    }
+    for key, label in labels.items():
+        if audit.get(key):
+            failures.append(label + ":\n  " + "\n  ".join(audit[key][:20]))
+    if failures:
+        raise RuntimeError("compiler product ELF audit failed:\n" +
+                           "\n".join(failures))
+    return audit
+
+
+def _compiler_product_local_path_markers():
+    candidates = []
+    for path in (ROOT, PROJ, BUILD, LLVM_BUILD):
+        candidates.append(os.fspath(path))
+        try:
+            candidates.append(os.fspath(path.resolve()))
+        except OSError:
+            pass
+    for key in ("GITHUB_WORKSPACE", "RUNNER_TEMP"):
+        if os.environ.get(key):
+            candidates.append(os.environ[key])
+            try:
+                candidates.append(os.fspath(Path(os.environ[key]).resolve()))
+            except OSError:
+                pass
+    markers = []
+    for candidate in candidates:
+        for marker in _compiler_product_local_path_marker_variants(candidate):
+            if len(marker) > 3:
+                markers.append(marker)
+    return sorted(set(markers), key=len, reverse=True)
+
+
+def _compiler_product_local_path_marker_variants(value):
+    text = str(value)
+    return sorted({text, text.replace("\\", "/"), text.replace("/", "\\")})
+
+
+def _file_local_path_matches(path, markers):
+    if not markers:
+        return []
+    max_marker = max(len(marker) for marker in markers)
+    overlap = b""
+    matches = set()
+    with path.open("rb") as f:
+        while True:
+            data = f.read(1024 * 1024)
+            if not data:
+                break
+            chunk = overlap + data
+            for marker in markers:
+                if marker in chunk:
+                    matches.add(marker.decode("utf-8", errors="replace"))
+            overlap = chunk[-(max_marker - 1):] if max_marker > 1 else b""
+    return sorted(matches)
+
+
+def _audit_compiler_product_local_paths(product, markers=None):
+    marker_source = markers if markers is not None else _compiler_product_local_path_markers()
+    marker_text = sorted({
+        variant
+        for marker in marker_source
+        for variant in _compiler_product_local_path_marker_variants(marker)
+    }, key=len, reverse=True)
+    marker_bytes = [marker.encode("utf-8") for marker in marker_text]
+    local_paths = []
+    product = product.resolve()
+    for path in sorted(p for p in product.rglob("*") if p.is_file()):
+        for marker in _file_local_path_matches(path, marker_bytes):
+            local_paths.append(f"{path.relative_to(product).as_posix()}: {marker}")
+    return {"local_paths": local_paths}
+
+
+def _verify_compiler_product_no_local_paths(product, markers=None):
+    audit = _audit_compiler_product_local_paths(product, markers=markers)
+    local_paths = audit.get("local_paths", [])
+    if local_paths:
+        raise RuntimeError("compiler product contains local build paths:\n  " +
+                           "\n  ".join(local_paths[:20]))
+    return audit
+
+
 def _peano_prefix():
     peano = Path(sysconfig.get_paths()["purelib"]) / "llvm-aie"
     if not peano.is_dir():
@@ -1758,14 +2125,20 @@ def _stage_compiler_product():
         if source.is_file():
             _stage(source, product / "licenses" / name)
 
+    _prune_python_bytecode(product)
+    pruned = _prune_compiler_product_build_metadata(product)
     _assert_no_symlinks(product)
+    if not IS_WINDOWS:
+        _compiler_product_linux_tools(COMPILER_PRODUCT_LINUX_PACKAGE_TOOLS)
+    strip_debug = _strip_compiler_product_linux_debug(product)
+    linux_elf = _repair_compiler_product_linux_elf(product)
     manifest = _write_product_manifest(product, {
         "schema_version": 1,
         "product": "rocm-npu-compiler",
         "artifact": product.name,
         "platform": {"system": platform.system(), "machine": platform.machine()},
         "required_tools": required_tools,
-        "peano": {"wheel": PEANO_WHEEL, "index": PEANO_INDEX,
+        "peano": {"bundled": True, "wheel": PEANO_WHEEL, "index": PEANO_INDEX,
                   "path": "peano/llvm-aie"},
         "sources": {
             "rocm-npu-staging": git_source_state(ROOT),
@@ -1779,6 +2152,8 @@ def _stage_compiler_product():
                 _manifest_file_record(ROOT / "requirements.lock"),
             ],
         },
+        "sanitization": {"pruned": len(pruned), "strip_debug": strip_debug},
+        "linux_elf": linux_elf,
         "toolchain": {
             "python": platform.python_version(),
             "platform": platform.platform(),
@@ -1787,6 +2162,7 @@ def _stage_compiler_product():
             "runner_arch": os.environ.get("RUNNER_ARCH"),
         },
     })
+    _verify_compiler_product_distribution(product)
     return product, manifest
 
 
@@ -1902,17 +2278,29 @@ def _verify_compiler_product_inventory(product):
     return manifest
 
 
+def _verify_compiler_product_distribution(product):
+    manifest = _verify_compiler_product_inventory(product)
+    return {
+        "manifest": manifest,
+        "linux_elf": _verify_compiler_product_linux_elf(product),
+        "local_paths": _verify_compiler_product_no_local_paths(product),
+    }
+
+
 def _compiler_product_env(prefix):
     sys.path.insert(0, str(ROOT / "tests" / "e2e"))
     import run_e2e
     try:
-        return run_e2e.toolchain_env(run_e2e.require_xclbinutil(prefix), prefix)
+        toolchain = run_e2e.resolve_toolchain(prefix)
+        run_e2e.print_toolchain(toolchain)
+        return toolchain.process_env()
     except run_e2e.E2EError as e:
         raise RuntimeError(str(e)) from e
 
 
 def _smoke_compiler_product(prefix):
-    manifest = _verify_compiler_product_inventory(prefix)
+    audit = _verify_compiler_product_distribution(prefix)
+    manifest = audit["manifest"]
     env = _compiler_product_env(prefix)
     aieopt = prefix / "bin" / f"aie-opt{_EXE}"
     sh([aieopt, "--version"], env=env)
@@ -1929,9 +2317,8 @@ def _relocate_compiler_product(product):
     relocated = COMPILER_PRODUCT_RELOCATED / product.name
     _stage(product, relocated)
     _smoke_compiler_product(relocated)
-    env = dict(os.environ, ROCM_NPU_COMPILER_PREFIX=str(relocated))
     rc = sh([venv_py(), ROOT / "tests" / "e2e" / "run_e2e.py",
-             "--compiler-prefix", relocated], env=env, check=False).returncode
+             "--compiler-prefix", relocated], check=False).returncode
     if rc != 0:
         raise RuntimeError(f"relocated compiler product e2e failed: {relocated}")
     return relocated
@@ -1970,6 +2357,16 @@ def cmd_verify_compiler_product(args):
     except RuntimeError as error:
         sys.exit(str(error))
     print(f"verify compiler product: ok ({len(manifest['files'])} files) -> {product}")
+
+
+def cmd_audit_compiler_product(args):
+    try:
+        product = _compiler_product_root(args.dir)
+        audit = _verify_compiler_product_distribution(product)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print("audit compiler product: ok "
+          f"({audit['linux_elf']['elf_files']} ELF files, no local paths) -> {product}")
 
 
 def cmd_package_npu_prereqs(args):
@@ -2728,6 +3125,9 @@ def main():
                     help="compiler product root or its parent directory")
     vc.add_argument("--relocate", action="store_true",
                     help="copy the product to another prefix and run the off-device e2e")
+    ac = sub.add_parser("audit-compiler-product")
+    ac.add_argument("--dir", default=str(COMPILER_PRODUCT_STAGE),
+                    help="compiler product root or its parent directory")
     u = sub.add_parser("unpack-npu-prereqs")
     u.add_argument("--dir", default=".artifact", help="where download-artifact put it")
     v = sub.add_parser("verify-npu-prereqs")
@@ -2766,6 +3166,7 @@ def main():
     elif a.cmd == "verify-fastflowlm": cmd_verify_fastflowlm(a)
     elif a.cmd == "unpack-compiler-product": cmd_unpack_compiler_product(a)
     elif a.cmd == "verify-compiler-product": cmd_verify_compiler_product(a)
+    elif a.cmd == "audit-compiler-product": cmd_audit_compiler_product(a)
     elif a.cmd == "unpack-npu-prereqs": cmd_unpack_npu_prereqs(a)
     elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
     elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))
