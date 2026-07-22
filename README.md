@@ -1,20 +1,39 @@
-# rocm-npu-staging
+# ROCm-NPU[^1]
 
-A staging repo for validating the ROCm NPU software stack from pinned source
-revisions. The quickest path is FastFlowLM running directly on HRX's `amdxdna`
-runtime; the full compiler-stack path additionally builds LLVM, IRON tools, and
-xclbin packaging.
 
-Pinned revisions live in [manifests/versions.toml](manifests/versions.toml),
-Python deps in [requirements.txt](requirements.txt), and common commands are
-orchestrated by [dev.py](dev.py).
+## A Complete Software Stack for AMD Neural Processing Engines
 
-`projects/` are git submodules: `hrx`, `FastFlowLM`, `llvm-project`
-(jtuyls/llvm-project @ the ROCm amd-llvm pin), `iron-tools`
-(Xilinx/mlir-aie), `iron-ops` (amd/IRON — the operator library, built and run
-against the source toolchain), and `hrx-xclbinutil` (transitional).
+ROCm-NPU is a bundle of software components that allow you to run and develop 
+applications on AMD XDNA Neural Processing Engines (NPUs). It consists of:
 
-## FastFlowLM HRX Quickstart
+- **FastFlowLM**[^2]: A set of optimized machine learning models
+- **HRX**[^3]: A runtime that executes NPU applications
+- **iron-tools**: A programming framework and compiler (formerly MLIR-AIE[^4])
+- **iron-ops**: A set of common machine learning operator implementation 
+   examples built using *iron-tools*
+
+Note that these top-level components will recursively pull in additional 
+requirements; each sub-project has more information on these.
+
+[^1]: ROCm-NPU: ROCm for Neural Processing Units
+[^2]: FastFlowLM: Fast Flow Language Models
+[^3]: HRX: HIP Runtime Extended, HIP: Heterogeneous-compute Interface for Portability
+[^4]: MLIR-AIE: Multi-Level Intermediate Representation for AI Engines
+
+
+## Getting Started
+
+What is your goal? Click to jump to the appropriate section.
+
+- [I want to **run fast models** on my NPU-enabled device.](#run-fastflowlm-models-using-hrx)
+- [I want to **develop my own models** and applications.](#develop-your-own-models-and-applications-using-iron-tools)
+
+
+## Run *FastFlowLM* models using *HRX*
+
+*FastFlowLM* provides a set of hand-optimized, blazingly fast large language 
+models that run natively on your AMD NPU. Follow below instructions to run 
+these.
 
 This is the entry point for NPU runtime validation. It builds only minimal HRX
 with the `amdxdna` HAL and the pinned FastFlowLM app, then pulls `qwen3:0.6b`,
@@ -111,7 +130,23 @@ package's `xrt-smi examine` performs a live XRT device query and reports the
 loaded firmware version; that value comes from the XRT/KMD device interface,
 not from Windows PnP metadata.
 
-## Full Compiler-Stack Quickstart
+## Develop your own Models and Applications Using *iron-tools*
+
+*iron-tools* provides programming abstractions and a compiler toolchain that 
+target the AI Engine (AIE) array in the AMD NPU. A guide and programming 
+examples document how to build your own applications. 
+*FastFlowLM* was built using *iron-tools*. 
+
+- The **[MLIR-AIE documentation](https://xilinx.github.io/mlir-aie/dev/)**
+  contains the latest instructions for getting started with iron-tools,
+  formerly known as MLIR-AIE.
+
+> Note: *iron-tools* is currently undergoing renaming from its old name, 
+> MLIR-AIE, so you might see references to both of these terms. They mean the
+> same thing!
+
+<details>
+<summary>Click to expand instructions on <b>building iron-tools from source</b></summary>
 
 Use this path when you also need the source-built LLVM/IRON toolchain and the
 IRON end-to-end artifact checks.
@@ -119,7 +154,7 @@ IRON end-to-end artifact checks.
 The stack, built from source against one ROCm LLVM except for the Peano wheel:
 
 ```
-LLVM+MLIR (ROCm amd-llvm pin, LLVM 23) ─┐
+LLVM+MLIR (ROCm amd-llvm pin, LLVM 23) ──┐
                                          ├─ iron-tools/IRON design ─ .xclbin
 Peano (llvm-aie wheel, AIE codegen) ─────┘                         │
 hrx-xclbinutil (xclbin packaging) ─────────────────────────────────┘  ─ HRX amdxdna HAL extracts PDI
@@ -166,3 +201,5 @@ the HAL, and `dev.py test-npu-iron-ops` runs the iron-ops operators' own tests o
 device (their references, their tolerances) with `IRON_RUNTIME=hrx`. The latter needs
 their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
 [requirements-iron-ops.txt](requirements-iron-ops.txt); the build path does not need them).
+
+</details>
