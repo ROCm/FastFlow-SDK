@@ -39,7 +39,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile, zipfile
+import argparse, contextlib, ctypes, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile
 from pathlib import Path
 
 from build_tools.fastflowlm_deps import (
@@ -79,6 +79,7 @@ LLVM_BUILD = Path(os.environ.get("RNS_LLVM_BUILD_DIR") or (BUILD / "llvm"))
 HRX_CMAKE_BUILD = PROJ / "hrx" / "build" / "cmake"
 HRX_INSTALL = BUILD / "hrx-install"
 HRX_PACKAGE_SMOKE_BUILD = BUILD / "hrx-package-smoke"
+IRON_TOOLS_INSTALL = BUILD / "iron-tools-install"
 FASTFLOWLM_BUILD = BUILD / "FastFlowLM"
 FASTFLOWLM_INSTALL = BUILD / "FastFlowLM-install"
 FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
@@ -89,7 +90,8 @@ COMPILER_PRODUCT_STAGE = BUILD / "rocm-npu-compiler-product"
 COMPILER_PRODUCT_EXTRACTED = BUILD / "rocm-npu-compiler-extracted"
 COMPILER_PRODUCT_RELOCATED = BUILD / "rocm-npu-compiler-relocated"
 ARCHIVE_FIXED_MTIME = 946684800  # 2000-01-01T00:00:00Z
-ARCHIVE_FIXED_ZIP_DATE = (2000, 1, 1, 0, 0, 0)
+COMPILER_PRODUCT_ZSTD_LEVEL = 6
+COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27  # 128 MiB: finds duplicate large LLVM binaries.
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 PATCHES = ROOT / "patches"                      # temporary submodule patches (see patches/README.md)
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
@@ -111,13 +113,13 @@ HRX_CTS_DIR = ("runtime", "src", "iree", "hal", "drivers", "amdxdna", "cts")
 ACCEL_DIR = Path("/dev/accel")
 SYS_ACCEL_DIR = Path("/sys/class/accel")
 AMDXDNA_MODULE_DIR = Path("/sys/module/amdxdna")
-# NPU targets for `test-npu`. `make` selects the device through makefile-common's
-# NPU2 switch; `devgen` is the XAie_TxnHeader.DevGen the design must then carry
+# NPU targets for `test-npu`. The @iron.jit script accepts these device names
+# directly; `devgen` is the XAie_TxnHeader.DevGen the design must then carry
 # (aie-rt xaiegbl_defs.h). libhrx cannot report the generation -- its ARCHITECTURE
 # property is a gfxNNNN string -- so the target is declared, not detected.
 NPU_TARGETS = {
-    "npu2": {"make": ["NPU2=1"], "devgen": 4, "arch": "AIE2P (Strix)"},
-    "npu1": {"make": [],         "devgen": 3, "arch": "AIE2IPU (Phoenix)"},
+    "npu2": {"device": "npu2", "devgen": 4, "arch": "AIE2P (Strix)"},
+    "npu1": {"device": "npu",  "devgen": 3, "arch": "AIE2IPU (Phoenix)"},
 }
 
 
@@ -1029,6 +1031,9 @@ def cmd_build_iron_tools(args):
     ]
     sh(cfg, env=env)
     sh([cmake_bin(), "--build", cmake_path(bdir), "-j", NPROC], env=env)
+    _reset_build_child(IRON_TOOLS_INSTALL)
+    sh([cmake_bin(), "--install", cmake_path(bdir),
+        "--prefix", cmake_path(IRON_TOOLS_INSTALL), "--config", "Release"], env=env)
     print("build iron-tools: ok ->", bdir / "bin")
 
 
@@ -1351,7 +1356,7 @@ def cmd_test_fastflowlm(args):
     if args.bundle:
         env["FASTFLOWLM_BUNDLE"] = str(Path(args.bundle).resolve())
     else:
-        env.setdefault("HRX_BUILD", str(HRX_CMAKE_BUILD))
+        _add_hrx_install_env(env)
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
     command = [
         sys.executable,
@@ -1398,7 +1403,7 @@ def cmd_test_iron_ops(args):
     # subprocesses it spawns, while build_operator.py imports `aie` in-process, so PYTHONPATH
     # and PEANO_INSTALL_DIR must already be set when the interpreter starts. _iron_env() is
     # run_e2e.toolchain_env(), so both commands still resolve the toolchain the same way.
-    sys.exit(sh(cmd, env=_iron_env(getattr(args, "compiler_prefix", None)),
+    sys.exit(sh(cmd, env=_iron_ops_env(getattr(args, "compiler_prefix", None)),
                 check=False).returncode)
 
 
@@ -1450,6 +1455,15 @@ def _require_txn_devgen(insts, target):
     print(f"insts.bin: TXN DevGen={got} (matches --device={target})")
 
 
+def _run_e2e_module():
+    """Import the shared E2E design/toolchain implementation."""
+    tests_dir = str(ROOT / "tests" / "e2e")
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    import run_e2e
+    return run_e2e
+
+
 def _iron_env(compiler_prefix=None):
     """The IRON toolchain env, from its single definition in tests/e2e/run_e2e.py.
 
@@ -1457,8 +1471,7 @@ def _iron_env(compiler_prefix=None):
     built?" check, and it puts tools-bin first on PATH so aiecc's bare `xclbinutil`
     resolves to hrx-xclbinutil. Imported by path rather than duplicated here: the old
     build_env() copy drifted, which is why it was removed."""
-    sys.path.insert(0, str(ROOT / "tests" / "e2e"))
-    import run_e2e
+    run_e2e = _run_e2e_module()
     prefix = Path(compiler_prefix).resolve() if compiler_prefix else run_e2e.compiler_prefix_from_env()
     try:
         return run_e2e.toolchain_env(run_e2e.require_xclbinutil(prefix), prefix)
@@ -1466,13 +1479,31 @@ def _iron_env(compiler_prefix=None):
         sys.exit(str(e))
 
 
+def _iron_ops_env(compiler_prefix=None):
+    """Layer the iron-ops source package over the selected compiler product."""
+    env = _iron_env(compiler_prefix)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(PROJ / "iron-ops"), env["PYTHONPATH"]])
+    return env
+
+
 def _libhrx_path(bundle=None):
     if bundle:
         candidate = (Path(bundle) / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")).resolve()
         return candidate if candidate.is_file() else None
-    pattern = "hrx.dll" if IS_WINDOWS else "libhrx*.so"
-    hits = sorted((PROJ / "hrx" / "build" / "cmake").rglob(pattern))
-    return hits[0] if hits else None
+    candidate = HRX_INSTALL / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")
+    return candidate if candidate.is_file() else None
+
+
+def _add_hrx_install_env(env, install=HRX_INSTALL):
+    """Expose an installed HRX package to ctypes and native dependencies."""
+    install = Path(install)
+    lib_dir = install / ("bin" if IS_WINDOWS else "lib")
+    env["HRX_INSTALL"] = str(install)
+    env["LIBHRX_DIR"] = str(lib_dir)
+    loader_var = "PATH" if IS_WINDOWS else "LD_LIBRARY_PATH"
+    env[loader_var] = str(lib_dir) + os.pathsep + env.get(loader_var, "")
+    return env
 
 
 def _hrx_check(lib, status, what):
@@ -1546,9 +1577,9 @@ def cmd_submodules(args):
     print(f"submodules: ok ({', '.join(args.names)})")
 
 
-# The run-prerequisites npu_e2e needs, and nothing else. aiecc drives
-# aie-opt/aie-translate/bootgen; xclbinutil packages the xclbin. aie-lsp-server and
-# aie-visualize are editor tools and are not shipped.
+# The relocatable compiler product tools. aiecc drives aie-opt/aie-translate/bootgen;
+# xclbinutil is added separately. aie-lsp-server and aie-visualize are editor tools and
+# are not shipped.
 NPU_PREREQ_TOOLS = ["aiecc", "aie-opt", "aie-translate", "bootgen",
                     "target_model", "target_model_rtti", "register_database"]
 NPU_PREREQ_DIR = BUILD / "artifacts"
@@ -1562,11 +1593,11 @@ def _prereq_codec():
     no trade to weigh. gzip stays as the fallback and drops to level 6 (35 s, 327 MB): level
     9 costs 3x the time for 1% of the size.
 
-    Probing rather than hardcoding is what keeps the two ends in agreement: the build job and
-    the NPU job run the same container image, so this resolves identically on both, and both
-    go through this module rather than naming a codec in YAML.
+    Windows uses gzip so the NPU consumer needs no separately installed zstd executable.
+    Linux probes zstd and records the selected codec in the filename; extraction trusts the
+    archive extension rather than making an independent choice.
     """
-    return "zst" if shutil.which("zstd") else "gz"
+    return "zst" if not IS_WINDOWS and shutil.which("zstd") else "gz"
 
 
 def _prereq_archive():
@@ -1635,9 +1666,11 @@ def _stage(src, dst):
 def _strip(stage, cts_rel):
     """Strip the ELF binaries: they are run-only and the artifact crosses a slow link.
 
-    Never strip a static archive -- it discards the symbol table, and libflatcc_runtime.a
-    is linked by build_xadx_helper.sh. python/ holds executable .py scripts, so select by
-    location and suffix rather than by the executable bit."""
+    Never strip a static archive because it discards the symbol table. python/ holds
+    executable .py scripts, so select by location and suffix rather than by the
+    executable bit."""
+    if IS_WINDOWS:
+        return
     strip = shutil.which("strip")
     if not strip:
         print("package: no strip(1) on PATH; shipping unstripped binaries")
@@ -1683,6 +1716,30 @@ def _assert_no_symlinks(root):
                            "\n  ".join(str(p) for p in links[:20]))
 
 
+_BUILD_METADATA_NAMES = {
+    "__pycache__", "CMakeFiles", "CMakeCache.txt", "cmake_install.cmake",
+    "CTestTestfile.cmake", "build.ninja", "rules.ninja",
+    ".ninja_deps", ".ninja_log", "install_manifest.txt",
+}
+_BUILD_INTERMEDIATE_SUFFIXES = {".obj", ".pdb", ".ilk", ".pyc", ".pyo"}
+
+
+def _is_build_metadata(path):
+    path = Path(path)
+    return ("CMakeFiles" in path.parts or
+            path.name in _BUILD_METADATA_NAMES or
+            path.suffix.lower() in _BUILD_INTERMEDIATE_SUFFIXES)
+
+
+def _stage_runtime_tree(src, dst):
+    """Copy a mixed runtime build tree without CMake/Ninja intermediates."""
+    shutil.copytree(
+        src, dst, symlinks=False, dirs_exist_ok=True,
+        ignore=lambda _directory, names: [
+            name for name in names if _is_build_metadata(Path(name))
+        ])
+
+
 def _peano_prefix():
     peano = Path(sysconfig.get_paths()["purelib"]) / "llvm-aie"
     if not peano.is_dir():
@@ -1713,11 +1770,14 @@ def _write_product_manifest(bundle, manifest):
     manifest = dict(manifest, files=files)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                              encoding="utf-8")
-    return verify_fastflowlm_bundle(bundle)
+    # _create_compiler_product_archive verifies this inventory immediately
+    # before archiving. Avoid hashing the full product twice back-to-back here.
+    return manifest
 
 
 def _stage_compiler_product():
-    it = BUILD / "iron-tools"
+    it_build = BUILD / "iron-tools"
+    it = IRON_TOOLS_INSTALL
     if not it.is_dir():
         raise RuntimeError("iron-tools is not installed - run: python dev.py build iron-tools")
 
@@ -1727,7 +1787,7 @@ def _stage_compiler_product():
 
     required_tools = []
     for tool_name in NPU_PREREQ_TOOLS:
-        tool = _tool(it / "bin" / tool_name)
+        tool = _tool(it_build / "bin" / tool_name)
         relative = Path("bin") / tool.name
         _stage(tool, product / relative)
         required_tools.append(relative.as_posix())
@@ -1737,11 +1797,31 @@ def _stage_compiler_product():
     _stage(xclbinutil, product / relative)
     required_tools.append(relative.as_posix())
 
-    for dirname in ("python", "lib", "runtime_lib", "include", "aie_runtime_lib"):
-        source = it / dirname
+    installed_python = it / "python"
+    if not installed_python.is_dir():
+        raise RuntimeError(f"missing from iron-tools install: {installed_python}")
+    _stage_runtime_tree(installed_python, product / "python")
+    installed_include = it / "include"
+    if not installed_include.is_dir():
+        raise RuntimeError(f"missing from iron-tools install: {installed_include}")
+    _stage(installed_include, product / "include")
+    build_include = it_build / "include"
+    if not build_include.is_dir():
+        raise RuntimeError(f"missing from iron-tools build: {build_include}")
+    _stage_runtime_tree(build_include, product / "include")
+    installed_lib = it / "lib"
+    if not installed_lib.is_dir():
+        raise RuntimeError(f"missing from iron-tools install: {installed_lib}")
+    _stage_runtime_tree(installed_lib, product / "lib")
+    # These data/header trees are generated directly into the configured build
+    # prefix by upstream install rules. They contain runtime inputs, not CMake
+    # object state; the Python package above must always come from the clean
+    # `cmake --install` tree.
+    for dirname in ("runtime_lib", "aie_runtime_lib"):
+        source = it_build / dirname
         if not source.is_dir():
-            raise RuntimeError(f"missing from iron-tools install: {source}")
-        _stage(source, product / dirname)
+            raise RuntimeError(f"missing from iron-tools build: {source}")
+        _stage_runtime_tree(source, product / dirname)
 
     aie_api = PROJ / "iron-tools" / "third_party" / "aie_api"
     if not aie_api.is_dir():
@@ -1803,51 +1883,67 @@ def _compiler_product_root(location):
     return candidates[0]
 
 
-def _write_compiler_product_zip(product, archive):
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED,
-                         compresslevel=9) as output:
-        for path in sorted(p for p in product.rglob("*") if p.is_file()):
-            relative = f"{product.name}/{path.relative_to(product).as_posix()}"
-            info = zipfile.ZipInfo(relative, date_time=ARCHIVE_FIXED_ZIP_DATE)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
-            output.writestr(info, path.read_bytes(), compresslevel=9)
+def _write_compiler_product_tar_members(product, output):
+    for path in sorted([product, *product.rglob("*")]):
+        relative = (product.name if path == product else
+                    f"{product.name}/{path.relative_to(product).as_posix()}")
+        info = tarfile.TarInfo(relative)
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        info.mtime = ARCHIVE_FIXED_MTIME
+        if path.is_file():
+            info.type = tarfile.REGTYPE
+            info.size = path.stat().st_size
+            mode = stat.S_IMODE(path.stat().st_mode)
+            info.mode = 0o755 if mode & 0o111 else 0o644
+            with path.open("rb") as stream:
+                output.addfile(info, stream)
+        elif path.is_dir() and not path.is_symlink():
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            output.addfile(info)
+        else:
+            raise RuntimeError(f"unsupported compiler product filesystem entry: {path}")
 
 
 def _write_compiler_product_tar_gz(product, archive):
     with tarfile.open(archive, "w:gz", compresslevel=6,
                       format=tarfile.PAX_FORMAT) as output:
-        for path in sorted([product, *product.rglob("*")]):
-            relative = (product.name if path == product else
-                        f"{product.name}/{path.relative_to(product).as_posix()}")
-            info = tarfile.TarInfo(relative)
-            info.uid = info.gid = 0
-            info.uname = info.gname = ""
-            info.mtime = ARCHIVE_FIXED_MTIME
-            if path.is_file():
-                info.type = tarfile.REGTYPE
-                info.size = path.stat().st_size
-                mode = stat.S_IMODE(path.stat().st_mode)
-                info.mode = 0o755 if mode & 0o111 else 0o644
-                with path.open("rb") as stream:
-                    output.addfile(info, stream)
-            elif path.is_dir() and not path.is_symlink():
-                info.type = tarfile.DIRTYPE
-                info.mode = 0o755
-                output.addfile(info)
-            else:
-                raise RuntimeError(f"unsupported compiler product filesystem entry: {path}")
+        _write_compiler_product_tar_members(product, output)
+
+
+def _write_compiler_product_tar_zst(product, archive):
+    try:
+        import zstandard
+    except ImportError as error:
+        raise RuntimeError(
+            "the zstandard Python package is required to package the Windows "
+            "compiler product; run: python dev.py setup"
+        ) from error
+    parameters = zstandard.ZstdCompressionParameters.from_level(
+        COMPILER_PRODUCT_ZSTD_LEVEL,
+        enable_ldm=True,
+        window_log=COMPILER_PRODUCT_ZSTD_WINDOW_LOG,
+        threads=-1,
+        write_checksum=True,
+    )
+    compressor = zstandard.ZstdCompressor(compression_params=parameters)
+    with archive.open("wb") as raw_stream:
+        with compressor.stream_writer(raw_stream, closefd=False) as compressed_stream:
+            with tarfile.open(fileobj=compressed_stream, mode="w|",
+                              format=tarfile.PAX_FORMAT) as output:
+                _write_compiler_product_tar_members(product, output)
 
 
 def _create_compiler_product_archive(product, output_directory):
     _verify_compiler_product_inventory(product)
     output_directory.mkdir(parents=True, exist_ok=True)
-    archive = output_directory / f"{product.name}{'.zip' if IS_WINDOWS else '.tar.gz'}"
+    archive = output_directory / f"{product.name}{'.tar.zst' if IS_WINDOWS else '.tar.gz'}"
     for stale in output_directory.glob(f"{product.name}.*"):
         if stale != archive and stale != archive.with_name(archive.name + ".sha256"):
             stale.unlink()
     if IS_WINDOWS:
-        _write_compiler_product_zip(product, archive)
+        _write_compiler_product_tar_zst(product, archive)
     else:
         _write_compiler_product_tar_gz(product, archive)
     archive.with_name(archive.name + ".sha256").write_text(
@@ -1884,6 +1980,14 @@ def _verify_compiler_product_inventory(product):
     artifact = str(manifest.get("artifact", ""))
     if "staging" in artifact:
         raise RuntimeError(f"compiler product artifact name must not include staging: {artifact}")
+    build_metadata = [
+        record["path"] for record in manifest.get("files", [])
+        if _is_build_metadata(record["path"])
+    ]
+    if build_metadata:
+        raise RuntimeError(
+            "compiler product contains build-system metadata: "
+            f"{build_metadata[0]}")
     _assert_no_symlinks(product)
 
     required_files = [
@@ -1921,6 +2025,13 @@ def _smoke_compiler_product(prefix):
     if p.returncode != 0:
         detail = p.stderr.decode(errors="replace")[:1000]
         raise RuntimeError(f"aie-opt relocation smoke failed: {detail}")
+    p = subprocess.run(
+        [str(venv_py()), "-c", "import aie.dialects.transform.interpreter"],
+        env=env, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(
+            "compiler Python extension import failed: "
+            f"{p.stderr[-1000:]}")
     return manifest
 
 
@@ -1953,8 +2064,9 @@ def cmd_package_compiler_product(args):
 def cmd_unpack_compiler_product(args):
     try:
         archive = _find_compiler_product_archive(args.dir)
+        output_directory = Path(args.output_dir)
         product = extract_fastflowlm_archive(
-            archive, COMPILER_PRODUCT_EXTRACTED, allowed_root=BUILD)
+            archive, output_directory, allowed_root=output_directory.parent)
     except RuntimeError as error:
         sys.exit(str(error))
     print("unpack compiler product: ok ->", product)
@@ -1972,50 +2084,31 @@ def cmd_verify_compiler_product(args):
     print(f"verify compiler product: ok ({len(manifest['files'])} files) -> {product}")
 
 
+def _stage_npu_runtime_prereqs(stage, hrx_install, cts_src):
+    """Stage the runtime-only payload not already in the compiler product."""
+    _stage(hrx_install, stage / "build/hrx-install")
+    cts_rel = "/".join(HRX_CTS_DIR)
+    for test_name in HRX_CTS_TESTS:
+        binary = _tool(cts_src / test_name)
+        _stage(binary, stage / "projects/hrx/build/cmake" / cts_rel / binary.name)
+
+
 def cmd_package_npu_prereqs(args):
-    """Stage exactly what npu_e2e executes and tar it (build/artifacts/npu-prereqs.tar.{zst,gz}
-    — see _prereq_codec; npu_e2e reads it back via `dev.py unpack-npu-prereqs`).
+    """Stage and archive NPU runtime prerequisites not in the compiler product.
 
     Not `tar -h`: staging with a dereferencing copy fails loudly on a dangling symlink,
     where tar would silently drop it."""
-    it, hrxb = BUILD / "iron-tools", PROJ / "hrx" / "build" / "cmake"
+    hrxb = PROJ / "hrx" / "build" / "cmake"
     cts_src = hrxb.joinpath(*HRX_CTS_DIR)
     cts_rel = "/".join(HRX_CTS_DIR)
     stage = BUILD / "npu-stage"
     if stage.exists():
         shutil.rmtree(stage)
 
-    for t in NPU_PREREQ_TOOLS:
-        tool = _tool(it / "bin" / t)
-        _stage(tool, stage / "build" / "iron-tools" / "bin" / tool.name)
-    # include/ + aie_runtime_lib/ are the kernel-compile headers: iron-ops compiles its own
-    # aie_kernels/*.cc on the NPU runner (`-I <root>/include -I <root>/aie_runtime_lib/AIE2P`,
-    # see IRON's KernelCompilationRule), where the iron-tools examples ship a prebuilt design
-    # and never needed them. 22 MB on a 1.2 GB stage.
-    for d in ("python", "lib", "runtime_lib", "include", "aie_runtime_lib"):
-        _stage(it / d, stage / "build" / "iron-tools" / d)
-
-    # hrx: the runtime library plus exactly what build_xadx_helper.sh compiles and links
-    # against (flatcc runtime + its headers + the generated runtime headers). The rest of
-    # that build tree is build-time only.
-    _stage(hrxb / "libhrx", stage / "projects/hrx/build/cmake/libhrx")
-    flatcc = [f for f in hrxb.glob("*flatcc_runtime*") if f.is_file()]
-    if not flatcc:
-        sys.exit(f"flatcc_runtime not built in {hrxb} — run: python dev.py build hrx")
-    for f in flatcc:
-        _stage(f, stage / "projects/hrx/build/cmake" / f.name)
-    _stage(hrxb / "_deps/flatcc-src/include",
-           stage / "projects/hrx/build/cmake/_deps/flatcc-src/include")
-    for h in (hrxb / "runtime" / "src").rglob("*.h"):
-        _stage(h, stage / "projects/hrx/build/cmake" / h.relative_to(hrxb))
-
-    # amdxdna HAL conformance suites; the binaries only, not the CMake scratch beside them.
-    for t in HRX_CTS_TESTS:
-        binary = _tool(cts_src / t)
-        _stage(binary, stage / "projects/hrx/build/cmake" / cts_rel / binary.name)
-
-    xclbinutil = _tool(ROOT / "tools-bin" / "xclbinutil")
-    _stage(xclbinutil, stage / "tools-bin" / xclbinutil.name)
+    # The NPU job downloads the separately verified compiler product for aiecc,
+    # Python bindings, headers, Peano, and xclbinutil. Duplicating that tree here
+    # made the "runtime prerequisites" artifact hundreds of megabytes.
+    _stage_npu_runtime_prereqs(stage, HRX_INSTALL, cts_src)
 
     _strip(stage, cts_rel)
 
@@ -2042,64 +2135,50 @@ def cmd_package_npu_prereqs(args):
     print(f"package-npu-prereqs: ok -> {archive} ({mb:.0f} MB)")
 
 
-def _rehearse(python, pythonpath, hrx_dir, hrx_build):
+def _rehearse(python, pythonpath, hrx_install):
     """Import the aie package the way the design build does, with the HRX backend forced.
 
-    Three distinct failures all reach `import aie.iron` as the same message -- a missing
-    libhrx, an hrxruntime the CMake SOURCES list never installed, and an xadx helper that
-    will not compile. aie/utils/__init__.py catches every exception from its hrx probe and
-    reports only "libhrx.so could not be located", and discovery.ensure_xadx_helper()
-    swallows the compiler's CalledProcessError and returns None. So check each layer
-    explicitly, cheapest and most specific first, before letting the import speak.
+    Check the packaged runtime library explicitly before importing the backend so a
+    packaging omission is reported directly. XADX construction is part of libhrx and
+    needs no compiler or build-tree helper on the consumer.
 
-    HRX_DIR is the source checkout (the artifact ships only projects/hrx/build);
-    HRX_BUILD is the artifact."""
-    env = dict(os.environ, PYTHONPATH=str(pythonpath), HRX_DIR=str(hrx_dir),
-               HRX_BUILD=str(hrx_build))
+    ``hrx_install`` is the installed package produced and package-smoked by
+    ``build hrx``."""
+    libhrx_dir = hrx_install / ("bin" if IS_WINDOWS else "lib")
+    env = _add_hrx_install_env(
+        dict(os.environ, PYTHONPATH=str(pythonpath)), hrx_install
+    )
 
-    # 1. The files discovery.py resolves by path. Names a packaging omission outright.
-    for rel, why in [("libhrx/src/libhrx/libhrx.so", "discovery.find_libhrx()"),
-                     ("libflatcc_runtime.a", "discovery.find_hrx_build()")]:
-        if not (hrx_build / rel).is_file():
-            sys.exit(f"artifact is missing {rel} under {hrx_build} (needed by {why})")
-    if not (hrx_dir / "libhrx" / "include" / "hrx_runtime.h").is_file():
-        sys.exit(f"{hrx_dir} is not an hrx source checkout (needed by build_xadx_helper.sh)")
+    library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
+    libhrx = libhrx_dir / library_name
+    if not libhrx.is_file():
+        sys.exit(f"artifact is missing {libhrx} (needed by discovery.find_libhrx())")
+    for header in ("hrx_runtime.h", "hrx_amdxdna.h"):
+        if not (hrx_install / "include" / "hrx" / header).is_file():
+            sys.exit(f"artifact is missing installed HRX header: {header}")
 
     # 1b. dlopen it here: hrxruntime does this at import and the probe discards the reason,
     #     so a libhrx that gained a shared-library dependency the image lacks would be
     #     reported as "libhrx.so could not be located".
-    libhrx = hrx_build / "libhrx/src/libhrx/libhrx.so"
     if not IS_WINDOWS:
         try:
             ctypes.CDLL(str(libhrx), mode=ctypes.RTLD_GLOBAL)
         except OSError as e:
             sys.exit(f"{libhrx} is present but will not load: {e}")
 
-    # 2. Build the xadx helper ourselves so the compiler's error is visible; hrxruntime
-    #    would build it on import and discard the reason.
-    pkg = pythonpath / "aie/utils/hostruntime/hrxruntime"
-    helper, source = pkg / "build_xadx_helper.sh", pkg / "libironhrx_xadx.so"
-    if not helper.is_file():
-        sys.exit(f"artifact is missing {helper} (is patch 0003's CMakeLists hunk applied?)")
-    if not source.exists() and not IS_WINDOWS:   # the helper is a POSIX shell script
-        sh(["bash", str(helper)], env=dict(env, HRX_DIR=str(hrx_dir), HRX_BUILD=str(hrx_build)))
-
-    # 3. Now the probe can only fail for reasons the layers above did not cover, and
+    # Now the probe can only fail for reasons the layers above did not cover, and
     #    IRON_RUNTIME=auto lets aie.utils import so its DEBUG log reaches us.
     script = (
         "import logging, sys\n"
         "logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)\n"
         "import aie.utils as u\n"
         "from aie.utils.hostruntime.hrxruntime import discovery\n"
-        "print('hrx_dir  :', discovery.find_hrx_dir())\n"
-        "print('hrx_build:', discovery.find_hrx_build())\n"
         "print('libhrx   :', discovery.find_libhrx())\n"
-        "print('xadx     :', discovery.find_xadx_helper())\n"
         "assert u.has_hrx, 'hrx backend unavailable; see the DEBUG line above for why'\n"
     )
     sh([python, "-c", script], env=dict(env, IRON_RUNTIME="auto"))
 
-    # 4. Finally the real thing: the design build's import, with the backend forced.
+    # Finally the real thing: the design build's import, with the backend forced.
     sh([python, "-c", "import aie.ir, aie.iron\nprint('rehearsal ok:', aie.ir.__file__)\n"],
        env=dict(env, IRON_RUNTIME="hrx"))
 
@@ -2109,26 +2188,21 @@ def cmd_verify_npu_prereqs(args):
 
     --extracted checks a tree the consumer already unpacked; the default checks the
     archive and then rehearses npu_e2e's imports from it."""
-    hrxruntime = "build/iron-tools/python/aie/utils/hostruntime/hrxruntime"
-    required = ["build/iron-tools/python/aie/ir.py",
-                f"{hrxruntime}/discovery.py",
-                # build_xadx_helper.sh compiles iron_hrx_xadx.cpp against these; discovery
-                # resolves libhrx.so and the flatcc archive by path, so a packaging omission
-                # here surfaces as an unrelated "libhrx.so could not be located".
-                f"{hrxruntime}/build_xadx_helper.sh",
-                f"{hrxruntime}/iron_hrx_xadx.cpp",
-                "projects/hrx/build/cmake/libhrx/src/libhrx/libhrx.so",
-                "projects/hrx/build/cmake/libflatcc_runtime.a",
-                # The kernel-compile headers test-npu-iron-ops compiles aie_kernels/*.cc
-                # against. One header from each of the two -I roots: without them Peano
-                # fails on the NPU runner with a missing-include error that says nothing
-                # about packaging. See cmd_package_npu_prereqs.
-                "build/iron-tools/include/aie_api/aie.hpp",
-                "build/iron-tools/aie_runtime_lib/AIE2P/vec_math.h"]
+    cts_rel = "/".join(HRX_CTS_DIR)
+    cts_root = f"projects/hrx/build/cmake/{cts_rel}"
+    required = [
+        ("build/hrx-install/bin/hrx.dll"
+         if IS_WINDOWS else
+         "build/hrx-install/lib/libhrx.so"),
+        "build/hrx-install/include/hrx/hrx_runtime.h",
+        "build/hrx-install/include/hrx/hrx_amdxdna.h",
+        *(f"{cts_root}/{name}{_EXE}" for name in HRX_CTS_TESTS),
+    ]
     if args.extracted:
         # `find`/rglob over a missing root yields nothing, so assert the roots exist
         # before concluding anything from the absence of symlinks.
-        roots = [BUILD / "iron-tools", PROJ / "hrx" / "build", ROOT / "tools-bin"]
+        roots = [BUILD / "hrx-install", PROJ.joinpath(
+            "hrx", "build", "cmake", *HRX_CTS_DIR)]
         for r in roots:
             if not r.is_dir():
                 sys.exit(f"{r} missing: did the artifact extract?")
@@ -2139,7 +2213,7 @@ def cmd_verify_npu_prereqs(args):
         for rel in required:
             if not (ROOT / rel).is_file():
                 sys.exit(f"missing from the artifact: {rel}")
-        print(f"verify-npu-prereqs: ok (no symlinks under {len(roots)} roots)")
+        print(f"verify-npu-prereqs: ok (runtime-only; no symlinks under {len(roots)} roots)")
         return 0
 
     archive = _find_prereq_archive(NPU_PREREQ_DIR)
@@ -2161,8 +2235,10 @@ def cmd_verify_npu_prereqs(args):
     rehearsal.mkdir(parents=True)
     with _prereq_tar(archive) as tar:   # streamed: a second pass needs a second handle
         tar.extractall(rehearsal, filter="data")
-    _rehearse(venv_py(), rehearsal / "build" / "iron-tools" / "python",
-              PROJ / "hrx", rehearsal / "projects" / "hrx" / "build" / "cmake")
+    compiler_python = BUILD / "iron-tools" / "python"
+    if not compiler_python.is_dir():
+        sys.exit(f"{compiler_python} missing: run python dev.py build iron-tools")
+    _rehearse(venv_py(), compiler_python, rehearsal / "build" / "hrx-install")
     shutil.rmtree(rehearsal)
     print(f"verify-npu-prereqs: ok ({len(members)} entries, no links)")
     return 0
@@ -2514,13 +2590,16 @@ def cmd_test_hrx_cts(args):
     which is why command_buffer_tests is mostly skips today."""
     cts = PROJ.joinpath("hrx", "build", "cmake", *HRX_CTS_DIR)
     names = [args.suite] if getattr(args, "suite", None) else HRX_CTS_TESTS
-    missing = [n for n in names if not (cts / n).exists()]
-    if missing:
-        sys.exit(f"CTS binaries missing ({', '.join(missing)}) — run: python dev.py build hrx")
+    executables = {}
+    for name in names:
+        candidate = cts / f"{name}{_EXE}"
+        if not candidate.is_file():
+            sys.exit(f"CTS binary missing ({candidate}) — run: python dev.py build hrx-cts")
+        executables[name] = candidate
     failed, counts = [], {}
     for n in names:
         print(f"\n=== hrx CTS: {n} ===", flush=True)
-        r = subprocess.run([str(cts / n)], capture_output=True, text=True)
+        r = subprocess.run([str(executables[n])], capture_output=True, text=True)
         print(r.stdout, end="")
         if r.stderr:
             print(r.stderr, end="", file=sys.stderr)
@@ -2565,15 +2644,19 @@ def cmd_test_npu(args):
     _require_hrx_runtime(getattr(args, "compiler_prefix", None))
 
     env = _iron_env(getattr(args, "compiler_prefix", None))
-    env["HRX_DIR"] = str(PROJ / "hrx")
-    env["HRX_BUILD"] = str(PROJ / "hrx" / "build" / "cmake")
     env["IRON_RUNTIME"] = "hrx"
-    # makefile-common reads NPU2, not DEVICE (`devicename ?= $(if $(filter 1,$(NPU2)),
-    # npu2,npu)`). Building for the wrong device is accepted by the driver and then never
-    # completes, so check the emitted TXN's DevGen rather than trusting the make flags.
+    _add_hrx_install_env(env)
     target = getattr(args, "device", None) or "npu2"
-    sh(["make", "all", *NPU_TARGETS[target]["make"]], cwd=ddir, env=env)
-    _require_txn_devgen(ddir / "build" / "insts.bin", target)
+    run_e2e = _run_e2e_module()
+    try:
+        artifacts = run_e2e.build_design(
+            ddir, NPU_TARGETS[target]["device"], [], env
+        )
+    except run_e2e.E2EError as e:
+        sys.exit(f"test-npu design build failed: {e}")
+    # A wrong target is accepted by the driver and then never completes, so inspect
+    # the emitted transaction rather than trusting the command-line argument.
+    _require_txn_devgen(artifacts.insts, target)
 
     if getattr(args, "chain", False):
         if not (ddir / "test_chain_hrx.py").exists():
@@ -2581,7 +2664,7 @@ def cmd_test_npu(args):
         testbench = [venv_py(), "test_chain_hrx.py"]
     else:
         testbench = [venv_py(), ROOT / "tests" / "npu" / "single_dispatch.py"]
-    sh(testbench + ["--xclbin", "build/final.xclbin", "--instr", "build/insts.bin",
+    sh(testbench + ["--xclbin", str(artifacts.xclbin), "--instr", str(artifacts.insts),
                     "--kernel", "MLIR_AIE"], cwd=ddir, env=env)
     print(f"test-npu: ok ({design} ran on the NPU via hrx)")
 
@@ -2599,8 +2682,9 @@ def _require_hrx_runtime(compiler_prefix=None):
             / "discovery.py").exists():
         sys.exit("hrxruntime missing from the built aie package — "
                  "is patches/iron-tools/0003 applied? (run: python dev.py fetch, then build iron-tools)")
-    if not list((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so")):
-        sys.exit("libhrx.so not found — run: python dev.py build hrx")
+    if not _libhrx_path():
+        library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
+        sys.exit(f"{library_name} not found — run: python dev.py build hrx")
 
 
 def cmd_test_npu_iron_ops(args):
@@ -2638,10 +2722,9 @@ def cmd_test_npu_iron_ops(args):
             sys.exit(f"{op.name}: no test.py under projects/iron-ops/iron/operators")
         test_dirs.append(str(test_dir))
 
-    env = _iron_env(getattr(args, "compiler_prefix", None))
-    env["HRX_DIR"] = str(PROJ / "hrx")
-    env["HRX_BUILD"] = str(PROJ / "hrx" / "build" / "cmake")
+    env = _iron_ops_env(getattr(args, "compiler_prefix", None))
     env["IRON_RUNTIME"] = "hrx"
+    _add_hrx_install_env(env)
     filters = [op.hrx_pytest_filter for op in operators if op.hrx_pytest_filter]
     pytest_filter = ["-k", " or ".join(f"({f})" for f in filters)] if filters else []
     # cwd is the iron-ops checkout: pytest.ini and conftest.py live there, and conftest picks
@@ -2723,6 +2806,8 @@ def main():
                     help="extracted bundle root or its parent directory")
     uc = sub.add_parser("unpack-compiler-product")
     uc.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
+    uc.add_argument("--output-dir", default=str(COMPILER_PRODUCT_EXTRACTED),
+                    help="physical extraction root (use a short path on Windows)")
     vc = sub.add_parser("verify-compiler-product")
     vc.add_argument("--dir", default=str(COMPILER_PRODUCT_STAGE),
                     help="compiler product root or its parent directory")

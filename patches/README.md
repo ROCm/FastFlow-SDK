@@ -117,8 +117,9 @@ that require XRT.
 
 ### 0003-add-hrx-iron-path.patch
 Adds an HRX host-runtime to mlir-aie's IRON path so a design can run on the NPU
-through the hrx amdxdna HAL (`libhrx.so`) instead of XRT — `cmake/modules/FindHRX.cmake`,
-`python/utils/hostruntime/hrxruntime/` (the `IRON_RUNTIME=hrx` runtime + xadx builder),
+through the hrx amdxdna HAL (`libhrx.so` or `hrx.dll`) instead of XRT —
+`python/utils/hostruntime/hrxruntime/` (the `IRON_RUNTIME=hrx` runtime using
+HRX's public executable-builder API),
 `runtime_lib/test_lib/hrx_test_wrapper.h`, and a `vector_scalar_add` HRX testbench
 (`test_chain_hrx.py` / `test_runlist_hrx.cpp`). Drives `dev.py test-npu`.
 
@@ -126,10 +127,10 @@ Ported from Abhishek Varma's `avarma_add_hrx` branch of mlir-aie (the upstream-a
 reference integration), scoped to our pin (`git diff <our-pin>..avarma_add_hrx` over the
 16 touched files). **Remove when** this lands upstream in mlir-aie.
 
-The hrxruntime binds libhrx by symbol, so it tracks the hrx pin: `hrx_buffer_map_persistent`
+The hrxruntime binds HRX by symbol, so it tracks the hrx pin: `hrx_buffer_map_persistent`
 became `hrx_buffer_map_with_mode(buffer, mode, flags, offset, size, ptr)`. A removed symbol
-surfaces as `undefined symbol` from ctypes at import, which `aie/utils/__init__.py` swallows
-into "libhrx.so could not be located" -- `dev.py verify-npu-prereqs` reports the real one.
+surfaces as an import-time loader error; `dev.py verify-npu-prereqs` reports the
+resolved installed library and its native dependency failure directly.
 
 ### 0001-eudsl-for-amd-llvm-23.patch
 Edits two files in the submodule (upstream `Xilinx/mlir-aie`):

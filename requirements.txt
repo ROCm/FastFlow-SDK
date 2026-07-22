@@ -25,6 +25,7 @@ scikit-build-core==0.12.2
 setuptools>=64        # eudsl backend does `from setuptools.build_meta import ...`; venvs omit setuptools
 wheel
 PyYAML==6.0.3
+zstandard==0.25.0     # streaming .tar.zst compiler products on Windows and Linux
 
 # --- IRON runtime: to run the source-built aie.dialects / aie.extras ---
 numpy==1.26.4         # verified for this flow (mlir-aie nominally wants >=2.4.6)

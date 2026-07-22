@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: MIT
 #
 # Entry workflow: builds + validates the rocm-npu-staging stack via reusable
-# workflows — Linux (ROCm scale runner + TheRock manylinux), Windows
-# (azure-windows-scale-rocm + clang-cl), and Linux/Windows FLM on gfx1151 NPU runners.
+# workflows — Linux/Windows compiler-stack and FLM builds, each followed by
+# on-device validation on the matching gfx1151 NPU runner.
 # Every submodule is public, so none needs secrets.
-# The Linux build also publishes run-prerequisites and rocm-npu-compiler product
-# artifacts; npu_e2e consumes both and runs an iron-tools design plus the iron-ops
-# operators on the NPU through the hrx HAL (linux-gfx1151-gpu-rocm = Strix).
 name: CI
 
 on:
@@ -34,7 +31,7 @@ jobs:
       contents: read
     with:
       name: Build + smoke
-      upload_artifact: true   # publish run-prereqs for npu_e2e
+      run_npu_e2e: true
 
   windows:
     name: Windows
@@ -43,6 +40,7 @@ jobs:
       contents: read
     with:
       name: Build + smoke (Windows)
+      run_npu_e2e: true
 
   linux_flm:
     name: Linux FLM
@@ -59,109 +57,3 @@ jobs:
       contents: read
     with:
       name: NPU e2e
-
-  npu_e2e:
-    name: NPU e2e (gfx1151)
-    needs: linux
-    runs-on: linux-gfx1151-gpu-rocm
-    permissions:
-      contents: read
-    # No LLVM/HAL compile here — but the designs ARE built: the iron-tools example, plus one
-    # xclbin per iron-ops operator/column-count. Each is minutes, not tens of minutes.
-    timeout-minutes: 60
-    # To reduce NPU-runner load, gate this to main/dispatch by adding e.g.:
-    #   if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
-    container:
-      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
-      # amdxdna NPU node lives under the DRM accel subsystem at /dev/accel/accel0
-      # (NOT /dev/accel0); hrx's shim scans /dev/accel/ and opens accel0.
-      options: --device=/dev/accel/accel0
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Adjust git config
-        run: git config --global --add safe.directory "$PWD"
-
-      # No openssl-devel: this job compiles nothing against OpenSSL. The headers are a
-      # build-time dep of iron-tools' bootgen, which arrives prebuilt in the artifact and
-      # resolves libcrypto from openssl-libs.
-
-      # Source needed to build+run the design: the patched iron-tools examples, hrx
-      # (headers + runtime/src for the xadx helper), and iron-ops (operators plus
-      # aie_kernels/*.cc). llvm-project is NOT needed; the compiler tools, Python
-      # package, aie_api headers, xclbinutil, and Peano arrive in the compiler product.
-      # --reset --clean because this runner is self-hosted; see cmd_submodules.
-      - name: Initialize submodules
-        run: python3 dev.py submodules hrx iron-tools iron-ops --reset --clean hrx iron-tools --shallow
-      # venv + apply the compiler-stack patches (so the example + hrxruntime source exist)
-      # + prefetch eudsl. FastFlowLM is outside this job's dependency closure. The heavy
-      # compile is skipped — it comes from the artifact.
-      # --iron-ops-tests: this is the ONLY job that runs iron-ops' own tests, so it is the
-      # only one that installs torch (their golden references) + pytest. The build jobs
-      # deliberately do not; see requirements-iron-ops.txt.
-      - name: Setup (venv + patches + prefetch + iron-ops test deps)
-        run: python3 dev.py setup --profile npu-e2e --iron-ops-tests
-
-      - name: Download build artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: npu-prereqs
-          path: .artifact
-
-      - name: Download compiler product artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: rocm-npu-compiler-linux-x86_64
-          path: .compiler-artifact
-
-      # Via dev.py, not tar: the producer picks the codec, so only it knows which one.
-      - name: Extract build artifact (build/iron-tools, hrx build, tools)
-        run: python3 dev.py unpack-npu-prereqs --dir .artifact
-
-      # This job never checks out llvm-project, so a symlink into it dangles and surfaces
-      # as an ImportError from inside the design's Makefile.
-      - name: Verify artifact is self-contained
-        run: .venv/bin/python dev.py verify-npu-prereqs --extracted
-
-      - name: Extract compiler product artifact
-        run: python3 dev.py unpack-compiler-product --dir .compiler-artifact
-
-      - name: Verify compiler product artifact
-        run: .venv/bin/python dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted
-
-      - name: Use compiler product artifact
-        run: echo "ROCM_NPU_COMPILER_PREFIX=$PWD/build/rocm-npu-compiler-extracted/rocm-npu-compiler-linux-x86_64" >> "$GITHUB_ENV"
-
-      # Fail fast and unambiguously if the runner has no usable NPU: the accel node, its
-      # permissions, and libhrx opening the device. Without this a missing or busy device
-      # surfaces much later as an opaque dispatch error.
-      - name: NPU device probe
-        run: .venv/bin/python dev.py npu-probe
-
-      # amdxdna HAL conformance, one layer below the IRON design: if these pass but the
-      # e2e fails, the fault is in the design/host-runtime path, not the HAL.
-      #
-      # What it actually covers today: driver, event, semaphore, buffer mapping, queue
-      # alloca/host-call. NOT executable dispatch (amdxdna has no cts/executable suite),
-      # and NOT fill/copy/update/transfer -- the backend self-skips those until it has
-      # native blit support. dev.py prints passed/skipped per suite and fails a suite
-      # that ran nothing, so that erosion cannot pass silently.
-      - name: HRX CTS (amdxdna, on device)
-        run: .venv/bin/python dev.py test-hrx-cts
-
-      - name: NPU e2e (single dispatch of a design via hrx)
-        run: .venv/bin/python dev.py test-npu
-
-      # The layer a model actually calls, on the device: compile an iron-ops operator here
-      # (the design is small; no LLVM needed — aiecc, Peano and the kernel headers all come
-      # from the artifact) and run the operator's OWN tests against it with IRON_RUNTIME=hrx,
-      # so buffers are HRXTensors and dispatch goes through libhrx rather than XRT.
-      #
-      # This is a strictly stronger claim than the step above: test-npu proves ONE dispatch
-      # reaches the NPU, this proves the operator library computes the RIGHT ANSWER on it —
-      # iron-ops owns the reference implementation and the tolerances, so a numerics
-      # regression fails here. It runs upstream's small tier (one input length, every column
-      # count) for each operator in tests/iron-ops/suite.py.
-      - name: NPU e2e (iron-ops operators via hrx, numerics verified)
-        run: .venv/bin/python dev.py test-npu-iron-ops
