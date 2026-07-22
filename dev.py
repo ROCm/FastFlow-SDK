@@ -18,6 +18,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build hrx-cts         # amdxdna HAL conformance binaries (need an NPU to run)
   python dev.py build fastflowlm      # HRX amdxdna + FastFlowLM app only
   python dev.py package-fastflowlm    # relocatable .zip/.tar.zst + manifest
+  python dev.py package-fastflowlm-wheels # rocm-npu-runtime + rocm-npu-fastflowlm wheels
+  python dev.py verify-fastflowlm-wheels  # pip install wheels into a clean venv and smoke
   python dev.py unpack-fastflowlm     # checksum, extract, and verify the bundle
   python dev.py package-compiler-product # relocatable rocm-npu-compiler product artifact
   python dev.py verify-compiler-product  # verify compiler product and relocation smoke
@@ -57,11 +59,24 @@ from build_tools.fastflowlm_artifact import (
     git_source_state,
     sha256_file,
     stage_runtime_bundle,
+    validate_directory_target,
     validate_source_policy,
     verify_fastflowlm_fresh_installs,
     verify_bundle as verify_fastflowlm_bundle,
 )
 from build_tools import npu_test_package
+from build_tools.rocm_npu_linux_wheels import (
+    FASTFLOWLM_DISTRIBUTION,
+    RUNTIME_DISTRIBUTION,
+    build_runtime_fastflowlm_wheels,
+    find_rocm_npu_wheels,
+    verify_wheels_do_not_have_text_path_references,
+)
+from build_tools.rocm_npu_wheel_common import (
+    PACKAGE_VERSION_ENV,
+    default_package_version,
+    verify_wheel_checksums,
+)
 from build_tools.windows_npu import (
     probe_runtime as probe_windows_npu_runtime,
 )
@@ -88,6 +103,8 @@ FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
 FASTFLOWLM_BUNDLE_STAGE = BUILD / "FastFlowLM-bundle"
 FASTFLOWLM_ARTIFACTS = BUILD / "artifacts"
 FASTFLOWLM_EXTRACTED = BUILD / "FastFlowLM-extracted"
+FASTFLOWLM_WHEEL_STAGE = BUILD / "rocm-npu-wheel-stage"
+FASTFLOWLM_WHEEL_VENV = BUILD / "rocm-npu-wheel-venv"
 COMPILER_PRODUCT_STAGE = BUILD / "rocm-npu-compiler-product"
 COMPILER_PRODUCT_EXTRACTED = BUILD / "rocm-npu-compiler-extracted"
 COMPILER_PRODUCT_RELOCATED = BUILD / "rocm-npu-compiler-relocated"
@@ -1245,10 +1262,9 @@ def cmd_build_fastflowlm(args):
     print("build fastflowlm: ok ->", installed_flm)
 
 
-def cmd_package_fastflowlm(args):
-    """Create and independently re-extract the relocatable FLM + HRX runtime."""
+def _verify_fastflowlm_fresh_installs():
     try:
-        verify_fastflowlm_fresh_installs(
+        return verify_fastflowlm_fresh_installs(
             hrx_install=HRX_INSTALL,
             hrx_source=PROJ / "hrx",
             fastflowlm_install=FASTFLOWLM_INSTALL,
@@ -1257,6 +1273,11 @@ def cmd_package_fastflowlm(args):
         )
     except RuntimeError as error:
         sys.exit(str(error))
+
+
+def cmd_package_fastflowlm(args):
+    """Create and independently re-extract the relocatable FLM + HRX runtime."""
+    _verify_fastflowlm_fresh_installs()
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
                                   FASTFLOWLM_BUNDLE_STAGE)
     archive = create_fastflowlm_archive(bundle, FASTFLOWLM_ARTIFACTS)
@@ -1265,6 +1286,76 @@ def cmd_package_fastflowlm(args):
     print("package fastflowlm: ok")
     print("  archive:  ", archive)
     print("  extracted:", extracted)
+
+
+def cmd_package_fastflowlm_wheels(args):
+    """Build split rocm-npu-runtime and rocm-npu-fastflowlm Linux wheels."""
+    if IS_WINDOWS:
+        sys.exit("rocm-npu runtime/FastFlowLM wheel packaging is Linux-only for now")
+    _verify_fastflowlm_fresh_installs()
+    version = args.version or default_package_version(ROOT)
+    bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
+                                  FASTFLOWLM_BUNDLE_STAGE)
+    wheels = build_runtime_fastflowlm_wheels(
+        bundle, FASTFLOWLM_WHEEL_STAGE, FASTFLOWLM_ARTIFACTS, version)
+    print("package fastflowlm wheels: ok")
+    for product in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
+        print(f"  {product}: {wheels[product]}")
+
+
+def _python_executable_tool(name):
+    tool = shutil.which(name)
+    if tool:
+        return tool
+    candidate = Path(sys.executable).resolve().parent / (f"{name}.exe" if IS_WINDOWS else name)
+    return str(candidate) if candidate.is_file() else None
+
+
+def cmd_audit_fastflowlm_wheels(args):
+    if IS_WINDOWS:
+        sys.exit("audit-fastflowlm-wheels is Linux-only")
+    auditwheel = _python_executable_tool("auditwheel")
+    if not auditwheel:
+        sys.exit("auditwheel is required to audit Linux rocm-npu wheels")
+    wheels = find_rocm_npu_wheels(Path(args.dir))
+    verify_wheel_checksums(wheels)
+    for product in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
+        print(f"== auditwheel show: {wheels[product].name} ==")
+        sh([auditwheel, "show", wheels[product]])
+
+
+def _venv_python(venv_dir):
+    return Path(venv_dir) / ("Scripts" if IS_WINDOWS else "bin") / f"python{_EXE}"
+
+
+def cmd_verify_fastflowlm_wheels(args):
+    wheels = find_rocm_npu_wheels(Path(args.dir))
+    verify_wheel_checksums(wheels)
+    verify_wheels_do_not_have_text_path_references(wheels, (ROOT,))
+
+    venv_dir = Path(args.venv)
+    validate_directory_target(venv_dir, BUILD)
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
+    sh([sys.executable, "-m", "venv", venv_dir])
+    py = _venv_python(venv_dir)
+    sh([py, "-m", "pip", "install", "--disable-pip-version-check", "--no-index",
+        wheels[RUNTIME_DISTRIBUTION], wheels[FASTFLOWLM_DISTRIBUTION]])
+    sh([py, "-m", "pip", "check"])
+    smoke = (
+        "import os, sysconfig; "
+        "from pathlib import Path; "
+        "import rocm_npu_runtime as r, rocm_npu_fastflowlm as f; "
+        "print('runtime', r.self_test(load=True)); "
+        "print('flm', f.flm_path()); "
+        "script = Path(sysconfig.get_path('scripts')) / ('flm.exe' if os.name == 'nt' else 'flm'); "
+        "print('flm script', script); "
+        "assert script.is_file(), script; "
+        "print('config', f.config_path()); "
+        "print('xclbins', f.xclbin_path())"
+    )
+    sh([py, "-c", smoke])
+    print(f"verify fastflowlm wheels: ok -> {venv_dir}")
 
 
 def _find_fastflowlm_archive(directory):
@@ -1353,12 +1444,33 @@ def cmd_test(args):
     sys.exit(sh(cmd, check=False).returncode)
 
 
+def _require_fastflowlm_wheel_packages():
+    missing = []
+    for module in ("rocm_npu_runtime", "rocm_npu_fastflowlm"):
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(module)
+    if missing:
+        executable = FASTFLOWLM_WHEEL_VENV / _VBIN / f"python{_EXE}"
+        sys.exit(
+            "test-fastflowlm --wheel-package requires running dev.py with a "
+            "Python environment where the rocm-npu-runtime and "
+            "rocm-npu-fastflowlm wheels are installed; missing "
+            f"{', '.join(missing)}. Run `python dev.py verify-fastflowlm-wheels` "
+            f"first, then use `{executable} dev.py test-fastflowlm --wheel-package`."
+        )
+
+
 def cmd_test_fastflowlm(args):
     """Run the on-device FastFlowLM HRX smoke test."""
     script = ROOT / "tests" / "fastflowlm" / "run_fastflowlm_hrx_smoke.py"
     env = cmake_env()
     if args.bundle:
         env["FASTFLOWLM_BUNDLE"] = str(Path(args.bundle).resolve())
+    elif args.wheel_package:
+        _require_fastflowlm_wheel_packages()
+        env["FASTFLOWLM_INSTALLED_PACKAGE"] = "1"
     else:
         _add_hrx_install_env(env)
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
@@ -1491,7 +1603,14 @@ def _iron_ops_env(compiler_prefix=None):
     return env
 
 
-def _libhrx_path(bundle=None):
+def _libhrx_path(bundle=None, runtime_package=False):
+    if runtime_package:
+        try:
+            import rocm_npu_runtime
+            return Path(rocm_npu_runtime.libhrx_path()).resolve()
+        except (ImportError, FileNotFoundError) as error:
+            print(f"  [MISS] installed rocm-npu-runtime package: {error}")
+            return None
     if bundle:
         candidate = (Path(bundle) / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")).resolve()
         return candidate if candidate.is_file() else None
@@ -2604,8 +2723,8 @@ def _print_npu_driver_info():
         _print_probe_file("revision", n / "device" / "revision", indent="    ")
 
 
-def _probe_libhrx(bundle=None):
-    lib_path = _libhrx_path(bundle)
+def _probe_libhrx(bundle=None, runtime_package=False):
+    lib_path = _libhrx_path(bundle, runtime_package)
     library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
     if not lib_path:
         print(f"  [MISS] {library_name} - run: python dev.py build hrx")
@@ -2650,7 +2769,7 @@ def cmd_npu_probe(args):
     Run before on-device tests so a missing or busy device is not reported as a
     dispatch failure. Needs no build artifact beyond libhrx."""
     if IS_WINDOWS:
-        library = _libhrx_path(args.bundle)
+        library = _libhrx_path(args.bundle, args.runtime_package)
         if not library:
             print("npu-probe: hrx.dll was not found")
             return 1
@@ -2667,7 +2786,7 @@ def cmd_npu_probe(args):
         print("  [MISS] skipping hrx_gpu_initialize because no usable NPU devnode was found")
         print("npu-probe: FAIL")
         return 1
-    rc |= _probe_libhrx(args.bundle)
+    rc |= _probe_libhrx(args.bundle, args.runtime_package)
 
     print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
     return rc
@@ -2885,6 +3004,8 @@ def main():
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     tf = sub.add_parser("test-fastflowlm")
     tf.add_argument("--bundle", help="run only from an extracted runtime bundle")
+    tf.add_argument("--wheel-package", action="store_true",
+                    help="run from installed rocm-npu-runtime/fastflowlm wheels")
     tf.add_argument(
         "--inference-iterations",
         type=argparse_positive_int,
@@ -2907,6 +3028,16 @@ def main():
     sub.add_parser("package-npu-prereqs")
     sub.add_parser("package-npu-test-package")
     sub.add_parser("package-fastflowlm")
+    pfw = sub.add_parser("package-fastflowlm-wheels")
+    pfw.add_argument("--version", help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})")
+    afw = sub.add_parser("audit-fastflowlm-wheels")
+    afw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS),
+                     help="directory containing the produced rocm-npu wheels")
+    vfw = sub.add_parser("verify-fastflowlm-wheels")
+    vfw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS),
+                     help="directory containing the produced rocm-npu wheels")
+    vfw.add_argument("--venv", default=str(FASTFLOWLM_WHEEL_VENV),
+                     help="fresh venv to create for wheel install testing")
     sub.add_parser("package-compiler-product")
     uf = sub.add_parser("unpack-fastflowlm")
     uf.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
@@ -2937,6 +3068,8 @@ def main():
                      help="run only this packaged case; may be repeated")
     np = sub.add_parser("npu-probe")
     np.add_argument("--bundle", help="probe libHRX from an extracted runtime bundle")
+    np.add_argument("--runtime-package", action="store_true",
+                    help="probe libHRX from an installed rocm-npu-runtime wheel")
     c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
     tno = sub.add_parser("test-npu-iron-ops"); tno.add_argument("operator", nargs="?",
         help="operator to run on the NPU (default: every one in tests/iron-ops/suite.py)")
@@ -2964,6 +3097,9 @@ def main():
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
     elif a.cmd == "package-npu-test-package": cmd_package_npu_test_package(a)
     elif a.cmd == "package-fastflowlm": cmd_package_fastflowlm(a)
+    elif a.cmd == "package-fastflowlm-wheels": cmd_package_fastflowlm_wheels(a)
+    elif a.cmd == "audit-fastflowlm-wheels": cmd_audit_fastflowlm_wheels(a)
+    elif a.cmd == "verify-fastflowlm-wheels": cmd_verify_fastflowlm_wheels(a)
     elif a.cmd == "package-compiler-product": cmd_package_compiler_product(a)
     elif a.cmd == "unpack-fastflowlm": cmd_unpack_fastflowlm(a)
     elif a.cmd == "verify-fastflowlm": cmd_verify_fastflowlm(a)

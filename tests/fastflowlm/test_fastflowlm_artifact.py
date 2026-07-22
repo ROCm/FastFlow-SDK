@@ -18,6 +18,7 @@ from build_tools.fastflowlm_artifact import (
     _linux_dependencies_and_licenses,
     _linux_package_owner_candidates,
     _is_linux_system_runtime,
+    _system_license_destination,
     pe_imports,
     create_archive,
     directory_state,
@@ -202,12 +203,20 @@ class FastFlowLMArtifactTest(unittest.TestCase):
             self.assertTrue(_is_linux_system_runtime(name), name)
         self.assertFalse(_is_linux_system_runtime("libcurl.so.4"))
 
+    def test_linux_system_license_destination_for_own_license_directory(self):
+        bundle = Path("/bundle")
+        source = Path("/usr/share/licenses/libstdc++/COPYING")
+        self.assertEqual(
+            _system_license_destination(bundle, "libstdc++", source, "libstdc++"),
+            bundle / "licenses" / "system" / "libstdc++" / "COPYING",
+        )
+
     def test_linux_system_dependency_uses_source_rpm_license_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary)
             (bundle / "lib").mkdir()
             (bundle / "lib" / "libstdc++.so.6.0.25").write_bytes(b"")
-            license_source = bundle / "rpm-root" / "usr" / "share" / "doc" / "gcc" / "COPYING.RUNTIME"
+            license_source = bundle / "rpm-root" / "usr" / "share" / "licenses" / "gcc" / "COPYING.RUNTIME"
             license_source.parent.mkdir(parents=True)
             license_source.write_text("runtime exception\n", encoding="utf-8")
 

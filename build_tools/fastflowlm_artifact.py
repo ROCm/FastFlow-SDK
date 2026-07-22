@@ -436,7 +436,13 @@ def _system_license_destination(bundle: Path, package: str, source: Path,
     normalized = source.as_posix()
     marker = "/usr/share/licenses/"
     if marker in normalized:
-        return bundle / "licenses" / "system" / normalized.split(marker, 1)[1]
+        relative = normalized.split(marker, 1)[1]
+        source_package_name = PurePosixPath(relative).parts[0]
+        destination = bundle / "licenses" / "system" / package
+        if source_package_name != package:
+            destination /= source_package_name
+        relative = PurePosixPath(relative).relative_to(source_package_name).as_posix()
+        return destination / relative
     doc_package = source_package or package
     doc_marker = f"/usr/share/doc/{doc_package}/"
     if doc_marker in normalized:
