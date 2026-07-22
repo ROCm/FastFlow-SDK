@@ -867,7 +867,8 @@ def _tar_zst_bundle(bundle: Path, archive: Path) -> None:
                                 f"artifact symlink escapes bundle or is not a file: {path}")
                     info.type = tarfile.REGTYPE
                     info.size = path.stat().st_size
-                    info.mode = 0o755 if path.name == "flm" else 0o644
+                    mode = stat.S_IMODE(path.stat().st_mode)
+                    info.mode = 0o755 if mode & 0o111 else 0o644
                     with path.open("rb") as stream:
                         output.addfile(info, stream)
                 elif path.is_dir() and not path.is_symlink():
@@ -925,13 +926,17 @@ def _extract_archive_contents(archive: Path, destination: Path) -> Path:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with source.open(member) as input_stream, target.open("wb") as output_stream:
                         shutil.copyfileobj(input_stream, output_stream)
-    elif archive.name.endswith(".tar.zst"):
-        zstd = shutil.which("zstd")
-        if not zstd:
-            raise RuntimeError("zstd is required to extract the Linux .tar.zst artifact")
-        with tempfile.TemporaryDirectory(prefix="fastflowlm-untar-") as temporary:
-            tar_path = Path(temporary) / "bundle.tar"
+    elif archive.name.endswith((".tar.gz", ".tar.zst")):
+        temporary_dir = None
+        tar_path = archive
+        if archive.name.endswith(".tar.zst"):
+            zstd = shutil.which("zstd")
+            if not zstd:
+                raise RuntimeError("zstd is required to extract the Linux .tar.zst artifact")
+            temporary_dir = tempfile.TemporaryDirectory(prefix="fastflowlm-untar-")
+            tar_path = Path(temporary_dir.name) / "bundle.tar"
             subprocess.run([zstd, "-q", "-d", "-f", str(archive), "-o", str(tar_path)], check=True)
+        try:
             with tarfile.open(tar_path) as source:
                 members = source.getmembers()
                 names = [member.name for member in members]
@@ -959,6 +964,9 @@ def _extract_archive_contents(archive: Path, destination: Path) -> Path:
                         with input_stream, target.open("wb") as output_stream:
                             shutil.copyfileobj(input_stream, output_stream)
                         target.chmod(member.mode & 0o777)
+        finally:
+            if temporary_dir is not None:
+                temporary_dir.cleanup()
     else:
         raise RuntimeError(f"unsupported artifact format: {archive}")
 

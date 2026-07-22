@@ -19,6 +19,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py build fastflowlm      # HRX amdxdna + FastFlowLM app only
   python dev.py package-fastflowlm    # relocatable .zip/.tar.zst + manifest
   python dev.py unpack-fastflowlm     # checksum, extract, and verify the bundle
+  python dev.py package-compiler-product # relocatable rocm-npu-compiler product artifact
+  python dev.py verify-compiler-product  # verify compiler product and relocation smoke
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
@@ -37,7 +39,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, hashlib, json, os, re, shutil, stat, subprocess, sys, tarfile, tempfile
+import argparse, contextlib, ctypes, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile, zipfile
 from pathlib import Path
 
 from build_tools.fastflowlm_deps import (
@@ -83,6 +85,11 @@ FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
 FASTFLOWLM_BUNDLE_STAGE = BUILD / "FastFlowLM-bundle"
 FASTFLOWLM_ARTIFACTS = BUILD / "artifacts"
 FASTFLOWLM_EXTRACTED = BUILD / "FastFlowLM-extracted"
+COMPILER_PRODUCT_STAGE = BUILD / "rocm-npu-compiler-product"
+COMPILER_PRODUCT_EXTRACTED = BUILD / "rocm-npu-compiler-extracted"
+COMPILER_PRODUCT_RELOCATED = BUILD / "rocm-npu-compiler-relocated"
+ARCHIVE_FIXED_MTIME = 946684800  # 2000-01-01T00:00:00Z
+ARCHIVE_FIXED_ZIP_DATE = (2000, 1, 1, 0, 0, 0)
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 PATCHES = ROOT / "patches"                      # temporary submodule patches (see patches/README.md)
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
@@ -1325,6 +1332,8 @@ def cmd_test(args):
     if not venv_py().exists():
         sys.exit(f"no venv at {VENV} (run: python dev.py setup)")
     cmd = [venv_py(), ROOT / "tests" / "e2e" / "run_e2e.py"]
+    if getattr(args, "compiler_prefix", None):
+        cmd += ["--compiler-prefix", args.compiler_prefix]
     if args.design:
         cmd.append(args.design)
     if args.design_args:
@@ -1383,7 +1392,8 @@ def cmd_test_iron_ops(args):
     # subprocesses it spawns, while build_operator.py imports `aie` in-process, so PYTHONPATH
     # and PEANO_INSTALL_DIR must already be set when the interpreter starts. _iron_env() is
     # run_e2e.toolchain_env(), so both commands still resolve the toolchain the same way.
-    sys.exit(sh(cmd, env=_iron_env(), check=False).returncode)
+    sys.exit(sh(cmd, env=_iron_env(getattr(args, "compiler_prefix", None)),
+                check=False).returncode)
 
 
 def cmd_smoke(args):
@@ -1434,7 +1444,7 @@ def _require_txn_devgen(insts, target):
     print(f"insts.bin: TXN DevGen={got} (matches --device={target})")
 
 
-def _iron_env():
+def _iron_env(compiler_prefix=None):
     """The IRON toolchain env, from its single definition in tests/e2e/run_e2e.py.
 
     That module owns PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR and the "is iron-tools
@@ -1443,8 +1453,9 @@ def _iron_env():
     build_env() copy drifted, which is why it was removed."""
     sys.path.insert(0, str(ROOT / "tests" / "e2e"))
     import run_e2e
+    prefix = Path(compiler_prefix).resolve() if compiler_prefix else run_e2e.compiler_prefix_from_env()
     try:
-        return run_e2e.toolchain_env(run_e2e.require_xclbinutil())
+        return run_e2e.toolchain_env(run_e2e.require_xclbinutil(prefix), prefix)
     except run_e2e.E2EError as e:
         sys.exit(str(e))
 
@@ -1636,6 +1647,323 @@ def _strip(stage, cts_rel):
     if targets:
         subprocess.run([strip, "-s", *[str(t) for t in targets]], check=True)
         print(f"package: stripped {len(targets)} binaries")
+
+
+def _platform_machine(machine=None):
+    machine = (machine or platform.machine() or "unknown").lower()
+    return "x86_64" if machine == "amd64" else machine
+
+
+def _compiler_product_name(system=None, machine=None):
+    return f"rocm-npu-compiler-{(system or platform.system()).lower()}-{_platform_machine(machine)}"
+
+
+def _reset_build_child(path):
+    resolved = Path(path).resolve()
+    build_root = BUILD.resolve()
+    if resolved == build_root or build_root not in resolved.parents:
+        raise RuntimeError(f"refusing to remove directory outside {build_root}: {resolved}")
+    if Path(path).is_symlink():
+        Path(path).unlink()
+    elif Path(path).exists():
+        shutil.rmtree(path)
+    Path(path).mkdir(parents=True)
+
+
+def _assert_no_symlinks(root):
+    links = [p for p in [root, *root.rglob("*")] if p.is_symlink()]
+    if links:
+        raise RuntimeError("compiler product contains symlinks:\n  " +
+                           "\n  ".join(str(p) for p in links[:20]))
+
+
+def _peano_prefix():
+    peano = Path(sysconfig.get_paths()["purelib"]) / "llvm-aie"
+    if not peano.is_dir():
+        raise RuntimeError(
+            f"Peano is not installed in this Python environment: {peano}\n"
+            "run: python dev.py setup")
+    return peano
+
+
+def _manifest_file_record(path, root=ROOT):
+    return {
+        "path": path.relative_to(root).as_posix() if path.is_relative_to(root)
+                else str(path),
+        "size": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _write_product_manifest(bundle, manifest):
+    manifest_path = bundle / "manifest.json"
+    if manifest_path.exists():
+        manifest_path.unlink()
+    files = []
+    for path in sorted(p for p in bundle.rglob("*") if p.is_file()):
+        files.append({"path": path.relative_to(bundle).as_posix(),
+                      "size": path.stat().st_size,
+                      "sha256": sha256_file(path)})
+    manifest = dict(manifest, files=files)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+    return verify_fastflowlm_bundle(bundle)
+
+
+def _stage_compiler_product():
+    it = BUILD / "iron-tools"
+    if not it.is_dir():
+        raise RuntimeError("iron-tools is not installed - run: python dev.py build iron-tools")
+
+    _reset_build_child(COMPILER_PRODUCT_STAGE)
+    product = COMPILER_PRODUCT_STAGE / _compiler_product_name()
+    product.mkdir(parents=True)
+
+    required_tools = []
+    for tool_name in NPU_PREREQ_TOOLS:
+        tool = _tool(it / "bin" / tool_name)
+        relative = Path("bin") / tool.name
+        _stage(tool, product / relative)
+        required_tools.append(relative.as_posix())
+
+    xclbinutil = _tool(ROOT / "tools-bin" / "xclbinutil")
+    relative = Path("bin") / xclbinutil.name
+    _stage(xclbinutil, product / relative)
+    required_tools.append(relative.as_posix())
+
+    for dirname in ("python", "lib", "runtime_lib", "include", "aie_runtime_lib"):
+        source = it / dirname
+        if not source.is_dir():
+            raise RuntimeError(f"missing from iron-tools install: {source}")
+        _stage(source, product / dirname)
+
+    aie_api = PROJ / "iron-tools" / "third_party" / "aie_api"
+    if not aie_api.is_dir():
+        raise RuntimeError(f"missing aie_api checkout: {aie_api}")
+    _stage(aie_api, product / "third_party" / "aie_api")
+    _stage(_peano_prefix(), product / "peano" / "llvm-aie")
+
+    license_sources = (
+        (ROOT / "LICENSE", "rocm-npu-staging-LICENSE"),
+        (PROJ / "iron-tools" / "LICENSE", "iron-tools-LICENSE"),
+        (PROJ / "hrx-xclbinutil" / "LICENSE", "hrx-xclbinutil-LICENSE"),
+    )
+    for source, name in license_sources:
+        if source.is_file():
+            _stage(source, product / "licenses" / name)
+
+    _assert_no_symlinks(product)
+    manifest = _write_product_manifest(product, {
+        "schema_version": 1,
+        "product": "rocm-npu-compiler",
+        "artifact": product.name,
+        "platform": {"system": platform.system(), "machine": platform.machine()},
+        "required_tools": required_tools,
+        "peano": {"wheel": PEANO_WHEEL, "index": PEANO_INDEX,
+                  "path": "peano/llvm-aie"},
+        "sources": {
+            "rocm-npu-staging": git_source_state(ROOT),
+            "llvm-project": git_source_state(PROJ / "llvm-project"),
+            "iron-tools": git_source_state(PROJ / "iron-tools"),
+            "hrx-xclbinutil": git_source_state(PROJ / "hrx-xclbinutil"),
+        },
+        "dependencies": {
+            "requirements": [
+                _manifest_file_record(ROOT / "requirements.txt"),
+                _manifest_file_record(ROOT / "requirements.lock"),
+            ],
+        },
+        "toolchain": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "build_image": os.environ.get("RNS_BUILD_IMAGE"),
+            "runner_os": os.environ.get("RUNNER_OS"),
+            "runner_arch": os.environ.get("RUNNER_ARCH"),
+        },
+    })
+    return product, manifest
+
+
+def _compiler_product_root(location):
+    location = Path(location)
+    if (location / "manifest.json").is_file():
+        return location
+    if not location.is_dir():
+        raise RuntimeError(f"compiler product directory not found: {location}")
+    candidates = [p for p in location.iterdir()
+                  if p.is_dir() and (p / "manifest.json").is_file()]
+    if len(candidates) != 1:
+        raise RuntimeError(f"expected exactly one compiler product under {location}")
+    return candidates[0]
+
+
+def _write_compiler_product_zip(product, archive):
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED,
+                         compresslevel=9) as output:
+        for path in sorted(p for p in product.rglob("*") if p.is_file()):
+            relative = f"{product.name}/{path.relative_to(product).as_posix()}"
+            info = zipfile.ZipInfo(relative, date_time=ARCHIVE_FIXED_ZIP_DATE)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            output.writestr(info, path.read_bytes(), compresslevel=9)
+
+
+def _write_compiler_product_tar_gz(product, archive):
+    with tarfile.open(archive, "w:gz", compresslevel=6,
+                      format=tarfile.PAX_FORMAT) as output:
+        for path in sorted([product, *product.rglob("*")]):
+            relative = (product.name if path == product else
+                        f"{product.name}/{path.relative_to(product).as_posix()}")
+            info = tarfile.TarInfo(relative)
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            info.mtime = ARCHIVE_FIXED_MTIME
+            if path.is_file():
+                info.type = tarfile.REGTYPE
+                info.size = path.stat().st_size
+                mode = stat.S_IMODE(path.stat().st_mode)
+                info.mode = 0o755 if mode & 0o111 else 0o644
+                with path.open("rb") as stream:
+                    output.addfile(info, stream)
+            elif path.is_dir() and not path.is_symlink():
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                output.addfile(info)
+            else:
+                raise RuntimeError(f"unsupported compiler product filesystem entry: {path}")
+
+
+def _create_compiler_product_archive(product, output_directory):
+    _verify_compiler_product_inventory(product)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    archive = output_directory / f"{product.name}{'.zip' if IS_WINDOWS else '.tar.gz'}"
+    for stale in output_directory.glob(f"{product.name}.*"):
+        if stale != archive and stale != archive.with_name(archive.name + ".sha256"):
+            stale.unlink()
+    if IS_WINDOWS:
+        _write_compiler_product_zip(product, archive)
+    else:
+        _write_compiler_product_tar_gz(product, archive)
+    archive.with_name(archive.name + ".sha256").write_text(
+        f"{sha256_file(archive)}  {archive.name}\n", encoding="ascii")
+    return archive
+
+
+def _find_compiler_product_archive(directory):
+    directory = Path(directory)
+    archives = sorted([*directory.glob("rocm-npu-compiler-*.zip"),
+                       *directory.glob("rocm-npu-compiler-*.tar.gz"),
+                       *directory.glob("rocm-npu-compiler-*.tar.zst")])
+    if len(archives) != 1:
+        raise RuntimeError(
+            f"expected exactly one rocm-npu-compiler artifact in {directory}, "
+            f"found {len(archives)}")
+    archive = archives[0]
+    checksum_path = archive.with_name(archive.name + ".sha256")
+    if not checksum_path.is_file():
+        raise RuntimeError(f"artifact checksum missing: {checksum_path}")
+    fields = checksum_path.read_text(encoding="ascii").strip().split()
+    if (len(fields) != 2 or fields[1] != archive.name or
+            not re.fullmatch(r"[0-9a-f]{64}", fields[0])):
+        raise RuntimeError(f"malformed artifact checksum: {checksum_path}")
+    if sha256_file(archive) != fields[0]:
+        raise RuntimeError(f"artifact checksum mismatch: {archive}")
+    return archive
+
+
+def _verify_compiler_product_inventory(product):
+    manifest = verify_fastflowlm_bundle(product)
+    if manifest.get("product") != "rocm-npu-compiler":
+        raise RuntimeError(f"not a rocm-npu-compiler product: {product}")
+    artifact = str(manifest.get("artifact", ""))
+    if "staging" in artifact:
+        raise RuntimeError(f"compiler product artifact name must not include staging: {artifact}")
+    _assert_no_symlinks(product)
+
+    required_files = [
+        "python/aie/ir.py",
+        "python/aie/compiler/aiecc/main.py",
+        "include/aie_api/aie.hpp",
+        "aie_runtime_lib/AIE2P/vec_math.h",
+        *manifest.get("required_tools", []),
+    ]
+    for relative in required_files:
+        if not (product / relative).is_file():
+            raise RuntimeError(f"compiler product is missing file: {relative}")
+    for relative in ("peano/llvm-aie", "third_party/aie_api", "lib"):
+        if not (product / relative).is_dir():
+            raise RuntimeError(f"compiler product is missing directory: {relative}")
+    return manifest
+
+
+def _compiler_product_env(prefix):
+    sys.path.insert(0, str(ROOT / "tests" / "e2e"))
+    import run_e2e
+    try:
+        return run_e2e.toolchain_env(run_e2e.require_xclbinutil(prefix), prefix)
+    except run_e2e.E2EError as e:
+        raise RuntimeError(str(e)) from e
+
+
+def _smoke_compiler_product(prefix):
+    manifest = _verify_compiler_product_inventory(prefix)
+    env = _compiler_product_env(prefix)
+    aieopt = prefix / "bin" / f"aie-opt{_EXE}"
+    sh([aieopt, "--version"], env=env)
+    p = subprocess.run([str(aieopt)], input=b"module { aie.device(npu2) {} }\n",
+                       env=env, capture_output=True)
+    if p.returncode != 0:
+        detail = p.stderr.decode(errors="replace")[:1000]
+        raise RuntimeError(f"aie-opt relocation smoke failed: {detail}")
+    return manifest
+
+
+def _relocate_compiler_product(product):
+    _reset_build_child(COMPILER_PRODUCT_RELOCATED)
+    relocated = COMPILER_PRODUCT_RELOCATED / product.name
+    _stage(product, relocated)
+    _smoke_compiler_product(relocated)
+    env = dict(os.environ, ROCM_NPU_COMPILER_PREFIX=str(relocated))
+    rc = sh([venv_py(), ROOT / "tests" / "e2e" / "run_e2e.py",
+             "--compiler-prefix", relocated], env=env, check=False).returncode
+    if rc != 0:
+        raise RuntimeError(f"relocated compiler product e2e failed: {relocated}")
+    return relocated
+
+
+def cmd_package_compiler_product(args):
+    """Stage and archive the source-built compiler product under a relocatable prefix."""
+    try:
+        product, manifest = _stage_compiler_product()
+        archive = _create_compiler_product_archive(product, FASTFLOWLM_ARTIFACTS)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print("package compiler product: ok")
+    print("  product: ", product)
+    print("  archive: ", archive)
+    print(f"  files:   {len(manifest['files'])}")
+
+
+def cmd_unpack_compiler_product(args):
+    try:
+        archive = _find_compiler_product_archive(args.dir)
+        product = extract_fastflowlm_archive(
+            archive, COMPILER_PRODUCT_EXTRACTED, allowed_root=BUILD)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print("unpack compiler product: ok ->", product)
+
+
+def cmd_verify_compiler_product(args):
+    try:
+        product = _compiler_product_root(args.dir)
+        manifest = _smoke_compiler_product(product)
+        if args.relocate:
+            relocated = _relocate_compiler_product(product)
+            print("  relocated:", relocated)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print(f"verify compiler product: ok ({len(manifest['files'])} files) -> {product}")
 
 
 def cmd_package_npu_prereqs(args):
@@ -2228,9 +2556,9 @@ def cmd_test_npu(args):
         sys.exit(f"{design}: no such design under programming_examples/basic")
     # The hrx IRON host-runtime is added by patch 0003 and registered in the built
     # package by its python/CMakeLists.txt hunk; without both, IRON_RUNTIME=hrx raises.
-    _require_hrx_runtime()
+    _require_hrx_runtime(getattr(args, "compiler_prefix", None))
 
-    env = _iron_env()
+    env = _iron_env(getattr(args, "compiler_prefix", None))
     env["HRX_DIR"] = str(PROJ / "hrx")
     env["HRX_BUILD"] = str(PROJ / "hrx" / "build" / "cmake")
     env["IRON_RUNTIME"] = "hrx"
@@ -2252,10 +2580,17 @@ def cmd_test_npu(args):
     print(f"test-npu: ok ({design} ran on the NPU via hrx)")
 
 
-def _require_hrx_runtime():
+def _compiler_python_root(compiler_prefix=None):
+    value = compiler_prefix or os.environ.get("ROCM_NPU_COMPILER_PREFIX")
+    prefix = Path(value).resolve() if value else None
+    return prefix / "python" if prefix else BUILD / "iron-tools" / "python"
+
+
+def _require_hrx_runtime(compiler_prefix=None):
     """The two things IRON_RUNTIME=hrx needs, named separately so the failure says which."""
-    if not (BUILD / "iron-tools" / "python" / "aie" / "utils" / "hostruntime"
-            / "hrxruntime" / "discovery.py").exists():
+    python_root = _compiler_python_root(compiler_prefix)
+    if not (python_root / "aie" / "utils" / "hostruntime" / "hrxruntime"
+            / "discovery.py").exists():
         sys.exit("hrxruntime missing from the built aie package — "
                  "is patches/iron-tools/0003 applied? (run: python dev.py fetch, then build iron-tools)")
     if not list((PROJ / "hrx" / "build" / "cmake").rglob("libhrx*.so")):
@@ -2284,7 +2619,7 @@ def cmd_test_npu_iron_ops(args):
         operators = suite.select(getattr(args, "operator", None))
     except KeyError as e:
         sys.exit(e.args[0])   # KeyError stringifies to its repr; the message is the argument
-    _require_hrx_runtime()
+    _require_hrx_runtime(getattr(args, "compiler_prefix", None))
     if not (VENV / _VBIN / f"pytest{_EXE}").exists():
         sys.exit("pytest not in the venv — the NPU job installs the iron-ops test deps: "
                  "python dev.py setup --iron-ops-tests")
@@ -2297,7 +2632,7 @@ def cmd_test_npu_iron_ops(args):
             sys.exit(f"{op.name}: no test.py under projects/iron-ops/iron/operators")
         test_dirs.append(str(test_dir))
 
-    env = _iron_env()
+    env = _iron_env(getattr(args, "compiler_prefix", None))
     env["HRX_DIR"] = str(PROJ / "hrx")
     env["HRX_BUILD"] = str(PROJ / "hrx" / "build" / "cmake")
     env["IRON_RUNTIME"] = "hrx"
@@ -2338,11 +2673,15 @@ def main():
     b.add_argument("--fresh", action="store_true",
                    help="clear generated CMake state and outputs before configuring")
     t = sub.add_parser("test"); t.add_argument("design", nargs="?")
+    t.add_argument("--compiler-prefix",
+                   help="relocated rocm-npu-compiler product prefix to test")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     tf = sub.add_parser("test-fastflowlm")
     tf.add_argument("--bundle", help="run only from an extracted runtime bundle")
     to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
+    to.add_argument("--compiler-prefix",
+                    help="relocated rocm-npu-compiler product prefix to test")
     to.add_argument("--device", choices=sorted(NPU_TARGETS),
                     help="override the NPU generation the suite pins for the operator")
     sub.add_parser("smoke")
@@ -2353,11 +2692,19 @@ def main():
     sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
     sub.add_parser("package-npu-prereqs")
     sub.add_parser("package-fastflowlm")
+    sub.add_parser("package-compiler-product")
     uf = sub.add_parser("unpack-fastflowlm")
     uf.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
     vf = sub.add_parser("verify-fastflowlm")
     vf.add_argument("--dir", default=str(FASTFLOWLM_EXTRACTED),
                     help="extracted bundle root or its parent directory")
+    uc = sub.add_parser("unpack-compiler-product")
+    uc.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
+    vc = sub.add_parser("verify-compiler-product")
+    vc.add_argument("--dir", default=str(COMPILER_PRODUCT_STAGE),
+                    help="compiler product root or its parent directory")
+    vc.add_argument("--relocate", action="store_true",
+                    help="copy the product to another prefix and run the off-device e2e")
     u = sub.add_parser("unpack-npu-prereqs")
     u.add_argument("--dir", default=".artifact", help="where download-artifact put it")
     v = sub.add_parser("verify-npu-prereqs")
@@ -2368,7 +2715,11 @@ def main():
     c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
     tno = sub.add_parser("test-npu-iron-ops"); tno.add_argument("operator", nargs="?",
         help="operator to run on the NPU (default: every one in tests/iron-ops/suite.py)")
+    tno.add_argument("--compiler-prefix",
+                     help="relocated rocm-npu-compiler product prefix to test")
     tn = sub.add_parser("test-npu"); tn.add_argument("design", nargs="?")
+    tn.add_argument("--compiler-prefix",
+                    help="relocated rocm-npu-compiler product prefix to test")
     tn.add_argument("--device", choices=sorted(NPU_TARGETS), default="npu2",
                     help="NPU generation to build the design for (default: npu2/Strix)")
     tn.add_argument("--chain", action="store_true",
@@ -2387,8 +2738,11 @@ def main():
     elif a.cmd == "submodules": cmd_submodules(a)
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
     elif a.cmd == "package-fastflowlm": cmd_package_fastflowlm(a)
+    elif a.cmd == "package-compiler-product": cmd_package_compiler_product(a)
     elif a.cmd == "unpack-fastflowlm": cmd_unpack_fastflowlm(a)
     elif a.cmd == "verify-fastflowlm": cmd_verify_fastflowlm(a)
+    elif a.cmd == "unpack-compiler-product": cmd_unpack_compiler_product(a)
+    elif a.cmd == "verify-compiler-product": cmd_verify_compiler_product(a)
     elif a.cmd == "unpack-npu-prereqs": cmd_unpack_npu_prereqs(a)
     elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
     elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))

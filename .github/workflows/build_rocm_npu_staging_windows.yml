@@ -197,6 +197,9 @@ jobs:
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
+      - name: Test compiler product artifact helpers
+        run: .venv/Scripts/python.exe -m unittest discover -s tests/compiler -p 'test_*.py'
+
       - name: Run Windows unit tests
         run: .venv/Scripts/python.exe -m unittest discover -s tests/windows -p 'test_*.py'
 
@@ -239,8 +242,17 @@ jobs:
       - name: e2e (xclbin + HAL PDI artifact-contract)
         run: .venv/Scripts/python.exe dev.py test
 
+      - name: Package compiler product
+        run: .venv/Scripts/python.exe dev.py package-compiler-product
+
+      - name: Unpack compiler product
+        run: .venv/Scripts/python.exe dev.py unpack-compiler-product --dir build/artifacts
+
+      - name: Verify compiler product relocation
+        run: .venv/Scripts/python.exe dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted --relocate
+
       # Same iron-ops operator build as Linux, same driver. This is the only place the
       # operator library is compiled on Windows at all, so it is also what would catch a
       # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).
       - name: iron-ops (build operators off-device)
-        run: .venv/Scripts/python.exe dev.py test-iron-ops
+        run: .venv/Scripts/python.exe dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-windows-x86_64
