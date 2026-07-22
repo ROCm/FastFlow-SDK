@@ -3,10 +3,12 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,7 +25,12 @@ class CompilerProductTest(unittest.TestCase):
         if executable and os.name != "nt":
             path.chmod(0o755)
 
-    def make_product(self, root: Path, artifact: str = "rocm-npu-compiler-linux-x86_64") -> Path:
+    def make_product(
+        self,
+        root: Path,
+        artifact: str = "rocm-npu-compiler-linux-x86_64",
+        include_build_metadata: bool = False,
+    ) -> Path:
         product = root / artifact
         required_tools = []
         for name in [*dev.NPU_PREREQ_TOOLS, "xclbinutil"]:
@@ -40,6 +47,8 @@ class CompilerProductTest(unittest.TestCase):
             "lib/.keep",
         ):
             self.write_file(product / relative)
+        if include_build_metadata:
+            self.write_file(product / "python" / "CMakeFiles" / "target.dir" / "object.obj")
 
         files = []
         for path in sorted(p for p in product.rglob("*") if p.is_file()):
@@ -62,6 +71,24 @@ class CompilerProductTest(unittest.TestCase):
         )
         self.assertNotIn("staging", dev._compiler_product_name("Windows", "x86_64"))
 
+    def test_compiler_product_can_extract_to_explicit_short_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            short_root = Path(temporary) / "rnc"
+            archive = Path(temporary) / "compiler.zip"
+            with (
+                mock.patch.object(dev, "_find_compiler_product_archive",
+                                  return_value=archive),
+                mock.patch.object(
+                    dev, "extract_fastflowlm_archive",
+                    return_value=short_root / "rocm-npu-compiler-windows-x86_64",
+                ) as extract,
+            ):
+                dev.cmd_unpack_compiler_product(SimpleNamespace(
+                    dir=Path(temporary), output_dir=str(short_root)))
+
+            extract.assert_called_once_with(
+                archive, short_root, allowed_root=short_root.parent)
+
     def test_inventory_accepts_complete_product(self):
         with tempfile.TemporaryDirectory() as temporary:
             product = self.make_product(Path(temporary))
@@ -74,6 +101,96 @@ class CompilerProductTest(unittest.TestCase):
                 Path(temporary), "rocm-npu-staging-compiler-linux-x86_64")
             with self.assertRaisesRegex(RuntimeError, "must not include staging"):
                 dev._verify_compiler_product_inventory(product)
+
+    def test_inventory_rejects_build_system_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            product = self.make_product(
+                Path(temporary), include_build_metadata=True)
+            with self.assertRaisesRegex(RuntimeError, "build-system metadata"):
+                dev._verify_compiler_product_inventory(product)
+
+    def test_runtime_staging_excludes_build_intermediates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            self.write_file(source / "lib" / "runtime.lib")
+            self.write_file(source / "include" / "runtime.h")
+            self.write_file(source / "CMakeFiles" / "target.dir" / "runtime.obj")
+            self.write_file(source / "lib" / "stray.pdb")
+            self.write_file(source / "__pycache__" / "module.cpython-312.pyc")
+
+            destination = root / "destination"
+            dev._stage_runtime_tree(source, destination)
+
+            self.assertTrue((destination / "lib" / "runtime.lib").is_file())
+            self.assertTrue((destination / "include" / "runtime.h").is_file())
+            self.assertFalse((destination / "CMakeFiles").exists())
+            self.assertFalse((destination / "lib" / "stray.pdb").exists())
+            self.assertFalse((destination / "__pycache__").exists())
+
+    def test_npu_prerequisites_exclude_separate_compiler_product(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hrx_install = root / "hrx-install"
+            self.write_file(
+                hrx_install / ("bin/hrx.dll" if os.name == "nt" else "lib/libhrx.so"))
+            self.write_file(hrx_install / "include/hrx/hrx_runtime.h")
+            self.write_file(hrx_install / "include/hrx/hrx_amdxdna.h")
+            cts_source = root / "cts"
+            for name in dev.HRX_CTS_TESTS:
+                self.write_file(
+                    cts_source / f"{name}{dev._EXE}", executable=True)
+
+            stage = root / "stage"
+            dev._stage_npu_runtime_prereqs(stage, hrx_install, cts_source)
+
+            self.assertTrue(
+                (stage / "build/hrx-install/include/hrx/hrx_runtime.h").is_file())
+            cts_stage = stage.joinpath(
+                "projects", "hrx", "build", "cmake", *dev.HRX_CTS_DIR)
+            for name in dev.HRX_CTS_TESTS:
+                self.assertTrue((cts_stage / f"{name}{dev._EXE}").is_file())
+            self.assertFalse((stage / "build/iron-tools").exists())
+            self.assertFalse((stage / "tools-bin").exists())
+
+    def test_windows_tar_zst_is_deterministic_and_extracts_valid_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            product = self.make_product(
+                root, artifact="rocm-npu-compiler-windows-x86_64")
+            with mock.patch.object(dev, "IS_WINDOWS", True):
+                first = dev._create_compiler_product_archive(
+                    product, root / "first")
+                second = dev._create_compiler_product_archive(
+                    product, root / "second")
+
+            self.assertTrue(first.name.endswith(".tar.zst"))
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            self.assertTrue(first.with_name(first.name + ".sha256").is_file())
+            extracted = dev.extract_fastflowlm_archive(
+                first, root / "extracted", allowed_root=root)
+            self.assertEqual(
+                (extracted / "python" / "aie" / "ir.py").read_bytes(), b"x")
+            dev._verify_compiler_product_inventory(extracted)
+
+    def test_product_smoke_reports_python_extension_import_failure(self):
+        aieopt_result = mock.Mock(returncode=0, stderr=b"")
+        import_result = mock.Mock(
+            returncode=1, stderr="ImportError: DLL filename is too long")
+        with (
+            mock.patch.object(dev, "_verify_compiler_product_inventory",
+                              return_value={"files": []}),
+            mock.patch.object(dev, "_compiler_product_env", return_value={}),
+            mock.patch.object(dev, "sh"),
+            mock.patch.object(dev.subprocess, "run",
+                              side_effect=[aieopt_result, import_result]) as run,
+            self.assertRaisesRegex(RuntimeError, "DLL filename is too long"),
+        ):
+            dev._smoke_compiler_product(Path("compiler"))
+
+        self.assertEqual(
+            run.call_args_list[1].args[0][-1],
+            "import aie.dialects.transform.interpreter")
 
     @unittest.skipIf(os.name == "nt", "Linux archive format test")
     def test_linux_archive_is_tar_gz_without_zstd(self):
@@ -97,6 +214,7 @@ class CompilerProductTest(unittest.TestCase):
             self.write_file(prefix / "bin" / f"aie-opt{run_e2e.EXE}", executable=True)
             self.write_file(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", executable=True)
             self.write_file(prefix / "python" / "aie" / "compiler" / "aiecc" / "main.py")
+            self.write_file(prefix / "python" / "probe.py", b"VALUE = 1\n")
             (prefix / "peano" / "llvm-aie").mkdir(parents=True)
             (prefix / "third_party" / "aie_api").mkdir(parents=True)
             (prefix / "lib").mkdir()
@@ -108,6 +226,10 @@ class CompilerProductTest(unittest.TestCase):
             self.assertEqual(env["PEANO_INSTALL_DIR"], str(prefix / "peano" / "llvm-aie"))
             self.assertEqual(env["AIEOPT_DIR"], str(prefix / "third_party" / "aie_api"))
             self.assertEqual(env["ROCM_NPU_COMPILER_PREFIX"], str(prefix))
+            self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
+            subprocess.run(
+                [sys.executable, "-c", "import probe"], env=env, check=True)
+            self.assertFalse((prefix / "python" / "__pycache__").exists())
             if os.name == "nt":
                 self.assertIn(str(prefix / "lib"), env["PATH"].split(os.pathsep))
             else:

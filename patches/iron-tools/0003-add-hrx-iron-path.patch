@@ -1,140 +1,5 @@
-diff --git a/cmake/modules/FindHRX.cmake b/cmake/modules/FindHRX.cmake
-new file mode 100644
-index 0000000..bf65ac7
---- /dev/null
-+++ b/cmake/modules/FindHRX.cmake
-@@ -0,0 +1,129 @@
-+# This file is licensed under the Apache License v2.0 with LLVM Exceptions.
-+# See https://llvm.org/LICENSE.txt for license information.
-+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-+#
-+# Copyright (C) 2026 Advanced Micro Devices, Inc.
-+#
-+# FindHRX.cmake - locate the HRX (libhrx amdxdna) runtime for the IRON host stack.
-+#
-+# This mirrors the role find_package(XRT) plays for the XRT backend: it probes
-+# standard install locations (plus a few env-var hints) so callers don't have to
-+# hard-code paths or rely on activate_env.sh. Environment variables, when set,
-+# are treated only as *hints* with the highest priority -- detection still works
-+# without them.
-+#
-+# Result variables:
-+#   HRX_FOUND                    TRUE if a usable HRX tree was located.
-+#   HRX_DIR                      Root of the hrx source checkout.
-+#   HRX_INCLUDE_DIR              Dir containing hrx_runtime.h (libhrx/include).
-+#   HRX_LIBHRX                   Full path to libhrx.so.
-+#   HRX_LIBHRX_DIR               Dir containing libhrx.so.
-+#
-+# Additional variables for building the XADX flatbuffer helper from source
-+# (set only when the matching build artifacts are present):
-+#   HRX_BUILD_DIR                HRX build dir (contains libflatcc_runtime.a).
-+#   HRX_RUNTIME_SRC_DIR          <HRX_DIR>/runtime/src (schema sources).
-+#   HRX_BUILD_RUNTIME_SRC_DIR    <HRX_BUILD_DIR>/runtime/src (generated builder).
-+#   HRX_FLATCC_INCLUDE_DIR       flatcc public headers.
-+#   HRX_FLATCC_LIB               libflatcc_runtime.a.
-+#   HRX_XADX_BUILDABLE           TRUE if all of the above were found.
-+
-+include(FindPackageHandleStandardArgs)
-+
-+# --- candidate roots (env hints first, then standard locations) --------------
-+set(_hrx_root_hints
-+  "$ENV{HRX_DIR}"
-+  "$HOME/hrx"
-+  "$ENV{HOME}/hrx"
-+  "$ENV{HOME}/avarma_repro/hrx"
-+  "/opt/hrx"
-+  "/usr/local/hrx"
-+  "${CMAKE_CURRENT_LIST_DIR}/../../../hrx"
-+  "${CMAKE_CURRENT_LIST_DIR}/../../../../hrx"
-+)
-+
-+# --- 1) the public header (anchors the source root) --------------------------
-+find_path(HRX_INCLUDE_DIR
-+  NAMES hrx_runtime.h
-+  HINTS ${_hrx_root_hints}
-+  PATH_SUFFIXES libhrx/include
-+  DOC "Directory containing hrx_runtime.h"
-+)
-+
-+if(HRX_INCLUDE_DIR)
-+  # <root>/libhrx/include/hrx_runtime.h -> <root>
-+  get_filename_component(HRX_DIR "${HRX_INCLUDE_DIR}/../.." ABSOLUTE)
-+endif()
-+
-+# --- 2) libhrx.so ------------------------------------------------------------
-+# Build the candidate build-dir list from env hints and the derived source root.
-+set(_hrx_build_hints
-+  "$ENV{HRX_BUILD}"
-+  "${HRX_DIR}/build/cmake"
-+  "${HRX_DIR}/build-amdxdna-native"
-+  "${HRX_DIR}/build"
-+)
-+
-+find_library(HRX_LIBHRX
-+  NAMES hrx libhrx
-+  HINTS
-+    "$ENV{LIBHRX_DIR}"
-+    "$ENV{HRX_BUILD}/libhrx/src/libhrx"
-+    "${HRX_DIR}/build/cmake/libhrx/src/libhrx"
-+    "${HRX_DIR}/build-amdxdna-native/libhrx/src/libhrx"
-+  PATHS /usr/lib /usr/local/lib
-+  DOC "Path to libhrx.so"
-+)
-+
-+if(HRX_LIBHRX)
-+  get_filename_component(HRX_LIBHRX_DIR "${HRX_LIBHRX}" DIRECTORY)
-+endif()
-+
-+# --- 3) build artifacts needed to compile the XADX helper from source --------
-+find_library(HRX_FLATCC_LIB
-+  NAMES flatcc_runtime libflatcc_runtime
-+  HINTS ${_hrx_build_hints}
-+  DOC "Path to libflatcc_runtime.a"
-+)
-+
-+if(HRX_FLATCC_LIB)
-+  get_filename_component(HRX_BUILD_DIR "${HRX_FLATCC_LIB}" DIRECTORY)
-+endif()
-+
-+find_path(HRX_FLATCC_INCLUDE_DIR
-+  NAMES flatcc/flatcc_builder.h
-+  HINTS
-+    "${HRX_BUILD_DIR}/_deps/flatcc-src/include"
-+    "$ENV{HRX_BUILD}/_deps/flatcc-src/include"
-+  DOC "flatcc public include dir"
-+)
-+
-+# Generated XADX schema builder header lives under the build tree.
-+find_path(HRX_BUILD_RUNTIME_SRC_DIR
-+  NAMES iree/schemas/amdxdna_xclbin_executable_def_builder.h
-+  HINTS
-+    "${HRX_BUILD_DIR}/runtime/src"
-+    "$ENV{HRX_BUILD}/runtime/src"
-+  DOC "HRX build runtime/src (generated flatbuffer builder)"
-+)
-+
-+if(HRX_DIR AND EXISTS "${HRX_DIR}/runtime/src")
-+  set(HRX_RUNTIME_SRC_DIR "${HRX_DIR}/runtime/src")
-+endif()
-+
-+set(HRX_XADX_BUILDABLE FALSE)
-+if(HRX_FLATCC_LIB AND HRX_FLATCC_INCLUDE_DIR AND HRX_BUILD_RUNTIME_SRC_DIR
-+    AND HRX_RUNTIME_SRC_DIR)
-+  set(HRX_XADX_BUILDABLE TRUE)
-+endif()
-+
-+find_package_handle_standard_args(HRX
-+  REQUIRED_VARS HRX_INCLUDE_DIR HRX_LIBHRX
-+  FAIL_MESSAGE
-+    "Could not find HRX. Set HRX_DIR (source checkout with libhrx/include/hrx_runtime.h) and/or LIBHRX_DIR (dir with libhrx.so), or install HRX to a standard location."
-+)
-+
-+mark_as_advanced(
-+  HRX_INCLUDE_DIR HRX_LIBHRX HRX_FLATCC_LIB HRX_FLATCC_INCLUDE_DIR
-+  HRX_BUILD_RUNTIME_SRC_DIR
-+)
 diff --git a/programming_examples/basic/vector_scalar_add/Makefile b/programming_examples/basic/vector_scalar_add/Makefile
-index ee32c3c..254f3c1 100644
+index ee32c3c..b89de71 100644
 --- a/programming_examples/basic/vector_scalar_add/Makefile
 +++ b/programming_examples/basic/vector_scalar_add/Makefile
 @@ -4,7 +4,7 @@
@@ -172,7 +37,7 @@ index ee32c3c..254f3c1 100644
  $(eval $(call build_host_exe,${runlist_targetname},_build_runlist,test_runlist.cpp,-DTEST_SRC=test_runlist.cpp))
 +# HRX chain (runlist) testbench. Self-selects the HRX backend (-DUSE_HRX=ON) so
 +# `make run_runlist_hrx` works without RUNTIME=hrx; it consumes insts.bin
-+# directly (the HRX wrapper parses the TXN itself, no aiebu/ELF needed).
++# directly through HRX's executable-builder API (no aiebu/ELF needed).
 +$(eval $(call build_host_exe,${runlist_hrx_targetname},_build_runlist_hrx,test_runlist_hrx.cpp,-DTEST_SRC=test_runlist_hrx.cpp -DUSE_HRX=ON))
  
  .PHONY: run
@@ -417,7 +282,7 @@ index 0000000..d26ac46
 +  }
 +}
 diff --git a/programming_examples/common.cmake b/programming_examples/common.cmake
-index 3fd4fea..c5bcc84 100644
+index 3fd4fea..5642891 100644
 --- a/programming_examples/common.cmake
 +++ b/programming_examples/common.cmake
 @@ -2,7 +2,7 @@
@@ -429,11 +294,11 @@ index 3fd4fea..c5bcc84 100644
  
  # Common CMake configuration for programming examples
  # This file provides common setup for test_utils library linking
-@@ -47,9 +47,37 @@ if(NOT MLIR_AIE_DIR)
+@@ -47,9 +47,40 @@ if(NOT MLIR_AIE_DIR)
    message(FATAL_ERROR "Unable to determine MLIR_AIE_DIR (repo root not found and Python probe unavailable).")
  endif()
  
-+# Make the repo's Find modules (FindHRX.cmake, ...) available to find_package.
++# Make the repo's legacy Find modules (such as FindXRT.cmake) available.
 +list(APPEND CMAKE_MODULE_PATH "${MLIR_AIE_DIR}/cmake/modules")
 +
 +# -----------------------------------------------------------------------------
@@ -449,6 +314,9 @@ index 3fd4fea..c5bcc84 100644
 +option(USE_HRX "Build programming-example host code against HRX instead of XRT" OFF)
 +
 +if(USE_HRX)
++  if(DEFINED ENV{HRX_INSTALL} AND NOT "$ENV{HRX_INSTALL}" STREQUAL "")
++    list(PREPEND CMAKE_PREFIX_PATH "$ENV{HRX_INSTALL}")
++  endif()
 +  if(NOT TARGET xrt_coreutil)
 +    add_library(xrt_coreutil INTERFACE IMPORTED)
 +  endif()
@@ -467,7 +335,7 @@ index 3fd4fea..c5bcc84 100644
  if(NOT DEFINED XRT_INC_DIR OR NOT DEFINED XRT_LIB_DIR)
      find_package(XRT QUIET)
      if(XRT_FOUND)
-@@ -91,6 +119,7 @@ if(NOT DEFINED XRT_INC_DIR OR NOT DEFINED XRT_LIB_DIR)
+@@ -91,6 +122,7 @@ if(NOT DEFINED XRT_INC_DIR OR NOT DEFINED XRT_LIB_DIR)
          endif()
      endif()
  endif()
@@ -475,58 +343,7 @@ index 3fd4fea..c5bcc84 100644
  
  # -----------------------------------------------------------------------------
  # test_utils discovery
-@@ -101,9 +130,101 @@ set(TEST_UTILS_INST_INC_DIR "${MLIR_AIE_DIR}/runtime_lib/x86_64/test_lib/include
- set(TEST_UTILS_SRC_DIR     "${MLIR_AIE_DIR}/runtime_lib/test_lib")
- set(TEST_UTILS_RUNTIME_LIB_DIR "${MLIR_AIE_DIR}/runtime_lib")
- 
-+# -----------------------------------------------------------------------------
-+# XADX flatbuffer helper (libironhrx_xadx)
-+# -----------------------------------------------------------------------------
-+# Produces the small C-ABI library that serializes the amdxdna XADX executable
-+# (xclbin + TXN control code + patch table). Preference order:
-+#   1. Build it from the in-tree source against the detected HRX tree (no manual
-+#      step, ABI-matched to the running libhrx).
-+#   2. IRON_HRX_XADX env var pointing at a prebuilt .so.
-+#   3. A prebuilt .so already sitting next to the Python helper (legacy).
-+# Returns the target/path to link via the named output variable.
-+function(_mlir_aie_hrx_xadx_helper out_var)
-+  set(_xadx_src "${MLIR_AIE_DIR}/python/utils/hostruntime/hrxruntime/iron_hrx_xadx.cpp")
-+
-+  if(HRX_XADX_BUILDABLE AND EXISTS "${_xadx_src}")
-+    if(NOT TARGET ironhrx_xadx)
-+      add_library(ironhrx_xadx SHARED "${_xadx_src}")
-+      set_target_properties(ironhrx_xadx PROPERTIES
-+        CXX_STANDARD 20
-+        CXX_STANDARD_REQUIRED ON
-+        POSITION_INDEPENDENT_CODE ON
-+        OUTPUT_NAME ironhrx_xadx)
-+      target_include_directories(ironhrx_xadx PRIVATE
-+        "${HRX_RUNTIME_SRC_DIR}"
-+        "${HRX_BUILD_RUNTIME_SRC_DIR}"
-+        "${HRX_FLATCC_INCLUDE_DIR}")
-+      target_link_libraries(ironhrx_xadx PRIVATE "${HRX_FLATCC_LIB}")
-+    endif()
-+    set(${out_var} ironhrx_xadx PARENT_SCOPE)
-+    return()
-+  endif()
-+
-+  # Fallback: explicit override or an existing prebuilt .so.
-+  set(_xadx_so "$ENV{IRON_HRX_XADX}")
-+  if(NOT _xadx_so)
-+    set(_xadx_so "${MLIR_AIE_DIR}/python/utils/hostruntime/hrxruntime/libironhrx_xadx.so")
-+  endif()
-+  if(NOT EXISTS "${_xadx_so}")
-+    message(FATAL_ERROR
-+      "Cannot provide the XADX helper: HRX build artifacts (flatcc + generated "
-+      "schema builder) were not found, and no prebuilt libironhrx_xadx.so is "
-+      "available at '${_xadx_so}'. Point HRX_BUILD at a full HRX build dir, or "
-+      "set IRON_HRX_XADX to a prebuilt helper .so.")
-+  endif()
-+  message(STATUS "HRX: using prebuilt XADX helper '${_xadx_so}' "
-+    "(HRX build artifacts not found, cannot build from source).")
-+  set(${out_var} "${_xadx_so}" PARENT_SCOPE)
-+endfunction()
-+
+@@ -104,6 +136,35 @@ set(TEST_UTILS_RUNTIME_LIB_DIR "${MLIR_AIE_DIR}/runtime_lib")
  function(target_link_test_utils target_name)
    target_include_directories(${target_name} PUBLIC "${TEST_UTILS_RUNTIME_LIB_DIR}")
  
@@ -539,22 +356,13 @@ index 3fd4fea..c5bcc84 100644
 +      message(FATAL_ERROR "HRX wrapper not found at: ${TEST_UTILS_SRC_DIR}")
 +    endif()
 +
-+    # Auto-detect HRX (FindHRX.cmake probes standard locations + env hints).
-+    # Done once at function scope; HRX_* persist as cache vars afterwards.
-+    if(NOT HRX_FOUND)
-+      find_package(HRX QUIET)
-+    endif()
-+    if(NOT HRX_FOUND)
-+      message(FATAL_ERROR
-+        "USE_HRX=ON but the HRX runtime was not found. "
-+        "Set HRX_DIR (source checkout with libhrx/include/hrx_runtime.h) and "
-+        "LIBHRX_DIR (dir with libhrx.so), or install HRX to a standard "
-+        "location. Falling back to the default XRT backend (RUNTIME=xrt) is "
-+        "also an option if HRX is unavailable.")
-+    endif()
++    # Consume HRX through its installed CMake package. This carries the public
++    # include path, import library/shared library, and platform-specific link
++    # requirements as one versioned target.
++    find_package(hrx CONFIG REQUIRED)
 +
 +    target_include_directories(${target_name} PUBLIC
-+        "${TEST_UTILS_SRC_DIR}" "${HRX_INCLUDE_DIR}")
++        "${TEST_UTILS_SRC_DIR}")
 +    target_compile_definitions(${target_name} PRIVATE TEST_UTILS_USE_HRX)
 +
 +    if(NOT TARGET test_utils)
@@ -563,14 +371,8 @@ index 3fd4fea..c5bcc84 100644
 +          "${TEST_UTILS_SRC_DIR}" "${TEST_UTILS_RUNTIME_LIB_DIR}")
 +    endif()
 +
-+    # XADX flatbuffer helper. Preferred: build it from source against the
-+    # detected HRX tree (keeps it ABI-matched to libhrx, no manual step / no
-+    # prebuilt binary in the source tree). Fall back to an explicit override or
-+    # an existing prebuilt .so only if the build inputs are unavailable.
-+    _mlir_aie_hrx_xadx_helper(_xadx_target)
-+
 +    target_link_libraries(${target_name} PUBLIC
-+        test_utils "${HRX_LIBHRX}" "${_xadx_target}")
++        test_utils hrx::hrx)
 +    return()
 +  endif()
 +
@@ -610,24 +412,23 @@ index 3592d26..a2bca9c 100644
  	cp $(2)/$(1)$${host_exe_suffix} $$@
  endef
 diff --git a/python/CMakeLists.txt b/python/CMakeLists.txt
-index 1c7581c..f60f28b 100644
+index 1c7581c..b7b13ef 100644
 --- a/python/CMakeLists.txt
 +++ b/python/CMakeLists.txt
-@@ -52,6 +52,12 @@ declare_mlir_python_sources(AIEPythonSources.Utils
+@@ -52,6 +52,11 @@ declare_mlir_python_sources(AIEPythonSources.Utils
      utils/hostruntime/xrtruntime/hostruntime.py
      utils/hostruntime/xrtruntime/parameter_scratchpad.py
      utils/hostruntime/xrtruntime/tensor.py
 +    utils/hostruntime/hrxruntime/__init__.py
++    utils/hostruntime/hrxruntime/abi.py
 +    utils/hostruntime/hrxruntime/discovery.py
 +    utils/hostruntime/hrxruntime/hostruntime.py
 +    utils/hostruntime/hrxruntime/tensor.py
-+    utils/hostruntime/hrxruntime/build_xadx_helper.sh
-+    utils/hostruntime/hrxruntime/iron_hrx_xadx.cpp
      utils/compile/__init__.py
      utils/compile/utils.py
      utils/compile/cache/utils.py
 diff --git a/python/utils/__init__.py b/python/utils/__init__.py
-index 65a51b5..334f731 100644
+index 65a51b5..dd6553b 100644
 --- a/python/utils/__init__.py
 +++ b/python/utils/__init__.py
 @@ -4,7 +4,7 @@
@@ -654,9 +455,9 @@ index 65a51b5..334f731 100644
  
 -if has_xrt:
 +# Capability probe for the HRX (libhrx amdxdna) backend. This is the analogue of
-+# ``import pyxrt`` above for XRT: it only checks whether libhrx.so can be located
-+# on this host (no dlopen / no device init), so it is cheap and safe to run at
-+# import time even when HRX is not the selected backend.
++# ``import pyxrt`` above for XRT: it only checks whether the platform HRX shared
++# library can be located (no dlopen / no device init), so it is cheap and safe
++# to run even when HRX is not the selected backend.
 +try:
 +    from .hostruntime.hrxruntime.discovery import hrx_available
 +
@@ -671,8 +472,7 @@ index 65a51b5..334f731 100644
 +#   xrt   - force the XRT backend (error later if pyxrt is missing).
 +#   hrx   - force the HRX backend (error here if libhrx is not found).
 +#   auto  - (default) prefer XRT when present, else fall back to HRX, else CPU.
-+# We import the selected backend lazily because the HRX package dlopen()s libhrx
-+# + libironhrx_xadx at import time.
++# We import the selected backend lazily because the HRX package loads libhrx.
 +_IRON_RUNTIME = os.environ.get("IRON_RUNTIME", "auto").lower()
 +
 +if _IRON_RUNTIME not in ("xrt", "hrx", "auto"):
@@ -684,8 +484,9 @@ index 65a51b5..334f731 100644
 +
 +if _IRON_RUNTIME == "hrx" and not has_hrx:
 +    raise ImportError(
-+        "IRON_RUNTIME=hrx was requested but libhrx.so could not be located. "
-+        "Install HRX to a standard location, or set HRX_DIR/LIBHRX_DIR. "
++        "IRON_RUNTIME=hrx was requested but the HRX shared library could not be located. "
++        "Install HRX to a standard location, or set HRX_LIBHRX, LIBHRX_DIR, "
++        "or HRX_INSTALL. "
 +        "Use IRON_RUNTIME=auto to fall back to XRT/CPU when HRX is absent."
 +    )
 +
@@ -792,384 +593,94 @@ index 65a51b5..334f731 100644
 +    return device
 diff --git a/python/utils/hostruntime/hrxruntime/README.md b/python/utils/hostruntime/hrxruntime/README.md
 new file mode 100644
-index 0000000..f2e8b1e
+index 0000000..3ddfc15
 --- /dev/null
 +++ b/python/utils/hostruntime/hrxruntime/README.md
-@@ -0,0 +1,341 @@
-+# Running MLIR-AIE IRON (Python) & C++ tests on the **HRX** runtime
+@@ -0,0 +1,50 @@
++# IRON HRX host runtime
 +
-+This package (`aie.utils.hostruntime.hrxruntime`) is a drop-in **HRX** host-runtime
-+backend for MLIR-AIE, a sibling of the default **XRT** backend. It dispatches
-+IRON designs and the C++ testbench on the AMD **XDNA2 NPU** through **`libhrx`**
-+(the IREE-based runtime with an `amdxdna` HAL) instead of XRT, consuming the
-+*identical* `aiecc` artifacts (`final.xclbin` + `insts.bin`).
-+
-+This README is a **self-contained runbook**: follow it top-to-bottom to build and
-+run both the IRON (Python) end-to-end tests and the C++ on-hardware tests with
-+HRX. No source edits to example/test files are needed — HRX is selected by an
-+environment/make variable.
-+
-+> TL;DR
-+> - **IRON / Python:** `IRON_RUNTIME=hrx python <example>.py …`
-+> - **C++:** `RUNTIME=hrx make run`
-+> - HRX is **auto-detected** (no env vars required if it's in a standard/sibling
-+>   location). The XADX helper `libironhrx_xadx.so` is **built on demand**.
-+> - `aiebu-asm` / XRT are **not** required at runtime (the patch table is parsed
-+>   straight from `insts.bin`; aiebu is only a fallback).
-+
-+---
-+
-+## 1. Prerequisites
-+
-+| Requirement | Notes |
-+|---|---|
-+| **XDNA2 NPU** (Strix / `npu4` / aie2p) | `/dev/accel/accel0` present; `amdxdna` driver loaded. |
-+| **HRX built** (`libhrx.so` + flatcc) | See §2. This is the runtime we dispatch through. |
-+| **MLIR-AIE installed from *this* branch** | So `import aie` works, `aiecc` can build examples, and the wheel includes this `hrxruntime` package + the `IRON_RUNTIME` switch. See §3. |
-+| **A C++ toolchain + CMake ≥ 3.30** | Only for the C++ tests. (`pip install "cmake>=3.30"` into the venv if the system cmake is older.) |
-+| **Peano / llvm-aie** | Needed by `aiecc` to build the example `.xclbin`/`insts.bin` (same as the XRT flow). |
-+| XRT userspace (`aiebu-asm`, pyxrt) | **Optional.** Only used as a fallback (see §7) and for the XRT baseline. HRX itself does not need it. |
-+
-+The NPU + driver + Peano requirements are exactly the same as the normal (XRT)
-+MLIR-AIE flow — if XRT examples build/run on this box, HRX has what it needs too,
-+plus a built `libhrx`.
-+
-+---
-+
-+## 2. Build HRX (`libhrx.so` + flatcc)
-+
-+Clone HRX, check out the `amdxdna` HAL branch (**PR #37**), and build it.
-+
-+> **Placement (do this for zero-config detection):** clone HRX as a **sibling of
-+> `mlir-aie`** (i.e. into `<parent-of-mlir-aie>/hrx`). Auto-detection then finds
-+> it with no env vars. (`~/hrx`, `/opt/hrx`, `/usr/local/hrx` also work; anything
-+> else needs the env hints in §4.)
++This backend runs the artifacts emitted by `aiecc` (`final.xclbin` and
++`insts.bin`) through HRX instead of XRT:
 +
 +```bash
-+# from the directory that contains your mlir-aie checkout:
-+git clone https://github.com/ROCm/hrx-system.git hrx
-+cd hrx
-+gh pr checkout 37          # or: git fetch origin pull/37/head:amdxdna && git checkout amdxdna
-+
-+python dev.py cmake setup
-+python dev.py cmake configure -DIREE_HAL_DRIVER_AMDXDNA=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
-+python dev.py cmake build
++IRON_RUNTIME=hrx python <example>.py ...
 +```
 +
-+> **If `python dev.py cmake build` fails** on an unrelated `loom` `static_assert`
-+> in some other target, build just the runtime library — it's all HRX needs here:
-+> ```bash
-+> python dev.py cmake build --target libhrx_src_libhrx_hrx
-+> ```
++## Requirements
 +
-+**Verify** the build produced everything the MLIR-AIE HRX backend consumes (the
-+`libhrx.so` to dispatch through, plus the flatcc + generated schema used to build
-+the XADX helper):
++- An HRX build with the amdxdna driver enabled.
++- An amdxdna NPU and driver.
++- `HRX_LIBHRX`, `LIBHRX_DIR`, or `HRX_INSTALL` when HRX is not installed in a
++  standard location.
++
++The runtime supports Linux and Windows. It discovers `libhrx.so` or `hrx.dll`
++and calls the public HRX C API through `ctypes`.
++
++## Executable creation
++
++IRON does not serialize XADX or link FlatCC. It passes:
++
++- the xclbin bytes,
++- the raw XAie transaction from `insts.bin`, and
++- the entry-point name
++
++to `hrx_amdxdna_executable_create`. HRX derives host relocation metadata from
++the transaction, serializes its private XADX representation, and loads the
++executable. This keeps the backend package format and schema implementation
++inside HRX and avoids a platform-specific helper library.
++
++## C++ examples
++
++Programming examples can select the same backend with:
 +
 +```bash
-+B=build/cmake   # HRX build dir
-+ls $B/libhrx/src/libhrx/libhrx.so
-+ls $B/libflatcc_runtime.a
-+ls $B/_deps/flatcc-src/include
-+ls $B/runtime/src/iree/schemas/amdxdna_xclbin_executable_def_builder.h
-+nm -D $B/libhrx/src/libhrx/libhrx.so | grep -E 'hrx_buffer_map_with_mode|hrx_stream_dispatch'
++HRX_INSTALL=/path/to/hrx-install RUNTIME=hrx make run
 +```
 +
-+All five must exist. If you cloned HRX as a sibling of `mlir-aie`, you're done —
-+no env vars needed; skip to §3. Otherwise set the hints in §4.
++`hrx_test_wrapper.h` uses the same `hrx_amdxdna_executable_create` API and links
++only against the installed `hrx::hrx` package. `HRX_INSTALL` is unnecessary
++when that package is already on CMake's normal search path.
 +
-+---
++## Files
 +
-+## 3. Install MLIR-AIE (from this branch)
-+
-+Install the `mlir_aie` + `llvm_aie` wheels per the project's normal instructions,
-+**built from this branch** so the wheel ships this `hrxruntime` package and the
-+`IRON_RUNTIME` selection logic in `aie/utils/__init__.py`.
-+
-+Verify the imported `aie.utils` is the one from this branch (it must expose the
-+HRX hooks):
-+
-+```bash
-+python3 - <<'PY'
-+import aie.utils as u, inspect
-+print("aie.utils from:", inspect.getfile(u))
-+print("has hrx hooks  :", hasattr(u, "has_hrx"))   # must be True
-+PY
-+```
-+
-+> **Two-trees caveat.** If you instead use a *prebuilt* wheel and edit this source
-+> tree directly, the edits won't take effect until copied into the imported
-+> package dir (the path printed above). The robust fix is to **(re)build/install
-+> the wheel from this branch**. If you must hot-patch, copy:
-+> `python/utils/__init__.py` → `<aie>/utils/__init__.py` and
-+> `python/utils/hostruntime/hrxruntime/*` → `<aie>/utils/hostruntime/hrxruntime/`,
-+> then `rm -rf <aie>/utils/hostruntime/hrxruntime/__pycache__`.
-+
-+---
-+
-+## 4. Environment (optional — only if auto-detection fails)
-+
-+Auto-detection (`FindHRX.cmake` for C++, `hrxruntime/discovery.py` for Python)
-+probes standard locations and a sibling `../hrx` checkout. If your HRX lives
-+elsewhere, export these **hints** (highest priority):
-+
-+```bash
-+export HRX_DIR=<hrx>                         # checkout w/ libhrx/include/hrx_runtime.h
-+export HRX_BUILD=<hrx>/build/cmake           # build dir w/ libflatcc_runtime.a
-+export LIBHRX_DIR=$HRX_BUILD/libhrx/src/libhrx
-+export LD_LIBRARY_PATH=$LIBHRX_DIR:$LD_LIBRARY_PATH
-+```
-+
-+**Verify HRX is discoverable.** Primary check (robust — prints `True`/`False`
-+even when HRX is missing; this loads `libhrx` but does **not** init the device or
-+run a kernel):
-+
-+```bash
-+python3 -c "import aie.utils as u; print('has_hrx:', u.has_hrx)"   # -> True
-+```
-+
-+If `has_hrx` is `True`, you're ready. To see the resolved paths (only meaningful
-+once HRX is found):
-+
-+```bash
-+python3 -c "from aie.utils.hostruntime.hrxruntime import discovery as d; \
-+print('libhrx :', d.find_libhrx()); print('build  :', d.find_hrx_build())"
-+```
-+
-+The XADX helper `libironhrx_xadx.so` is compiled automatically on first use
-+(Python) or by the CMake build (C++).
-+
-+---
-+
-+## 5. Run IRON (Python) end-to-end tests with HRX
-+
-+Select the backend with **`IRON_RUNTIME=hrx`**. Everything else is the normal
-+IRON flow. Two common shapes:
-+
-+### 5a. `test.py`-driven example
-+
-+```bash
-+cd programming_examples/basic/vector_scalar_mul
-+make                                  # builds build/final_8192.xclbin + build/insts_8192.bin (aiecc)
-+IRON_RUNTIME=hrx python3 test.py \
-+  --xclbin build/final_8192.xclbin --instr build/insts_8192.bin \
-+  --kernel MLIR_AIE --in1-size 8192 --in2-size 4 --out-size 8192
-+# expect: PASS!
-+```
-+
-+### 5b. `@iron.jit` self-running example
-+
-+```bash
-+cd programming_examples/basic/vector_vector_add
-+IRON_RUNTIME=hrx python3 vector_vector_add.py     # expect: PASS!
-+```
-+
-+### Backend selection semantics (`IRON_RUNTIME`)
-+
-+- `hrx`  — force HRX; clear error if `libhrx` can't be found.
-+- `xrt`  — force XRT (default upstream behavior).
-+- `auto` *(default when unset)* — XRT if available, else HRX, else CPU.
-+
-+Quick smoke test (no hardware dispatch — just import + selection):
-+
-+```bash
-+IRON_RUNTIME=hrx python3 -c "import aie.utils as u; print(u.DEFAULT_TENSOR_CLASS.__name__)"
-+# -> HRXTensor
-+```
-+
-+Designs known to pass on HRX: `vector_scalar_mul`, `vector_vector_add`,
-+`vector_scalar_add`, `vector_reduce_add`, `passthrough_dmas`,
-+`vector_reduce_max`.
-+
-+### 5c. Multi-dispatch chains / runlists (`run_chain`)
-+
-+`HRXHostRuntime.run_chain([(handle, args), ...])` is the HRX analogue of
-+`xrt::runlist` (the XRT `test_runlist.cpp` testbench): it records several
-+dispatches into one HRX command buffer — in order, with an execution + memory
-+barrier between them — and submits the whole batch with a single
-+`synchronize`. The amdxdna HAL lowers the multi-dispatch command buffer into one
-+`ERT_CMD_CHAIN`. Because of the barrier, a later run observes an earlier run's
-+device writes, so producer→consumer chains work (one run's output buffer is the
-+next run's input). Entries may share one `handle` (re-dispatch the same kernel)
-+or use different handles (a true multi-kernel pipeline).
-+
-+A chained test mirroring `test_runlist.cpp` (`run0: out0 = in+1`,
-+`run1: out1 = out0+1`, plus a deeper N-link chain):
-+
-+```bash
-+cd programming_examples/basic/vector_scalar_add
-+make all                              # build/final.xclbin + build/insts.bin
-+IRON_RUNTIME=hrx python3 test_chain_hrx.py \
-+  --xclbin build/final.xclbin --instr build/insts.bin --kernel MLIR_AIE
-+# expect: PASS!
-+```
-+
-+---
-+
-+## 6. Run C++ on-hardware tests with HRX
-+
-+Select the backend with **`RUNTIME=hrx`** on the example's `make`. This builds the
-+C++ host exe against `libhrx` (no XRT SDK headers needed) and runs it on the NPU.
-+
-+```bash
-+cd programming_examples/basic/vector_reduce_max/single_core_designs
-+make all                       # aiecc: build/final.xclbin + build/insts.bin
-+RUNTIME=hrx make run           # build C++ host vs HRX + run on the NPU
-+# expect: ... PASS!
-+```
-+
-+What `RUNTIME=hrx` does under the hood (no per-example edits):
-+- `makefile-common` adds `-DUSE_HRX=ON` to every `build_host_exe` cmake call.
-+- `programming_examples/common.cmake` runs `find_package(HRX)`, compiles the XADX
-+  helper `libironhrx_xadx.so` from source (ABI-matched to your `libhrx`), links
-+  `libhrx.so` + the helper, and defines `TEST_UTILS_USE_HRX` so the shared
-+  `xrt_test_wrapper.h` pulls in `hrx_test_wrapper.h`. A dummy `xrt_coreutil`
-+  INTERFACE target neutralizes the examples' `-lxrt_coreutil`.
-+
-+> If the system `cmake` is < 3.30, install a newer one (`pip install "cmake>=3.30"`)
-+> and ensure it's first on `PATH` before `make`.
-+
-+`make run` builds the host exe into `_build/` (alongside the freshly compiled
-+`_build/libironhrx_xadx.so`, on the exe's RPATH), copies it to
-+`./<targetname>.exe`, and runs it. You can re-run it directly:
-+
-+```bash
-+./vector_reduce_max.exe -x build/final.xclbin -i build/insts.bin -k MLIR_AIE
-+```
-+
-+> **Switching backends?** If you previously built an example (XRT or an older
-+> HRX build) and then hit `error while loading shared libraries:
-+> libironhrx_xadx.so` at run time, you have a **stale exe** with an outdated
-+> RPATH. Run `make clean` first, then `RUNTIME=hrx make run`. (A fresh checkout
-+> has no stale artifacts, so this only bites when reusing a build tree.)
-+
-+### 6b. C++ multi-dispatch chains / runlists
-+
-+`hrx_test::dispatch_chain({{&lk, {&a, &b}}, ...})` (in `hrx_test_wrapper.h`) is
-+the C++ analogue of `xrt::runlist` (the XRT `test_runlist.cpp` testbench) and of
-+the Python `run_chain`: it records several kernel dispatches into one HRX command
-+buffer — in order, with an execution + memory barrier between them — then submits
-+the batch with a single `synchronize` (the amdxdna HAL lowers it into one
-+`ERT_CMD_CHAIN`). A later run sees an earlier run's device writes, so
-+producer→consumer chains work; entries may share one `LoadedKernel` or use
-+different ones (a multi-kernel pipeline).
-+
-+A chained testbench mirroring `test_runlist.cpp` (`run0: out0 = in+1`,
-+`run1: out1 = out0+1`, where `run1`'s input is `run0`'s output) lives in
-+`vector_scalar_add`. Its make target self-selects the HRX backend
-+(`-DUSE_HRX=ON`), so you don't even need `RUNTIME=hrx`:
-+
-+```bash
-+cd programming_examples/basic/vector_scalar_add
-+make all                       # build/final.xclbin + build/insts.bin
-+make run_runlist_hrx           # build the HRX chain testbench + run on the NPU
-+# expect: ... PASS!
-+```
-+
-+> The HRX runlist testbench reads `insts.bin` directly (the wrapper parses the
-+> TXN itself — no aiebu/ELF needed), unlike the XRT `run_runlist` target which
-+> consumes `insts.elf`.
-+
-+---
-+
-+## 7. How patch tables work (and why aiebu isn't required)
-+
-+HRX's `amdxdna` COMMAND_CHAIN path host-patches each I/O buffer's device address
-+into the control code using a **patch table** of `(offset, arg_idx, addend)`
-+triples. The control code is the raw `insts.bin` TXN words; the patch table is
-+parsed **directly from the TXN's embedded `DDR_PATCH` ops** (`parse_txn` in
-+`__init__.py` for Python, `parse_txn()` in `hrx_test_wrapper.h` for C++).
-+
-+Without the patch table the NPU writes to address 0 → **all-zero output**. The
-+direct parser is validated byte-for-byte against `aiebu-asm`.
-+
-+- The direct parser handles TXN **v0.1** (what `aiecc` emits today).
-+- If it ever meets an unknown TXN version/opcode, it falls back to the
-+  `aiebu-asm` round-trip (needs XRT's `aiebu-asm`).
-+- Force the fallback for debugging with `IRON_HRX_FORCE_AIEBU=1` (Python and C++).
-+
-+---
-+
-+## 8. Troubleshooting
-+
-+| Symptom | Cause / Fix |
-+|---|---|
-+| `IRON_RUNTIME=hrx … ImportError: libhrx.so could not be located` | HRX not found. Build it (§2), place it as a sibling `../hrx`, or set `HRX_DIR`/`LIBHRX_DIR` (§4). Verify with the §4 probe. |
-+| C++ configure: `USE_HRX=ON but the HRX runtime was not found` | Same as above (CMake side). Set `HRX_DIR`/`LIBHRX_DIR` or co-locate `../hrx`. |
-+| `Cannot provide the XADX helper … flatcc/schema not found` | Your `HRX_BUILD` is incomplete. Ensure `libflatcc_runtime.a`, `_deps/flatcc-src/include`, and the generated `amdxdna_xclbin_executable_def_builder.h` exist (§2). |
-+| Output is **all zeros** but no error | Patch table empty/incorrect. Confirm you're on this branch; check `parse_txn` ran (unset `IRON_HRX_FORCE_AIEBU`). File a note — the design's arg order may be unusual. |
-+| `has_hrx`/import works but run hangs or `hrx_stream_synchronize … INTERNAL` | Possible NPU wedge (see §9). Recover with a driver reload. |
-+| `import aie.utils` lacks `has_hrx` | You're importing an upstream wheel, not this branch (§3 two-trees caveat). |
-+| C++ run: `error while loading shared libraries: libironhrx_xadx.so` | **Stale exe** from a previous build with an outdated RPATH. `make clean`, then `RUNTIME=hrx make run` (rebuilds the helper into `_build/` on the exe's RPATH). |
-+| C++ build: `CMake 3.30 or higher is required` | Old system cmake; install `cmake>=3.30` and put it first on `PATH`. |
-+| `aiebu-asm not found` (only if the direct parser fell back) | Either install XRT (`/opt/xilinx/xrt/bin/aiebu-asm`) or report the unhandled TXN version so `parse_txn` can learn it. |
-+
-+---
-+
-+## 9. Safety: do not wedge the NPU
-+
-+The NPU is a **single shared device**. On dev firmware, tight repeated dispatch
-+or `SIGKILL`-ing a process **mid-dispatch** can wedge the device so *both* XRT and
-+HRX then fail even a single run. Guidelines:
-+
-+- Prefer **single dispatches / small loops** when validating.
-+- **Never** `SIGKILL` a running dispatch; let it finish or time out.
-+- Recover a wedged device with a driver reload:
-+  ```bash
-+  sudo rmmod amdxdna && sudo modprobe amdxdna   # then re-check with one run
-+  ```
-+
-+---
-+
-+## 10. Files in this package
-+
-+| File | Role |
-+|---|---|
-+| `__init__.py` | ctypes bindings to `libhrx` + the XADX helper; `HRXContext` (device/stream/buffer/exe/dispatch); `parse_txn` (direct TXN → control code + patch table); `parse_control_elf` + `insts_to_control_elf` (aiebu fallback); `control_code_and_patch_table` dispatcher. |
-+| `hostruntime.py` | `HRXHostRuntime` / `CachedHRXRuntime` (the IRON `HostRuntime` implementation). |
-+| `tensor.py` | `HRXTensor` (persistent host-mapped device buffer, zero-copy numpy view). |
-+| `discovery.py` | Path-only HRX discovery (no dlopen): `find_libhrx`/`find_hrx_dir`/`find_hrx_build`/`ensure_xadx_helper`/`hrx_available`. |
-+| `iron_hrx_xadx.cpp` | Tiny C-ABI helper that serializes the amdxdna XADX flatbuffer (built into `libironhrx_xadx.so`). |
-+| `build_xadx_helper.sh` | Builds `libironhrx_xadx.so` (invoked automatically on first Python use). |
-+
-+Related (outside this package):
-+- `cmake/modules/FindHRX.cmake` — HRX auto-detection for CMake.
-+- `programming_examples/common.cmake` — `USE_HRX` wiring + builds the XADX helper.
-+- `programming_examples/makefile-common` — the `RUNTIME=xrt|hrx` switch.
-+- `runtime_lib/test_lib/hrx_test_wrapper.h` — C++ HRX backend (mirrors `xrt_test_wrapper.h`).
++- `discovery.py`: cross-platform HRX shared-library discovery.
++- `__init__.py`: HRX C ABI bindings and `HRXContext`.
++- `hostruntime.py`: IRON `HostRuntime` implementation and executable cache.
++- `tensor.py`: HRX-backed tensor storage and cache synchronization.
 diff --git a/python/utils/hostruntime/hrxruntime/__init__.py b/python/utils/hostruntime/hrxruntime/__init__.py
 new file mode 100644
-index 0000000..1dc92ad
+index 0000000..142268d
 --- /dev/null
 +++ b/python/utils/hostruntime/hrxruntime/__init__.py
-@@ -0,0 +1,766 @@
+@@ -0,0 +1,386 @@
 +# SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc.
 +# SPDX-License-Identifier: Apache-2.0
 +
 +"""
-+ctypes bindings for the HRX C ABI (``libhrx.so``) plus the small XADX builder
-+helper (``libironhrx_xadx.so``).
++ctypes bindings for the HRX C ABI.
 +
 +This is the HRX analogue of pyxrt for the IRON host stack: it binds only the
 +handful of ``hrx_*`` entry points the dispatch path needs (the same set the
 +FastFlowLM interposer proved), and wraps them in a tiny ``HRXContext`` singleton
-+that owns the device + stream and builds/loads XADX executables.
++that owns the device + stream. XADX serialization stays private to libhrx via
++``hrx_amdxdna_executable_create``.
 +
-+Library discovery order for ``libhrx.so``:
-+  1. ``$HRX_LIBHRX``                       (explicit full path to the .so)
-+  2. ``$LIBHRX_DIR/libhrx.so``             (set by activate_env.sh)
-+  3. ``$HRX_BUILD/libhrx/src/libhrx/libhrx.so``
-+  4. plain ``libhrx.so`` via the loader (LD_LIBRARY_PATH)
++Library discovery order:
++  1. ``$HRX_LIBHRX`` (explicit full path)
++  2. ``$LIBHRX_DIR/{libhrx.so,hrx.dll}``
++  3. ``$HRX_INSTALL/{lib,bin}/{libhrx.so,hrx.dll}``
++  4. standard system install locations
++  5. the platform library name via the dynamic loader
 +"""
 +
 +import ctypes
-+import logging
 +import os
-+from pathlib import Path
 +
-+from .discovery import ensure_xadx_helper, find_libhrx
-+
-+logger = logging.getLogger(__name__)
++from .abi import (
++    HrxAmdxdnaExecutableCreateParams,
++    make_amdxdna_executable_description,
++)
++from .discovery import find_libhrx
 +
 +# ---------------------------------------------------------------------------
 +# Enum / flag constants (mirror hrx_runtime.h; values match IREE HAL).
@@ -1190,18 +701,10 @@ index 0000000..1dc92ad
 +
 +HRX_DISPATCH_FLAG_NONE = 0
 +
-+# The HAL executable format string for the amdxdna xclbin-based package that
-+# build_xadx() produces (same string the FLM shim passes).
-+HRX_AMDXDNA_FORMAT = b"amdxdna-xclbin-fb"
-+
-+
 +class HRXError(RuntimeError):
 +    """Raised when an hrx_* call returns a non-OK status."""
 +
 +
-+# ---------------------------------------------------------------------------
-+# ctypes struct mirrors
-+# ---------------------------------------------------------------------------
 +class HrxDispatchConfig(ctypes.Structure):
 +    _fields_ = [
 +        ("workgroup_count", ctypes.c_uint32 * 3),
@@ -1221,47 +724,25 @@ index 0000000..1dc92ad
 +def _load_libhrx() -> ctypes.CDLL:
 +    last_err = None
 +    tried = []
-+    # Auto-detected path first (env hints + standard locations), then a bare
-+    # name so the dynamic loader's LD_LIBRARY_PATH search still works.
-+    for c in [find_libhrx(), "libhrx.so"]:
++    library_name = "hrx.dll" if os.name == "nt" else "libhrx.so"
++    # Auto-detected path first, then a bare platform name so normal loader
++    # search semantics remain available.
++    for c in [find_libhrx(), library_name]:
 +        if not c:
 +            continue
 +        tried.append(c)
 +        try:
-+            return ctypes.CDLL(c, mode=ctypes.RTLD_GLOBAL)
++            load_args = {} if os.name == "nt" else {"mode": ctypes.RTLD_GLOBAL}
++            return ctypes.CDLL(c, **load_args)
 +        except OSError as e:
 +            last_err = e
 +    raise HRXError(
-+        f"Could not load libhrx.so (tried: {tried}). "
-+        f"Install HRX to a standard location, set HRX_DIR/LIBHRX_DIR, or add "
++        f"Could not load {library_name} (tried: {tried}). "
++        f"Install HRX to a standard location, set HRX_LIBHRX/LIBHRX_DIR, or add "
 +        f"libhrx to LD_LIBRARY_PATH. Last error: {last_err}"
 +    )
 +
-+
-+def _load_xadx_helper() -> ctypes.CDLL:
-+    # Auto-detect a prebuilt helper; if absent, build it on first use from the
-+    # detected HRX tree (no manual step). Falls back to the loader search path.
-+    candidates = [ensure_xadx_helper(), "libironhrx_xadx.so"]
-+    last_err = None
-+    tried = []
-+    for c in candidates:
-+        if not c:
-+            continue
-+        tried.append(c)
-+        try:
-+            return ctypes.CDLL(c)
-+        except OSError as e:
-+            last_err = e
-+    raise HRXError(
-+        f"Could not load libironhrx_xadx.so (tried: {tried}). "
-+        f"It is built on first use from the HRX tree; ensure HRX_DIR/HRX_BUILD "
-+        f"point at a full HRX checkout + build, or run build_xadx_helper.sh. "
-+        f"Last error: {last_err}"
-+    )
-+
-+
 +_lib = _load_libhrx()
-+_xadx = _load_xadx_helper()
 +
 +# Status is an opaque pointer; NULL == OK.
 +_status_t = ctypes.c_void_p
@@ -1343,14 +824,12 @@ index 0000000..1dc92ad
 +)
 +
 +# Executables
-+_hrx_executable_load_data = _decl(
-+    "hrx_executable_load_data",
++_hrx_amdxdna_executable_create = _decl(
++    "hrx_amdxdna_executable_create",
 +    _status_t,
 +    [
 +        _handle,
-+        ctypes.c_void_p,
-+        ctypes.c_size_t,
-+        ctypes.c_char_p,
++        ctypes.POINTER(HrxAmdxdnaExecutableCreateParams),
 +        ctypes.POINTER(_handle),
 +    ],
 +)
@@ -1379,25 +858,6 @@ index 0000000..1dc92ad
 +)
 +_hrx_stream_synchronize = _decl("hrx_stream_synchronize", _status_t, [_handle])
 +
-+# XADX builder helper
-+_iron_build_xadx = _xadx.iron_build_xadx
-+_iron_build_xadx.restype = ctypes.c_int
-+_iron_build_xadx.argtypes = [
-+    ctypes.c_void_p,  # xclbin
-+    ctypes.c_size_t,  # xclbin_n
-+    ctypes.c_void_p,  # cc
-+    ctypes.c_size_t,  # cc_n
-+    ctypes.c_void_p,  # patch (flat uint32 triples) or NULL
-+    ctypes.c_size_t,  # patch_n (element count = 3 * n_relocs)
-+    ctypes.c_char_p,  # entry_name
-+    ctypes.POINTER(ctypes.c_void_p),  # out
-+    ctypes.POINTER(ctypes.c_size_t),  # out_n
-+]
-+_iron_free_xadx = _xadx.iron_free_xadx
-+_iron_free_xadx.restype = None
-+_iron_free_xadx.argtypes = [ctypes.c_void_p]
-+
-+
 +def _check(status, what: str):
 +    """Raise HRXError if status is non-OK (non-NULL)."""
 +    if not status:  # NULL == OK
@@ -1415,298 +875,6 @@ index 0000000..1dc92ad
 +    _hrx_status_ignore(s2)
 +    _hrx_status_ignore(status)
 +    raise HRXError(f"{what} failed (hrx status code {code}): {text}")
-+
-+
-+# ---------------------------------------------------------------------------
-+# Direct TXN -> (control_code, patch_table)   [no aiebu dependency]
-+# ---------------------------------------------------------------------------
-+class TxnUnsupportedError(HRXError):
-+    """Raised when an insts.bin TXN stream can't be parsed directly.
-+
-+    Signals the caller to fall back to the aiebu-asm round-trip
-+    (:func:`insts_to_control_elf` + :func:`parse_control_elf`).
-+    """
-+
-+
-+# XAie_TxnOpcode values (mlir-aie lib/Targets/AIETargetNPU.cpp).
-+_TXN_OP_WRITE = 0x00
-+_TXN_OP_BLOCKWRITE = 0x01
-+_TXN_OP_MASKWRITE = 0x03
-+_TXN_OP_PREEMPT = 0x06
-+_TXN_OP_TCT = 0x80  # XAIE_IO_CUSTOM_OP_BEGIN
-+_TXN_OP_DDR_PATCH = 0x81  # XAIE_IO_CUSTOM_OP_DDR_PATCH
-+_TXN_HEADER_BYTES = 16
-+
-+
-+def parse_txn(insts_bytes: bytes):
-+    """Extract ``(control_code, patch_table)`` straight from a raw ``insts.bin``.
-+
-+    This removes the runtime dependency on ``aiebu-asm``: instead of converting
-+    the TXN to an aiebu control ELF and reading its ``.rela.dyn`` (see
-+    :func:`parse_control_elf`), it walks the TXN op stream itself and derives the
-+    same patch table that aiebu would emit. Validated byte-for-byte against
-+    ``aiebu-asm -t aie2txn`` output.
-+
-+    Background (op layout from ``AIETargetNPU.cpp`` / ``AIEToConfiguration.cpp``):
-+
-+      * The aiebu ``.ctrltext`` is the raw TXN bytes verbatim, so the **control
-+        code is just the ``insts.bin`` words**.
-+      * 16-byte header: ``major=byte[0]``, ``minor=byte[1]``, ``num_ops`` @ byte
-+        8, ``txn_size`` @ byte 12. Only TXN v0.1 is currently emitted/handled.
-+      * ``BLOCKWRITE`` (op 0x01): base addr @ +8, opSize @ +12, then a payload of
-+        32-bit words starting @ +16; payload word ``j`` programs absolute address
-+        ``base + 4*j``.
-+      * ``DDR_PATCH`` (op 0x81): opSize @ +4, ``addr`` @ +24, ``argIdx`` @ +32,
-+        ``argPlus`` @ +40. ``argIdx`` is already the 0-based buffer/binding index
-+        (aiebu would turn it into the XRT arg index ``argIdx + 3``).
-+
-+    The relocation lands on the *low* word of the BD's 64-bit DDR address, i.e.
-+    the TXN word at absolute address ``addr - 4``; its byte position in the
-+    control code is the patch ``offset``.
-+
-+    Returns ``(control_code: np.uint32[], patch_table: np.uint32[] flat triples)``
-+    identical in shape/meaning to :func:`parse_control_elf`.
-+    Raises :class:`TxnUnsupportedError` on any unrecognized header/opcode.
-+    """
-+    import struct
-+
-+    import numpy as np
-+
-+    d = insts_bytes
-+    if len(d) < _TXN_HEADER_BYTES:
-+        raise TxnUnsupportedError("insts.bin too small for a TXN header")
-+
-+    def r32(o):
-+        return struct.unpack_from("<I", d, o)[0]
-+
-+    def s32(o):
-+        return struct.unpack_from("<i", d, o)[0]
-+
-+    major, minor = d[0], d[1]
-+    if (major, minor) != (0, 1):
-+        raise TxnUnsupportedError(
-+            f"unsupported TXN version {major}.{minor} (only 0.1 handled directly)"
-+        )
-+
-+    # Map absolute AIE address -> byte offset of the word that programs it, so a
-+    # DDR_PATCH's target address resolves to a patch offset in the control code.
-+    addr_to_off = {}
-+    patches = []  # (target_addr, arg_idx, addend)
-+
-+    i = _TXN_HEADER_BYTES
-+    try:
-+        while i < len(d):
-+            opc = d[i]
-+            start = i
-+            if opc == _TXN_OP_WRITE:  # 24 bytes
-+                addr_lo = r32(i + 8)
-+                addr_to_off[addr_lo] = i + 16
-+                i += r32(i + 20)
-+            elif opc == _TXN_OP_BLOCKWRITE:
-+                base = r32(i + 8)
-+                op_size = r32(i + 12)
-+                if op_size < 16:
-+                    raise TxnUnsupportedError("malformed BLOCKWRITE op size")
-+                for j in range((op_size - 16) // 4):
-+                    addr_to_off[base + 4 * j] = i + 16 + 4 * j
-+                i += op_size
-+            elif opc == _TXN_OP_MASKWRITE:  # 28 bytes
-+                i += r32(i + 24)
-+            elif opc == _TXN_OP_TCT:
-+                i += r32(i + 4)
-+            elif opc == _TXN_OP_DDR_PATCH:
-+                op_size = r32(i + 4)
-+                if op_size < 44:
-+                    raise TxnUnsupportedError("malformed DDR_PATCH op size")
-+                patches.append((r32(i + 24), s32(i + 32), s32(i + 40)))
-+                i += op_size
-+            elif opc == _TXN_OP_PREEMPT:  # 8-byte TxnPreemptHeader
-+                i += 8
-+            else:
-+                raise TxnUnsupportedError(f"unhandled TXN opcode {hex(opc)} @ {i}")
-+            if i <= start:
-+                raise TxnUnsupportedError(f"zero-size TXN op {hex(opc)} @ {start}")
-+    except struct.error as e:
-+        raise TxnUnsupportedError(f"TXN truncated while parsing: {e}") from e
-+
-+    control_code = np.frombuffer(d, dtype=np.uint32).copy()
-+
-+    patch = []
-+    for target_addr, arg_idx, addend in patches:
-+        # The patch lands on the low DDR-address word, at absolute addr-4.
-+        off = addr_to_off.get(target_addr - 4)
-+        if off is None:
-+            raise TxnUnsupportedError(
-+                f"DDR_PATCH target {hex(target_addr)} has no preceding write "
-+                f"(can't resolve patch offset)"
-+            )
-+        if arg_idx >= 0:
-+            patch.extend((off, arg_idx, addend & 0xFFFFFFFF))
-+    patch_table = np.asarray(patch, dtype=np.uint32)
-+    return control_code, patch_table
-+
-+
-+# ---------------------------------------------------------------------------
-+# Control-ELF -> (control_code, patch_table)
-+# ---------------------------------------------------------------------------
-+def parse_control_elf(elf_bytes: bytes, scalar_args: int = 3):
-+    """Extract the TXN control code and buffer patch table from a control ELF.
-+
-+    This is a Python port of ``parse_control_elf`` in the FastFlowLM interposer
-+    (``hrx-integration/src/xrt_coreutil_shim.cpp``). The ELF is the ``aiebu``
-+    instruction-transaction blob ``aiecc``/``aiebu-asm`` produces from the
-+    mlir-aie TXN stream:
-+
-+      * ``.ctrltext``  -> the TXN control code (uint32 words)
-+      * ``.rela.dyn``  -> one relocation per I/O buffer reference; each symbol
-+        name is the *XRT kernel arg index* as a decimal string. The user
-+        buffers start at arg ``scalar_args`` (3 = opcode, instr_bo, instr_size),
-+        so ``arg_idx = atoi(name) - scalar_args`` indexes the dispatch bindings.
-+
-+    Returns ``(control_code, patch_table)`` where ``control_code`` is a
-+    ``numpy.uint32`` array and ``patch_table`` is a flat numpy array of
-+    ``(offset, arg_idx, addend)`` uint32 triples, ready for :meth:`build_xadx`.
-+    """
-+    import struct
-+
-+    import numpy as np
-+
-+    d = elf_bytes
-+    if len(d) < 52 or d[0] != 0x7F or d[1:4] != b"ELF":
-+        raise HRXError("control ELF is not a valid ELF32 file")
-+
-+    def rd(fmt, off):
-+        return struct.unpack_from(fmt, d, off)[0]
-+
-+    # ELF32 header fields (little-endian).
-+    e_shoff = rd("<I", 0x20)
-+    e_shentsize = rd("<H", 0x2E)
-+    e_shnum = rd("<H", 0x30)
-+    e_shstrndx = rd("<H", 0x32)
-+
-+    def sh(i, f):
-+        return e_shoff + i * e_shentsize + f
-+
-+    shstr_off = rd("<I", sh(e_shstrndx, 0x10))
-+
-+    def sname(i):
-+        nm = rd("<I", sh(i, 0))
-+        end = d.index(b"\x00", shstr_off + nm)
-+        return d[shstr_off + nm : end].decode("ascii", "replace")
-+
-+    ctrl = rela = dynsym = dynstr = -1
-+    for i in range(e_shnum):
-+        n = sname(i)
-+        if n == ".ctrltext":
-+            ctrl = i
-+        elif n == ".rela.dyn":
-+            rela = i
-+        elif n == ".dynsym":
-+            dynsym = i
-+        elif n == ".dynstr":
-+            dynstr = i
-+    if ctrl < 0:
-+        raise HRXError("control ELF has no .ctrltext section")
-+
-+    coff = rd("<I", sh(ctrl, 0x10))
-+    csize = rd("<I", sh(ctrl, 0x14))
-+    control_code = np.frombuffer(d[coff : coff + csize], dtype=np.uint32).copy()
-+
-+    patch = []
-+    if rela >= 0 and dynsym >= 0 and dynstr >= 0:
-+        roff = rd("<I", sh(rela, 0x10))
-+        rsize = rd("<I", sh(rela, 0x14))
-+        symoff = rd("<I", sh(dynsym, 0x10))
-+        symentsz = rd("<I", sh(dynsym, 0x24)) or 16
-+        strtab = rd("<I", sh(dynstr, 0x10))
-+        o = 0
-+        while o + 12 <= rsize:
-+            r_offset = rd("<I", roff + o + 0)
-+            r_info = rd("<I", roff + o + 4)
-+            r_addend = rd("<i", roff + o + 8)
-+            symidx = r_info >> 8
-+            st_name = rd("<I", symoff + symidx * symentsz)
-+            end = d.index(b"\x00", strtab + st_name)
-+            name = d[strtab + st_name : end].decode("ascii", "replace")
-+            try:
-+                arg_idx = int(name) - scalar_args
-+            except ValueError:
-+                o += 12
-+                continue
-+            if arg_idx >= 0:
-+                patch.extend((r_offset, arg_idx, r_addend & 0xFFFFFFFF))
-+            o += 12
-+    patch_table = np.asarray(patch, dtype=np.uint32)
-+    return control_code, patch_table
-+
-+
-+def insts_to_control_elf(insts_path) -> bytes:
-+    """Convert a raw mlir-aie ``insts.bin`` TXN stream into a control ELF.
-+
-+    Prefers a sibling ``<stem>.elf`` if it already exists (e.g. emitted by
-+    ``aiecc --aie-generate-elf``). Otherwise it runs ``aiebu-asm -t aie2txn``,
-+    which reads the TXN's embedded ``DDR_PATCH`` ops and emits ``.ctrltext`` +
-+    ``.rela.dyn`` — exactly the format :func:`parse_control_elf` consumes.
-+    """
-+    import shutil
-+    import subprocess
-+
-+    insts_path = Path(insts_path)
-+    sibling = insts_path.with_suffix(".elf")
-+    if sibling.exists() and sibling.stat().st_mtime >= insts_path.stat().st_mtime:
-+        return sibling.read_bytes()
-+
-+    aiebu = (
-+        os.environ.get("AIEBU_ASM")
-+        or shutil.which("aiebu-asm")
-+        or "/opt/xilinx/xrt/bin/aiebu-asm"
-+    )
-+    if not Path(aiebu).exists():
-+        raise HRXError(
-+            "aiebu-asm not found; set AIEBU_ASM or add /opt/xilinx/xrt/bin to PATH "
-+            "(needed to convert insts.bin -> control ELF for HRX patching)."
-+        )
-+    try:
-+        subprocess.run(
-+            [aiebu, "-t", "aie2txn", "-c", str(insts_path), "-o", str(sibling)],
-+            check=True,
-+            capture_output=True,
-+        )
-+    except subprocess.CalledProcessError as e:
-+        raise HRXError(
-+            f"aiebu-asm failed converting {insts_path} to a control ELF: "
-+            f"{e.stderr.decode('utf-8', 'replace')}"
-+        ) from e
-+    return sibling.read_bytes()
-+
-+
-+def control_code_and_patch_table(insts_path, scalar_args: int = 3):
-+    """Resolve ``(control_code, patch_table)`` for an ``insts.bin`` / control ELF.
-+
-+    Strategy (avoids ``aiebu-asm`` whenever possible):
-+      1. If the file is already an ELF, parse it with :func:`parse_control_elf`.
-+      2. Otherwise parse the raw TXN directly with :func:`parse_txn` (no aiebu).
-+      3. If direct parsing isn't supported (unknown TXN version/opcode), fall
-+         back to the ``aiebu-asm`` round-trip
-+         (:func:`insts_to_control_elf` + :func:`parse_control_elf`).
-+
-+    Set ``IRON_HRX_FORCE_AIEBU=1`` to always use the aiebu path (debugging /
-+    bringing up a new TXN version before the direct parser learns it).
-+    """
-+    insts_path = Path(insts_path)
-+    data = insts_path.read_bytes()
-+
-+    if data[:4] == b"\x7fELF":
-+        return parse_control_elf(data, scalar_args=scalar_args)
-+
-+    if not os.environ.get("IRON_HRX_FORCE_AIEBU"):
-+        try:
-+            return parse_txn(data)
-+        except TxnUnsupportedError as e:
-+            logger.debug("direct TXN parse failed (%s); falling back to aiebu", e)
-+
-+    elf_bytes = insts_to_control_elf(insts_path)
-+    return parse_control_elf(elf_bytes, scalar_args=scalar_args)
 +
 +
 +class HRXContext:
@@ -1787,58 +955,20 @@ index 0000000..1dc92ad
 +            _hrx_buffer_release(buf)
 +
 +    # -- executables -------------------------------------------------------
-+    def build_xadx(
-+        self, xclbin_bytes: bytes, cc_words, entry_name: str, patch_table=None
-+    ) -> bytes:
-+        """Wrap xclbin + control-code (uint32 words) + patch_table into a XADX.
-+
-+        ``patch_table`` is a flat sequence of (offset, arg_idx, addend) uint32
-+        triples (as produced by :func:`parse_control_elf`). HRX uses it to
-+        host-patch each I/O buffer's device address into the control code; if it
-+        is omitted the addresses stay 0 and the NPU produces all-zero output.
-+        """
-+        import numpy as np
-+
-+        cc = np.ascontiguousarray(cc_words, dtype=np.uint32)
-+        if patch_table is not None and len(patch_table):
-+            pt = np.ascontiguousarray(patch_table, dtype=np.uint32).ravel()
-+            patch_ptr = ctypes.cast(pt.ctypes.data, ctypes.c_void_p)
-+            patch_n = ctypes.c_size_t(pt.size)
-+        else:
-+            patch_ptr = ctypes.c_void_p(0)
-+            patch_n = ctypes.c_size_t(0)
-+        out_ptr = ctypes.c_void_p()
-+        out_n = ctypes.c_size_t()
-+        rc = _iron_build_xadx(
-+            ctypes.cast(ctypes.c_char_p(xclbin_bytes), ctypes.c_void_p),
-+            ctypes.c_size_t(len(xclbin_bytes)),
-+            ctypes.cast(cc.ctypes.data, ctypes.c_void_p),
-+            ctypes.c_size_t(cc.size),
-+            patch_ptr,
-+            patch_n,
-+            entry_name.encode("utf-8"),
-+            ctypes.byref(out_ptr),
-+            ctypes.byref(out_n),
++    def create_executable(
++        self, xclbin_bytes: bytes, transaction_bytes: bytes, entry_name: str
++    ):
++        """Create an amdxdna executable through HRX's semantic builder API."""
++        description = make_amdxdna_executable_description(
++            xclbin_bytes, transaction_bytes, entry_name
 +        )
-+        if rc != 0 or not out_ptr.value:
-+            raise HRXError(f"iron_build_xadx failed (rc={rc})")
-+        try:
-+            blob = ctypes.string_at(out_ptr, out_n.value)
-+        finally:
-+            _iron_free_xadx(out_ptr)
-+        return blob
 +
-+    def load_executable(self, xadx_blob: bytes):
 +        exe = _handle()
 +        _check(
-+            _hrx_executable_load_data(
-+                self.device,
-+                ctypes.cast(ctypes.c_char_p(xadx_blob), ctypes.c_void_p),
-+                ctypes.c_size_t(len(xadx_blob)),
-+                HRX_AMDXDNA_FORMAT,
-+                ctypes.byref(exe),
++            _hrx_amdxdna_executable_create(
++                self.device, ctypes.byref(description.params), ctypes.byref(exe)
 +            ),
-+            "hrx_executable_load_data",
++            "hrx_amdxdna_executable_create",
 +        )
 +        return exe
 +
@@ -1909,211 +1039,203 @@ index 0000000..1dc92ad
 +
 +    def synchronize(self):
 +        _check(_hrx_stream_synchronize(self.stream), "hrx_stream_synchronize")
-diff --git a/python/utils/hostruntime/hrxruntime/build_xadx_helper.sh b/python/utils/hostruntime/hrxruntime/build_xadx_helper.sh
+diff --git a/python/utils/hostruntime/hrxruntime/abi.py b/python/utils/hostruntime/hrxruntime/abi.py
 new file mode 100644
-index 0000000..b115ed9
+index 0000000..4b71f47
 --- /dev/null
-+++ b/python/utils/hostruntime/hrxruntime/build_xadx_helper.sh
-@@ -0,0 +1,46 @@
-+#!/usr/bin/env bash
-+# Build libironhrx_xadx.so — the small C ABI helper that serializes the HRX
-+# amdxdna XADX executable flatbuffer, loaded by the hrxruntime Python package via
-+# ctypes. Depends only on the HRX tree (schema + flatcc); no FastFlowLM.
-+#
-+# Requires (env vars or auto-detected):
-+#   HRX_DIR    path to the hrx source checkout (libhrx/include/hrx_runtime.h)
-+#   HRX_BUILD  path to the hrx build dir (libflatcc_runtime.a, generated builder)
-+set -euo pipefail
++++ b/python/utils/hostruntime/hrxruntime/abi.py
+@@ -0,0 +1,123 @@
++# SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc.
++# SPDX-License-Identifier: Apache-2.0
 +
-+HERE="$(cd "$(dirname "$0")" && pwd)"
-+OUT="$HERE/libironhrx_xadx.so"
++"""Pure ctypes declarations for the public HRX amdxdna executable ABI."""
 +
-+HRX_DIR="${HRX_DIR:-}"
-+HRX_BUILD="${HRX_BUILD:-}"
++import ctypes
++from typing import NamedTuple
 +
-+if [[ -z "$HRX_DIR" ]]; then
-+  for c in "$HOME/avarma_repro/hrx" "$HOME/hrx" "../hrx"; do
-+    [[ -f "$c/libhrx/include/hrx_runtime.h" ]] && HRX_DIR="$(cd "$c" && pwd)" && break
-+  done
-+fi
-+[[ -n "$HRX_DIR" && -f "$HRX_DIR/libhrx/include/hrx_runtime.h" ]] || {
-+  echo "ERROR: set HRX_DIR (hrx checkout with libhrx/include/hrx_runtime.h)"; exit 1; }
++HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0 = 0
++HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0 = 0
++HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0 = 0
++HRX_AMDXDNA_CONTEXT_MODE_CREATE = 0
 +
-+if [[ -z "$HRX_BUILD" ]]; then
-+  for c in "$HRX_DIR/build/cmake" "$HRX_DIR/build-amdxdna-native" "$HRX_DIR/build"; do
-+    [[ -f "$c/libflatcc_runtime.a" ]] && HRX_BUILD="$c" && break
-+  done
-+fi
-+[[ -n "$HRX_BUILD" && -f "$HRX_BUILD/libflatcc_runtime.a" ]] || {
-+  echo "ERROR: set HRX_BUILD (hrx build dir with libflatcc_runtime.a)"; exit 1; }
 +
-+FLATCC_INC="$HRX_BUILD/_deps/flatcc-src/include"
-+FLATCC_LIB="$HRX_BUILD/libflatcc_runtime.a"
++class HrxConstByteSpan(ctypes.Structure):
++    _fields_ = [
++        ("data", ctypes.c_void_p),
++        ("data_length", ctypes.c_size_t),
++    ]
 +
-+echo "HRX_DIR   = $HRX_DIR"
-+echo "HRX_BUILD = $HRX_BUILD"
 +
-+g++ -std=c++20 -O2 -fPIC -shared -o "$OUT" \
-+  "$HERE/iron_hrx_xadx.cpp" \
-+  -I "$HRX_DIR/runtime/src" \
-+  -I "$HRX_BUILD/runtime/src" \
-+  -I "$FLATCC_INC" \
-+  "$FLATCC_LIB"
++class HrxStringView(ctypes.Structure):
++    _fields_ = [
++        ("data", ctypes.c_char_p),
++        ("size", ctypes.c_size_t),
++    ]
 +
-+echo "built: $OUT"
++
++class HrxAmdxdnaExecutableRun(ctypes.Structure):
++    _fields_ = [
++        ("record_length", ctypes.c_uint32),
++        ("abi_version", ctypes.c_uint32),
++        ("transaction", HrxConstByteSpan),
++        ("data_payload", HrxConstByteSpan),
++    ]
++
++
++class HrxAmdxdnaExecutableEntryPoint(ctypes.Structure):
++    _fields_ = [
++        ("record_length", ctypes.c_uint32),
++        ("abi_version", ctypes.c_uint32),
++        ("name", HrxStringView),
++        ("context_mode", ctypes.c_uint32),
++        ("xclbin_ordinal", ctypes.c_uint32),
++        ("pdi_ordinal", ctypes.c_uint32),
++        ("source_line", ctypes.c_uint32),
++        ("source_file", HrxStringView),
++        ("runs", ctypes.POINTER(HrxAmdxdnaExecutableRun)),
++        ("run_count", ctypes.c_size_t),
++    ]
++
++
++class HrxAmdxdnaExecutableCreateParams(ctypes.Structure):
++    _fields_ = [
++        ("record_length", ctypes.c_uint32),
++        ("abi_version", ctypes.c_uint32),
++        ("flags", ctypes.c_uint32),
++        ("reserved", ctypes.c_uint32),
++        ("xclbins", ctypes.POINTER(HrxConstByteSpan)),
++        ("xclbin_count", ctypes.c_size_t),
++        ("entry_points", ctypes.POINTER(HrxAmdxdnaExecutableEntryPoint)),
++        ("entry_point_count", ctypes.c_size_t),
++    ]
++
++
++class AmdxdnaExecutableDescription(NamedTuple):
++    """ABI records plus the Python-owned storage backing their borrowed spans."""
++
++    params: HrxAmdxdnaExecutableCreateParams
++    xclbins: ctypes.Array
++    entry: HrxAmdxdnaExecutableEntryPoint
++    run: HrxAmdxdnaExecutableRun
++    xclbin_storage: ctypes.Array
++    transaction_storage: ctypes.Array
++    name_storage: bytes
++
++
++def make_amdxdna_executable_description(
++    xclbin_bytes: bytes, transaction_bytes: bytes, entry_name: str
++) -> AmdxdnaExecutableDescription:
++    """Build one create-context entry point while retaining all borrowed storage."""
++    if not xclbin_bytes:
++        raise ValueError("xclbin_bytes must not be empty")
++    if not transaction_bytes:
++        raise ValueError("transaction_bytes must not be empty")
++    name_storage = entry_name.encode("utf-8")
++    if not name_storage:
++        raise ValueError("entry_name must not be empty")
++
++    xclbin_storage = ctypes.create_string_buffer(xclbin_bytes)
++    transaction_storage = ctypes.create_string_buffer(transaction_bytes)
++    xclbins = (HrxConstByteSpan * 1)(
++        HrxConstByteSpan(
++            ctypes.cast(xclbin_storage, ctypes.c_void_p), len(xclbin_bytes)
++        )
++    )
++
++    run = HrxAmdxdnaExecutableRun()
++    run.record_length = ctypes.sizeof(run)
++    run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0
++    run.transaction = HrxConstByteSpan(
++        ctypes.cast(transaction_storage, ctypes.c_void_p), len(transaction_bytes)
++    )
++
++    entry = HrxAmdxdnaExecutableEntryPoint()
++    entry.record_length = ctypes.sizeof(entry)
++    entry.abi_version = HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0
++    entry.name = HrxStringView(name_storage, len(name_storage))
++    entry.context_mode = HRX_AMDXDNA_CONTEXT_MODE_CREATE
++    entry.runs = ctypes.pointer(run)
++    entry.run_count = 1
++
++    params = HrxAmdxdnaExecutableCreateParams()
++    params.record_length = ctypes.sizeof(params)
++    params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0
++    params.xclbins = xclbins
++    params.xclbin_count = 1
++    params.entry_points = ctypes.pointer(entry)
++    params.entry_point_count = 1
++
++    return AmdxdnaExecutableDescription(
++        params, xclbins, entry, run, xclbin_storage, transaction_storage, name_storage
++    )
 diff --git a/python/utils/hostruntime/hrxruntime/discovery.py b/python/utils/hostruntime/hrxruntime/discovery.py
 new file mode 100644
-index 0000000..2d3e293
+index 0000000..4aa053f
 --- /dev/null
 +++ b/python/utils/hostruntime/hrxruntime/discovery.py
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,56 @@
 +# SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc.
 +# SPDX-License-Identifier: Apache-2.0
 +
 +"""Filesystem discovery for the HRX runtime (no ctypes / no dlopen).
 +
-+This module mirrors ``FindHRX.cmake`` for the Python host stack: it locates
-+``libhrx.so`` and the XADX builder helper by probing standard install locations,
-+treating the ``HRX_*`` environment variables only as high-priority *hints*. It
-+deliberately performs no ``dlopen`` so it can be used as a cheap capability
-+probe (the analogue of ``import pyxrt`` for the XRT backend) before committing to
-+the heavier ``hrxruntime`` import that actually loads the libraries.
++The C++ host stack consumes the installed ``hrx::hrx`` package target. This
++module locates the corresponding shared library for Python ctypes, treating
++the ``HRX_*`` environment variables only as high-priority *hints*. XADX
++serialization is part of libhrx's public amdxdna executable API, so no separate
++builder library or build-tree discovery is required.
 +"""
 +
 +import os
-+import subprocess
 +from pathlib import Path
 +from typing import List, Optional
 +
 +__all__ = [
 +    "find_libhrx",
-+    "find_xadx_helper",
-+    "find_hrx_dir",
-+    "find_hrx_build",
-+    "ensure_xadx_helper",
 +    "hrx_available",
 +]
 +
-+_HOME = Path(os.path.expanduser("~"))
-+
-+# Standard source-checkout roots probed when HRX_DIR is unset.
-+_HRX_ROOT_CANDIDATES = [
-+    _HOME / "hrx",
-+    _HOME / "avarma_repro" / "hrx",
-+    Path("/opt/hrx"),
-+    Path("/usr/local/hrx"),
-+]
-+
-+# Build-dir suffixes under an HRX source root.
-+_BUILD_SUFFIXES = ["build/cmake", "build-amdxdna-native", "build"]
++_LIBHRX_NAME = "hrx.dll" if os.name == "nt" else "libhrx.so"
 +
 +
 +def _existing(paths: List[Optional[str]]) -> List[str]:
 +    out = []
 +    for p in paths:
-+        if p and Path(p).exists() and p not in out:
++        if p and Path(p).is_file() and p not in out:
 +            out.append(p)
 +    return out
 +
 +
-+def find_hrx_dir() -> Optional[str]:
-+    """Locate the HRX source checkout (dir with libhrx/include/hrx_runtime.h)."""
-+    hints = [os.environ.get("HRX_DIR")] + [str(c) for c in _HRX_ROOT_CANDIDATES]
-+    for c in hints:
-+        if c and (Path(c) / "libhrx" / "include" / "hrx_runtime.h").is_file():
-+            return str(Path(c).resolve())
-+    return None
-+
-+
-+def find_hrx_build(hrx_dir: Optional[str] = None) -> Optional[str]:
-+    """Locate the HRX build dir (dir containing libflatcc_runtime.a)."""
-+    if os.environ.get("HRX_BUILD"):
-+        b = os.environ["HRX_BUILD"]
-+        if (Path(b) / "libflatcc_runtime.a").is_file():
-+            return str(Path(b).resolve())
-+    hrx_dir = hrx_dir or find_hrx_dir()
-+    if hrx_dir:
-+        for suf in _BUILD_SUFFIXES:
-+            b = Path(hrx_dir) / suf
-+            if (b / "libflatcc_runtime.a").is_file():
-+                return str(b.resolve())
-+    return None
-+
-+
 +def find_libhrx() -> Optional[str]:
-+    """Locate libhrx.so, honoring env hints then standard locations."""
-+    hrx_dir = find_hrx_dir()
-+    hrx_build = os.environ.get("HRX_BUILD")
++    """Locate the HRX shared library, honoring env hints then standard locations."""
 +    libhrx_dir = os.environ.get("LIBHRX_DIR")
++    hrx_install = os.environ.get("HRX_INSTALL")
 +
 +    candidates: List[Optional[str]] = [
 +        os.environ.get("HRX_LIBHRX"),
-+        os.path.join(libhrx_dir, "libhrx.so") if libhrx_dir else None,
-+        os.path.join(hrx_build, "libhrx", "src", "libhrx", "libhrx.so")
-+        if hrx_build
++        os.path.join(libhrx_dir, _LIBHRX_NAME) if libhrx_dir else None,
++        os.path.join(
++            hrx_install, "bin" if os.name == "nt" else "lib", _LIBHRX_NAME
++        )
++        if hrx_install
 +        else None,
 +    ]
-+    if hrx_dir:
-+        for suf in _BUILD_SUFFIXES:
-+            candidates.append(
-+                os.path.join(hrx_dir, suf, "libhrx", "src", "libhrx", "libhrx.so")
-+            )
-+    candidates += ["/usr/lib/libhrx.so", "/usr/local/lib/libhrx.so"]
++    if os.name != "nt":
++        candidates += ["/usr/lib/libhrx.so", "/usr/local/lib/libhrx.so"]
 +
 +    found = _existing(candidates)
 +    return found[0] if found else None
-+
-+
-+def find_xadx_helper() -> Optional[str]:
-+    """Locate a prebuilt libironhrx_xadx.so (env override or next to this pkg)."""
-+    here = Path(__file__).resolve().parent
-+    candidates = [
-+        os.environ.get("IRON_HRX_XADX"),
-+        str(here / "libironhrx_xadx.so"),
-+    ]
-+    found = _existing(candidates)
-+    return found[0] if found else None
-+
-+
-+def ensure_xadx_helper() -> Optional[str]:
-+    """Return a usable libironhrx_xadx.so, building it from source if missing.
-+
-+    Build is a no-manual-step fallback: when no prebuilt helper is found but the
-+    HRX tree (schema + flatcc) is present, run build_xadx_helper.sh to produce
-+    the .so next to this package (ABI-matched to the detected HRX build). Returns
-+    None if neither a prebuilt nor the build inputs are available.
-+    """
-+    existing = find_xadx_helper()
-+    if existing:
-+        return existing
-+
-+    here = Path(__file__).resolve().parent
-+    script = here / "build_xadx_helper.sh"
-+    hrx_dir = find_hrx_dir()
-+    hrx_build = find_hrx_build(hrx_dir)
-+    if not (script.exists() and hrx_dir and hrx_build):
-+        return None
-+
-+    env = dict(os.environ, HRX_DIR=hrx_dir, HRX_BUILD=hrx_build)
-+    try:
-+        subprocess.run(
-+            ["bash", str(script)], check=True, capture_output=True, env=env
-+        )
-+    except subprocess.CalledProcessError:
-+        return None
-+    out = here / "libironhrx_xadx.so"
-+    return str(out) if out.exists() else None
 +
 +
 +def hrx_available() -> bool:
-+    """Cheap capability probe: True if libhrx.so can be located on this host."""
++    """Cheap capability probe: True if the HRX shared library is locatable."""
 +    return find_libhrx() is not None
 diff --git a/python/utils/hostruntime/hrxruntime/hostruntime.py b/python/utils/hostruntime/hrxruntime/hostruntime.py
 new file mode 100644
-index 0000000..1d45497
+index 0000000..81c4eba
 --- /dev/null
 +++ b/python/utils/hostruntime/hrxruntime/hostruntime.py
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,270 @@
 +# SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc.
 +# SPDX-License-Identifier: Apache-2.0
 +
@@ -2128,12 +1250,12 @@ index 0000000..1d45497
 +
 +maps 1:1 onto:
 +
-+    insts.bin words -> XADX control_code  (one executable, cached by content)
-+    I/O tensors     -> bindings           (group_id order = arg_idx - 3)
++    xclbin + insts.bin -> hrx_amdxdna_executable_create(...)
++    I/O tensors        -> bindings
 +    hrx_stream_dispatch(...) + hrx_stream_synchronize(...)
 +
-+HRX host-patches the buffer addresses into the control code from binding order +
-+the TXN's own DDR-patch ops (npu4 COMMAND_CHAIN path).
++HRX owns XADX serialization and derives host relocation metadata from the TXN's
++DDR-patch ops.
 +"""
 +
 +import logging
@@ -2145,7 +1267,7 @@ index 0000000..1d45497
 +
 +from ..hostruntime import HostRuntime, HostRuntimeError, KernelHandle, KernelResult
 +from .tensor import HRXTensor
-+from . import HRXContext, HRXError, control_code_and_patch_table
++from . import HRXContext, HRXError
 +
 +if TYPE_CHECKING:
 +    from aie.iron.device import Device
@@ -2222,22 +1344,10 @@ index 0000000..1d45497
 +                exe, ordv, kernel_name, xclbin_path, insts_path
 +            )
 +
-+        xclbin_bytes = xclbin_path.read_bytes()
-+        # HRX needs the (offset, arg_idx, addend) patch table so it can host-patch
-+        # each I/O buffer's device address into the control code. The raw insts.bin
-+        # carries the addresses only as embedded DDR_PATCH ops, so we extract the
-+        # patch table from the TXN directly (no aiebu-asm), falling back to the
-+        # aiebu control-ELF round-trip only for TXN versions the direct parser
-+        # doesn't know. Without the patch table the NPU writes to address 0 and the
-+        # output is all zeros.
 +        try:
-+            cc_words, patch_table = control_code_and_patch_table(
-+                insts_path, scalar_args=3
++            exe = self._ctx.create_executable(
++                xclbin_path.read_bytes(), insts_path.read_bytes(), kernel_name
 +            )
-+            xadx = self._ctx.build_xadx(
-+                xclbin_bytes, cc_words, kernel_name, patch_table=patch_table
-+            )
-+            exe = self._ctx.load_executable(xadx)
 +            ordv = self._ctx.lookup_export(exe, kernel_name)
 +        except HRXError as e:
 +            raise HostRuntimeError(f"HRX failed to load kernel: {e}") from e
@@ -2288,7 +1398,10 @@ index 0000000..1d45497
 +
 +        args, bindings = self._prepare_bindings(args)
 +
-+        start = time.time_ns()
++        # Measure elapsed time with the monotonic, highest-resolution process
++        # clock. time_ns() is a wall clock and can return identical values for
++        # short dispatches on Windows, yielding a bogus zero-duration result.
++        start = time.perf_counter_ns()
 +        try:
 +            self._ctx.dispatch(
 +                kernel_handle.executable, kernel_handle.export_ordinal, bindings
@@ -2297,9 +1410,9 @@ index 0000000..1d45497
 +        except HRXError as e:
 +            if fail_on_error:
 +                raise HostRuntimeError(f"HRX dispatch failed: {e}") from e
-+            stop = time.time_ns()
++            stop = time.perf_counter_ns()
 +            return HRXKernelResult(stop - start, success=False)
-+        stop = time.time_ns()
++        stop = time.perf_counter_ns()
 +
 +        # Outputs were written on-device; the persistent host mapping is stale.
 +        # Leave the tensors marked device="npu" so the next host read
@@ -2347,16 +1460,16 @@ index 0000000..1d45497
 +            )
 +            touched.extend(kept)
 +
-+        start = time.time_ns()
++        start = time.perf_counter_ns()
 +        try:
 +            self._ctx.dispatch_chain(items)
 +            self._ctx.synchronize()
 +        except HRXError as e:
 +            if fail_on_error:
 +                raise HostRuntimeError(f"HRX chain dispatch failed: {e}") from e
-+            stop = time.time_ns()
++            stop = time.perf_counter_ns()
 +            return HRXKernelResult(stop - start, success=False)
-+        stop = time.time_ns()
++        stop = time.perf_counter_ns()
 +
 +        # Mark every touched tensor device-resident so the next host read
 +        # invalidates and observes the on-device results.
@@ -2393,199 +1506,6 @@ index 0000000..1d45497
 +    """
 +
 +    pass
-diff --git a/python/utils/hostruntime/hrxruntime/iron_hrx_xadx.cpp b/python/utils/hostruntime/hrxruntime/iron_hrx_xadx.cpp
-new file mode 100644
-index 0000000..524b1f3
---- /dev/null
-+++ b/python/utils/hostruntime/hrxruntime/iron_hrx_xadx.cpp
-@@ -0,0 +1,187 @@
-+// SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc.
-+// SPDX-License-Identifier: Apache-2.0
-+//
-+// iron_hrx_xadx.cpp — tiny C ABI helper that serializes an HRX amdxdna "XADX"
-+// executable flatbuffer (xclbin + TXN control code + buffer patch table).
-+//
-+// ctypes cannot assemble a flatbuffer directly, so this ~1-function library does
-+// it in C and exposes a flat C entry point the hrxruntime Python package binds
-+// with ctypes. It depends ONLY on HRX's own schema/flatcc headers (no external
-+// runtimes): the XADX schema and its generated builder live in the HRX tree
-+//   - iree/schemas/amdxdna_xclbin_executable_def.fbs
-+//   - iree/hal/drivers/amdxdna/executable_xclbin_test.cc (MakeXadxExecutable,
-+//     the verified reference producer this mirrors)
-+//
-+// Build (see build_xadx_helper.sh next to this file):
-+//   g++ -std=c++20 -O2 -fPIC -shared -o libironhrx_xadx.so iron_hrx_xadx.cpp \
-+//       -I<HRX>/runtime/src -I<HRX_BUILD>/runtime/src \
-+//       -I<HRX_BUILD>/_deps/flatcc-src/include \
-+//       <HRX_BUILD>/libflatcc_runtime.a
-+//
-+// The XADX produced here is a single xclbin, one entry point ("MLIR_AIE" by
-+// default) with one RunDef whose control_code is the mlir-aie insts.bin TXN
-+// stream (uint32 words) and whose patch_table is the (offset, arg_idx, addend)
-+// triples extracted from the aiebu control ELF's .rela.dyn. HRX host-patches
-+// each I/O buffer's device address into the control code at those offsets
-+// (binding[arg_idx]) on the npu4 COMMAND_CHAIN path; without it the addresses
-+// stay 0 and the NPU writes nothing (all-zero output) — so the patch table is
-+// always passed, never treated as optional.
-+
-+#include <cstdint>
-+#include <cstdlib>
-+#include <cstring>
-+#include <vector>
-+
-+// flatcc builder + the generated XADX schema builder, both from the HRX tree.
-+#include "iree/base/internal/flatcc/building.h"
-+#include "iree/schemas/amdxdna_xclbin_executable_def_builder.h"
-+
-+namespace {
-+
-+flatbuffers_uint32_vec_ref_t create_u32_vec(flatbuffers_builder_t *b,
-+                                            const uint32_t *data, size_t n) {
-+  return flatbuffers_uint32_vec_create(b, n ? data : nullptr, n);
-+}
-+
-+// Serialize a single-xclbin, single-entry-point, single-run XADX flatbuffer.
-+// Returns true on success and fills `out`.
-+bool build_xadx(const uint8_t *xclbin, size_t xclbin_n, const uint32_t *cc,
-+                size_t cc_n, const uint32_t *patch, size_t patch_n,
-+                const char *entry_name, std::vector<uint8_t> *out) {
-+  flatbuffers_builder_t builder;
-+  if (flatcc_builder_init(&builder) != 0) return false;
-+
-+  bool ok = true;
-+  auto guard = [&](bool cond) { ok = ok && cond; };
-+
-+  guard(!flatbuffers_failed(
-+      iree_hal_amdxdna_xclbin_ExecutableDef_start_as_root(&builder)));
-+
-+  // xclbins: one container holding the raw final.xclbin bytes.
-+  iree_hal_amdxdna_xclbin_XclbinDef_vec_ref_t xclbins_ref = 0;
-+  if (ok) {
-+    flatbuffers_string_ref_t xclbin_str = flatbuffers_string_create(
-+        &builder, reinterpret_cast<const char *>(xclbin), xclbin_n);
-+    iree_hal_amdxdna_xclbin_XclbinDef_ref_t xclbin_ref =
-+        xclbin_str ? iree_hal_amdxdna_xclbin_XclbinDef_create(&builder,
-+                                                              xclbin_str)
-+                   : 0;
-+    guard(xclbin_ref != 0);
-+    if (ok) {
-+      iree_hal_amdxdna_xclbin_XclbinDef_ref_t arr[] = {xclbin_ref};
-+      xclbins_ref =
-+          iree_hal_amdxdna_xclbin_XclbinDef_vec_create(&builder, arr, 1);
-+      guard(xclbins_ref != 0);
-+    }
-+  }
-+
-+  // entry point: one RunDef (control_code + empty data_payload + patch_table).
-+  iree_hal_amdxdna_xclbin_EntryPointDef_vec_ref_t entries_ref = 0;
-+  if (ok) {
-+    iree_hal_amdxdna_xclbin_RunDef_ref_t run_ref =
-+        iree_hal_amdxdna_xclbin_RunDef_create(
-+            &builder, create_u32_vec(&builder, cc, cc_n),
-+            create_u32_vec(&builder, nullptr, 0),
-+            create_u32_vec(&builder, patch, patch_n));
-+    guard(run_ref != 0);
-+
-+    iree_hal_amdxdna_xclbin_RunDef_ref_t run_arr[] = {run_ref};
-+    iree_hal_amdxdna_xclbin_RunDef_vec_ref_t runs_ref =
-+        ok ? iree_hal_amdxdna_xclbin_RunDef_vec_create(&builder, run_arr, 1) : 0;
-+    guard(runs_ref != 0);
-+
-+    flatbuffers_string_ref_t name_ref =
-+        ok ? flatbuffers_string_create_str(
-+                 &builder, entry_name ? entry_name : "MLIR_AIE")
-+           : 0;
-+    guard(name_ref != 0);
-+
-+    iree_hal_amdxdna_xclbin_EntryPointDef_ref_t ep_ref = 0;
-+    if (ok &&
-+        !flatbuffers_failed(
-+            iree_hal_amdxdna_xclbin_EntryPointDef_start(&builder)) &&
-+        !flatbuffers_failed(iree_hal_amdxdna_xclbin_EntryPointDef_name_add(
-+            &builder, name_ref)) &&
-+        !flatbuffers_failed(iree_hal_amdxdna_xclbin_EntryPointDef_pdi_index_add(
-+            &builder, 0)) &&
-+        !flatbuffers_failed(
-+            iree_hal_amdxdna_xclbin_EntryPointDef_xclbin_index_add(&builder,
-+                                                                   0)) &&
-+        !flatbuffers_failed(iree_hal_amdxdna_xclbin_EntryPointDef_runs_add(
-+            &builder, runs_ref))) {
-+      ep_ref = iree_hal_amdxdna_xclbin_EntryPointDef_end(&builder);
-+    }
-+    guard(ep_ref != 0);
-+    if (ok) {
-+      iree_hal_amdxdna_xclbin_EntryPointDef_ref_t ep_arr[] = {ep_ref};
-+      entries_ref = iree_hal_amdxdna_xclbin_EntryPointDef_vec_create(
-+          &builder, ep_arr, 1);
-+      guard(entries_ref != 0);
-+    }
-+  }
-+
-+  guard(ok && !flatbuffers_failed(
-+                  iree_hal_amdxdna_xclbin_ExecutableDef_xclbins_add(
-+                      &builder, xclbins_ref)));
-+  guard(ok && !flatbuffers_failed(
-+                  iree_hal_amdxdna_xclbin_ExecutableDef_entry_points_add(
-+                      &builder, entries_ref)));
-+  guard(ok &&
-+        iree_hal_amdxdna_xclbin_ExecutableDef_end_as_root(&builder) != 0);
-+
-+  if (!ok) {
-+    flatcc_builder_clear(&builder);
-+    return false;
-+  }
-+
-+  size_t size = 0;
-+  void *buf = flatcc_builder_finalize_buffer(&builder, &size);
-+  if (buf) {
-+    out->assign(static_cast<uint8_t *>(buf),
-+                static_cast<uint8_t *>(buf) + size);
-+    free(buf);
-+  }
-+  flatcc_builder_clear(&builder);
-+  return buf != nullptr;
-+}
-+
-+}  // namespace
-+
-+extern "C" {
-+
-+// Build a XADX flatbuffer.
-+//   xclbin / xclbin_n : raw final.xclbin bytes
-+//   cc / cc_n         : insts.bin as uint32 words (the TXN control stream)
-+//   patch / patch_n   : flat (offset, arg_idx, addend) uint32 triples from the
-+//                       control ELF's .rela.dyn (patch_n is the element count,
-+//                       i.e. 3 * number_of_relocations); may be NULL/0.
-+//   entry_name        : export name (e.g. "MLIR_AIE"); NULL -> "MLIR_AIE"
-+//   out / out_n       : receive a malloc'd buffer (free with iron_free_xadx)
-+// Returns 0 on success, non-zero on failure.
-+int iron_build_xadx(const uint8_t *xclbin, size_t xclbin_n, const uint32_t *cc,
-+                    size_t cc_n, const uint32_t *patch, size_t patch_n,
-+                    const char *entry_name, uint8_t **out, size_t *out_n) {
-+  if (!xclbin || xclbin_n == 0 || !cc || cc_n == 0 || !out || !out_n) {
-+    return 1;
-+  }
-+  try {
-+    std::vector<uint8_t> blob;
-+    if (!build_xadx(xclbin, xclbin_n, cc, cc_n, patch, patch_n, entry_name,
-+                    &blob) ||
-+        blob.empty()) {
-+      return 3;
-+    }
-+    uint8_t *buf = static_cast<uint8_t *>(std::malloc(blob.size()));
-+    if (!buf) return 2;
-+    std::memcpy(buf, blob.data(), blob.size());
-+    *out = buf;
-+    *out_n = blob.size();
-+    return 0;
-+  } catch (...) {
-+    return 3;
-+  }
-+}
-+
-+void iron_free_xadx(uint8_t *p) { std::free(p); }
-+
-+}  // extern "C"
 diff --git a/python/utils/hostruntime/hrxruntime/tensor.py b/python/utils/hostruntime/hrxruntime/tensor.py
 new file mode 100644
 index 0000000..0017bab
@@ -2699,10 +1619,10 @@ index 0000000..0017bab
 +        return self._alloc_size
 diff --git a/runtime_lib/test_lib/hrx_test_wrapper.h b/runtime_lib/test_lib/hrx_test_wrapper.h
 new file mode 100644
-index 0000000..db8fed8
+index 0000000..cbb51aa
 --- /dev/null
 +++ b/runtime_lib/test_lib/hrx_test_wrapper.h
-@@ -0,0 +1,766 @@
+@@ -0,0 +1,454 @@
 +//===- hrx_test_wrapper.h ---------------------------------------*- C++ -*-===//
 +//
 +// This file is licensed under the Apache License v2.0 with LLVM Exceptions.
@@ -2722,13 +1642,10 @@ index 0000000..db8fed8
 +// makes that header pull this one in instead, so no example source changes.
 +//
 +// It consumes the identical artifacts as the XRT path (`final.xclbin` +
-+// `insts.bin`): the insts.bin TXN stream's words become the XADX control code
-+// and its embedded DDR_PATCH ops are parsed directly into the (offset, arg_idx,
-+// addend) patch table (no aiebu-asm; see parse_txn()). An aiebu control-ELF
-+// round-trip remains as a fallback for ELF input / unknown TXN versions. The
-+// two are wrapped into an HRX "amdxdna-xclbin-fb" executable by the shared
-+// `libironhrx_xadx.so` helper. This is the C++ analogue of the Python
-+// `HRXHostRuntime` (python/utils/hostruntime/hrxruntime/).
++// `insts.bin`). Both are passed to HRX's amdxdna executable-builder API; HRX
++// owns XADX serialization and derives relocation metadata from the transaction.
++// This is the C++ analogue of the Python `HRXHostRuntime`
++// (python/utils/hostruntime/hrxruntime/).
 +//
 +// Buffer order matches the XRT wrapper exactly (faithful drop-in): the bindings
 +// list is [in1, in2, out] (2-input form) or [in1, out] (1-input form), so
@@ -2743,37 +1660,20 @@ index 0000000..db8fed8
 +#include "cxxopts.hpp"
 +#include "test_utils.h"
 +
-+#include "hrx_runtime.h"
++#include "hrx_amdxdna.h"
 +
 +#include <chrono>
 +#include <cstdint>
 +#include <cstdio>
 +#include <cstdlib>
-+#include <cstring>
-+#include <filesystem>
 +#include <fstream>
 +#include <iostream>
 +#include <sstream>
 +#include <stdexcept>
 +#include <string>
-+#include <unordered_map>
 +#include <vector>
 +
-+// ---------------------------------------------------------------------------
-+// XADX builder helper (libironhrx_xadx.so) — same entry points the Python
-+// hrxruntime binds via ctypes.
-+// ---------------------------------------------------------------------------
-+extern "C" {
-+int iron_build_xadx(const uint8_t *xclbin, size_t xclbin_n, const uint32_t *cc,
-+                    size_t cc_n, const uint32_t *patch, size_t patch_n,
-+                    const char *entry_name, uint8_t **out, size_t *out_n);
-+void iron_free_xadx(uint8_t *p);
-+}
-+
 +namespace hrx_test {
-+
-+// HAL executable format string for the amdxdna xclbin package build_xadx emits.
-+static constexpr const char *kHrxAmdxdnaFormat = "amdxdna-xclbin-fb";
 +
 +// ---------------------------------------------------------------------------
 +// Status check
@@ -2866,297 +1766,6 @@ index 0000000..db8fed8
 +};
 +
 +// ---------------------------------------------------------------------------
-+// insts.bin (raw TXN stream) -> aiebu control ELF bytes.
-+// Prefers a fresh sibling "<instr>.ctrl.elf"; otherwise runs aiebu-asm.
-+// ---------------------------------------------------------------------------
-+inline std::vector<uint8_t> insts_to_control_elf(const std::string &insts_path) {
-+  namespace fs = std::filesystem;
-+
-+  // If the caller already handed us an ELF (xrt::elf flow / --elf-path), use it.
-+  {
-+    std::ifstream f(insts_path, std::ios::binary);
-+    char magic[4] = {0};
-+    if (f.read(magic, 4) && magic[0] == 0x7f && magic[1] == 'E' &&
-+        magic[2] == 'L' && magic[3] == 'F') {
-+      f.seekg(0, std::ios::end);
-+      std::streamsize n = f.tellg();
-+      f.seekg(0, std::ios::beg);
-+      std::vector<uint8_t> data(static_cast<size_t>(n));
-+      f.read(reinterpret_cast<char *>(data.data()), n);
-+      return data;
-+    }
-+  }
-+
-+  std::string elf_path = insts_path + ".ctrl.elf";
-+  bool reuse = fs::exists(elf_path);
-+  if (reuse) {
-+    std::error_code ec;
-+    auto ie = fs::last_write_time(insts_path, ec);
-+    auto ee = fs::last_write_time(elf_path, ec);
-+    reuse = !ec && ee >= ie;
-+  }
-+  if (!reuse) {
-+    std::string aiebu;
-+    if (const char *e = std::getenv("AIEBU_ASM"))
-+      aiebu = e;
-+    else if (fs::exists("/opt/xilinx/xrt/bin/aiebu-asm"))
-+      aiebu = "/opt/xilinx/xrt/bin/aiebu-asm";
-+    else
-+      aiebu = "aiebu-asm"; // hope it's on PATH
-+    std::string cmd = "'" + aiebu + "' -t aie2txn -c '" + insts_path +
-+                      "' -o '" + elf_path + "'";
-+    int rc = std::system(cmd.c_str());
-+    if (rc != 0)
-+      throw std::runtime_error(
-+          "aiebu-asm failed converting insts.bin to a control ELF (cmd: " +
-+          cmd + "). Set AIEBU_ASM or add /opt/xilinx/xrt/bin to PATH.");
-+  }
-+  std::ifstream f(elf_path, std::ios::binary);
-+  if (!f)
-+    throw std::runtime_error("could not read control ELF: " + elf_path);
-+  f.seekg(0, std::ios::end);
-+  std::streamsize n = f.tellg();
-+  f.seekg(0, std::ios::beg);
-+  std::vector<uint8_t> data(static_cast<size_t>(n));
-+  if (!f.read(reinterpret_cast<char *>(data.data()), n))
-+    throw std::runtime_error("short read on control ELF: " + elf_path);
-+  return data;
-+}
-+
-+// ---------------------------------------------------------------------------
-+// Parse an aiebu control ELF (ELF32, little-endian) into the TXN control code
-+// and the (offset, arg_idx, addend) patch table. C++ port of
-+// parse_control_elf() in python/utils/hostruntime/hrxruntime/__init__.py.
-+// ---------------------------------------------------------------------------
-+struct ControlProgram {
-+  std::vector<uint32_t> control_code;
-+  std::vector<uint32_t> patch_table; // flat (offset, arg_idx, addend) triples
-+};
-+
-+inline ControlProgram parse_control_elf(const std::vector<uint8_t> &d,
-+                                        int scalar_args = 3) {
-+  auto rd32 = [&](size_t off) -> uint32_t {
-+    uint32_t v;
-+    std::memcpy(&v, d.data() + off, 4);
-+    return v;
-+  };
-+  auto rd16 = [&](size_t off) -> uint16_t {
-+    uint16_t v;
-+    std::memcpy(&v, d.data() + off, 2);
-+    return v;
-+  };
-+  auto rdi32 = [&](size_t off) -> int32_t {
-+    int32_t v;
-+    std::memcpy(&v, d.data() + off, 4);
-+    return v;
-+  };
-+
-+  if (d.size() < 52 || d[0] != 0x7f || d[1] != 'E' || d[2] != 'L' ||
-+      d[3] != 'F')
-+    throw std::runtime_error("control ELF is not a valid ELF32 file");
-+
-+  uint32_t e_shoff = rd32(0x20);
-+  uint16_t e_shentsize = rd16(0x2E);
-+  uint16_t e_shnum = rd16(0x30);
-+  uint16_t e_shstrndx = rd16(0x32);
-+
-+  auto sh = [&](uint32_t i, uint32_t f) -> size_t {
-+    return e_shoff + static_cast<size_t>(i) * e_shentsize + f;
-+  };
-+  uint32_t shstr_off = rd32(sh(e_shstrndx, 0x10));
-+
-+  auto cstr = [&](size_t off) -> std::string {
-+    size_t end = off;
-+    while (end < d.size() && d[end] != 0)
-+      ++end;
-+    return std::string(reinterpret_cast<const char *>(d.data() + off),
-+                       end - off);
-+  };
-+  auto sname = [&](uint32_t i) -> std::string {
-+    uint32_t nm = rd32(sh(i, 0));
-+    return cstr(shstr_off + nm);
-+  };
-+
-+  int ctrl = -1, rela = -1, dynsym = -1, dynstr = -1;
-+  for (uint32_t i = 0; i < e_shnum; ++i) {
-+    std::string n = sname(i);
-+    if (n == ".ctrltext")
-+      ctrl = i;
-+    else if (n == ".rela.dyn")
-+      rela = i;
-+    else if (n == ".dynsym")
-+      dynsym = i;
-+    else if (n == ".dynstr")
-+      dynstr = i;
-+  }
-+  if (ctrl < 0)
-+    throw std::runtime_error("control ELF has no .ctrltext section");
-+
-+  ControlProgram out;
-+  uint32_t coff = rd32(sh(ctrl, 0x10));
-+  uint32_t csize = rd32(sh(ctrl, 0x14));
-+  out.control_code.resize(csize / 4);
-+  std::memcpy(out.control_code.data(), d.data() + coff, csize);
-+
-+  if (rela >= 0 && dynsym >= 0 && dynstr >= 0) {
-+    uint32_t roff = rd32(sh(rela, 0x10));
-+    uint32_t rsize = rd32(sh(rela, 0x14));
-+    uint32_t symoff = rd32(sh(dynsym, 0x10));
-+    uint32_t symentsz = rd32(sh(dynsym, 0x24));
-+    if (symentsz == 0)
-+      symentsz = 16;
-+    uint32_t strtab = rd32(sh(dynstr, 0x10));
-+    for (uint32_t o = 0; o + 12 <= rsize; o += 12) {
-+      uint32_t r_offset = rd32(roff + o + 0);
-+      uint32_t r_info = rd32(roff + o + 4);
-+      int32_t r_addend = rdi32(roff + o + 8);
-+      uint32_t symidx = r_info >> 8;
-+      uint32_t st_name = rd32(symoff + symidx * symentsz);
-+      std::string name = cstr(strtab + st_name);
-+      char *endp = nullptr;
-+      long val = std::strtol(name.c_str(), &endp, 10);
-+      if (endp == name.c_str() || *endp != '\0')
-+        continue; // not a decimal arg-index symbol
-+      long arg_idx = val - scalar_args;
-+      if (arg_idx >= 0) {
-+        out.patch_table.push_back(r_offset);
-+        out.patch_table.push_back(static_cast<uint32_t>(arg_idx));
-+        out.patch_table.push_back(static_cast<uint32_t>(r_addend));
-+      }
-+    }
-+  }
-+  return out;
-+}
-+
-+// ---------------------------------------------------------------------------
-+// Direct TXN -> ControlProgram (no aiebu dependency). C++ port of parse_txn()
-+// in python/utils/hostruntime/hrxruntime/__init__.py. Walks the raw insts.bin
-+// op stream and derives the same (offset, arg_idx, addend) patch table aiebu
-+// would emit; validated byte-for-byte against `aiebu-asm -t aie2txn`.
-+//
-+// Op layout from lib/Targets/AIETargetNPU.cpp + AIEToConfiguration.cpp:
-+//   - 16-byte header: major=byte[0], minor=byte[1], num_ops@8, txn_size@12.
-+//   - BLOCKWRITE (0x01): base@+8, opSize@+12, payload words from +16; payload
-+//     word j programs absolute address base + 4*j.
-+//   - DDR_PATCH (0x81): opSize@+4, addr@+24, argIdx@+32, argPlus@+40. argIdx is
-+//     already the 0-based binding index. The reloc lands on the low DDR-address
-+//     word, i.e. the TXN word at absolute address (addr - 4).
-+// The .ctrltext aiebu emits is the raw TXN verbatim, so control_code = words.
-+// ---------------------------------------------------------------------------
-+struct TxnUnsupported : std::runtime_error {
-+  using std::runtime_error::runtime_error;
-+};
-+
-+inline ControlProgram parse_txn(const std::vector<uint8_t> &d) {
-+  constexpr uint8_t OP_WRITE = 0x00, OP_BLOCKWRITE = 0x01, OP_MASKWRITE = 0x03,
-+                    OP_PREEMPT = 0x06, OP_TCT = 0x80, OP_DDR_PATCH = 0x81;
-+  constexpr size_t HEADER = 16;
-+
-+  if (d.size() < HEADER)
-+    throw TxnUnsupported("insts.bin too small for a TXN header");
-+  auto r32 = [&](size_t o) -> uint32_t {
-+    if (o + 4 > d.size())
-+      throw TxnUnsupported("TXN truncated");
-+    uint32_t v;
-+    std::memcpy(&v, d.data() + o, 4);
-+    return v;
-+  };
-+  auto ri32 = [&](size_t o) -> int32_t {
-+    return static_cast<int32_t>(r32(o));
-+  };
-+
-+  if (d[0] != 0 || d[1] != 1)
-+    throw TxnUnsupported("unsupported TXN version (only 0.1 handled directly)");
-+
-+  // absolute AIE address -> byte offset of the word that programs it.
-+  std::unordered_map<uint32_t, uint32_t> addr_to_off;
-+  struct Patch {
-+    uint32_t addr;
-+    int32_t arg_idx;
-+    int32_t addend;
-+  };
-+  std::vector<Patch> patches;
-+
-+  size_t i = HEADER;
-+  while (i < d.size()) {
-+    uint8_t opc = d[i];
-+    size_t start = i;
-+    if (opc == OP_WRITE) { // 24 bytes
-+      addr_to_off[r32(i + 8)] = static_cast<uint32_t>(i + 16);
-+      i += r32(i + 20);
-+    } else if (opc == OP_BLOCKWRITE) {
-+      uint32_t base = r32(i + 8);
-+      uint32_t op_size = r32(i + 12);
-+      if (op_size < 16)
-+        throw TxnUnsupported("malformed BLOCKWRITE op size");
-+      for (uint32_t j = 0; j < (op_size - 16) / 4; ++j)
-+        addr_to_off[base + 4 * j] = static_cast<uint32_t>(i + 16 + 4 * j);
-+      i += op_size;
-+    } else if (opc == OP_MASKWRITE) { // 28 bytes
-+      i += r32(i + 24);
-+    } else if (opc == OP_TCT) {
-+      i += r32(i + 4);
-+    } else if (opc == OP_DDR_PATCH) {
-+      uint32_t op_size = r32(i + 4);
-+      if (op_size < 44)
-+        throw TxnUnsupported("malformed DDR_PATCH op size");
-+      patches.push_back({r32(i + 24), ri32(i + 32), ri32(i + 40)});
-+      i += op_size;
-+    } else if (opc == OP_PREEMPT) { // 8-byte TxnPreemptHeader
-+      i += 8;
-+    } else {
-+      throw TxnUnsupported("unhandled TXN opcode " + std::to_string(opc));
-+    }
-+    if (i <= start)
-+      throw TxnUnsupported("zero-size TXN op");
-+  }
-+
-+  ControlProgram out;
-+  out.control_code.resize(d.size() / 4);
-+  std::memcpy(out.control_code.data(), d.data(),
-+              out.control_code.size() * 4);
-+
-+  for (const auto &p : patches) {
-+    auto it = addr_to_off.find(p.addr - 4);
-+    if (it == addr_to_off.end())
-+      throw TxnUnsupported("DDR_PATCH target has no preceding write");
-+    if (p.arg_idx >= 0) {
-+      out.patch_table.push_back(it->second);
-+      out.patch_table.push_back(static_cast<uint32_t>(p.arg_idx));
-+      out.patch_table.push_back(static_cast<uint32_t>(p.addend));
-+    }
-+  }
-+  return out;
-+}
-+
-+// ---------------------------------------------------------------------------
-+// Resolve a ControlProgram for an insts.bin / control ELF. Prefers the direct
-+// TXN parser (no aiebu); falls back to the aiebu-asm round-trip for an already-
-+// ELF input or a TXN version the direct parser doesn't know. Set
-+// IRON_HRX_FORCE_AIEBU=1 to always use the aiebu path.
-+// ---------------------------------------------------------------------------
-+inline ControlProgram load_control_program(const std::string &insts_path) {
-+  std::ifstream f(insts_path, std::ios::binary);
-+  if (!f)
-+    throw std::runtime_error("could not read insts: " + insts_path);
-+  std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)),
-+                            std::istreambuf_iterator<char>());
-+
-+  if (data.size() >= 4 && data[0] == 0x7f && data[1] == 'E' && data[2] == 'L' &&
-+      data[3] == 'F')
-+    return parse_control_elf(data);
-+
-+  if (!std::getenv("IRON_HRX_FORCE_AIEBU")) {
-+    try {
-+      return parse_txn(data);
-+    } catch (const TxnUnsupported &) {
-+      // fall through to the aiebu round-trip
-+    }
-+  }
-+  return parse_control_elf(insts_to_control_elf(insts_path));
-+}
-+
-+// ---------------------------------------------------------------------------
 +// Build + load an HRX executable from the artifacts, returning (exe, ordinal).
 +// ---------------------------------------------------------------------------
 +struct LoadedKernel {
@@ -3174,36 +1783,35 @@ index 0000000..db8fed8
 +  std::vector<uint8_t> xclbin((std::istreambuf_iterator<char>(xf)),
 +                              std::istreambuf_iterator<char>());
 +
-+  // insts.bin -> (control_code, patch_table). Direct TXN parse (no aiebu),
-+  // with an aiebu-asm fallback for ELF input / unknown TXN versions.
-+  ControlProgram cp = load_control_program(insts_path);
++  std::ifstream tf(insts_path, std::ios::binary);
++  if (!tf)
++    throw std::runtime_error("could not read insts: " + insts_path);
++  std::vector<uint8_t> transaction((std::istreambuf_iterator<char>(tf)),
++                                   std::istreambuf_iterator<char>());
 +
-+  // Serialize the XADX flatbuffer.
-+  uint8_t *blob = nullptr;
-+  size_t blob_n = 0;
-+  int rc = iron_build_xadx(
-+      xclbin.data(), xclbin.size(), cp.control_code.data(),
-+      cp.control_code.size(),
-+      cp.patch_table.empty() ? nullptr : cp.patch_table.data(),
-+      cp.patch_table.size(), kernel_name.c_str(), &blob, &blob_n);
-+  if (rc != 0 || !blob)
-+    throw std::runtime_error("iron_build_xadx failed (rc=" +
-+                             std::to_string(rc) + ")");
++  const hrx_const_byte_span_t xclbin_span = {xclbin.data(), xclbin.size()};
++  hrx_amdxdna_executable_run_t run =
++      hrx_amdxdna_executable_run_default();
++  run.transaction = {transaction.data(), transaction.size()};
++  hrx_amdxdna_executable_entry_point_t entry =
++      hrx_amdxdna_executable_entry_point_default();
++  entry.name = {kernel_name.data(), kernel_name.size()};
++  entry.runs = &run;
++  entry.run_count = 1;
++  hrx_amdxdna_executable_create_params_t params =
++      hrx_amdxdna_executable_create_params_default();
++  params.xclbins = &xclbin_span;
++  params.xclbin_count = 1;
++  params.entry_points = &entry;
++  params.entry_point_count = 1;
 +
 +  Context &ctx = Context::get();
 +  LoadedKernel lk;
-+  try {
-+    hrx_check(hrx_executable_load_data(ctx.device, blob, blob_n,
-+                                       kHrxAmdxdnaFormat, &lk.exe),
-+              "hrx_executable_load_data");
-+    hrx_check(hrx_executable_lookup_export_by_name(lk.exe, kernel_name.c_str(),
-+                                                   &lk.ordinal),
-+              "hrx_executable_lookup_export_by_name");
-+  } catch (...) {
-+    iron_free_xadx(blob);
-+    throw;
-+  }
-+  iron_free_xadx(blob);
++  hrx_check(hrx_amdxdna_executable_create(ctx.device, &params, &lk.exe),
++            "hrx_amdxdna_executable_create");
++  hrx_check(hrx_executable_lookup_export_by_name(lk.exe, kernel_name.c_str(),
++                                                 &lk.ordinal),
++            "hrx_executable_lookup_export_by_name");
 +  return lk;
 +}
 +

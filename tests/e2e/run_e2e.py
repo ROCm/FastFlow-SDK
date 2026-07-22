@@ -70,10 +70,12 @@ class DesignArtifacts(NamedTuple):
 
     Attributes:
         xclbin: the packaged .xclbin
+        insts: the raw XAie transaction consumed by the host runtime
         pdi: bootgen's main.pdi, which the HAL must extract byte-for-byte
     """
 
     xclbin: Path
+    insts: Path
     pdi: Path
 
 
@@ -188,6 +190,9 @@ def toolchain_env(xclbinutil: Path,
     env["PEANO_INSTALL_DIR"] = str(peano)
     env["AIEOPT_DIR"] = str(aieopt_dir)
     if compiler_prefix:
+        # A verified product is immutable input. Importing its Python modules
+        # must not add unmanifested __pycache__ files to the product tree.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["ROCM_NPU_COMPILER_PREFIX"] = str(compiler_prefix)
         print(f"== toolchain: relocated rocm-npu compiler product ({compiler_prefix}) ==")
     else:
@@ -242,9 +247,12 @@ def build_design(
         raise E2EError("design build failed")
 
     xclbin = build_dir / "final.xclbin"
+    insts = build_dir / "insts.bin"
     pdi = build_dir / "final.prj" / "main.pdi"
     if not xclbin.is_file():
         raise E2EError("no .xclbin produced")
+    if not insts.is_file():
+        raise E2EError("no instruction transaction produced")
     if not pdi.is_file():
         raise E2EError(f"no bootgen PDI produced ({pdi})")
 
@@ -252,7 +260,7 @@ def build_design(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(xclbin, artifacts_dir / f"{design_dir.name}.xclbin")
     print(f"  ok: {design_dir.name}.xclbin ({xclbin.stat().st_size} B)")
-    return DesignArtifacts(xclbin=xclbin, pdi=pdi)
+    return DesignArtifacts(xclbin=xclbin, insts=insts, pdi=pdi)
 
 
 def check_sections(

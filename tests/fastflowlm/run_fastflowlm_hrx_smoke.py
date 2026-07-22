@@ -207,11 +207,15 @@ def main():
     bundle = Path(os.environ["FASTFLOWLM_BUNDLE"]) if os.environ.get("FASTFLOWLM_BUNDLE") else None
     fastflowlm_dir = Path(os.environ.get("FASTFLOWLM_DIR") or (ROOT / "projects" / "FastFlowLM"))
     flm_src = fastflowlm_dir / "src"
-    hrx_build = Path(os.environ.get("HRX_BUILD") or (ROOT / "projects" / "hrx" / "build" / "cmake"))
     flm_bin = (bundle / "bin" / ("flm.exe" if IS_WINDOWS else "flm") if bundle else
                Path(os.environ.get("FLM_BIN") or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm"))))
-    hrx_runtime = (bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so") if bundle else
-                   hrx_build / "libhrx" / "src" / "libhrx" / ("hrx.dll" if IS_WINDOWS else "libhrx.so"))
+    library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
+    default_install = Path(os.environ.get("HRX_INSTALL") or (ROOT / "build" / "hrx-install"))
+    runtime_dir = Path(os.environ.get("LIBHRX_DIR") or
+                       (default_install / ("bin" if IS_WINDOWS else "lib")))
+    hrx_runtime = (bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")
+                   if bundle else Path(os.environ.get("HRX_LIBHRX") or
+                                       (runtime_dir / library_name)))
     model = os.environ.get("FLM_MODEL") or "qwen3:0.6b"
     model_cache = Path(os.environ.get("FLM_MODEL_PATH") or (ROOT / "build" / "FastFlowLM-models"))
     config_path = (bundle / "share" / "flm" / "model_list.json" if bundle else

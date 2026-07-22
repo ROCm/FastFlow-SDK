@@ -34,6 +34,19 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _zstandard_module():
+    # dev.py imports this module before `dev.py setup` creates the venv, so keep
+    # the optional codec import at the point where an archive actually needs it.
+    try:
+        import zstandard
+    except ImportError as error:
+        raise RuntimeError(
+            "the zstandard Python package is required for .tar.zst artifacts; "
+            "run: python dev.py setup"
+        ) from error
+    return zstandard
+
+
 def _run_text(command: list[str], cwd: Path | None = None) -> str:
     result = subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True)
     return result.stdout.strip()
@@ -927,24 +940,36 @@ def _extract_archive_contents(archive: Path, destination: Path) -> Path:
                     with source.open(member) as input_stream, target.open("wb") as output_stream:
                         shutil.copyfileobj(input_stream, output_stream)
     elif archive.name.endswith((".tar.gz", ".tar.zst")):
-        temporary_dir = None
-        tar_path = archive
-        if archive.name.endswith(".tar.zst"):
-            zstd = shutil.which("zstd")
-            if not zstd:
-                raise RuntimeError("zstd is required to extract the Linux .tar.zst artifact")
-            temporary_dir = tempfile.TemporaryDirectory(prefix="fastflowlm-untar-")
-            tar_path = Path(temporary_dir.name) / "bundle.tar"
-            subprocess.run([zstd, "-q", "-d", "-f", str(archive), "-o", str(tar_path)], check=True)
+        raw_stream = archive.open("rb")
+        decoded_stream = None
+        zstd_process = None
         try:
-            with tarfile.open(tar_path) as source:
-                members = source.getmembers()
-                names = [member.name for member in members]
-                if len(names) != len(set(names)):
-                    raise RuntimeError(
-                        f"duplicate paths are not allowed in runtime artifacts: {archive}")
+            if archive.name.endswith(".tar.zst"):
+                try:
+                    decoded_stream = _zstandard_module().ZstdDecompressor().stream_reader(
+                        raw_stream)
+                except RuntimeError as module_error:
+                    zstd = shutil.which("zstd")
+                    if not zstd:
+                        raise module_error
+                    zstd_process = subprocess.Popen(
+                        [zstd, "-q", "-d", "-c", str(archive)],
+                        stdout=subprocess.PIPE,
+                    )
+                    decoded_stream = zstd_process.stdout
+                tar_stream = decoded_stream
+                mode = "r|"
+            else:
+                tar_stream = raw_stream
+                mode = "r:gz"
+            with tarfile.open(fileobj=tar_stream, mode=mode) as source:
+                names = set()
                 targets = set()
-                for member in members:
+                for member in source:
+                    if member.name in names:
+                        raise RuntimeError(
+                            f"duplicate paths are not allowed in runtime artifacts: {archive}")
+                    names.add(member.name)
                     target = _safe_member_path(destination, member.name)
                     normalized = os.path.normcase(str(target))
                     if normalized in targets:
@@ -965,8 +990,12 @@ def _extract_archive_contents(archive: Path, destination: Path) -> Path:
                             shutil.copyfileobj(input_stream, output_stream)
                         target.chmod(member.mode & 0o777)
         finally:
-            if temporary_dir is not None:
-                temporary_dir.cleanup()
+            if decoded_stream is not None:
+                decoded_stream.close()
+            raw_stream.close()
+            if zstd_process is not None and zstd_process.wait() != 0:
+                raise RuntimeError(
+                    f"zstd failed to extract {archive} (exit {zstd_process.returncode})")
     else:
         raise RuntimeError(f"unsupported artifact format: {archive}")
 

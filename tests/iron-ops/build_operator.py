@@ -19,8 +19,8 @@ does.
 Which operators, at what size: tests/iron-ops/suite.py. Runs on Linux and Windows.
 
 Must be run BY the stack's venv python, WITH the IRON toolchain env (PYTHONPATH ->
-build/iron-tools/python, PEANO_INSTALL_DIR, tools-bin on PATH). `dev.py test-iron-ops` does
-both; it takes that env from run_e2e.toolchain_env(), the single definition.
+projects/iron-ops plus the selected compiler's Python package, PEANO_INSTALL_DIR,
+tools-bin on PATH). `dev.py test-iron-ops` provides both layers.
 """
 
 import argparse
