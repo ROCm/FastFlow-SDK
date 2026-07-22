@@ -191,5 +191,5 @@ jobs:
       - name: Probe NPU driver, firmware, and packaged libHRX
         run: python dev.py npu-probe --bundle build/FastFlowLM-extracted/fastflowlm-hrx-windows-x86_64
 
-      - name: Run packaged FastFlowLM HRX smoke
-        run: python dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hrx-windows-x86_64
+      - name: Run packaged FastFlowLM HRX soak
+        run: python dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hrx-windows-x86_64 --inference-iterations 5

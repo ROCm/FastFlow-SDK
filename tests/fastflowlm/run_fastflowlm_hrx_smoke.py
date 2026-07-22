@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Cross-platform FastFlowLM-on-HRX inference and benchmark smoke test."""
 
+import argparse
 import csv
 import hashlib
 import os
@@ -28,6 +29,27 @@ FASTFLOWLM_QWEN3_06B_XCLBINS = {
 
 class SmokeFailure(RuntimeError):
     pass
+
+
+def positive_int(value):
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--inference-iterations",
+        type=positive_int,
+        default=1,
+        help="number of independent FLM inference processes to validate",
+    )
+    return parser.parse_args(argv)
 
 
 def parse_duration_seconds(value, default):
@@ -181,6 +203,7 @@ def require_file(path, label):
 
 
 def main():
+    args = parse_args()
     bundle = Path(os.environ["FASTFLOWLM_BUNDLE"]) if os.environ.get("FASTFLOWLM_BUNDLE") else None
     fastflowlm_dir = Path(os.environ.get("FASTFLOWLM_DIR") or (ROOT / "projects" / "FastFlowLM"))
     flm_src = fastflowlm_dir / "src"
@@ -230,40 +253,54 @@ def main():
     print(f"  flm:         {flm_bin}")
     print(f"  hrx runtime: {hrx_runtime}")
     print(f"  model cache: {model_cache}")
+    print(f"  inference processes: {args.inference_iterations}")
 
     run_tee([flm_bin, "pull", model], env=env)
     run_tee([flm_bin, "check", model], env=env)
 
     safe_model = re.sub(r"[^A-Za-z0-9_.-]+", "_", model)
-    run_output = work_dir / f"run_{safe_model}.txt"
-    raw_output = work_dir / f"run_{safe_model}_raw.txt"
     bench_output = work_dir / f"bench_{safe_model}.txt"
 
-    print("Running FastFlowLM inference smoke...")
-    print("== FastFlowLM inference transcript begin ==")
-    run_text = run_tee(
-        [flm_bin, "run", model, "--ctx-len", "1024"],
-        env=env,
-        input_text=smoke_prompt + "\n",
-        timeout=parse_duration_seconds(os.environ.get("FLM_RUN_TIMEOUT"), 180.0),
-        output_path=run_output,
-    )
-    print("== FastFlowLM inference transcript end ==")
-    fail_if_runtime_errors(run_text, "FastFlowLM run", run_output)
-    raw_text = extract_raw_output(run_text)
-    raw_output.write_text(raw_text + "\n", encoding="utf-8", errors="replace")
-    if not re.search(r"[A-Za-z]{4,}", raw_text):
-        raise SmokeFailure(f"FastFlowLM run completed but did not produce visible model output: {run_output}")
-    if smoke_regex and not re.search(smoke_regex, raw_text, re.IGNORECASE):
-        raise SmokeFailure(
-            f"FastFlowLM output did not match expected smoke phrase: {raw_output}\n"
-            f"Expected regex: {smoke_regex}"
+    for iteration in range(1, args.inference_iterations + 1):
+        if args.inference_iterations == 1:
+            run_output = work_dir / f"run_{safe_model}.txt"
+            raw_output = work_dir / f"run_{safe_model}_raw.txt"
+        else:
+            suffix = f"{iteration:02d}-of-{args.inference_iterations:02d}"
+            run_output = work_dir / f"run_{safe_model}_{suffix}.txt"
+            raw_output = work_dir / f"run_{safe_model}_{suffix}_raw.txt"
+
+        print(
+            "Running FastFlowLM inference smoke "
+            f"{iteration}/{args.inference_iterations}..."
         )
-    if not smoke_regex and raw_text != smoke_expected:
-        raise SmokeFailure(
-            f"FastFlowLM output did not exactly match the smoke phrase: {raw_output}\n"
-            f"Expected: {smoke_expected!r}; got: {raw_text!r}"
+        print("== FastFlowLM inference transcript begin ==")
+        run_text = run_tee(
+            [flm_bin, "run", model, "--ctx-len", "1024"],
+            env=env,
+            input_text=smoke_prompt + "\n",
+            timeout=parse_duration_seconds(os.environ.get("FLM_RUN_TIMEOUT"), 180.0),
+            output_path=run_output,
         )
+        print("== FastFlowLM inference transcript end ==")
+        fail_if_runtime_errors(run_text, "FastFlowLM run", run_output)
+        raw_text = extract_raw_output(run_text)
+        raw_output.write_text(raw_text + "\n", encoding="utf-8", errors="replace")
+        if not re.search(r"[A-Za-z]{4,}", raw_text):
+            raise SmokeFailure(
+                "FastFlowLM run completed but did not produce visible model output: "
+                f"{run_output}"
+            )
+        if smoke_regex and not re.search(smoke_regex, raw_text, re.IGNORECASE):
+            raise SmokeFailure(
+                f"FastFlowLM output did not match expected smoke phrase: {raw_output}\n"
+                f"Expected regex: {smoke_regex}"
+            )
+        if not smoke_regex and raw_text != smoke_expected:
+            raise SmokeFailure(
+                f"FastFlowLM output did not exactly match the smoke phrase: {raw_output}\n"
+                f"Expected: {smoke_expected!r}; got: {raw_text!r}"
+            )
 
     stamp_file = work_dir / ".bench-start"
     stamp_file.write_text("", encoding="utf-8")
