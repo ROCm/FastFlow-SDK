@@ -153,6 +153,46 @@ class CompilerProductTest(unittest.TestCase):
             self.assertFalse((stage / "build/iron-tools").exists())
             self.assertFalse((stage / "tools-bin").exists())
 
+    def test_npu_test_package_contains_only_xadx_and_numeric_cases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            _, test_cases = dev._npu_test_modules()
+            case_records = []
+            for name in ("vector_scalar_add", "elementwise_add", "relu", "gemv"):
+                case_records.append(
+                    dev.npu_test_package.write_case(
+                        stage,
+                        test_cases.generate_case(name),
+                        b"\x00\x00\x00\x00XADX",
+                        {"kind": "test", "name": name},
+                    )
+                )
+
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            system = dev.platform.system().lower()
+            dev.npu_test_package.write_manifest(
+                stage, case_records, revision, system, "x86_64"
+            )
+            manifest = dev.npu_test_package.verify_tree(
+                stage,
+                ("vector_scalar_add", "elementwise_add", "relu", "gemv"),
+                revision,
+                system,
+            )
+
+            self.assertEqual(len(manifest["cases"]), 4)
+            packaged = {
+                path.suffix for path in stage.rglob("*") if path.is_file()
+            }
+            self.assertNotIn(".xclbin", packaged)
+            self.assertNotIn(".mlir", packaged)
+
     def test_windows_tar_zst_is_deterministic_and_extracts_valid_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
