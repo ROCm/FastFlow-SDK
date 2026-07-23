@@ -108,17 +108,18 @@ a coherent benchmark summary, and validates the benchmark CSV under
 
 ### Windows driver compatibility
 
-The following Windows MCDM packages have been validated on a Strix
-`PCI\VEN_1022&DEV_17F0` NPU with Windows build `26200`. A passing row means
-HRX initialization, checked single dispatches, checked native command chains,
-and coherent Qwen3 0.6B FastFlowLM-to-HRX execution all passed.
+The following Windows MCDM packages have been validated on Strix
+(`PCI\VEN_1022&DEV_17F0`, Windows build `26200`) and Krackan Point
+(BirmanPlus-KRK, Ryzen AI 7 350, `PCI\VEN_1022&DEV_17F0`, Windows build
+`26100`). A passing row means Qwen3 0.6B FastFlowLM-to-HRX execution passed
+(Strix: full smoke/CTS; Krackan: 20-iteration soak + 1k benchmark).
 
-| AMD XDNA driver | Firmware evidence | HRX single | HRX chain | FLM Qwen3 0.6B |
-| --- | --- | --- | --- | --- |
-| `32.0.203.314` | loaded `1.0.21.43` (`xrt-smi`) | Pass | Pass | Pass |
-| `32.0.203.329` | loaded `1.0.21.43` (`xrt-smi`) | Pass | Pass | Pass |
-| `32.0.20101.3760` | loaded `1.1.2.64` (`xrt-smi`) | Pass | Pass | Pass |
-| `32.0.20102.3930` | package candidates `1.1.2.64`, `1.1.2.65`, `1.1.2.73`, `1.5.5.391` (`npu-probe`) | Pass | Pass | Pass |
+| AMD XDNA driver | Firmware evidence | FLM Qwen3 0.6B |
+| --- | --- | --- |
+| `32.0.203.314` | loaded `1.0.21.43` (`xrt-smi`) | Pass (Strix) |
+| `32.0.203.329` | loaded `1.0.21.43` (`xrt-smi`) | Pass (Strix + Krackan) |
+| `32.0.20101.3760` | loaded `1.1.2.64` (`xrt-smi`) | Pass (Strix + Krackan) |
+| `32.0.20102.3930` | package candidates `1.1.2.64`, `1.1.2.65`, `1.1.2.73`, `1.5.5.391` (`npu-probe`); loaded `1.1.2.64` on Krackan (`xrt-smi`) | Pass (Strix + Krackan) |
 
 Reboot after changing the driver before validating the NPU. A hot package
 switch can leave device execution unhealthy even when Windows reports the new
