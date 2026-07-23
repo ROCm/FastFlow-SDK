@@ -2782,7 +2782,7 @@ def main():
         type=argparse_positive_int,
         default=1,
         metavar="N",
-        help="run N independent FLM inference processes before the benchmark",
+        help="run N independent two-turn FLM inference processes before the benchmark",
     )
     to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")

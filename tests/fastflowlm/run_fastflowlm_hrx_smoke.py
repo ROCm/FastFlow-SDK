@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Cross-platform FastFlowLM-on-HRX inference and benchmark smoke test."""
+"""Cross-platform FastFlowLM-on-HRX multi-turn inference and benchmark smoke test."""
 
 import argparse
 import csv
@@ -47,7 +47,7 @@ def parse_args(argv=None):
         "--inference-iterations",
         type=positive_int,
         default=1,
-        help="number of independent FLM inference processes to validate",
+        help="number of independent two-turn FLM inference processes to validate",
     )
     return parser.parse_args(argv)
 
@@ -160,18 +160,29 @@ def fail_if_runtime_errors(text, label, path):
         raise SmokeFailure(f"{label} hit the generation length limit: {path}")
 
 
-def extract_raw_output(text):
-    lines = []
-    seen = False
+def extract_raw_outputs(text):
+    outputs = []
+    lines = None
     for line in text.splitlines():
         if "Model RAW Output:" in line:
-            seen = True
+            if lines is not None:
+                outputs.append("\n".join(lines).strip())
+            lines = []
             continue
-        if seen and (line.startswith(">>>") or line.startswith("[FLM]")):
-            break
-        if seen:
+        if lines is not None and (line.startswith(">>>") or line.startswith("[FLM]")):
+            outputs.append("\n".join(lines).strip())
+            lines = None
+            continue
+        if lines is not None:
             lines.append(line)
-    return "\n".join(lines).strip()
+    if lines is not None:
+        outputs.append("\n".join(lines).strip())
+    return outputs
+
+
+def extract_raw_output(text):
+    outputs = extract_raw_outputs(text)
+    return outputs[0] if outputs else ""
 
 
 def verify_qwen3_xclbins(xclbin_prefix):
@@ -224,9 +235,22 @@ def main():
                      Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src))
     bench_config = Path(os.environ.get("FLM_BENCH_CONFIG") or (ROOT / "tests" / "fastflowlm" / "bench_1k_smoke.json"))
     work_dir = Path(os.environ.get("FLM_SMOKE_WORK_DIR") or (ROOT / "build" / "FastFlowLM-smoke"))
-    smoke_prompt = os.environ.get("FLM_SMOKE_PROMPT") or "Repeat exactly: HRX runtime smoke test."
-    smoke_expected = os.environ.get("FLM_SMOKE_EXPECTED") or "HRX runtime smoke test."
-    smoke_regex = os.environ.get("FLM_SMOKE_EXPECTED_REGEX")
+    smoke_turns = [
+        (
+            os.environ.get("FLM_SMOKE_PROMPT")
+            or "Repeat exactly: HRX runtime smoke test one.",
+            os.environ.get("FLM_SMOKE_EXPECTED")
+            or "HRX runtime smoke test one.",
+            os.environ.get("FLM_SMOKE_EXPECTED_REGEX"),
+        ),
+        (
+            os.environ.get("FLM_SMOKE_PROMPT_2")
+            or "Repeat exactly: HRX runtime smoke test two.",
+            os.environ.get("FLM_SMOKE_EXPECTED_2")
+            or "HRX runtime smoke test two.",
+            os.environ.get("FLM_SMOKE_EXPECTED_REGEX_2"),
+        ),
+    ]
     bench_regex = os.environ.get("FLM_BENCH_EXPECTED_REGEX") or r"FastFlowLM.*HRX.*runtime"
 
     require_file(flm_bin, "flm binary")
@@ -258,6 +282,7 @@ def main():
     print(f"  hrx runtime: {hrx_runtime}")
     print(f"  model cache: {model_cache}")
     print(f"  inference processes: {args.inference_iterations}")
+    print(f"  turns per process: {len(smoke_turns)}")
 
     run_tee([flm_bin, "pull", model], env=env)
     run_tee([flm_bin, "check", model], env=env)
@@ -282,29 +307,41 @@ def main():
         run_text = run_tee(
             [flm_bin, "run", model, "--ctx-len", "1024"],
             env=env,
-            input_text=smoke_prompt + "\n",
+            input_text="".join(f"{prompt}\n" for prompt, _, _ in smoke_turns),
             timeout=parse_duration_seconds(os.environ.get("FLM_RUN_TIMEOUT"), 180.0),
             output_path=run_output,
         )
         print("== FastFlowLM inference transcript end ==")
         fail_if_runtime_errors(run_text, "FastFlowLM run", run_output)
-        raw_text = extract_raw_output(run_text)
-        raw_output.write_text(raw_text + "\n", encoding="utf-8", errors="replace")
-        if not re.search(r"[A-Za-z]{4,}", raw_text):
+        raw_texts = extract_raw_outputs(run_text)
+        raw_output.write_text(
+            "\n\n".join(raw_texts) + "\n", encoding="utf-8", errors="replace"
+        )
+        if len(raw_texts) != len(smoke_turns):
             raise SmokeFailure(
-                "FastFlowLM run completed but did not produce visible model output: "
-                f"{run_output}"
+                f"FastFlowLM run produced {len(raw_texts)} model responses; "
+                f"expected {len(smoke_turns)}: {run_output}"
             )
-        if smoke_regex and not re.search(smoke_regex, raw_text, re.IGNORECASE):
-            raise SmokeFailure(
-                f"FastFlowLM output did not match expected smoke phrase: {raw_output}\n"
-                f"Expected regex: {smoke_regex}"
-            )
-        if not smoke_regex and raw_text != smoke_expected:
-            raise SmokeFailure(
-                f"FastFlowLM output did not exactly match the smoke phrase: {raw_output}\n"
-                f"Expected: {smoke_expected!r}; got: {raw_text!r}"
-            )
+        for turn, (raw_text, (_, expected, expected_regex)) in enumerate(
+            zip(raw_texts, smoke_turns), start=1
+        ):
+            if not re.search(r"[A-Za-z]{4,}", raw_text):
+                raise SmokeFailure(
+                    f"FastFlowLM turn {turn} did not produce visible model output: "
+                    f"{run_output}"
+                )
+            if expected_regex and not re.search(
+                expected_regex, raw_text, re.IGNORECASE
+            ):
+                raise SmokeFailure(
+                    f"FastFlowLM turn {turn} did not match the expected phrase: "
+                    f"{raw_output}\nExpected regex: {expected_regex}"
+                )
+            if not expected_regex and raw_text != expected:
+                raise SmokeFailure(
+                    f"FastFlowLM turn {turn} did not exactly match the smoke phrase: "
+                    f"{raw_output}\nExpected: {expected!r}; got: {raw_text!r}"
+                )
 
     stamp_file = work_dir / ".bench-start"
     stamp_file.write_text("", encoding="utf-8")

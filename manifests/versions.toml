@@ -48,9 +48,9 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/jtuyls/hrx"                     # fork; upstream ROCm/hrx-system
 branch     = "amdxdna-hal-native-rel"                     # == amdxdna-hal-native + relocatable FLM runtime hooks
-commit     = "5341df73c6badef4e2cdbe6c91fa79c4c19af1b0"
+commit     = "51d563c5b3d72c0f84e4159eee0e1a5e35a6550d"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
-note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, negotiated legacy/compact Windows MCDM contracts (including Krackan compact/legacy v4), legacy protocol revision 3 support, ABI-hardened HRX-owned amdxdna XADX executable creation, DDI-owned Windows CPU-write publication, and minimal/relocatable runtime component gating."
+note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, per-submit restaging of shared Windows command-aperture contents, negotiated legacy/compact Windows MCDM contracts (including Krackan compact/legacy v4), legacy protocol revision 3 support, ABI-hardened HRX-owned amdxdna XADX executable creation, DDI-owned Windows CPU-write publication, and minimal/relocatable runtime component gating."
 
 [hrx_xclbinutil]                # projects/hrx-xclbinutil — standalone repo (transitional)
 repo       = "github.com/jtuyls/hrx-xclbinutil"          # origin remote set; push when ready

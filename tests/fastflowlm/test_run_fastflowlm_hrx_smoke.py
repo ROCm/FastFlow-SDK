@@ -21,6 +21,17 @@ class FastFlowLMSmokeTest(unittest.TestCase):
         transcript = "before\nModel RAW Output:\ncoherent text\n>>> prompt\nafter\n"
         self.assertEqual(smoke.extract_raw_output(transcript), "coherent text")
 
+    def test_extract_multiple_raw_outputs(self):
+        transcript = (
+            "Model RAW Output:\nfirst response\n"
+            "[FLM]  Prefill chunk 1/1\n"
+            "Model RAW Output:\nsecond response\n"
+        )
+        self.assertEqual(
+            smoke.extract_raw_outputs(transcript),
+            ["first response", "second response"],
+        )
+
     def test_extract_benchmark_raw_output_stops_before_metrics(self):
         transcript = "Model RAW Output:\ncoherent text\n[FLM]  TTFT: 1.0s\n"
         self.assertEqual(smoke.extract_raw_output(transcript), "coherent text")
