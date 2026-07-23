@@ -17,12 +17,14 @@ from unittest import mock
 from build_tools.fastflowlm_artifact import (
     _linux_dependencies_and_licenses,
     _is_linux_system_runtime,
-    _pe_imports,
+    pe_imports,
     create_archive,
+    directory_state,
     extract_archive,
     git_source_state,
     sha256_file,
     validate_source_policy,
+    verify_fastflowlm_fresh_installs,
     verify_bundle,
 )
 
@@ -85,6 +87,113 @@ class FastFlowLMArtifactTest(unittest.TestCase):
             self.assertTrue(state["dirty"])
             self.assertEqual([entry["path"] for entry in state["changed_files"]],
                              ["new.txt", "tracked.txt"])
+
+    def test_git_source_state_records_staged_only_changes_as_dirty(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Artifact Test"],
+                cwd=repository,
+                check=True,
+            )
+            tracked = repository / "tracked.txt"
+            tracked.write_text("original\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "--quiet", "-m", "initial"],
+                cwd=repository,
+                check=True,
+            )
+            tracked.write_text("staged\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+            state = git_source_state(repository)
+            self.assertTrue(state["dirty"])
+            self.assertEqual(
+                [entry["path"] for entry in state["changed_files"]],
+                ["tracked.txt"],
+            )
+
+    def test_fresh_install_verification_checks_sources_installs_and_dependency(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker_name = ".fresh.json"
+
+            def make_source(name):
+                repository = root / name
+                repository.mkdir()
+                subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
+                subprocess.run(
+                    ["git", "config", "user.email", "test@example.com"],
+                    cwd=repository,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.name", "Artifact Test"],
+                    cwd=repository,
+                    check=True,
+                )
+                (repository / "source.txt").write_text("source\n", encoding="utf-8")
+                subprocess.run(["git", "add", "."], cwd=repository, check=True)
+                subprocess.run(
+                    ["git", "commit", "--quiet", "-m", "initial"],
+                    cwd=repository,
+                    check=True,
+                )
+                return repository
+
+            hrx_source = make_source("hrx-source")
+            fastflowlm_source = make_source("fastflowlm-source")
+            hrx_install = root / "hrx-install"
+            fastflowlm_install = root / "fastflowlm-install"
+            flm_name = "flm.exe" if os.name == "nt" else "flm"
+            (hrx_install / "bin").mkdir(parents=True)
+            (hrx_install / "bin" / "hrx.dll").write_bytes(b"hrx")
+            (fastflowlm_install / "bin").mkdir(parents=True)
+            (fastflowlm_install / "bin" / flm_name).write_bytes(b"flm")
+
+            hrx_marker = {
+                "source": git_source_state(hrx_source),
+                "install": directory_state(
+                    hrx_install, exclude_names=(marker_name,)
+                ),
+            }
+            (hrx_install / marker_name).write_text(
+                json.dumps(hrx_marker), encoding="utf-8"
+            )
+            fastflowlm_marker = {
+                "source": git_source_state(fastflowlm_source),
+                "hrx": hrx_marker,
+                "install": directory_state(
+                    fastflowlm_install, exclude_names=(marker_name,)
+                ),
+            }
+            (fastflowlm_install / marker_name).write_text(
+                json.dumps(fastflowlm_marker), encoding="utf-8"
+            )
+
+            markers = verify_fastflowlm_fresh_installs(
+                hrx_install=hrx_install,
+                hrx_source=hrx_source,
+                fastflowlm_install=fastflowlm_install,
+                fastflowlm_source=fastflowlm_source,
+                marker_name=marker_name,
+            )
+            self.assertEqual(markers["HRX"], hrx_marker)
+            (fastflowlm_install / "bin" / flm_name).write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "install changed"):
+                verify_fastflowlm_fresh_installs(
+                    hrx_install=hrx_install,
+                    hrx_source=hrx_source,
+                    fastflowlm_install=fastflowlm_install,
+                    fastflowlm_source=fastflowlm_source,
+                    marker_name=marker_name,
+                )
 
     def test_linux_system_runtime_classification(self):
         for name in ("libc.so.6", "libm.so.6", "libpthread.so.0",
@@ -159,7 +268,7 @@ class FastFlowLMArtifactTest(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "PE fixture is built on Windows")
     def test_parse_pe_imports(self):
         executable = Path(os.environ["SystemRoot"]) / "System32" / "where.exe"
-        imports = _pe_imports(executable)
+        imports = pe_imports(executable)
         self.assertIn("kernel32.dll", imports)
 
     def test_source_policy_enforces_component_pins_and_clean_staging(self):

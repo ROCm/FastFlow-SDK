@@ -56,12 +56,11 @@ from build_tools.fastflowlm_artifact import (
     sha256_file,
     stage_runtime_bundle,
     validate_source_policy,
+    verify_fastflowlm_fresh_installs,
     verify_bundle as verify_fastflowlm_bundle,
 )
 from build_tools.windows_npu import (
-    device_is_healthy,
-    driver_firmware_packages,
-    parse_device_query,
+    probe_runtime as probe_windows_npu_runtime,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -1072,6 +1071,7 @@ def _prepare_fresh_cmake_tree(path):
 def cmd_build_hrx(args):
     d = PROJ / "hrx"
     cc, cxx = _compilers()
+    env = cmake_env()
     if not (d / "CMakeLists.txt").exists():
         sys.exit("missing projects/hrx (run: git submodule update --init projects/hrx)")
     apply_patches({"hrx"})
@@ -1108,19 +1108,19 @@ def cmd_build_hrx(args):
         "-DIREE_HAL_DRIVER_NULL=OFF",
         *_cmake_source_override("FETCHCONTENT_SOURCE_DIR_FLATCC"),
         *_cc_flags(cc, cxx), *_ccache_flags(),
-    ], env=cmake_env())
+    ], env=env)
     sh([
         cmake_bin(), "--build", cmake_path(HRX_CMAKE_BUILD),
         *(["--clean-first"] if fresh else []),
         "--target", "iree_hal_drivers_amdxdna_registration_registration", "hrx", "flatcc_runtime",
         "-j", BUILD_JOBS,
-    ], env=cmake_env())
+    ], env=env)
     shutil.rmtree(HRX_INSTALL, ignore_errors=True)
     sh([
         cmake_bin(), "--install", cmake_path(HRX_CMAKE_BUILD),
         "--prefix", cmake_path(HRX_INSTALL),
         "--component", "HrxPublicDist",
-    ], env=cmake_env())
+    ], env=env)
 
     # Exercise the installed package from an unrelated build tree. This catches
     # absolute build paths, missing headers, and incomplete imported targets.
@@ -1132,10 +1132,10 @@ def cmd_build_hrx(args):
         f"-DCMAKE_BUILD_TYPE=Release",
         f"-DCMAKE_PREFIX_PATH={cmake_path(HRX_INSTALL)}",
         *_cc_flags(cc, cxx),
-    ], env=cmake_env())
+    ], env=env)
     sh([cmake_bin(), "--build", cmake_path(HRX_PACKAGE_SMOKE_BUILD), "-j", BUILD_JOBS],
-       env=cmake_env())
-    smoke_env = cmake_env()
+       env=env)
+    smoke_env = dict(env)
     if IS_WINDOWS:
         smoke_env["PATH"] = str(HRX_INSTALL / "bin") + os.pathsep + smoke_env.get("PATH", "")
     else:
@@ -1235,24 +1235,16 @@ def cmd_build_fastflowlm(args):
 
 def cmd_package_fastflowlm(args):
     """Create and independently re-extract the relocatable FLM + HRX runtime."""
-    if not (FASTFLOWLM_INSTALL / "bin" / f"flm{_EXE}").is_file():
-        sys.exit("FastFlowLM is not installed - run: python dev.py build fastflowlm")
-    markers = {}
-    for name, install, source in (
-            ("HRX", HRX_INSTALL, PROJ / "hrx"),
-            ("FastFlowLM", FASTFLOWLM_INSTALL, PROJ / "FastFlowLM")):
-        marker = install / FRESH_BUILD_MARKER
-        if not marker.is_file():
-            sys.exit(f"{name} was not built with --fresh")
-        recorded = json.loads(marker.read_text(encoding="utf-8"))
-        if recorded.get("source") != git_source_state(source):
-            sys.exit(f"{name} sources changed after the fresh build; rebuild with --fresh")
-        if recorded.get("install") != directory_state(
-                install, exclude_names=(FRESH_BUILD_MARKER,)):
-            sys.exit(f"{name} install changed after the fresh build; rebuild with --fresh")
-        markers[name] = recorded
-    if markers["FastFlowLM"].get("hrx") != markers["HRX"]:
-        sys.exit("FastFlowLM was built against a different HRX install; rebuild with --fresh")
+    try:
+        verify_fastflowlm_fresh_installs(
+            hrx_install=HRX_INSTALL,
+            hrx_source=PROJ / "hrx",
+            fastflowlm_install=FASTFLOWLM_INSTALL,
+            fastflowlm_source=PROJ / "FastFlowLM",
+            marker_name=FRESH_BUILD_MARKER,
+        )
+    except RuntimeError as error:
+        sys.exit(str(error))
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
                                   FASTFLOWLM_BUNDLE_STAGE)
     archive = create_fastflowlm_archive(bundle, FASTFLOWLM_ARTIFACTS)
@@ -2392,110 +2384,6 @@ def _print_npu_driver_info():
         _print_probe_file("revision", n / "device" / "revision", indent="    ")
 
 
-def _windows_npu_info():
-    """Returns every amdxdna MCDM device without opening or dispatching it."""
-    powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
-    if not powershell:
-        return None, "PowerShell was not found"
-    script = r"""
-$ErrorActionPreference = 'Stop'
-$candidates = @(Get-PnpDevice -PresentOnly |
-  Where-Object {
-    $_.Class -eq 'ComputeAccelerator' -and
-    $_.InstanceId -like 'PCI\VEN_1022*'
-  })
-$devices = @($candidates | ForEach-Object {
-$pnp = $_
-$deviceId = $pnp.InstanceId
-$service = (Get-PnpDeviceProperty -InstanceId $deviceId `
-  -KeyName 'DEVPKEY_Device_Service').Data
-if ($service -ne 'IpuMcdmDriver') { return }
-$driverVersion = (Get-PnpDeviceProperty -InstanceId $deviceId `
-  -KeyName 'DEVPKEY_Device_DriverVersion').Data
-$driverDateValue = (Get-PnpDeviceProperty -InstanceId $deviceId `
-  -KeyName 'DEVPKEY_Device_DriverDate').Data
-$driverDate = if ($driverDateValue -is [DateTime]) {
-  $driverDateValue.ToString('yyyy-MM-dd')
-} else {
-  [string]$driverDateValue
-}
-$driverProvider = (Get-PnpDeviceProperty -InstanceId $deviceId `
-  -KeyName 'DEVPKEY_Device_DriverProvider').Data
-$infName = (Get-PnpDeviceProperty -InstanceId $deviceId `
-  -KeyName 'DEVPKEY_Device_DriverInfPath').Data
-$systemDriver = Get-CimInstance Win32_SystemDriver -Filter "Name='$service'"
-$driverPath = if ($systemDriver) { $systemDriver.PathName.Trim('"') } else { $null }
-if ($driverPath -and $driverPath.StartsWith('\SystemRoot\')) {
-  $driverPath = Join-Path $env:SystemRoot $driverPath.Substring(12)
-}
-[PSCustomObject]@{
-  device_name = $pnp.FriendlyName
-  device_id = $deviceId
-  driver_version = [string]$driverVersion
-  driver_date = $driverDate
-  driver_provider = [string]$driverProvider
-  inf_name = [string]$infName
-  status = [string]$pnp.Status
-  problem = [string]$pnp.Problem
-  service = [string]$service
-  driver_path = [string]$driverPath
-}
-})
-if ($devices.Count -eq 0) { throw 'amdxdna MCDM device was not found' }
-ConvertTo-Json -InputObject $devices -Compress
-"""
-    p = subprocess.run(
-        [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
-    )
-    if p.returncode != 0:
-        detail = p.stderr.strip() or p.stdout.strip() or f"exit code {p.returncode}"
-        return None, detail
-    try:
-        return parse_device_query(p.stdout), None
-    except (json.JSONDecodeError, ValueError) as e:
-        return None, f"could not parse PowerShell device query: {e}"
-
-
-def _windows_driver_firmware_packages(driver_path):
-    return driver_firmware_packages(driver_path)
-
-
-def _print_windows_npu_driver_info():
-    print("== amdxdna driver / firmware ==")
-    devices, error = _windows_npu_info()
-    if error:
-        print(f"  [MISS] Windows NPU device query failed: {error}")
-        return 1
-
-    all_healthy = True
-    for index, info in enumerate(devices):
-        prefix = f"device {index}: " if len(devices) > 1 else "device: "
-        print(f"  [ok ] {prefix}{info['device_name']}")
-        print(f"  [info] device id: {info['device_id']}")
-        print(f"  [info] driver: {info['driver_version']} ({info['driver_provider']}, "
-              f"{info['driver_date']}, {info['inf_name']})")
-        print(f"  [info] service: {info['service']} ({info['driver_path']})")
-        healthy = device_is_healthy(info)
-        all_healthy &= healthy
-        state = "ok " if healthy else "MISS"
-        print(f"  [{state}] PnP status: {info['status']} / {info['problem']}")
-
-        packages = _windows_driver_firmware_packages(info.get("driver_path"))
-        if packages:
-            print("  [info] driver-package firmware candidates:")
-            for package in packages:
-                if error := package.get("error"):
-                    print(f"    {package['name']}: unreadable ({error})")
-                else:
-                    print(f"    {package['name']}: release {package['release']}, "
-                          f"sha256 {package['sha256']}")
-            print("  [note] Windows PnP does not expose which firmware candidate the KMD loaded")
-        else:
-            print("  [note] no firmware package metadata found beside the active KMD")
-    return 0 if all_healthy else 1
-
-
 def _probe_libhrx(bundle=None):
     lib_path = _libhrx_path(bundle)
     library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
@@ -2542,11 +2430,11 @@ def cmd_npu_probe(args):
     Run before on-device tests so a missing or busy device is not reported as a
     dispatch failure. Needs no build artifact beyond libhrx."""
     if IS_WINDOWS:
-        rc = _print_windows_npu_driver_info()
-        print("== NPU device / libhrx probe ==")
-        rc |= _probe_libhrx(args.bundle)
-        print("npu-probe: " + ("ok" if rc == 0 else "FAIL"))
-        return rc
+        library = _libhrx_path(args.bundle)
+        if not library:
+            print("npu-probe: hrx.dll was not found")
+            return 1
+        return probe_windows_npu_runtime(library)
 
     rc = 0
     _print_npu_driver_info()

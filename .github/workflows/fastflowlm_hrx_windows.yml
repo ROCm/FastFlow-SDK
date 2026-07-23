@@ -134,6 +134,7 @@ jobs:
         run: |
           .venv/Scripts/python.exe dev.py doctor fastflowlm
           .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p "test_*.py"
+          .venv/Scripts/python.exe -m unittest discover -s tests/windows -p "test_npu_probe.py"
 
       - name: Build HRX
         run: .venv/Scripts/python.exe dev.py build hrx --fresh
@@ -144,11 +145,28 @@ jobs:
       - name: Package runtime
         run: .venv/Scripts/python.exe dev.py package-fastflowlm
 
+      - name: Package rocm-npu runtime wheels
+        run: .venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py package
+
+      - name: Install-test rocm-npu runtime wheels
+        run: .venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py verify
+
       - name: Upload runtime artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fastflowlm-hrx-windows-x86_64
           path: build/artifacts/fastflowlm-hrx-windows-x86_64.zip*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload rocm-npu runtime wheel artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-runtime-fastflowlm-windows-x86_64
+          path: |
+            build/artifacts/rocm_npu_runtime-*.whl*
+            build/artifacts/rocm_npu_fastflowlm-*.whl*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -177,19 +195,17 @@ jobs:
         with:
           python-version: '3.12.10'
 
-      - name: Download runtime artifact
+      - name: Download rocm-npu runtime wheel artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fastflowlm-hrx-windows-x86_64
+          name: rocm-npu-runtime-fastflowlm-windows-x86_64
           path: .artifact
 
-      - name: Extract and verify runtime artifact
-        run: |
-          python dev.py unpack-fastflowlm --dir .artifact
-          python dev.py verify-fastflowlm
+      - name: Install and verify rocm-npu runtime wheels
+        run: python build_tools/rocm_npu_windows_wheel_cli.py verify --dir .artifact
 
       - name: Probe NPU driver, firmware, and packaged libHRX
-        run: python dev.py npu-probe --bundle build/FastFlowLM-extracted/fastflowlm-hrx-windows-x86_64
+        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py probe
 
       - name: Run packaged FastFlowLM HRX soak
-        run: python dev.py test-fastflowlm --bundle build/FastFlowLM-extracted/fastflowlm-hrx-windows-x86_64 --inference-iterations 5
+        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py smoke --inference-iterations 5

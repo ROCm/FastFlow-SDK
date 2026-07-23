@@ -62,13 +62,18 @@ def git_source_state(path: Path) -> dict[str, object]:
         ["git", "diff", "--binary", "--no-ext-diff", "HEAD"], cwd=path,
         check=True, capture_output=True,
     ).stdout
-    changed_output = subprocess.run(
-        ["git", "ls-files", "-m", "-o", "--exclude-standard", "-z"],
+    tracked_output = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", "-z", "HEAD"],
+        cwd=path, check=True, capture_output=True,
+    ).stdout
+    untracked_output = subprocess.run(
+        ["git", "ls-files", "-o", "--exclude-standard", "-z"],
         cwd=path, check=True, capture_output=True,
     ).stdout
     changed_paths = sorted({
         item.decode("utf-8", errors="surrogateescape")
-        for item in changed_output.split(b"\0") if item
+        for output in (tracked_output, untracked_output)
+        for item in output.split(b"\0") if item
     })
     changed_files = []
     for relative in changed_paths:
@@ -103,6 +108,50 @@ def directory_state(path: Path, *, exclude_names: tuple[str, ...] = ()) -> dict[
     return {"sha256": digest.hexdigest(), "file_count": len(files)}
 
 
+def verify_fastflowlm_fresh_installs(
+    *,
+    hrx_install: Path,
+    hrx_source: Path,
+    fastflowlm_install: Path,
+    fastflowlm_source: Path,
+    marker_name: str,
+) -> dict[str, dict[str, object]]:
+    """Verifies that fresh HRX and FastFlowLM installs still match their sources."""
+    installed_flm = fastflowlm_install / "bin" / (
+        "flm.exe" if os.name == "nt" else "flm"
+    )
+    if not installed_flm.is_file():
+        raise RuntimeError(
+            "FastFlowLM is not installed; run: python dev.py build fastflowlm --fresh"
+        )
+
+    markers = {}
+    for name, install, source in (
+        ("HRX", hrx_install, hrx_source),
+        ("FastFlowLM", fastflowlm_install, fastflowlm_source),
+    ):
+        marker = install / marker_name
+        if not marker.is_file():
+            raise RuntimeError(f"{name} was not built with --fresh")
+        recorded = json.loads(marker.read_text(encoding="utf-8"))
+        if recorded.get("source") != git_source_state(source):
+            raise RuntimeError(
+                f"{name} sources changed after the fresh build; rebuild with --fresh"
+            )
+        if recorded.get("install") != directory_state(
+            install, exclude_names=(marker_name,)
+        ):
+            raise RuntimeError(
+                f"{name} install changed after the fresh build; rebuild with --fresh"
+            )
+        markers[name] = recorded
+    if markers["FastFlowLM"].get("hrx") != markers["HRX"]:
+        raise RuntimeError(
+            "FastFlowLM was built against a different HRX install; rebuild with --fresh"
+        )
+    return markers
+
+
 def validate_source_policy(manifest: dict[str, object], root: Path) -> None:
     versions = tomllib.loads(
         (root / "manifests" / "versions.toml").read_text(encoding="utf-8"))
@@ -133,15 +182,15 @@ def _copy_checked(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
-def _validate_directory_target(path: Path, allowed_root: Path) -> None:
+def validate_directory_target(path: Path, allowed_root: Path) -> None:
     resolved = path.resolve()
     root = allowed_root.resolve()
     if resolved == root or root not in resolved.parents:
         raise RuntimeError(f"refusing to remove directory outside {root}: {resolved}")
 
 
-def _reset_directory(path: Path, allowed_root: Path) -> None:
-    _validate_directory_target(path, allowed_root)
+def reset_directory(path: Path, allowed_root: Path) -> None:
+    validate_directory_target(path, allowed_root)
     if path.is_symlink():
         path.unlink()
     elif path.exists():
@@ -168,7 +217,7 @@ def _parse_control_file(path: Path) -> list[dict[str, str]]:
     return records
 
 
-def _pe_imports(path: Path) -> list[str]:
+def pe_imports(path: Path) -> list[str]:
     data = path.read_bytes()
     if len(data) < 0x40 or data[:2] != b"MZ":
         raise RuntimeError(f"not a PE binary: {path}")
@@ -249,7 +298,7 @@ def _windows_pe_dependency_graph(bundle: Path) -> dict[str, list[str]]:
     graph = {}
     missing = []
     for binary in binaries:
-        imports = _pe_imports(binary)
+        imports = pe_imports(binary)
         graph[binary.relative_to(bundle).as_posix()] = imports
         for name in imports:
             is_api_set = name.startswith(("api-ms-", "ext-ms-"))
@@ -695,7 +744,7 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
                          destination: Path) -> Path:
     """Creates the bundle root and writes its complete hash manifest."""
     bundle = destination / artifact_name()
-    _reset_directory(destination, root / "build")
+    reset_directory(destination, root / "build")
     shutil.copytree(flm_install, bundle)
     build_marker = bundle / ".rns-fresh-build.json"
     if build_marker.exists():
@@ -1008,7 +1057,7 @@ def _extract_archive_contents(archive: Path, destination: Path) -> Path:
 
 def extract_archive(archive: Path, destination: Path, *, allowed_root: Path) -> Path:
     """Verifies in a temporary sibling and promotes only a complete bundle."""
-    _validate_directory_target(destination, allowed_root)
+    validate_directory_target(destination, allowed_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(
         prefix=f".{destination.name}-extract-", dir=destination.parent))
