@@ -3,8 +3,10 @@
 
 import builtins
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -12,6 +14,37 @@ import dev
 
 
 class FastFlowLMWheelPackageCliTest(unittest.TestCase):
+    def test_verify_resolves_runtime_as_fastflowlm_dependency(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wheel_directory = Path(temporary)
+            runtime_wheel = wheel_directory / "runtime.whl"
+            fastflowlm_wheel = wheel_directory / "fastflowlm.whl"
+            wheels = {
+                dev.RUNTIME_DISTRIBUTION: runtime_wheel,
+                dev.FASTFLOWLM_DISTRIBUTION: fastflowlm_wheel,
+            }
+            args = SimpleNamespace(
+                dir=str(wheel_directory),
+                venv=str(wheel_directory / "venv"),
+            )
+            with (
+                mock.patch.object(dev, "find_rocm_npu_wheels", return_value=wheels),
+                mock.patch.object(dev, "verify_wheel_checksums"),
+                mock.patch.object(
+                    dev, "verify_wheels_do_not_have_text_path_references"
+                ),
+                mock.patch.object(dev, "validate_directory_target"),
+                mock.patch.object(dev, "_venv_python", return_value=Path("python")),
+                mock.patch.object(dev, "sh") as sh,
+            ):
+                dev.cmd_verify_fastflowlm_wheels(args)
+
+        install = sh.call_args_list[1].args[0]
+        self.assertIn("--find-links", install)
+        self.assertIn(wheel_directory, install)
+        self.assertIn(fastflowlm_wheel, install)
+        self.assertNotIn(runtime_wheel, install)
+
     def test_wheel_package_requires_installed_wheels(self):
         real_import = builtins.__import__
 
@@ -47,7 +80,9 @@ class FastFlowLMWheelPackageCliTest(unittest.TestCase):
         }
         with (
             mock.patch.dict(sys.modules, modules),
-            mock.patch.object(dev, "sh", return_value=SimpleNamespace(returncode=7)) as sh,
+            mock.patch.object(
+                dev, "sh", return_value=SimpleNamespace(returncode=7)
+            ) as sh,
             self.assertRaises(SystemExit) as error,
         ):
             dev.cmd_test_fastflowlm(args)

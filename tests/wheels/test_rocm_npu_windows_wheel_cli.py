@@ -21,11 +21,15 @@ class RocmNpuWindowsWheelCliTest(unittest.TestCase):
             RUNTIME_DISTRIBUTION: Path("runtime.whl"),
             FASTFLOWLM_DISTRIBUTION: Path("fastflowlm.whl"),
         }
-        with mock.patch.object(cli, "_verify_fresh_installs") as verify, \
-             mock.patch.object(cli, "stage_runtime_bundle", return_value=Path("bundle")) as stage, \
-             mock.patch.object(
-                 cli, "build_runtime_fastflowlm_wheels", return_value=wheels
-             ) as build:
+        with (
+            mock.patch.object(cli, "_verify_fresh_installs") as verify,
+            mock.patch.object(
+                cli, "stage_runtime_bundle", return_value=Path("bundle")
+            ) as stage,
+            mock.patch.object(
+                cli, "build_runtime_fastflowlm_wheels", return_value=wheels
+            ) as build,
+        ):
             cli.package_wheels("1.2.3")
         verify.assert_called_once_with()
         stage.assert_called_once_with(
@@ -43,10 +47,39 @@ class RocmNpuWindowsWheelCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             library = Path(temporary) / "hrx.dll"
             runtime = SimpleNamespace(libhrx_path=lambda: library)
-            with mock.patch.dict(sys.modules, {"rocm_npu_runtime": runtime}), \
-                 mock.patch.object(cli, "probe_runtime", return_value=0) as probe:
+            with (
+                mock.patch.dict(sys.modules, {"rocm_npu_runtime": runtime}),
+                mock.patch.object(cli, "probe_runtime", return_value=0) as probe,
+            ):
                 self.assertEqual(cli.probe_runtime_package(), 0)
             probe.assert_called_once_with(library)
+
+    def test_verify_installs_fastflowlm_and_resolves_runtime_transitively(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            venv = directory / "venv"
+            runtime_wheel = directory / "runtime.whl"
+            fastflowlm_wheel = directory / "fastflowlm.whl"
+            wheels = {
+                RUNTIME_DISTRIBUTION: runtime_wheel,
+                FASTFLOWLM_DISTRIBUTION: fastflowlm_wheel,
+            }
+            with (
+                mock.patch.object(cli, "find_rocm_npu_wheels", return_value=wheels),
+                mock.patch.object(cli, "verify_wheel_checksums"),
+                mock.patch.object(
+                    cli, "verify_wheels_do_not_have_text_path_references"
+                ),
+                mock.patch.object(cli, "validate_directory_target"),
+                mock.patch.object(cli.subprocess, "run") as run,
+            ):
+                cli.verify_wheels(directory, venv)
+
+        install = run.call_args_list[1].args[0]
+        self.assertIn("--find-links", install)
+        self.assertIn(directory, install)
+        self.assertIn(fastflowlm_wheel, install)
+        self.assertNotIn(runtime_wheel, install)
 
 
 if __name__ == "__main__":

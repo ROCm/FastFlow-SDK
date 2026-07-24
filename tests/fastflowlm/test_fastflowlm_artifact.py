@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -275,6 +276,15 @@ class FastFlowLMArtifactTest(unittest.TestCase):
             self.assertEqual(dependencies["packages"], [])
             self.assertEqual(dependencies["unmapped_libraries"], [])
 
+    def test_linux_package_owner_candidates_keep_regular_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "libexample.so.1"
+            source.write_bytes(b"")
+            self.assertEqual(_linux_package_owner_candidates(source), [source])
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"), "requires Linux symlink semantics"
+    )
     def test_linux_package_owner_candidates_resolve_usrmerge_symlinks(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

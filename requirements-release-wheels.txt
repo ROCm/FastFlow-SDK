@@ -1,0 +1,8 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# Platform-neutral wheel release metadata validation.
+# Regenerate requirements-release-wheels.lock with:
+#   uv pip compile requirements-release-wheels.txt --generate-hashes --universal \
+#     --python-version 3.12 \
+#     --output-file requirements-release-wheels.lock
+twine==6.2.0

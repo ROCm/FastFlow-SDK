@@ -41,7 +41,8 @@ class WheelPathReference:
     forbidden_path: Path
 
 
-def _sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """Returns the SHA-256 digest of a file."""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -167,7 +168,7 @@ def _file_records(package_root: Path) -> list[dict[str, object]]:
         records.append({
             "path": path.relative_to(package_root).as_posix(),
             "size": path.stat().st_size,
-            "sha256": _sha256_file(path),
+            "sha256": sha256_file(path),
         })
     return records
 
@@ -324,7 +325,7 @@ def build_wheel(
         record = _record_csv([*records, (record_name, "", "")]).encode("utf-8")
         output.writestr(_zip_info(record_name), record, compresslevel=9)
     wheel.with_name(wheel.name + ".sha256").write_text(
-        f"{_sha256_file(wheel)}  {wheel.name}\n", encoding="ascii"
+        f"{sha256_file(wheel)}  {wheel.name}\n", encoding="ascii"
     )
     return wheel
 
@@ -370,7 +371,7 @@ def verify_wheel_checksums(wheels: dict[str, Path]) -> None:
         fields = checksum.read_text(encoding="ascii").strip().split()
         if len(fields) != 2 or fields[1] != wheel.name:
             raise RuntimeError(f"malformed wheel checksum: {checksum}")
-        if _sha256_file(wheel) != fields[0]:
+        if sha256_file(wheel) != fields[0]:
             raise RuntimeError(f"wheel checksum mismatch: {wheel}")
 
 
