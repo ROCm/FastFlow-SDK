@@ -123,9 +123,16 @@ jobs:
           retention-days: 7
 
   npu:
-    name: ${{ inputs.name }}
+    name: ${{ inputs.name }} (${{ matrix.runner_label }})
     needs: build
-    runs-on: linux-gfx1151-gpu-rocm
+    strategy:
+      fail-fast: false
+      matrix:
+        runner_label:
+          - linux-gfx1151-gpu-rocm
+          - linux-gfx1150-gpu-rocm
+          - linux-gfx1152-gpu-rocm
+    runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 45
     steps:
       - name: Checkout test harness
