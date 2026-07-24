@@ -61,7 +61,11 @@ class FastFlowLMSmokeTest(unittest.TestCase):
             self.assertTrue(smoke.csv_has_1k_row(path))
 
     def test_run_tee_redirects_input_and_writes_log(self):
-        child = "import sys; print('ready', flush=True); print(sys.stdin.readline().strip(), flush=True)"
+        child = (
+            "import sys; "
+            "print('ready', flush=True); "
+            "print(sys.stdin.readline().strip(), flush=True)"
+        )
         with tempfile.TemporaryDirectory() as td:
             log = Path(td) / "child.log"
             output = smoke.run_tee(
@@ -72,6 +76,36 @@ class FastFlowLMSmokeTest(unittest.TestCase):
                 output_path=log,
             )
             self.assertEqual(output, "ready\nhello\n")
+            self.assertEqual(log.read_text(encoding="utf-8"), output)
+
+    def test_run_tee_can_drive_prompt_paced_input(self):
+        child = (
+            "import sys\n"
+            "for _ in range(2):\n"
+            "    sys.stdout.write('>>> ')\n"
+            "    sys.stdout.flush()\n"
+            "    line = sys.stdin.readline().strip()\n"
+            "    print(line, flush=True)\n"
+            "    print('Model RAW Output:', flush=True)\n"
+            "    print('response ' + line, flush=True)\n"
+            "sys.stdout.write('>>> ')\n"
+            "sys.stdout.flush()\n"
+            "print(sys.stdin.readline().strip(), flush=True)\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "child.log"
+            output = smoke.run_tee(
+                [sys.executable, "-u", "-c", child],
+                env=dict(os.environ),
+                input_lines=["one", "two"],
+                timeout=5,
+                output_path=log,
+            )
+            self.assertEqual(
+                smoke.extract_raw_outputs(output),
+                ["response one", "response two"],
+            )
+            self.assertIn(">>> /bye\n", output)
             self.assertEqual(log.read_text(encoding="utf-8"), output)
 
 

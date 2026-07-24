@@ -337,6 +337,7 @@ def _check_fastflowlm_linux_host(verbose):
         ("git", bool(shutil.which("git")), "git"),
         ("make", bool(shutil.which("make")), "build-essential"),
         ("nasm", bool(shutil.which("nasm")), "nasm"),
+        ("patchelf", bool(shutil.which("patchelf")), "patchelf"),
         ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
         ("tar", bool(shutil.which("tar")), "tar"),
         ("unzip", bool(shutil.which("unzip")), "unzip"),

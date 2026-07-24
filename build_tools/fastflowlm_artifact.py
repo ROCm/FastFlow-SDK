@@ -518,6 +518,17 @@ def _linux_soname(path: Path) -> str | None:
     return soname or None
 
 
+def _linux_package_owner_candidates(path: Path) -> list[Path]:
+    candidates = [path]
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return candidates
+    if resolved != path:
+        candidates.append(resolved)
+    return candidates
+
+
 def _is_linux_system_runtime(name: str) -> bool:
     return bool(re.match(
         r"^(ld-linux|linux-vdso|lib(c|dl|m|pthread|rt)\.so)([.-].*)?$", name))
@@ -590,32 +601,37 @@ def _linux_dependencies_and_licenses(
                 source = library_sources.get(soname)
         package = None
         if source and rpm:
-            query = subprocess.run([rpm, "-qf", "--qf", "%{NAME}\n", str(source)],
-                                   capture_output=True, text=True)
-            if query.returncode == 0:
-                package = query.stdout.strip()
-                package_versions[package] = _run_text([rpm, "-q", package])
-                package_files[package] = _rpm_license_entries(package)
-                if not package_files[package]:
-                    source_rpm = _rpm_query_field(package, "SOURCERPM")
-                    if source_rpm:
-                        for source_package in _rpm_packages_from_source(source_rpm):
-                            if source_package == package:
-                                continue
-                            entries = _rpm_license_entries(source_package)
-                            if entries:
-                                package_files[package].extend(entries)
-                                package_license_source_packages.setdefault(
-                                    package, []).append(source_package)
+            for candidate in _linux_package_owner_candidates(source):
+                query = subprocess.run(
+                    [rpm, "-qf", "--qf", "%{NAME}\n", str(candidate)],
+                    capture_output=True, text=True)
+                if query.returncode == 0:
+                    package = query.stdout.strip()
+                    package_versions[package] = _run_text([rpm, "-q", package])
+                    package_files[package] = _rpm_license_entries(package)
+                    if not package_files[package]:
+                        source_rpm = _rpm_query_field(package, "SOURCERPM")
+                        if source_rpm:
+                            for source_package in _rpm_packages_from_source(source_rpm):
+                                if source_package == package:
+                                    continue
+                                entries = _rpm_license_entries(source_package)
+                                if entries:
+                                    package_files[package].extend(entries)
+                                    package_license_source_packages.setdefault(
+                                        package, []).append(source_package)
+                    break
         elif source and dpkg_query:
-            query = subprocess.run([dpkg_query, "-S", str(source)],
-                                   capture_output=True, text=True)
-            if query.returncode == 0:
-                package = query.stdout.split(":", 1)[0]
-                package_versions[package] = _run_text(
-                    [dpkg_query, "-W", "-f=${Package}=${Version}", package])
-                copyright_file = Path("/usr/share/doc") / package / "copyright"
-                package_files[package] = [(copyright_file, package)]
+            for candidate in _linux_package_owner_candidates(source):
+                query = subprocess.run([dpkg_query, "-S", str(candidate)],
+                                       capture_output=True, text=True)
+                if query.returncode == 0:
+                    package = query.stdout.split(":", 1)[0]
+                    package_versions[package] = _run_text(
+                        [dpkg_query, "-W", "-f=${Package}=${Version}", package])
+                    copyright_file = Path("/usr/share/doc") / package / "copyright"
+                    package_files[package] = [(copyright_file, package)]
+                    break
         if package:
             mapped_libraries[library.name] = package
         else:
