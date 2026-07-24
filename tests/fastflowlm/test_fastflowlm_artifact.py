@@ -16,6 +16,7 @@ from unittest import mock
 
 from build_tools.fastflowlm_artifact import (
     _linux_dependencies_and_licenses,
+    _linux_package_owner_candidates,
     _is_linux_system_runtime,
     pe_imports,
     create_archive,
@@ -264,6 +265,20 @@ class FastFlowLMArtifactTest(unittest.TestCase):
                     bundle, set(), {"libq4_npu_eXpress.so"})
             self.assertEqual(dependencies["packages"], [])
             self.assertEqual(dependencies["unmapped_libraries"], [])
+
+    def test_linux_package_owner_candidates_resolve_usrmerge_symlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "usr" / "lib" / "libexample.so.1"
+            source = root / "lib" / "libexample.so.1"
+            target.parent.mkdir(parents=True)
+            source.parent.mkdir(parents=True)
+            target.write_bytes(b"")
+            source.symlink_to(target)
+            self.assertEqual(
+                _linux_package_owner_candidates(source),
+                [source, target],
+            )
 
     @unittest.skipUnless(os.name == "nt", "PE fixture is built on Windows")
     def test_parse_pe_imports(self):

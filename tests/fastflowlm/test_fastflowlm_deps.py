@@ -74,7 +74,9 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
         workflow = (
             ROOT / ".github/workflows/fastflowlm_hrx_linux.yml"
         ).read_text()
-        for package in ("bash", "kernel-headers", "nasm", "perl", "perl-IPC-Cmd"):
+        for package in (
+            "bash", "kernel-headers", "nasm", "patchelf", "perl", "perl-IPC-Cmd"
+        ):
             self.assertIn(package, workflow)
 
     def test_vcpkg_caches_are_saved_only_after_complete_setup(self):

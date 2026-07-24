@@ -76,18 +76,36 @@ def prepend_search_path(env, key, entries):
     env[key] = os.pathsep.join(parts)
 
 
-def run_tee(cmd, *, env, cwd=None, input_text=None, timeout=None, output_path=None):
+def run_tee(
+    cmd,
+    *,
+    env,
+    cwd=None,
+    input_text=None,
+    input_lines=None,
+    timeout=None,
+    output_path=None,
+    prompt_marker=">>> ",
+    exit_input="/bye",
+):
     """Runs a command while streaming merged output to the console and a log."""
+    if input_text is not None and input_lines is not None:
+        raise ValueError("input_text and input_lines are mutually exclusive")
     command = [str(part) for part in cmd]
     print(f"+ {' '.join(command)}", flush=True)
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+    input_lines = list(input_lines) if input_lines is not None else None
 
     process = subprocess.Popen(
         command,
         cwd=cwd,
         env=env,
-        stdin=subprocess.PIPE if input_text is not None else None,
+        stdin=(
+            subprocess.PIPE
+            if input_text is not None or input_lines is not None
+            else None
+        ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -108,7 +126,7 @@ def run_tee(cmd, *, env, cwd=None, input_text=None, timeout=None, output_path=No
 
     def read_output():
         try:
-            for chunk in iter(process.stdout.readline, ""):
+            for chunk in iter(lambda: process.stdout.read(1), ""):
                 chunks.put(chunk)
         finally:
             chunks.put(None)
@@ -118,6 +136,9 @@ def run_tee(cmd, *, env, cwd=None, input_text=None, timeout=None, output_path=No
     deadline = time.monotonic() + timeout if timeout is not None else None
     output = []
     timed_out = False
+    prompts_seen = 0
+    lines_sent = 0
+    exit_sent = False
 
     log = output_path.open("w", encoding="utf-8", errors="replace") if output_path else None
     try:
@@ -138,6 +159,26 @@ def run_tee(cmd, *, env, cwd=None, input_text=None, timeout=None, output_path=No
             if log:
                 log.write(chunk)
                 log.flush()
+            if input_lines is not None and process.stdin and not process.stdin.closed:
+                text = "".join(output)
+                current_prompts = text.count(prompt_marker)
+                while prompts_seen < current_prompts:
+                    prompts_seen += 1
+                    try:
+                        if lines_sent < len(input_lines):
+                            process.stdin.write(input_lines[lines_sent] + "\n")
+                            process.stdin.flush()
+                            lines_sent += 1
+                        elif not exit_sent:
+                            if exit_input is not None:
+                                process.stdin.write(exit_input + "\n")
+                                process.stdin.flush()
+                            process.stdin.close()
+                            exit_sent = True
+                        else:
+                            break
+                    except BrokenPipeError:
+                        break
     finally:
         if log:
             log.close()
@@ -148,6 +189,11 @@ def run_tee(cmd, *, env, cwd=None, input_text=None, timeout=None, output_path=No
     text = "".join(output)
     if timed_out:
         raise SmokeFailure(f"command timed out after {timeout:g}s: {' '.join(command)}")
+    if input_lines is not None and lines_sent != len(input_lines):
+        raise SmokeFailure(
+            f"command exited after receiving {lines_sent} interactive inputs; "
+            f"expected {len(input_lines)}: {' '.join(command)}"
+        )
     if returncode != 0:
         raise SmokeFailure(f"command exited with status {returncode}: {' '.join(command)}")
     return text
@@ -304,12 +350,18 @@ def main():
             f"{iteration}/{args.inference_iterations}..."
         )
         print("== FastFlowLM inference transcript begin ==")
+        if IS_WINDOWS:
+            input_kwargs = {
+                "input_text": "".join(f"{prompt}\n" for prompt, _, _ in smoke_turns)
+            }
+        else:
+            input_kwargs = {"input_lines": [prompt for prompt, _, _ in smoke_turns]}
         run_text = run_tee(
             [flm_bin, "run", model, "--ctx-len", "1024"],
             env=env,
-            input_text="".join(f"{prompt}\n" for prompt, _, _ in smoke_turns),
             timeout=parse_duration_seconds(os.environ.get("FLM_RUN_TIMEOUT"), 180.0),
             output_path=run_output,
+            **input_kwargs,
         )
         print("== FastFlowLM inference transcript end ==")
         fail_if_runtime_errors(run_text, "FastFlowLM run", run_output)

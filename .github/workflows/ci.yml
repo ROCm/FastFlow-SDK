@@ -3,7 +3,7 @@
 #
 # Entry workflow: builds + validates the rocm-npu-staging stack via reusable
 # workflows — Linux/Windows compiler-stack and FLM builds, each followed by
-# on-device validation on the matching gfx1151 NPU runner.
+# on-device validation on the matching NPU runners.
 # Every submodule is public, so none needs secrets.
 name: CI
 
@@ -18,7 +18,7 @@ permissions:
   contents: read
   actions: read
 
-# Cancel superseded PR runs: they queue on the single gfx1151 NPU runner. main is exempt
+# Cancel superseded PR runs: they queue on shared NPU runners. main is exempt
 # (run_id makes the group unique), so every landed commit is still validated on its own.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}

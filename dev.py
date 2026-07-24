@@ -41,7 +41,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile
+import argparse, contextlib, ctypes, errno, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile
 from pathlib import Path
 
 from build_tools.fastflowlm_deps import (
@@ -117,6 +117,9 @@ HRX_CTS_DIR = ("runtime", "src", "iree", "hal", "drivers", "amdxdna", "cts")
 ACCEL_DIR = Path("/dev/accel")
 SYS_ACCEL_DIR = Path("/sys/class/accel")
 AMDXDNA_MODULE_DIR = Path("/sys/module/amdxdna")
+KNOWN_AMDXDNA_SVA_REGRESSION_SRCVERSIONS = {
+    "2DBDA75956CAFA9D029EA89",
+}
 # NPU targets for `test-npu`. The @iron.jit script accepts these device names
 # directly; `devgen` is the XAie_TxnHeader.DevGen the design must then carry
 # (aie-rt xaiegbl_defs.h). libhrx cannot report the generation -- its ARCHITECTURE
@@ -337,6 +340,7 @@ def _check_fastflowlm_linux_host(verbose):
         ("git", bool(shutil.which("git")), "git"),
         ("make", bool(shutil.which("make")), "build-essential"),
         ("nasm", bool(shutil.which("nasm")), "nasm"),
+        ("patchelf", bool(shutil.which("patchelf")), "patchelf"),
         ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
         ("tar", bool(shutil.which("tar")), "tar"),
         ("unzip", bool(shutil.which("unzip")), "unzip"),
@@ -2445,6 +2449,57 @@ def _sys_accel_nodes():
     return sorted(SYS_ACCEL_DIR.glob("accel*")) if SYS_ACCEL_DIR.is_dir() else []
 
 
+def _known_amdxdna_sva_regression(kernel_release: str, srcversion: str | None) -> bool:
+    return (
+        kernel_release.startswith("6.17.0-22")
+        and srcversion in KNOWN_AMDXDNA_SVA_REGRESSION_SRCVERSIONS
+    )
+
+
+def _accel_open_failure_notes(err: OSError, sys_node: Path):
+    notes = []
+    if err.errno in (errno.EACCES, errno.EPERM):
+        notes.append("runner host must grant read/write access before this job runs")
+        return notes
+
+    if err.errno == errno.EOPNOTSUPP:
+        notes.append(
+            "amdxdna refused userspace open with EOPNOTSUPP; check kernel log for "
+            "'amdxdna_drm_open: SVA bind device failed, ret -95'"
+        )
+        group_type = _read_sysfs_text(sys_node / "device" / "iommu_group" / "type")
+        if group_type:
+            notes.append(f"IOMMU group type: {group_type}")
+        try:
+            kernel_release = os.uname().release
+        except AttributeError:
+            kernel_release = ""
+        srcversion = _read_sysfs_text(AMDXDNA_MODULE_DIR / "srcversion")
+        if _known_amdxdna_sva_regression(kernel_release, srcversion):
+            notes.append(
+                "known-bad Ubuntu 6.17.0-22 amdxdna/SVA stack; use 6.17.0-20 "
+                "or a fixed newer kernel for NPU tests"
+            )
+        else:
+            notes.append(
+                "this is an amdxdna/IOMMU SVA setup failure before HRX dispatch starts"
+            )
+    return notes
+
+
+def _probe_accel_open(target: Path, sys_node: Path) -> bool:
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(target, flags)
+    except OSError as e:
+        print(f"  [MISS] {target} exists but open(O_RDWR) failed: {e}")
+        for note in _accel_open_failure_notes(e, sys_node):
+            print(f"         {note}")
+        return False
+    os.close(fd)
+    return True
+
+
 def _probe_npu_devnodes():
     rc = 0
     usable = []
@@ -2487,6 +2542,9 @@ def _probe_npu_devnodes():
             if not (os.access(target, os.R_OK) and os.access(target, os.W_OK)):
                 print(f"  [MISS] {target} exists but is not read+write for this user")
                 print("         runner host must grant read/write access before this job runs")
+                rc = 1
+                continue
+            if not _probe_accel_open(target, sys_node):
                 rc = 1
                 continue
             print(f"  [ok ] {target} ({dev_text})")
