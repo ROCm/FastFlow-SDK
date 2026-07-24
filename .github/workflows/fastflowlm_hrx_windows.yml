@@ -134,7 +134,8 @@ jobs:
         run: |
           .venv/Scripts/python.exe dev.py doctor fastflowlm
           .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p "test_*.py"
-          .venv/Scripts/python.exe -m unittest discover -s tests/windows -p "test_npu_probe.py"
+          .venv/Scripts/python.exe -m unittest discover -s tests/wheels -p "test_*.py"
+          .venv/Scripts/python.exe -m unittest discover -s tests/windows -p "test_*.py"
 
       - name: Build HRX
         run: .venv/Scripts/python.exe dev.py build hrx --fresh

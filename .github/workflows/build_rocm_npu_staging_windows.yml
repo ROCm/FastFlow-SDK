@@ -202,6 +202,9 @@ jobs:
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p 'test_*.py'
 
+      - name: Test wheel tooling
+        run: .venv/Scripts/python.exe -m unittest discover -s tests/wheels -p 'test_*.py'
+
       - name: Test compiler product artifact helpers
         run: .venv/Scripts/python.exe -m unittest discover -s tests/compiler -p 'test_*.py'
 

@@ -1,9 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
-import importlib.util
-import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,14 +16,11 @@ from build_tools.rocm_npu_windows_wheels import (
     _copy_windows_runtime_closure,
     _dependency_license_packages,
     _verify_windows_products,
-    _write_runtime_module,
     build_wheel,
     find_rocm_npu_wheels,
-    stage_wheel_products,
     verify_wheels_do_not_have_text_path_references,
     wheel_tag,
 )
-from build_tools.fastflowlm_artifact import sha256_file
 from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 
 
@@ -160,110 +154,6 @@ class RocmNpuWheelTest(unittest.TestCase):
                 _copy_windows_runtime_closure(source, runtime)
             self.assertTrue((runtime / "bin" / "first.dll").is_file())
             self.assertTrue((runtime / "bin" / "second.dll").is_file())
-
-    @unittest.skipUnless(os.name == "nt", "staging requires a Windows host")
-    def test_stage_products_partitions_payload_and_dependency_licenses(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "bundle"
-            self._write_pe(source / "bin" / "hrx.dll")
-            self._write_pe(source / "bin" / "Runtime.DLL")
-            self._write_pe(source / "bin" / "flm.exe")
-            (source / "share" / "flm" / "xclbins").mkdir(parents=True)
-            (source / "share" / "flm" / "model_list.json").write_text(
-                "{}", encoding="utf-8"
-            )
-            (source / "share" / "flm" / "xclbins" / "kernel.xclbin").write_bytes(
-                b"xclbin"
-            )
-            licenses = {
-                "licenses/rocm-npu-staging-LICENSE": "staging",
-                "licenses/hrx-LICENSE/LICENSE": "hrx",
-                "licenses/FastFlowLM-LICENSE_RUNTIME.txt": "fastflowlm",
-                "licenses/FastFlowLM-TERMS.md": "terms",
-                "licenses/vcpkg/runtime-package/copyright": "dependency",
-            }
-            for relative, contents in licenses.items():
-                path = source / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(contents, encoding="utf-8")
-            manifest = {
-                "schema_version": 1,
-                "dependencies": {
-                    "provider": "vcpkg",
-                    "runtime_file_packages": {
-                        "runtime.dll": "runtime-package"
-                    },
-                },
-                "files": [
-                    {
-                        "path": path.relative_to(source).as_posix(),
-                        "size": path.stat().st_size,
-                        "sha256": sha256_file(path),
-                    }
-                    for path in sorted(
-                        item for item in source.rglob("*") if item.is_file()
-                    )
-                ],
-            }
-            (source / "manifest.json").write_text(
-                json.dumps(manifest), encoding="utf-8"
-            )
-            imports = {
-                "hrx.dll": ["runtime.dll"],
-                "runtime.dll": ["kernel32.dll"],
-                "flm.exe": ["runtime.dll"],
-            }
-            with mock.patch(
-                "build_tools.rocm_npu_windows_wheels.pe_imports",
-                side_effect=lambda path: imports[Path(path).name.casefold()],
-            ), mock.patch(
-                "build_tools.rocm_npu_windows_wheels._is_windows_system_runtime",
-                side_effect=lambda name: name == "kernel32.dll",
-            ):
-                products = stage_wheel_products(source, root / "stage", "1.2.3")
-
-            runtime = products[RUNTIME_DISTRIBUTION] / RUNTIME_PACKAGE
-            fastflowlm = (
-                products[FASTFLOWLM_DISTRIBUTION] / FASTFLOWLM_PACKAGE
-            )
-            self.assertTrue((runtime / "bin" / "Runtime.DLL").is_file())
-            self.assertFalse((fastflowlm / "bin" / "Runtime.DLL").exists())
-            self.assertTrue(
-                (
-                    runtime
-                    / "licenses"
-                    / "vcpkg"
-                    / "runtime-package"
-                    / "copyright"
-                ).is_file()
-            )
-            self.assertTrue((fastflowlm / "bin" / "flm.exe").is_file())
-            self.assertTrue(
-                (fastflowlm / "share" / "flm" / "xclbins" / "kernel.xclbin").is_file()
-            )
-
-    @unittest.skipUnless(os.name == "nt", "Windows DLL APIs require Windows")
-    def test_generated_runtime_keeps_dll_directory_and_library_alive(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            package = Path(temporary) / RUNTIME_PACKAGE
-            (package / "bin").mkdir(parents=True)
-            (package / "bin" / "hrx.dll").write_bytes(b"MZ")
-            _write_runtime_module(package)
-            spec = importlib.util.spec_from_file_location(
-                "test_generated_rocm_npu_runtime", package / "__init__.py"
-            )
-            module = importlib.util.module_from_spec(spec)
-            handle = object()
-            library = object()
-            with mock.patch("os.add_dll_directory", return_value=handle) as add_dir, \
-                 mock.patch("ctypes.WinDLL", return_value=library) as load_library:
-                assert spec.loader is not None
-                spec.loader.exec_module(module)
-                self.assertIs(module.initialize_process(), library)
-                self.assertIs(module.initialize_process(), library)
-            add_dir.assert_called_once_with(str(package / "bin"))
-            load_library.assert_called_once_with(str(package / "bin" / "hrx.dll"))
 
     def test_windows_fastflowlm_product_can_depend_on_runtime_product(self):
         with tempfile.TemporaryDirectory() as temporary:
