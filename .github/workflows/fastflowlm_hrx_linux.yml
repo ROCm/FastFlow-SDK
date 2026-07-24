@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -142,6 +143,8 @@ jobs:
         with:
           name: fastflowlm-hrx-linux-x86_64
           path: .artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Ensure zstd is available
         shell: bash

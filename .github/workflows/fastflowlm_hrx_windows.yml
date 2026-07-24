@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -182,6 +183,8 @@ jobs:
         with:
           name: fastflowlm-hrx-windows-x86_64
           path: .artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Extract and verify runtime artifact
         run: |

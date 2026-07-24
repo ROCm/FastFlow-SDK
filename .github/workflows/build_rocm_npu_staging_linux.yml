@@ -21,6 +21,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   build_rocm_npu_staging_linux:
     name: ${{ inputs.name }}
@@ -218,12 +222,16 @@ jobs:
         with:
           name: npu-prereqs-linux-x86_64
           path: .artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Download prebuilt NPU tests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npu-test-package-linux-x86_64
           path: .test-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Extract and verify artifacts
         run: |

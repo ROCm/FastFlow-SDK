@@ -29,6 +29,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  actions: read
+
 defaults:
   run:
     shell: bash   # Git Bash on the Windows runner -> git/dev.py steps match Linux
@@ -348,12 +352,16 @@ jobs:
         with:
           name: npu-prereqs-windows-x86_64
           path: .artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Download prebuilt NPU tests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npu-test-package-windows-x86_64
           path: .test-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Extract and verify artifacts
         run: |
