@@ -1,0 +1,11 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+
+self-hosted-runner:
+  labels:
+    - aws-linux-scale-rocm-prod
+    - azure-windows-scale-rocm
+    - linux-gfx1150-gpu-rocm-npu
+    - linux-gfx1151-gpu-rocm
+    - linux-gfx1152-gpu-rocm
+    - windows-gfx1151-gpu-rocm

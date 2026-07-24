@@ -1,0 +1,7 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+
+schema_version = 1
+
+[wheel_release]
+base_version = "0.1.0"

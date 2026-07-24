@@ -204,3 +204,8 @@ their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
 [requirements-iron-ops.txt](requirements-iron-ops.txt); the build path does not need them).
 
 </details>
+
+## Additional documentation
+
+- [ROCm NPU wheel releases](docs/wheel-releases.md): wheel versioning,
+  validation, and publication policy.

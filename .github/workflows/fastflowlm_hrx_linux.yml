@@ -8,16 +8,32 @@ on:
       name:
         type: string
         default: FLM Linux NPU e2e
+      ref:
+        type: string
+        default: ""
+      package_version:
+        type: string
+        default: ""
+      attest_wheels:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       name:
         description: Job display name
         required: false
         default: FLM Linux NPU e2e
+      ref:
+        description: Branch, tag, or commit to build
+        required: false
+        default: ""
+      package_version:
+        description: Explicit PEP 440 wheel version
+        required: false
+        default: ""
 
-permissions:
-  contents: read
-  actions: read
+# Reusable calls inherit the caller's permission ceiling. CI callers grant
+# read-only access; the release caller additionally grants attestation writes.
 
 jobs:
   build:
@@ -28,9 +44,12 @@ jobs:
       image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
     env:
       RNS_BUILD_IMAGE: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
+      ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Trust the job checkout
         run: git config --global --add safe.directory "$PWD"
@@ -87,6 +106,9 @@ jobs:
       - name: Install Linux wheel audit tooling
         run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-packaging-linux.lock
 
+      - name: Install release validation tools
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-release-wheels.lock
+
       - name: Save vcpkg download cache
         if: success() && steps.fastflowlm-deps.outcome == 'success' && steps.vcpkg-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -124,8 +146,17 @@ jobs:
       - name: Audit rocm-npu runtime wheels
         run: .venv/bin/python dev.py audit-fastflowlm-wheels
 
+      - name: Validate wheel metadata
+        run: .venv/bin/python -m twine check --strict build/artifacts/rocm_npu_*.whl
+
       - name: Install-test rocm-npu runtime wheels
         run: .venv/bin/python dev.py verify-fastflowlm-wheels
+
+      - name: Attest Linux wheels
+        if: ${{ inputs.attest_wheels }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: build/artifacts/rocm_npu_*.whl
 
       - name: Upload runtime archive artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -167,6 +198,8 @@ jobs:
     steps:
       - name: Checkout test harness
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Trust the job checkout
         run: git config --global --add safe.directory "$PWD"

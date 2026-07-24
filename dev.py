@@ -1329,7 +1329,8 @@ def _venv_python(venv_dir):
 
 
 def cmd_verify_fastflowlm_wheels(args):
-    wheels = find_rocm_npu_wheels(Path(args.dir))
+    wheel_directory = Path(args.dir)
+    wheels = find_rocm_npu_wheels(wheel_directory)
     verify_wheel_checksums(wheels)
     verify_wheels_do_not_have_text_path_references(wheels, (ROOT,))
 
@@ -1339,8 +1340,19 @@ def cmd_verify_fastflowlm_wheels(args):
         shutil.rmtree(venv_dir)
     sh([sys.executable, "-m", "venv", venv_dir])
     py = _venv_python(venv_dir)
-    sh([py, "-m", "pip", "install", "--disable-pip-version-check", "--no-index",
-        wheels[RUNTIME_DISTRIBUTION], wheels[FASTFLOWLM_DISTRIBUTION]])
+    sh(
+        [
+            py,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-index",
+            "--find-links",
+            wheel_directory,
+            wheels[FASTFLOWLM_DISTRIBUTION],
+        ]
+    )
     sh([py, "-m", "pip", "check"])
     smoke = (
         "import os, sysconfig; "

@@ -6,17 +6,42 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from build_tools import rocm_npu_wheel_common
 from build_tools.rocm_npu_wheel_common import (
     build_wheel,
     find_distribution_wheels,
     find_wheel_path_references,
     remove_distribution_wheels,
+    sha256_file,
     validate_version,
     verify_wheel_checksums,
 )
 
 
 class RocmNpuWheelCommonTest(unittest.TestCase):
+    def test_package_manifest_records_payload_checksums(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary)
+            payload = package / "bin" / "runtime.bin"
+            payload.parent.mkdir()
+            payload.write_bytes(b"runtime")
+
+            manifest = rocm_npu_wheel_common._write_package_manifest(
+                package, {"schema_version": 1}
+            )
+
+            self.assertEqual(
+                manifest["files"],
+                [
+                    {
+                        "path": "bin/runtime.bin",
+                        "size": 7,
+                        "sha256": sha256_file(payload),
+                    }
+                ],
+            )
+            self.assertTrue((package / "manifest.json").is_file())
+
     def test_build_and_find_wheel_for_explicit_platform_tag(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
