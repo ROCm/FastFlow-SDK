@@ -26,12 +26,14 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
                                      #   Linux + Windows; suite: tests/iron-ops/suite.py
   python dev.py submodules NAME...    # init (and optionally reset/clean) submodules
-  python dev.py package-npu-prereqs   # stage + tar what the NPU job needs (no NPU)
+  python dev.py package-npu-prereqs   # stage + tar HRX and its CTS binaries (no NPU)
+  python dev.py package-npu-test-package # prebuild XADX kernels + numeric cases (no NPU)
   python dev.py unpack-npu-prereqs    # extract that archive (codec-agnostic; no NPU)
   python dev.py verify-npu-prereqs    # assert that archive is self-contained + imports (no NPU)
   python dev.py npu-probe             # print NPU driver/fw versions + check libhrx open
   python dev.py test-hrx-cts [SUITE]  # amdxdna HAL conformance suites (needs an NPU)
-  python dev.py test-npu [DESIGN]     # ON-DEVICE e2e: one dispatch of a design via hrx (needs an NPU)
+  python dev.py test-npu-package      # ON-DEVICE execute-only XADX + numeric suite
+  python dev.py test-npu [DESIGN]     # ON-DEVICE compile+run developer path (needs compiler)
                                      #   --device npu2|npu1   --chain (opt-in chained testbench)
   python dev.py test-fastflowlm       # pull qwen3:0.6b + run a 1k HRX benchmark
   python dev.py test-npu-iron-ops [OP] # ON-DEVICE e2e: an iron-ops operator, numerics checked (needs an NPU)
@@ -59,6 +61,7 @@ from build_tools.fastflowlm_artifact import (
     verify_fastflowlm_fresh_installs,
     verify_bundle as verify_fastflowlm_bundle,
 )
+from build_tools import npu_test_package
 from build_tools.windows_npu import (
     probe_runtime as probe_windows_npu_runtime,
 )
@@ -88,6 +91,8 @@ FASTFLOWLM_EXTRACTED = BUILD / "FastFlowLM-extracted"
 COMPILER_PRODUCT_STAGE = BUILD / "rocm-npu-compiler-product"
 COMPILER_PRODUCT_EXTRACTED = BUILD / "rocm-npu-compiler-extracted"
 COMPILER_PRODUCT_RELOCATED = BUILD / "rocm-npu-compiler-relocated"
+NPU_TEST_PACKAGE_STAGE = BUILD / "npu-test-package"
+NPU_TEST_PACKAGE_EXTRACTED = BUILD / "npu-test-package-extracted"
 ARCHIVE_FIXED_MTIME = 946684800  # 2000-01-01T00:00:00Z
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27  # 128 MiB: finds duplicate large LLVM binaries.
@@ -624,6 +629,7 @@ SETUP_PROFILE_SUBMODULES = {
     "compiler-stack": DOCTOR_PROFILE_SUBMODULES["compiler-stack"],
     "fastflowlm": DOCTOR_PROFILE_SUBMODULES["fastflowlm"],
     "npu-e2e": {"hrx", "iron-tools", "iron-ops"},
+    "npu-runtime": set(),
 }
 
 
@@ -839,6 +845,8 @@ def cmd_setup(args):
     lock = ROOT / "requirements.lock"
     if args.profile == "fastflowlm":
         src = ROOT / "requirements-fastflowlm.lock"
+    elif args.profile == "npu-runtime":
+        src = ROOT / "requirements-npu-runtime.txt"
     # requirements.lock is hash-pinned for LINUX wheels; on Windows the platform-specific
     # wheels (llvm-aie, cmake, ...) have different sha256s, so those hashes can't match.
     # Use the unpinned requirements.txt there — same version pins + find-links, no hashes.
@@ -849,7 +857,7 @@ def cmd_setup(args):
     pip_args = ["--require-hashes"] if args.profile == "fastflowlm" else []
     sh(pip + pip_args + ["-r", str(src)])
     cmd_fetch(args, SETUP_PROFILE_SUBMODULES[args.profile])
-    if args.profile != "fastflowlm":
+    if args.profile not in ("fastflowlm", "npu-runtime"):
         install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
     if args.profile == "fastflowlm":
         _install_fastflowlm_deps()
@@ -2128,11 +2136,11 @@ def cmd_package_npu_prereqs(args):
 
 
 def _rehearse(python, pythonpath, hrx_install):
-    """Import the aie package the way the design build does, with the HRX backend forced.
+    """Load packaged HRX through the compiler-independent NPU test binding.
 
     Check the packaged runtime library explicitly before importing the backend so a
-    packaging omission is reported directly. XADX construction is part of libhrx and
-    needs no compiler or build-tree helper on the consumer.
+    packaging omission is reported directly. The hardware job executes prebuilt XADX
+    packages and intentionally has no aie/MLIR/Peano Python environment.
 
     ``hrx_install`` is the installed package produced and package-smoked by
     ``build hrx``."""
@@ -2158,21 +2166,13 @@ def _rehearse(python, pythonpath, hrx_install):
         except OSError as e:
             sys.exit(f"{libhrx} is present but will not load: {e}")
 
-    # Now the probe can only fail for reasons the layers above did not cover, and
-    #    IRON_RUNTIME=auto lets aie.utils import so its DEBUG log reaches us.
+    # Import and load exactly the tiny binding used by the hardware runner.
     script = (
-        "import logging, sys\n"
-        "logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)\n"
-        "import aie.utils as u\n"
-        "from aie.utils.hostruntime.hrxruntime import discovery\n"
-        "print('libhrx   :', discovery.find_libhrx())\n"
-        "assert u.has_hrx, 'hrx backend unavailable; see the DEBUG line above for why'\n"
+        "from hrx_api import load_libhrx\n"
+        "lib = load_libhrx()\n"
+        "print('libhrx:', lib._name)\n"
     )
-    sh([python, "-c", script], env=dict(env, IRON_RUNTIME="auto"))
-
-    # Finally the real thing: the design build's import, with the backend forced.
-    sh([python, "-c", "import aie.ir, aie.iron\nprint('rehearsal ok:', aie.ir.__file__)\n"],
-       env=dict(env, IRON_RUNTIME="hrx"))
+    sh([python, "-c", script], env=env)
 
 
 def cmd_verify_npu_prereqs(args):
@@ -2227,10 +2227,8 @@ def cmd_verify_npu_prereqs(args):
     rehearsal.mkdir(parents=True)
     with _prereq_tar(archive) as tar:   # streamed: a second pass needs a second handle
         tar.extractall(rehearsal, filter="data")
-    compiler_python = BUILD / "iron-tools" / "python"
-    if not compiler_python.is_dir():
-        sys.exit(f"{compiler_python} missing: run python dev.py build iron-tools")
-    _rehearse(venv_py(), compiler_python, rehearsal / "build" / "hrx-install")
+    runtime_python = ROOT / "tests" / "npu"
+    _rehearse(venv_py(), runtime_python, rehearsal / "build" / "hrx-install")
     shutil.rmtree(rehearsal)
     print(f"verify-npu-prereqs: ok ({len(members)} entries, no links)")
     return 0
@@ -2249,6 +2247,170 @@ def cmd_unpack_npu_prereqs(args):
     with _prereq_tar(archive) as tar:
         tar.extractall(ROOT, filter="data")
     print(f"unpack-npu-prereqs: ok ({archive.name} -> {ROOT})")
+
+
+def _npu_test_modules():
+    module_dir = ROOT / "tests" / "npu"
+    if str(module_dir) not in sys.path:
+        sys.path.insert(0, str(module_dir))
+    import hrx_api
+    import test_cases
+    return hrx_api, test_cases
+
+
+def _single_artifact(directory, pattern, description):
+    matches = sorted(Path(directory).glob(pattern))
+    if len(matches) != 1:
+        names = ", ".join(path.name for path in matches) or "none"
+        raise RuntimeError(
+            f"{directory}: expected one {description} ({pattern}), found {len(matches)}: {names}"
+        )
+    return matches[0]
+
+
+def cmd_package_npu_test_package(args):
+    """Build execute-only XADX kernels and deterministic numeric cases for NPU CI."""
+    hrx_api, test_cases = _npu_test_modules()
+    libhrx_env = _add_hrx_install_env(os.environ.copy())
+    serializer = hrx_api.HrxApi(
+        hrx_api.load_libhrx(libhrx_env, "nt" if IS_WINDOWS else "posix")
+    )
+
+    if NPU_TEST_PACKAGE_STAGE.exists():
+        shutil.rmtree(NPU_TEST_PACKAGE_STAGE)
+    NPU_TEST_PACKAGE_STAGE.mkdir(parents=True)
+    cases = []
+
+    # The on-device single-dispatch gate uses vector_scalar_add, which differs
+    # from the matrix_scalar_add compiler/HAL contract gate run earlier.
+    design = "vector_scalar_add"
+    design_dir = PROJ / "iron-tools" / "programming_examples" / "basic" / design
+    run_e2e = _run_e2e_module()
+    artifacts = run_e2e.build_design(
+        design_dir, NPU_TARGETS["npu2"]["device"], [], _iron_env()
+    )
+    _require_txn_devgen(artifacts.insts, "npu2")
+    cases.append(
+        npu_test_package.write_case(
+            NPU_TEST_PACKAGE_STAGE,
+            test_cases.generate_case(design),
+            serializer.serialize_xadx(
+                artifacts.xclbin.read_bytes(), artifacts.insts.read_bytes(), "MLIR_AIE"
+            ),
+            {"kind": "iron-tools-design", "name": design, "device": "npu2"},
+        )
+    )
+
+    suite = _iron_ops_suite()
+    for operator in suite.OPERATORS:
+        build_dir = OUT / "iron-ops" / operator.name
+        xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
+        insts = _single_artifact(build_dir, "*.bin", "operator transaction")
+        _require_txn_devgen(insts, operator.device)
+        cases.append(
+            npu_test_package.write_case(
+                NPU_TEST_PACKAGE_STAGE,
+                test_cases.generate_case(operator.name),
+                serializer.serialize_xadx(
+                    xclbin.read_bytes(), insts.read_bytes(), "MLIR_AIE"
+                ),
+                {
+                    "kind": "iron-ops",
+                    "name": operator.name,
+                    "device": operator.device,
+                    "build_kwargs": operator.build_kwargs,
+                },
+            )
+        )
+
+    npu_test_package.write_manifest(
+        NPU_TEST_PACKAGE_STAGE,
+        cases,
+        _source_revision(),
+        platform.system().lower(),
+        platform.machine().lower(),
+    )
+    _verify_npu_test_package(NPU_TEST_PACKAGE_STAGE)
+    archive = npu_test_package.create_archive(
+        NPU_TEST_PACKAGE_STAGE, NPU_PREREQ_DIR, _prereq_codec()
+    )
+    print(
+        f"package-npu-test-package: ok ({len(cases)} XADX cases) -> "
+        f"{archive} ({archive.stat().st_size / 1e6:.1f} MB)"
+    )
+
+
+def _source_revision():
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _verify_npu_test_package(package):
+    expected_cases = ["vector_scalar_add"] + [
+        operator.name for operator in _iron_ops_suite().OPERATORS
+    ]
+    return npu_test_package.verify_tree(
+        package, expected_cases, _source_revision(), platform.system().lower()
+    )
+
+
+def cmd_verify_npu_test_package(args):
+    if args.extracted:
+        package = NPU_TEST_PACKAGE_EXTRACTED
+        try:
+            manifest = _verify_npu_test_package(package)
+        except RuntimeError as error:
+            sys.exit(str(error))
+        print(f"verify-npu-test-package: ok ({len(manifest['cases'])} XADX cases)")
+        return
+
+    archive = npu_test_package.find_archive(NPU_PREREQ_DIR)
+    if archive is None:
+        sys.exit(
+            f"no npu-test-package.tar.* under {NPU_PREREQ_DIR} — "
+            "run: python dev.py package-npu-test-package"
+        )
+    try:
+        npu_test_package.extract_archive(archive, NPU_TEST_PACKAGE_EXTRACTED)
+        manifest = _verify_npu_test_package(NPU_TEST_PACKAGE_EXTRACTED)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print(f"verify-npu-test-package: ok ({len(manifest['cases'])} XADX cases)")
+
+
+def cmd_unpack_npu_test_package(args):
+    archive = npu_test_package.find_archive(args.dir)
+    if archive is None:
+        sys.exit(f"no npu-test-package.tar.* under {args.dir}")
+    try:
+        npu_test_package.extract_archive(archive, NPU_TEST_PACKAGE_EXTRACTED)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print(
+        f"unpack-npu-test-package: ok ({archive.name} -> {NPU_TEST_PACKAGE_EXTRACTED})"
+    )
+
+
+def cmd_test_npu_package(args):
+    """Run prebuilt XADX cases directly through HRX, with no compiler imports."""
+    try:
+        _verify_npu_test_package(NPU_TEST_PACKAGE_EXTRACTED)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    env = _add_hrx_install_env(os.environ.copy())
+    command = [
+        venv_py(),
+        ROOT / "tests" / "npu" / "run_test_package.py",
+        NPU_TEST_PACKAGE_EXTRACTED,
+    ]
+    for case in args.cases or []:
+        command += ["--case", case]
+    sys.exit(sh(command, env=env, check=False).returncode)
 
 
 def _read_sysfs_text(path: Path):
@@ -2685,6 +2847,7 @@ def main():
                     help="also remove untracked+ignored files (needed where a patch adds them)")
     sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
     sub.add_parser("package-npu-prereqs")
+    sub.add_parser("package-npu-test-package")
     sub.add_parser("package-fastflowlm")
     sub.add_parser("package-compiler-product")
     uf = sub.add_parser("unpack-fastflowlm")
@@ -2706,6 +2869,14 @@ def main():
     v = sub.add_parser("verify-npu-prereqs")
     v.add_argument("--extracted", action="store_true",
                    help="check an already-unpacked tree instead of the archive")
+    unt = sub.add_parser("unpack-npu-test-package")
+    unt.add_argument("--dir", default=".artifact", help="where download-artifact put it")
+    vnt = sub.add_parser("verify-npu-test-package")
+    vnt.add_argument("--extracted", action="store_true",
+                     help="check the unpacked package instead of the archive")
+    rnt = sub.add_parser("test-npu-package")
+    rnt.add_argument("--case", dest="cases", action="append",
+                     help="run only this packaged case; may be repeated")
     np = sub.add_parser("npu-probe")
     np.add_argument("--bundle", help="probe libHRX from an extracted runtime bundle")
     c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
@@ -2733,6 +2904,7 @@ def main():
     elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
     elif a.cmd == "submodules": cmd_submodules(a)
     elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
+    elif a.cmd == "package-npu-test-package": cmd_package_npu_test_package(a)
     elif a.cmd == "package-fastflowlm": cmd_package_fastflowlm(a)
     elif a.cmd == "package-compiler-product": cmd_package_compiler_product(a)
     elif a.cmd == "unpack-fastflowlm": cmd_unpack_fastflowlm(a)
@@ -2741,6 +2913,9 @@ def main():
     elif a.cmd == "verify-compiler-product": cmd_verify_compiler_product(a)
     elif a.cmd == "unpack-npu-prereqs": cmd_unpack_npu_prereqs(a)
     elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
+    elif a.cmd == "unpack-npu-test-package": cmd_unpack_npu_test_package(a)
+    elif a.cmd == "verify-npu-test-package": cmd_verify_npu_test_package(a)
+    elif a.cmd == "test-npu-package": cmd_test_npu_package(a)
     elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))
     elif a.cmd == "test-hrx-cts": sys.exit(cmd_test_hrx_cts(a))
     elif a.cmd == "test-npu": cmd_test_npu(a)

@@ -21,6 +21,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   build_rocm_npu_staging_linux:
     name: ${{ inputs.name }}
@@ -156,11 +160,17 @@ jobs:
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/bin/python dev.py package-npu-prereqs
 
+      - name: Package prebuilt NPU tests
+        if: ${{ inputs.run_npu_e2e }}
+        run: .venv/bin/python dev.py package-npu-test-package
+
       # Rehearse the NPU job's imports here, off-device: nothing below touches /dev/accel.
       # A broken artifact fails on this runner rather than on the scarce gfx1151 one.
       - name: Verify run prerequisites (off-device)
         if: ${{ inputs.run_npu_e2e }}
-        run: .venv/bin/python dev.py verify-npu-prereqs
+        run: |
+          .venv/bin/python dev.py verify-npu-prereqs
+          .venv/bin/python dev.py verify-npu-test-package
 
       - name: Upload run prerequisites
         if: ${{ inputs.run_npu_e2e }}
@@ -173,8 +183,16 @@ jobs:
           # second ineffective zlib pass and inflate on the NPU runner.
           compression-level: 0
 
-      - name: Upload compiler product
+      - name: Upload prebuilt NPU tests
         if: ${{ inputs.run_npu_e2e }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npu-test-package-linux-x86_64
+          path: build/artifacts/npu-test-package.tar.*
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload compiler product
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rocm-npu-compiler-linux-x86_64
@@ -199,31 +217,31 @@ jobs:
       - name: Trust the job checkout
         run: git config --global --add safe.directory "$PWD"
 
-      - name: Initialize runtime source pins
-        run: python3 dev.py submodules hrx iron-tools iron-ops --reset --clean iron-tools --shallow
-
       - name: Set up NPU test environment
-        run: python3 dev.py setup --profile npu-e2e --iron-ops-tests
+        run: python3 dev.py setup --profile npu-runtime
 
       - name: Download run prerequisites
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npu-prereqs-linux-x86_64
           path: .artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
-      - name: Download compiler product
+      - name: Download prebuilt NPU tests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rocm-npu-compiler-linux-x86_64
-          path: .compiler-artifact
+          name: npu-test-package-linux-x86_64
+          path: .test-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Extract and verify artifacts
         run: |
           .venv/bin/python dev.py unpack-npu-prereqs --dir .artifact
           .venv/bin/python dev.py verify-npu-prereqs --extracted
-          .venv/bin/python dev.py unpack-compiler-product --dir .compiler-artifact
-          .venv/bin/python dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted
-          echo "ROCM_NPU_COMPILER_PREFIX=$PWD/build/rocm-npu-compiler-extracted/rocm-npu-compiler-linux-x86_64" >> "$GITHUB_ENV"
+          .venv/bin/python dev.py unpack-npu-test-package --dir .test-artifact
+          .venv/bin/python dev.py verify-npu-test-package --extracted
 
       - name: Probe NPU driver and HRX
         run: .venv/bin/python dev.py npu-probe
@@ -231,8 +249,5 @@ jobs:
       - name: Run HRX amdxdna conformance suites
         run: .venv/bin/python dev.py test-hrx-cts
 
-      - name: Run IRON single-dispatch NPU e2e
-        run: .venv/bin/python dev.py test-npu
-
-      - name: Run iron-ops NPU numerics
-        run: .venv/bin/python dev.py test-npu-iron-ops
+      - name: Run prebuilt XADX NPU tests
+        run: .venv/bin/python dev.py test-npu-package

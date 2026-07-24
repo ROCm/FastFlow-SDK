@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -201,6 +202,8 @@ jobs:
         with:
           name: rocm-npu-runtime-fastflowlm-windows-x86_64
           path: .artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Install and verify rocm-npu runtime wheels
         run: python build_tools/rocm_npu_windows_wheel_cli.py verify --dir .artifact

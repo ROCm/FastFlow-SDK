@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # Cancel superseded PR runs: they queue on the single gfx1151 NPU runner. main is exempt
 # (run_id makes the group unique), so every landed commit is still validated on its own.
@@ -29,6 +30,7 @@ jobs:
     uses: ./.github/workflows/build_rocm_npu_staging_linux.yml
     permissions:
       contents: read
+      actions: read
     with:
       name: Build + smoke
       run_npu_e2e: true
@@ -38,6 +40,7 @@ jobs:
     uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
     permissions:
       contents: read
+      actions: read
     with:
       name: Build + smoke (Windows)
       run_npu_e2e: true
@@ -47,6 +50,7 @@ jobs:
     uses: ./.github/workflows/fastflowlm_hrx_linux.yml
     permissions:
       contents: read
+      actions: read
     with:
       name: NPU e2e
 
@@ -55,5 +59,6 @@ jobs:
     uses: ./.github/workflows/fastflowlm_hrx_windows.yml
     permissions:
       contents: read
+      actions: read
     with:
       name: NPU e2e
