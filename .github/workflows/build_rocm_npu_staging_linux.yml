@@ -93,6 +93,9 @@ jobs:
       - name: Test wheel tooling
         run: .venv/bin/python -m unittest discover -s tests/wheels -p 'test_*.py'
 
+      - name: Test Linux-native tooling
+        run: .venv/bin/python -m unittest discover -s tests/linux -p 'test_*.py'
+
       - name: Test NPU probe diagnostics
         run: .venv/bin/python -m unittest discover -s tests/npu -p 'test_npu_probe.py'
 
@@ -218,7 +221,9 @@ jobs:
     timeout-minutes: 60
     container:
       image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
-      options: --device=/dev/accel/accel0
+      options: >-
+        --device=/dev/accel/accel0
+        --ulimit memlock=-1:-1
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

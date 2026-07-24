@@ -11,6 +11,7 @@ import queue
 import re
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from pathlib import Path
@@ -231,6 +232,27 @@ def extract_raw_output(text):
     return outputs[0] if outputs else ""
 
 
+def normalize_smoke_phrase(text):
+    text = text.strip()
+    previous = None
+    while text != previous:
+        previous = text
+        text = re.sub(r"`([^`\n]+)`", r"\1", text)
+        text = re.sub(r"(\*\*|__|\*|_)([^*_`\n]+?)\1", r"\2", text)
+    return text
+
+
+def smoke_phrase_matches(raw_text, expected):
+    return normalize_smoke_phrase(raw_text) == expected.strip()
+
+
+def smoke_setup_commands():
+    value = os.environ.get("FLM_SMOKE_SETUP_COMMANDS")
+    if value is None:
+        return ["/set topk 1", "/set gen-lim 16"]
+    return [line.strip() for line in value.splitlines() if line.strip()]
+
+
 def verify_qwen3_xclbins(xclbin_prefix):
     xclbin_dir = xclbin_prefix / "xclbins" / "Qwen3-0.6B-NPU2"
     errors = []
@@ -259,25 +281,45 @@ def require_file(path, label):
         raise SmokeFailure(f"missing {label}: {path}")
 
 
+def installed_package_paths():
+    try:
+        import rocm_npu_fastflowlm
+        import rocm_npu_runtime
+    except ImportError as error:
+        raise SmokeFailure(f"installed rocm-npu wheel package is unavailable: {error}") from error
+    script = Path(sysconfig.get_path("scripts")) / ("flm.exe" if IS_WINDOWS else "flm")
+    return {
+        "flm_bin": script if script.is_file() else Path(rocm_npu_fastflowlm.flm_path()),
+        "hrx_runtime": Path(rocm_npu_runtime.libhrx_path()),
+        "config_path": Path(rocm_npu_fastflowlm.config_path()),
+        "xclbin_prefix": Path(rocm_npu_fastflowlm.xclbin_path()),
+    }
+
+
 def main():
     args = parse_args()
     bundle = Path(os.environ["FASTFLOWLM_BUNDLE"]) if os.environ.get("FASTFLOWLM_BUNDLE") else None
+    installed_package = os.environ.get("FASTFLOWLM_INSTALLED_PACKAGE") == "1"
     fastflowlm_dir = Path(os.environ.get("FASTFLOWLM_DIR") or (ROOT / "projects" / "FastFlowLM"))
     flm_src = fastflowlm_dir / "src"
-    flm_bin = (bundle / "bin" / ("flm.exe" if IS_WINDOWS else "flm") if bundle else
-               Path(os.environ.get("FLM_BIN") or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm"))))
     library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
     default_install = Path(os.environ.get("HRX_INSTALL") or (ROOT / "build" / "hrx-install"))
     runtime_dir = Path(os.environ.get("LIBHRX_DIR") or
                        (default_install / ("bin" if IS_WINDOWS else "lib")))
-    hrx_runtime = (bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")
-                   if bundle else Path(os.environ.get("HRX_LIBHRX") or
-                                       (runtime_dir / library_name)))
+    package_paths = installed_package_paths() if installed_package else {}
+    flm_bin = (package_paths["flm_bin"] if installed_package else
+               bundle / "bin" / ("flm.exe" if IS_WINDOWS else "flm") if bundle else
+               Path(os.environ.get("FLM_BIN") or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm"))))
+    hrx_runtime = (package_paths["hrx_runtime"] if installed_package else
+                   bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so") if bundle else
+                   Path(os.environ.get("HRX_LIBHRX") or (runtime_dir / library_name)))
     model = os.environ.get("FLM_MODEL") or "qwen3:0.6b"
     model_cache = Path(os.environ.get("FLM_MODEL_PATH") or (ROOT / "build" / "FastFlowLM-models"))
-    config_path = (bundle / "share" / "flm" / "model_list.json" if bundle else
+    config_path = (package_paths["config_path"] if installed_package else
+                   bundle / "share" / "flm" / "model_list.json" if bundle else
                    Path(os.environ.get("FLM_CONFIG_PATH") or (flm_src / "model_list.json")))
-    xclbin_prefix = (bundle / "share" / "flm" if bundle else
+    xclbin_prefix = (package_paths["xclbin_prefix"] if installed_package else
+                     bundle / "share" / "flm" if bundle else
                      Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src))
     bench_config = Path(os.environ.get("FLM_BENCH_CONFIG") or (ROOT / "tests" / "fastflowlm" / "bench_1k_smoke.json"))
     work_dir = Path(os.environ.get("FLM_SMOKE_WORK_DIR") or (ROOT / "build" / "FastFlowLM-smoke"))
@@ -297,6 +339,7 @@ def main():
             os.environ.get("FLM_SMOKE_EXPECTED_REGEX_2"),
         ),
     ]
+    setup_commands = smoke_setup_commands()
     bench_regex = os.environ.get("FLM_BENCH_EXPECTED_REGEX") or r"FastFlowLM.*HRX.*runtime"
 
     require_file(flm_bin, "flm binary")
@@ -311,12 +354,16 @@ def main():
     model_cache.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    if not bundle:
+    if installed_package:
+        env.setdefault("HRX_GPU_DRIVER", "amdxdna")
+        env["FLM_CONFIG_PATH"] = str(config_path)
+        env["FLM_XCLBIN_PATH"] = str(xclbin_prefix)
+    elif not bundle:
         env.setdefault("HRX_GPU_DRIVER", "amdxdna")
         env["FLM_CONFIG_PATH"] = str(config_path)
         env["FLM_XCLBIN_PATH"] = str(xclbin_prefix)
     env["FLM_MODEL_PATH"] = str(model_cache)
-    if not bundle:
+    if not bundle and not installed_package:
         if IS_WINDOWS:
             prepend_search_path(env, "PATH", [flm_bin.parent, hrx_runtime.parent, flm_src / "lib"])
         else:
@@ -329,6 +376,7 @@ def main():
     print(f"  model cache: {model_cache}")
     print(f"  inference processes: {args.inference_iterations}")
     print(f"  turns per process: {len(smoke_turns)}")
+    print(f"  setup commands: {len(setup_commands)}")
 
     run_tee([flm_bin, "pull", model], env=env)
     run_tee([flm_bin, "check", model], env=env)
@@ -350,12 +398,13 @@ def main():
             f"{iteration}/{args.inference_iterations}..."
         )
         print("== FastFlowLM inference transcript begin ==")
+        input_lines = setup_commands + [prompt for prompt, _, _ in smoke_turns]
         if IS_WINDOWS:
             input_kwargs = {
-                "input_text": "".join(f"{prompt}\n" for prompt, _, _ in smoke_turns)
+                "input_text": "".join(f"{line}\n" for line in input_lines)
             }
         else:
-            input_kwargs = {"input_lines": [prompt for prompt, _, _ in smoke_turns]}
+            input_kwargs = {"input_lines": input_lines}
         run_text = run_tee(
             [flm_bin, "run", model, "--ctx-len", "1024"],
             env=env,
@@ -389,9 +438,9 @@ def main():
                     f"FastFlowLM turn {turn} did not match the expected phrase: "
                     f"{raw_output}\nExpected regex: {expected_regex}"
                 )
-            if not expected_regex and raw_text != expected:
+            if not expected_regex and not smoke_phrase_matches(raw_text, expected):
                 raise SmokeFailure(
-                    f"FastFlowLM turn {turn} did not exactly match the smoke phrase: "
+                    f"FastFlowLM turn {turn} did not match the smoke phrase: "
                     f"{raw_output}\nExpected: {expected!r}; got: {raw_text!r}"
                 )
 

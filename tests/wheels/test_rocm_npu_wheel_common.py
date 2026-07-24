@@ -75,6 +75,8 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 )
                 metadata = archive.read(f"{dist_info}/METADATA").decode("utf-8")
                 self.assertIn("Name: example-package\n", metadata)
+                self.assertIn("Description-Content-Type: text/markdown\n", metadata)
+                self.assertTrue(metadata.endswith("\n\nexample\n"))
                 wheel_metadata = archive.read(f"{dist_info}/WHEEL").decode("utf-8")
                 self.assertIn("Tag: py3-none-test_platform\n", wheel_metadata)
                 record = archive.read(f"{dist_info}/RECORD").decode("utf-8")
