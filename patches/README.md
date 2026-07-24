@@ -97,6 +97,17 @@ causes a busy loop at the prompt. The POSIX CLI already treats EOF as `/bye`.
 
 **Remove when:** equivalent redirected-input handling lands in FastFlowLM.
 
+### 0003-remove-configured-runtime-paths.patch
+Removes compile-time install and xclbin prefixes from `flm.exe`, together with
+their obsolete runtime fallback branches. FastFlowLM already checks explicit
+environment variables and paths relative to its executable.
+
+**Why:** configured prefixes embed the build checkout in the Windows executable,
+which makes wheel provenance host-specific and defeats strict relocation checks.
+
+**Remove when:** FastFlowLM no longer compiles configured source/install paths
+into release executables upstream.
+
 ## patches/iron-ops/
 
 ### 0001-xrt-free-host-stack.patch

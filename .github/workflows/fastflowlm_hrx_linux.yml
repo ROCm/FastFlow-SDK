@@ -101,6 +101,7 @@ jobs:
         run: |
           .venv/bin/python dev.py doctor fastflowlm
           .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
+          .venv/bin/python -m unittest discover -s tests/wheels -p 'test_*.py'
 
       - name: Build HRX
         run: .venv/bin/python dev.py build hrx --fresh
