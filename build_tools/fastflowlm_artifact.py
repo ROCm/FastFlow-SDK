@@ -310,6 +310,57 @@ def _windows_pe_dependency_graph(bundle: Path) -> dict[str, list[str]]:
     return graph
 
 
+_MSVC_REDISTRIBUTABLE_RE = re.compile(
+    r"^(?:concrt|msvcp|vcomp|vcruntime)\d[^/\\]*\.dll$",
+    re.IGNORECASE,
+)
+
+
+def _copy_windows_redistributable_closure(bundle: Path) -> None:
+    """Copies imported MSVC/OpenMP runtimes from the VS redistributable tree."""
+    redist_root_value = os.environ.get("VCToolsRedistDir")
+    redist_root = Path(redist_root_value) if redist_root_value else None
+    candidates: dict[str, Path] | None = None
+    queue = sorted([*(bundle / "bin").glob("*.exe"), *(bundle / "bin").glob("*.dll")])
+    bundled = {path.name.casefold() for path in queue}
+    while queue:
+        binary = queue.pop(0)
+        for needed in pe_imports(binary):
+            normalized = needed.casefold()
+            if normalized in bundled or not _MSVC_REDISTRIBUTABLE_RE.fullmatch(needed):
+                continue
+            if redist_root is None or not redist_root.is_dir():
+                raise RuntimeError(
+                    f"{binary.name} imports {needed}, but VCToolsRedistDir does not "
+                    "identify a Visual Studio redistributable tree"
+                )
+            if candidates is None:
+                candidates = {}
+                x64_dlls = (
+                    path for path in redist_root.rglob("*.dll")
+                    if "x64" in {part.casefold() for part in path.parts}
+                )
+                for path in sorted(
+                    x64_dlls,
+                    key=lambda item: (
+                        "spectre" in {part.casefold() for part in item.parts},
+                        len(item.parts),
+                        str(item).casefold(),
+                    ),
+                ):
+                    candidates.setdefault(path.name.casefold(), path)
+            source = candidates.get(normalized)
+            if source is None:
+                raise RuntimeError(
+                    f"{binary.name} imports {needed}, but it was not found under "
+                    f"VCToolsRedistDir={redist_root}"
+                )
+            destination = bundle / "bin" / needed
+            _copy_checked(source, destination)
+            bundled.add(normalized)
+            queue.append(destination)
+
+
 def _vcpkg_dependencies_and_licenses(root: Path, bundle: Path,
                                      vcpkg_root: Path) -> dict[str, object]:
     packages = _parse_control_file(vcpkg_root.parent / "vcpkg" / "status")
@@ -385,8 +436,10 @@ def _vcpkg_dependencies_and_licenses(root: Path, bundle: Path,
         path.name.lower() for path in (root / "projects" / "FastFlowLM" / "src" / "lib").glob("*.dll")
     }
     project_dlls.update({"flm.exe", "hrx.dll"})
-    microsoft_runtime = sorted(name for name in bundle_dlls
-                               if re.match(r"^(msvcp|vcruntime|concrt|ucrtbase)", name))
+    microsoft_runtime = sorted(
+        name for name in bundle_dlls
+        if re.match(r"^(msvcp|vcruntime|concrt|ucrtbase|vcomp)", name)
+    )
     notice = bundle / "licenses" / "Microsoft-Visual-Cpp-Runtime-NOTICE.txt"
     if microsoft_runtime:
         notice.write_text(
@@ -775,6 +828,7 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
     binary_dependencies = None
     if os.name == "nt":
         _copy_checked(hrx_install / "bin" / "hrx.dll", bundle / "bin" / "hrx.dll")
+        _copy_windows_redistributable_closure(bundle)
         binary_dependencies = _windows_pe_dependency_graph(bundle)
     else:
         hrx_libraries = sorted((hrx_install / "lib").glob("libhrx.so*"))

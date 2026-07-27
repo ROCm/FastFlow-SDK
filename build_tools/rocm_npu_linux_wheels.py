@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import zipfile
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 from build_tools.fastflowlm_artifact import (
@@ -40,6 +43,8 @@ from build_tools.rocm_npu_wheel_common import (
 
 
 LINUX_WHEEL_TAG = "py3-none-manylinux_2_28_x86_64"
+FASTFLOWLM_LINUX_WHEEL_TAG = "py3-none-linux_x86_64"
+AUDITWHEEL_API_VERSION = "6.7.0"
 
 
 def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
@@ -52,6 +57,69 @@ def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
             f"rocm-npu Linux wheels require an x86-64 host, got {machine}"
         )
     return LINUX_WHEEL_TAG
+
+
+def fastflowlm_wheel_tag(
+    system: str | None = None, machine: str | None = None
+) -> str:
+    wheel_tag(system, machine)
+    return FASTFLOWLM_LINUX_WHEEL_TAG
+
+
+def auditwheel_policy(wheel: Path) -> str:
+    """Returns auditwheel's structured overall policy for a wheel."""
+    try:
+        installed_version = distribution_version("auditwheel")
+    except PackageNotFoundError as error:
+        raise RuntimeError(
+            f"auditwheel {AUDITWHEEL_API_VERSION} is required to audit Linux wheels"
+        ) from error
+    if installed_version != AUDITWHEEL_API_VERSION:
+        raise RuntimeError(
+            "unsupported auditwheel structured API version: "
+            f"{installed_version}; expected {AUDITWHEEL_API_VERSION}"
+        )
+    from auditwheel.error import NonPlatformWheelError, WheelToolsError
+    from auditwheel.wheel_abi import analyze_wheel_abi
+    from auditwheel.wheeltools import get_wheel_architecture, get_wheel_libc
+
+    try:
+        architecture = get_wheel_architecture(wheel.name)
+    except (WheelToolsError, NonPlatformWheelError):
+        architecture = None
+    try:
+        libc = get_wheel_libc(wheel.name)
+    except WheelToolsError:
+        libc = None
+    wheel_info = analyze_wheel_abi(
+        libc,
+        architecture,
+        wheel,
+        frozenset(),
+        disable_isa_ext_check=False,
+        allow_graft=False,
+    )
+    return wheel_info.overall_policy.name
+
+
+def validate_auditwheel_policy(distribution: str, policy: str) -> str:
+    """Checks auditwheel's structured policy against the claimed wheel policy."""
+    if distribution == RUNTIME_DISTRIBUTION:
+        manylinux = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", policy)
+        if not manylinux or tuple(map(int, manylinux.groups())) > (2, 28):
+            raise RuntimeError(
+                f"{distribution} is not manylinux_2_28 compatible: {policy}"
+            )
+    elif distribution == FASTFLOWLM_DISTRIBUTION:
+        if policy != "linux_x86_64" and not re.fullmatch(
+            r"manylinux_\d+_\d+_x86_64", policy
+        ):
+            raise RuntimeError(
+                f"{distribution} has an unexpected auditwheel policy: {policy}"
+            )
+    else:
+        raise RuntimeError(f"unexpected Linux wheel distribution: {distribution}")
+    return policy
 
 
 def _write_runtime_module(package_root: Path) -> None:
@@ -183,6 +251,35 @@ def _print_soname(patchelf: str, path: Path) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def _copy_hrx_soname(source_bundle: Path, runtime_root: Path) -> str:
+    """Copies only the runtime SONAME, omitting linker and version aliases."""
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        raise RuntimeError("patchelf is required to prepare Linux rocm-npu wheels")
+    libraries = sorted((source_bundle / "lib").glob("libhrx.so*"))
+    if not libraries:
+        raise RuntimeError(
+            f"staged runtime bundle contains no libhrx.so* under "
+            f"{source_bundle / 'lib'}"
+        )
+    sonames = {
+        soname for library in libraries
+        if (soname := _print_soname(patchelf, library))
+    }
+    if len(sonames) != 1:
+        raise RuntimeError(
+            "staged HRX libraries must expose exactly one ELF SONAME, found: "
+            + ", ".join(sorted(sonames))
+        )
+    soname = next(iter(sonames))
+    source = next(
+        (library for library in libraries if library.name == soname),
+        libraries[0],
+    )
+    _copy_file(source, runtime_root / "lib" / soname)
+    return soname
 
 
 def _print_needed(patchelf: str, path: Path) -> list[str]:
@@ -349,11 +446,7 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     fastflowlm_root.mkdir(parents=True)
 
     _write_runtime_module(runtime_root)
-    hrx_libraries = sorted((source_bundle / "lib").glob("libhrx.so*"))
-    if not hrx_libraries:
-        raise RuntimeError(f"staged runtime bundle contains no libhrx.so* under {source_bundle / 'lib'}")
-    for library in hrx_libraries:
-        _copy_file(library, runtime_root / "lib" / library.name)
+    _copy_hrx_soname(source_bundle, runtime_root)
     runtime_license_names = _copy_runtime_native_closure(source_bundle, runtime_root)
 
     _write_fastflowlm_module(fastflowlm_root)
@@ -389,15 +482,17 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         "platform": source_manifest.get("platform", {}),
         "sources": source_manifest.get("sources", {}),
         "patches": source_manifest.get("patches", []),
+        "dependencies": source_manifest.get("dependencies", {}),
+        "toolchain": source_manifest.get("toolchain", {}),
         "source_artifact": source_manifest.get("artifact"),
         "source_product": source_manifest.get("product"),
-        "wheel_tag": wheel_tag(),
         "strip": strip_report,
     }
     _write_package_manifest(runtime_root, {
         **common_manifest,
         "product": RUNTIME_DISTRIBUTION,
         "artifact": runtime_artifact_name(),
+        "wheel_tag": wheel_tag(),
         "binary_dependencies": {
             name: needed for name, needed in binary_dependencies.items()
             if name.startswith(f"{RUNTIME_PACKAGE}/")
@@ -407,6 +502,7 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         **common_manifest,
         "product": FASTFLOWLM_DISTRIBUTION,
         "artifact": fastflowlm_artifact_name(),
+        "wheel_tag": fastflowlm_wheel_tag(),
         "requires": [f"{RUNTIME_DISTRIBUTION} =={version}"],
         "binary_dependencies": {
             name: needed for name, needed in binary_dependencies.items()
@@ -455,6 +551,7 @@ def build_runtime_fastflowlm_wheels(source_bundle: Path, stage_directory: Path,
         version,
         output_directory,
         summary="ROCm NPU FastFlowLM runtime assets",
+        tag=fastflowlm_wheel_tag(),
         requires=(f"{RUNTIME_DISTRIBUTION} =={version}",),
         console_scripts={"flm": f"{FASTFLOWLM_PACKAGE}:main"},
     )

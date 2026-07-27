@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, tag, or commit to build; defaults to the triggering ref
+        description: Branch, tag, or commit to validate; publication requires main history
         required: false
         default: ""
       package_version:
@@ -47,11 +47,29 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.ref_name }}
+          fetch-depth: 0
 
       - name: Freeze source ref to commit
         id: source
         shell: bash
         run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Require reviewed main history
+        if: ${{ inputs.publish_target == 'github-prerelease' }}
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/heads/main ]]; then
+            echo "Release workflow must be dispatched from main, got ${GITHUB_REF}" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${SOURCE_SHA}" origin/main; then
+            echo "Release source ${SOURCE_SHA} is not reviewed main history" >&2
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -77,6 +95,35 @@ jobs:
   linux_wheels:
     name: Build and validate Linux wheels
     needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/fastflowlm_hrx_linux.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Linux wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+
+  windows_wheels:
+    name: Build and validate Windows wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/fastflowlm_hrx_windows.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Windows wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+
+  linux_publish_wheels:
+    name: Build, validate, and attest Linux wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
     uses: ./.github/workflows/fastflowlm_hrx_linux.yml
     permissions:
       contents: read
@@ -84,14 +131,15 @@ jobs:
       id-token: write
       attestations: write
     with:
-      name: Linux wheel release validation
+      name: Linux wheel prerelease
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
-      attest_wheels: ${{ inputs.publish_target == 'github-prerelease' }}
+      attest_wheels: true
 
-  windows_wheels:
-    name: Build and validate Windows wheels
+  windows_publish_wheels:
+    name: Build, validate, and attest Windows wheels
     needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
     uses: ./.github/workflows/fastflowlm_hrx_windows.yml
     permissions:
       contents: read
@@ -99,10 +147,10 @@ jobs:
       id-token: write
       attestations: write
     with:
-      name: Windows wheel release validation
+      name: Windows wheel prerelease
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
-      attest_wheels: ${{ inputs.publish_target == 'github-prerelease' }}
+      attest_wheels: true
 
   collect:
     name: Collect release artifacts
@@ -110,6 +158,25 @@ jobs:
       - prepare
       - linux_wheels
       - windows_wheels
+      - linux_publish_wheels
+      - windows_publish_wheels
+    if: >-
+      ${{
+        always() &&
+        needs.prepare.result == 'success' &&
+        (
+          (
+            inputs.publish_target == 'none' &&
+            needs.linux_wheels.result == 'success' &&
+            needs.windows_wheels.result == 'success'
+          ) ||
+          (
+            inputs.publish_target == 'github-prerelease' &&
+            needs.linux_publish_wheels.result == 'success' &&
+            needs.windows_publish_wheels.result == 'success'
+          )
+        )
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -161,6 +228,7 @@ jobs:
             --source-ref "${ROCM_NPU_RELEASE_REF}" \
             --source-sha "${ROCM_NPU_SOURCE_SHA}" \
             --expected-wheel-tag py3-none-manylinux_2_28_x86_64 \
+            --expected-wheel-tag py3-none-linux_x86_64 \
             --expected-wheel-tag py3-none-win_amd64
 
       - name: Resolve FastFlowLM runtime dependency for both platforms
@@ -169,14 +237,22 @@ jobs:
           ROCM_NPU_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
-          for platform in manylinux_2_28_x86_64 win_amd64; do
+          for platform in linux windows; do
             target="release-install-${platform}"
+            if [[ "${platform}" == linux ]]; then
+              platform_args=(
+                --platform linux_x86_64
+                --platform manylinux_2_28_x86_64
+              )
+            else
+              platform_args=(--platform win_amd64)
+            fi
             python -m pip install \
               --disable-pip-version-check \
               --no-index \
               --find-links release \
               --only-binary=:all: \
-              --platform "${platform}" \
+              "${platform_args[@]}" \
               --target "${target}" \
               "rocm-npu-fastflowlm==${ROCM_NPU_PACKAGE_VERSION}"
             ROCM_NPU_INSTALL_TARGET="${target}" python - <<'PY'

@@ -14,6 +14,7 @@ from build_tools.rocm_npu_windows_wheels import (
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
+    _copy_microsoft_runtime_notice,
     _write_runtime_module,
     stage_wheel_products,
 )
@@ -47,6 +48,8 @@ class RocmNpuWheelNativeTest(unittest.TestCase):
                 path.write_text(contents, encoding="utf-8")
             manifest = {
                 "schema_version": 1,
+                "sources": {"FastFlowLM": {"revision": "abc123"}},
+                "toolchain": {"cmake": "cmake version 4.0"},
                 "dependencies": {
                     "provider": "vcpkg",
                     "runtime_file_packages": {
@@ -99,6 +102,40 @@ class RocmNpuWheelNativeTest(unittest.TestCase):
             self.assertTrue((fastflowlm / "bin" / "flm.exe").is_file())
             self.assertTrue(
                 (fastflowlm / "share" / "flm" / "xclbins" / "kernel.xclbin").is_file()
+            )
+            runtime_manifest = json.loads(
+                (runtime / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(runtime_manifest["dependencies"], manifest["dependencies"])
+            self.assertEqual(runtime_manifest["toolchain"], manifest["toolchain"])
+
+    def test_microsoft_runtime_notice_follows_shipped_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "bundle"
+            notice = (
+                source / "licenses" / "Microsoft-Visual-Cpp-Runtime-NOTICE.txt"
+            )
+            notice.parent.mkdir(parents=True)
+            notice.write_text("Microsoft runtime terms\n", encoding="utf-8")
+            package = root / RUNTIME_PACKAGE
+            self._write_pe(package / "bin" / "msvcp140.dll")
+            manifest = {
+                "dependencies": {
+                    "provider": "vcpkg",
+                    "microsoft_runtime_files": ["msvcp140.dll"],
+                }
+            }
+
+            _copy_microsoft_runtime_notice(source, manifest, package)
+
+            self.assertEqual(
+                (
+                    package
+                    / "licenses"
+                    / "Microsoft-Visual-Cpp-Runtime-NOTICE.txt"
+                ).read_text(encoding="utf-8"),
+                "Microsoft runtime terms\n",
             )
 
     def test_generated_runtime_keeps_dll_directory_and_library_alive(self):

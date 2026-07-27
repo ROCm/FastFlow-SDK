@@ -115,6 +115,7 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
                 root,
                 version,
                 wheel_tag="py3-none-manylinux_2_28_x86_64",
+                fastflowlm_wheel_tag="py3-none-linux_x86_64",
                 output_directory=root / "dist" / "linux",
             )
 
@@ -128,6 +129,7 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
                 source_sha="abc123",
                 expected_wheel_tags=(
                     "py3-none-manylinux_2_28_x86_64",
+                    "py3-none-linux_x86_64",
                     "py3-none-win_amd64",
                 ),
                 github_run_id="42",
@@ -161,6 +163,7 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
                 artifact_tags,
                 {
                     "py3-none-manylinux_2_28_x86_64",
+                    "py3-none-linux_x86_64",
                     "py3-none-win_amd64",
                 },
             )
@@ -172,7 +175,10 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
                 index = (simple / distribution / "index.html").read_text(
                     encoding="utf-8"
                 )
-                self.assertIn("manylinux_2_28_x86_64", index)
+                if distribution == RUNTIME_DISTRIBUTION:
+                    self.assertIn("manylinux_2_28_x86_64", index)
+                else:
+                    self.assertIn("py3-none-linux_x86_64", index)
                 self.assertIn("win_amd64", index)
                 self.assertEqual(index.count("<a href="), 2)
             checksum_names = {
@@ -237,6 +243,7 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
                 root / "dist",
                 summary="extra",
                 tag="py3-none-win_amd64",
+                license_expression="MIT",
             )
 
             with self.assertRaisesRegex(
@@ -304,6 +311,7 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
         *,
         runtime_requirement: str | None = None,
         wheel_tag: str = "py3-none-win_amd64",
+        fastflowlm_wheel_tag: str | None = None,
         output_directory: Path | None = None,
     ) -> None:
         output_directory = output_directory or root / "dist"
@@ -321,7 +329,7 @@ class RocmNpuWheelReleaseTest(unittest.TestCase):
             version,
             output_directory,
             summary="fastflowlm",
-            tag=wheel_tag,
+            tag=fastflowlm_wheel_tag or wheel_tag,
             requires=(f"{RUNTIME_DISTRIBUTION} =={runtime_requirement or version}",),
             console_scripts={"flm": f"{FASTFLOWLM_PACKAGE}:main"},
         )

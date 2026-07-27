@@ -150,6 +150,15 @@ def _copy_release_wheel(wheel: Path, output_directory: Path) -> dict[str, object
 def _find_release_wheels(
     wheel_directory: Path, expected_wheel_tags: tuple[str, ...]
 ) -> list[Path]:
+    def release_platform(tag: str) -> str:
+        if tag.endswith("win_amd64"):
+            return "windows-x86_64"
+        if tag.endswith("_x86_64") and (
+            "manylinux_" in tag or tag.endswith("-linux_x86_64")
+        ):
+            return "linux-x86_64"
+        return tag
+
     expected_tags = set(expected_wheel_tags)
     wheels: dict[tuple[str, str], Path] = {}
     unexpected = []
@@ -165,11 +174,12 @@ def _find_release_wheels(
                 f"one expected tag: {expected_wheel_tags}"
             )
         platform_tag = next(iter(matched_tags), "")
-        key = (distribution, platform_tag)
+        platform = release_platform(platform_tag)
+        key = (distribution, platform)
         if key in wheels:
             raise RuntimeError(
                 f"release wheel set contains duplicate {distribution} wheels "
-                f"for tag {platform_tag or '<unspecified>'}"
+                f"for platform {platform or '<unspecified>'}"
             )
         wheels[key] = wheel
     if unexpected:
@@ -178,14 +188,19 @@ def _find_release_wheels(
             + "\n  ".join(unexpected)
         )
 
-    tags = expected_wheel_tags or ("",)
+    platforms = {
+        release_platform(tag) for tag in (expected_wheel_tags or ("",))
+    }
     expected_keys = {
-        (distribution, tag) for distribution in RELEASE_DISTRIBUTIONS for tag in tags
+        (distribution, platform)
+        for distribution in RELEASE_DISTRIBUTIONS
+        for platform in platforms
     }
     missing = sorted(expected_keys.difference(wheels))
     if missing:
         details = ", ".join(
-            f"{distribution}[{tag or 'unspecified'}]" for distribution, tag in missing
+            f"{distribution}[{platform or 'unspecified'}]"
+            for distribution, platform in missing
         )
         raise RuntimeError(f"release wheel set is incomplete; missing {details}")
     return [wheels[key] for key in sorted(expected_keys)]

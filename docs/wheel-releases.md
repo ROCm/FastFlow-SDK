@@ -55,6 +55,11 @@ version. FastFlowLM requires the runtime wheel at exactly that version. Never
 replace or reuse a published version; produce a new development or release
 candidate version instead.
 
+The Linux runtime wheel is tagged `manylinux_2_28_x86_64` because its complete
+native closure satisfies that policy. The FastFlowLM wheel is conservatively
+tagged `linux_x86_64`: it resolves `libhrx.so.0` from the separately installed
+runtime wheel, while manylinux policy evaluates each wheel independently.
+
 The unified workflow builds Linux and Windows wheels in parallel from one
 immutable source commit, completes the platform-specific NPU validation, and
 publishes all four wheels under the platform-neutral `rocm-npu-v<version>` tag.
@@ -70,12 +75,26 @@ uploads a temporary Actions artifact. With
 prerelease after both builds, metadata checks, dependency resolution, and all
 NPU validations succeed.
 
-The workflow resolves the requested branch or tag once and passes its immutable
-commit SHA through build, NPU validation, manifest generation, attestation, and
-publication. The human-readable source ref remains in the release metadata.
+The workflow resolves the requested ref once and passes its immutable commit
+SHA through build, NPU validation, manifest generation, and release assembly.
+The human-readable source ref remains in the release metadata. Validation-only
+runs may be dispatched from a pull-request branch and have read-only
+permissions; they do not request an OIDC token or create attestations.
+Publication runs must be dispatched from `main`, and the resolved source commit
+must be an ancestor of `origin/main`. Only those publication builds receive
+attestation permissions.
 `SHA256SUMS` covers only the flat, top-level files uploaded as GitHub Release
 assets. The nested PEP 503 `simple/` index remains available in the complete
 Actions artifact, and its wheel links carry their own SHA-256 fragments.
+
+Each wheel uses Core Metadata 2.4 with an SPDX license expression and copies
+all applicable license and notice files under `.dist-info/licenses/`. It also
+contains a CycloneDX 1.6 SBOM under `.dist-info/sboms/`; the SBOM and the
+package-local manifest retain source, dependency, toolchain, binary-closure,
+and per-file provenance for the shipped product. Tests validate each SBOM
+against the official CycloneDX 1.6 schema and require its file hashes to match
+the package manifest and wheel `RECORD`. The FastFlowLM SBOM also records its
+exact runtime-wheel dependency.
 
 After publication, validate GitHub's expanded-assets page end to end
 from clean Linux and Windows environments:

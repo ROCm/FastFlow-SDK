@@ -32,7 +32,7 @@ from build_tools.rocm_npu_wheel_common import (
     _copy_license_as,
     _copy_relative_file,
     _copy_relative_tree,
-    _dependency_license_packages,
+    _dependency_license_packages as _dependency_license_packages,
     _write_file,
     _write_package_manifest,
 )
@@ -232,6 +232,36 @@ def _copy_windows_fastflowlm_payload(source_bundle: Path, fastflowlm_root: Path,
             _copy_file(source, fastflowlm_root / "bin" / source.name)
 
 
+def _copy_microsoft_runtime_notice(
+    source_bundle: Path,
+    source_manifest: dict[str, object],
+    package_root: Path,
+) -> None:
+    dependencies = source_manifest.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return
+    vcpkg = (
+        dependencies.get("vcpkg")
+        if dependencies.get("provider") == "vcpkg+system"
+        else dependencies
+    )
+    if not isinstance(vcpkg, dict):
+        return
+    runtime_files = vcpkg.get("microsoft_runtime_files")
+    if not isinstance(runtime_files, list):
+        return
+    shipped_names = {
+        path.name.casefold() for path in package_root.rglob("*") if path.is_file()
+    }
+    if not any(str(name).casefold() in shipped_names for name in runtime_files):
+        return
+    _copy_license(
+        source_bundle,
+        "licenses/Microsoft-Visual-Cpp-Runtime-NOTICE.txt",
+        package_root,
+    )
+
+
 def _verify_windows_products(package_roots: list[Path]) -> dict[str, list[str]]:
     package_files = {
         package_root: {path.name.lower() for path in _pe_files(package_root)}
@@ -299,6 +329,8 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     fastflowlm_names = {path.name for path in fastflowlm_root.rglob("*") if path.is_file()}
     _copy_dependency_licenses(source_bundle, source_manifest, runtime_root, runtime_names)
     _copy_dependency_licenses(source_bundle, source_manifest, fastflowlm_root, fastflowlm_names)
+    _copy_microsoft_runtime_notice(source_bundle, source_manifest, runtime_root)
+    _copy_microsoft_runtime_notice(source_bundle, source_manifest, fastflowlm_root)
 
     binary_dependencies = _verify_windows_products(
         [runtime_root, fastflowlm_root])
@@ -309,6 +341,8 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         "platform": source_manifest.get("platform", {}),
         "sources": source_manifest.get("sources", {}),
         "patches": source_manifest.get("patches", []),
+        "dependencies": source_manifest.get("dependencies", {}),
+        "toolchain": source_manifest.get("toolchain", {}),
         "source_artifact": source_manifest.get("artifact"),
         "source_product": source_manifest.get("product"),
         "wheel_tag": wheel_tag(),

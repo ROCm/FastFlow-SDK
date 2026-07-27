@@ -20,6 +20,7 @@ from build_tools.fastflowlm_artifact import (
     _linux_package_owner_candidates,
     _is_linux_system_runtime,
     _system_license_destination,
+    _copy_windows_redistributable_closure,
     pe_imports,
     create_archive,
     directory_state,
@@ -304,6 +305,32 @@ class FastFlowLMArtifactTest(unittest.TestCase):
         executable = Path(os.environ["SystemRoot"]) / "System32" / "where.exe"
         imports = pe_imports(executable)
         self.assertIn("kernel32.dll", imports)
+
+    def test_windows_redistributable_closure_copies_openmp_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / "bundle"
+            executable = bundle / "bin" / "flm.exe"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"MZfake")
+            redist = root / "redist"
+            vcomp = redist / "x64" / "Microsoft.VC143.OpenMP" / "vcomp140.dll"
+            vcomp.parent.mkdir(parents=True)
+            vcomp.write_bytes(b"MZruntime")
+
+            with mock.patch.dict(
+                os.environ, {"VCToolsRedistDir": str(redist)}
+            ), mock.patch(
+                "build_tools.fastflowlm_artifact.pe_imports",
+                side_effect=lambda path: (
+                    ["vcomp140.dll"] if Path(path).name == "flm.exe" else []
+                ),
+            ):
+                _copy_windows_redistributable_closure(bundle)
+
+            self.assertEqual(
+                (bundle / "bin" / "vcomp140.dll").read_bytes(), b"MZruntime"
+            )
 
     def test_source_policy_enforces_component_pins_and_clean_staging(self):
         root = Path(__file__).resolve().parents[2]

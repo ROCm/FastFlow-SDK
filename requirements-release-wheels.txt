@@ -5,4 +5,6 @@
 #   uv pip compile requirements-release-wheels.txt --generate-hashes --universal \
 #     --python-version 3.12 \
 #     --output-file requirements-release-wheels.lock
+cyclonedx-python-lib==11.11.0
+jsonschema==4.26.0
 twine==6.2.0
