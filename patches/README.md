@@ -18,21 +18,19 @@ CI-only scaffolding belongs in `tests/` here, not inside a patch.
 
 Never hand-edit hunk bodies or `@@` headers: the line counts must agree with the
 body, and a malformed hunk only fails later, at `git apply` time. Regenerate the
-patch instead, from the submodule's pinned commit. To edit `0003`, commit the
-patches that precede it so `git diff --cached` yields `0003` alone:
+patch instead, from the submodule's pinned commit. To edit a patch that applies on
+top of earlier ones (e.g. `0004`), apply the preceding patches first so
+`git diff` yields the one you are editing alone:
 
 ```bash
 cd projects/iron-tools
-git checkout -f <pin> && git clean -fdx     # -x: patch-created files are gitignored
-git apply ../../patches/iron-tools/0001-*.patch
-git add -A -f && git commit -qm base        # everything 0003 applies on top of
+git checkout -f <pin> && git clean -fdx     # -x also clears gitignored build output
 git apply ../../patches/iron-tools/000[12]-*.patch
-# ...edit files...
-git add -A -f
-git diff --cached > ../../patches/iron-tools/0003-add-hrx-iron-path.patch
+# ...edit the files 0004 touches...
+git diff -- <files 0004 touches> > ../../patches/iron-tools/0004-hostruntime-cleanup.patch
 ```
 
-`git add -f` is required: several files these patches create are gitignored
+Use `git add -f` if a patch you are (re)creating adds a file that is gitignored
 upstream. Then verify against the pin with `git apply --check` and
 `git apply --reverse --check` — `dev.py` uses the reverse check to decide a patch
 is already applied, so a patch that does not reverse cleanly breaks `setup`.
@@ -128,38 +126,21 @@ Python support DLLs.
 
 ## patches/iron-tools/
 
-### 0003-add-hrx-iron-path.patch
-Adds an HRX host-runtime to mlir-aie's IRON path so a design can run on the NPU
-through the hrx amdxdna HAL (`libhrx.so` or `hrx.dll`) instead of XRT —
-`python/utils/hostruntime/hrxruntime/` (the `IRON_RUNTIME=hrx` runtime using
-HRX's public executable-builder API),
-`runtime_lib/test_lib/hrx_test_wrapper.h`, and a `vector_scalar_add` HRX testbench
-(`test_chain_hrx.py` / `test_runlist_hrx.cpp`). Drives `dev.py test-npu`.
-
-Ported from Abhishek Varma's `avarma_add_hrx` branch of mlir-aie (the upstream-able
-reference integration), scoped to our pin (`git diff <our-pin>..avarma_add_hrx` over the
-16 touched files). **Remove when** this lands upstream in mlir-aie.
-
-The hrxruntime binds HRX by symbol, so it tracks the hrx pin: `hrx_buffer_map_persistent`
-became `hrx_buffer_map_with_mode(buffer, mode, flags, offset, size, ptr)`. A removed symbol
-surfaces as an import-time loader error; `dev.py verify-npu-prereqs` reports the
-resolved installed library and its native dependency failure directly.
-
 ### 0001-eudsl-for-amd-llvm-23.patch
-Edits two files in the submodule (upstream `Xilinx/mlir-aie`):
+Edits one file in the submodule (upstream `Xilinx/mlir-aie`):
 1. `python/requirements.txt`: bumps the pinned `eudsl-python-extras` to the
    `manifests/versions.toml [eudsl]` version, and repoints its `-f` find-links from
    `https://llvm.github.io/eudsl` to the local prefetch cache (`../../../.cache/find-links`)
    so `vendor_eudsl.py` never lists the remote.
-2. `utils/mlir_aie_wheels/vendor_eudsl.py`: adds `--no-build-isolation` to its
-   `pip download`, so the sdist's metadata build uses the venv's build deps instead
-   of fetching them.
+
+(The former second hunk — `--no-build-isolation` in `vendor_eudsl.py` — is now upstream
+in mlir-aie's `install_eudsl`, so this patch is `requirements.txt` only.)
 
 Combined with `dev.py` setting `PIP_FIND_LINKS` (absolute cache) + `PIP_NO_INDEX=1`
 for the iron-tools build, eudsl vendoring is **network-free** (resolved from the
 sha256-verified prefetched sdist).
 
-**Why:** mlir-aie pins eudsl `0.1.0.20260418` — correct for mlir-aie's *intended*
+**Why:** mlir-aie pins eudsl `0.1.0.20260520` — correct for mlir-aie's *intended*
 LLVM. We build mlir-aie's Python bindings against **ROCm amd-llvm 23**, whose
 nanobind rejects eudsl 04-18's `ScalarValue` re-init path (`Value(OpResult)`),
 breaking IRON design generation. A newer eudsl (`0.1.0.20260629`) fixes that and
@@ -172,8 +153,8 @@ then, also worth upstreaming to mlir-aie as a build-against-newer-LLVM compatibi
 
 ### 0002-windows-clang-cl.patch
 Lets the submodule build under **clang-cl** (the Windows toolchain; see the
-`[hrx_xclbinutil]` note in `manifests/versions.toml` for why not `cl`). Four files,
-two root causes.
+`[iron_tools]` note in `manifests/versions.toml`, which also covers why the vendored
+hrx-xclbinutil needs clang-cl and not `cl`). Four files, two root causes.
 
 **A. MSVC-style drivers default C++ exceptions OFF, and clang-cl makes `throw` a hard
 error** (`cl` only warns, C4530). GCC/Clang enable exceptions by default, so every

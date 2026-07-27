@@ -8,16 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ABI_PATH = (
-    ROOT
-    / "projects"
-    / "iron-tools"
-    / "python"
-    / "utils"
-    / "hostruntime"
-    / "hrxruntime"
-    / "abi.py"
-)
+ABI_PATH = ROOT / "tests" / "npu" / "hrx_api.py"
 SPEC = importlib.util.spec_from_file_location("iron_hrx_abi", ABI_PATH)
 abi = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(abi)
@@ -38,7 +29,7 @@ class HrxAmdxdnaAbiTest(unittest.TestCase):
     def test_builder_populates_records_and_retains_storage(self):
         xclbin = b"xclbin-bytes"
         transaction = b"transaction-bytes"
-        description = abi.make_amdxdna_executable_description(
+        description = abi.AmdxdnaExecutableDescription(
             xclbin, transaction, "MLIR_AIE"
         )
 
@@ -67,11 +58,11 @@ class HrxAmdxdnaAbiTest(unittest.TestCase):
 
     def test_builder_rejects_empty_borrowed_data(self):
         with self.assertRaises(ValueError):
-            abi.make_amdxdna_executable_description(b"", b"txn", "MLIR_AIE")
+            abi.AmdxdnaExecutableDescription(b"", b"txn", "MLIR_AIE")
         with self.assertRaises(ValueError):
-            abi.make_amdxdna_executable_description(b"xclbin", b"", "MLIR_AIE")
+            abi.AmdxdnaExecutableDescription(b"xclbin", b"", "MLIR_AIE")
         with self.assertRaises(ValueError):
-            abi.make_amdxdna_executable_description(b"xclbin", b"txn", "")
+            abi.AmdxdnaExecutableDescription(b"xclbin", b"txn", "")
 
 
 if __name__ == "__main__":

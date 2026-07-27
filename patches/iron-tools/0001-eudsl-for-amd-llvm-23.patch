@@ -1,26 +1,13 @@
 diff --git a/python/requirements.txt b/python/requirements.txt
-index 0c63c566..251d2ce8 100644
+index 40dc87fec54..dc77da220de 100644
 --- a/python/requirements.txt
 +++ b/python/requirements.txt
-@@ -4,6 +4,6 @@ numpy>=2.4.6,<3.0; python_version >= "3.11"
+@@ -5,6 +5,6 @@ numpy>=2.5.1,<3.0; python_version >= "3.12"
  rich
  ml_dtypes>=0.5.4
  cloudpickle # required by eudsl when it is vendored instead of installed
 --f https://llvm.github.io/eudsl
--eudsl-python-extras==0.1.0.20260418.906+a736a7d \
+-eudsl-python-extras==0.1.0.20260520.827+af15e49 \
 +-f ../../../.cache/find-links
 +eudsl-python-extras==0.1.0.20260629.149+b27b3ae \
    --config-settings=EUDSL_PYTHON_EXTRAS_HOST_PACKAGE_PREFIX=aie
-\ No newline at end of file
-diff --git a/utils/mlir_aie_wheels/vendor_eudsl.py b/utils/mlir_aie_wheels/vendor_eudsl.py
-index ce437eb7..5b9f95e7 100644
---- a/utils/mlir_aie_wheels/vendor_eudsl.py
-+++ b/utils/mlir_aie_wheels/vendor_eudsl.py
-@@ -90,6 +90,7 @@ def install_eudsl(req_file, target_dir):
-             "--no-binary",
-             "eudsl-python-extras",
-             "--no-cache-dir",
-+            "--no-build-isolation",
-             "-f",
-             find_links,
-             "-d",

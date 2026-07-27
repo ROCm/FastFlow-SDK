@@ -270,11 +270,16 @@ def _ccache_flags():
 #   mlir-python-sources
 #   FileCheck, not, count  iron-tools' lit suites name these as DEPENDS
 #   llvm-config            queried by downstream cmake
+#   llvm-objcopy           iron-tools' top-level CMakeLists FATAL_ERRORs at configure time
+#                          if this is missing from LLVM_TOOLS_BINARY_DIR, and installs it
+#                          into its own bin/ (the IRON JIT external-kernel path uses
+#                          `llvm-objcopy --redefine-sym` on AIEngine-ELF objects that GNU
+#                          binutils objcopy can't parse).
 LLVM_BUILD_TARGETS = [
     "llvm-libraries", "mlir-libraries", "llvm-headers", "mlir-headers",
     "llvm-tblgen", "mlir-tblgen", "mlir-linalg-ods-yaml-gen", "mlir-pdll",
     "MLIRPythonModules", "mlir-python-sources",
-    "FileCheck", "not", "count", "llvm-config",
+    "FileCheck", "not", "count", "llvm-config", "llvm-objcopy",
 ]
 
 
@@ -390,10 +395,20 @@ def cmd_build_iron_tools(args):
 
 
 def cmd_build_hrx_xclbinutil(args):
-    d = PROJ / "hrx-xclbinutil"
+    # xclbinutil is vendored inside mlir-aie (the iron-tools submodule) at
+    # third_party/hrx-xclbinutil.
+    d = PROJ / "iron-tools" / "third_party" / "hrx-xclbinutil"
+    if not (d / "CMakeLists.txt").exists():
+        sys.exit("missing hrx-xclbinutil (vendored in mlir-aie); run: "
+                 "python dev.py submodules iron-tools  (recursive init pulls "
+                 "projects/iron-tools/third_party/hrx-xclbinutil)")
     sh([cmake_bin(), "-G", "Ninja", "-B", cmake_path(d / "bld"), "-S", cmake_path(d),
         "-DCMAKE_BUILD_TYPE=Release", *_ccache_flags()], env=cmake_env())
-    sh([cmake_bin(), "--build", cmake_path(d / "bld"), "--target", "hrx-xclbinutil",
+    # Build the tool plus the pdi_transform_test helper: the vendored tree's ctest
+    # smoke (dev.py smoke) runs both `smoke` and `pdi_transform`, and the latter needs
+    # its test executable present or ctest reports it "Not Run".
+    sh([cmake_bin(), "--build", cmake_path(d / "bld"),
+        "--target", "hrx-xclbinutil", "pdi_transform_test",
         "-j", NPROC], env=cmake_env())
     # expose as `xclbinutil` for aiecc.py
     tb = ROOT / "tools-bin"; tb.mkdir(exist_ok=True)
@@ -876,7 +891,7 @@ def cmd_smoke(args):
       - iron-tools: aie-opt reports its version and parses a trivial NPU device.
     Cheaper than the full e2e, which additionally builds a design through Peano."""
     rc = 0
-    xbld = PROJ / "hrx-xclbinutil" / "bld"
+    xbld = PROJ / "iron-tools" / "third_party" / "hrx-xclbinutil" / "bld"
     if (xbld / "CMakeCache.txt").exists():
         print("== hrx-xclbinutil smoke (ctest) ==")
         rc |= subprocess.run(["ctest", "--test-dir", str(xbld), "--output-on-failure"],
@@ -1018,10 +1033,11 @@ def cmd_submodules(args):
 
     --reset restores tracked files (`update --force`). --clean additionally removes
     untracked and ignored files from the named submodules: actions/checkout cleans the
-    repo root but not submodule work trees, so on a reused self-hosted runner a
-    previously patched tree survives, and the files patch 0003 creates are gitignored --
-    a leftover copy makes `git apply` fail with "already exists". `-x` is what removes
-    them, so `clean -fd` is not enough. Nested submodules carry a .git and are skipped.
+    repo root but not submodule work trees, so on a reused self-hosted runner a stale
+    tree survives -- e.g. gitignored build output (iron-tools builds the vendored
+    third_party/hrx-xclbinutil into its own tree) that a plain reset leaves behind.
+    `-x` is what removes ignored files, so `clean -fd` is not enough. Nested submodules
+    carry a .git and are skipped.
 
     --shallow (--depth 1 --jobs 4) is always safe here and is the single biggest win:
     llvm-project alone carries >4 GB of history, and nothing reads it. Patches apply to
@@ -1475,6 +1491,16 @@ def _stage_compiler_product():
     _stage(xclbinutil, product / relative)
     required_tools.append(relative.as_posix())
 
+    # The IRON JIT external-kernel path renames symbols in Peano objects via
+    # `llvm-objcopy --redefine-sym` (config.objcopy_path() prefers <root>/bin/llvm-objcopy
+    # and only falls back to PATH, which GNU binutils objcopy fails on for AIEngine ELFs).
+    # iron-tools installs it into its bin/ (aie-tools component), so ship it from the
+    # install tree — the relocated product must not depend on a system llvm-objcopy.
+    objcopy = _tool(it / "bin" / "llvm-objcopy")
+    relative = Path("bin") / objcopy.name
+    _stage(objcopy, product / relative)
+    required_tools.append(relative.as_posix())
+
     installed_python = it / "python"
     if not installed_python.is_dir():
         raise RuntimeError(f"missing from iron-tools install: {installed_python}")
@@ -1517,11 +1543,6 @@ def _stage_compiler_product():
     license_sources = (
         (ROOT / "LICENSE", "rocm-npu-staging-LICENSE"),
         (PROJ / "iron-tools" / "LICENSE", "iron-tools-LICENSE"),
-        # hrx-xclbinutil declares Apache-2.0 in its checked-in CMakeLists.txt,
-        # but its trimmed source checkout does not carry a standalone LICENSE.
-        # Stage this repository's identical Apache-2.0 terms under the
-        # component-specific name so the product remains license-complete.
-        (ROOT / "LICENSE", "hrx-xclbinutil-LICENSE"),
         (PROJ / "llvm-project" / "llvm" / "LICENSE.TXT", "llvm-LICENSE.txt"),
         (
             PROJ / "iron-tools" / "third_party" / "aie_api" / "LICENSE",
@@ -1553,7 +1574,8 @@ def _stage_compiler_product():
             "rocm-npu-staging": git_source_state(ROOT),
             "llvm-project": git_source_state(PROJ / "llvm-project"),
             "iron-tools": git_source_state(PROJ / "iron-tools"),
-            "hrx-xclbinutil": git_source_state(PROJ / "hrx-xclbinutil"),
+            "hrx-xclbinutil": git_source_state(
+                PROJ / "iron-tools" / "third_party" / "hrx-xclbinutil"),
         },
         "dependencies": {
             "requirements": [
@@ -2777,8 +2799,8 @@ def cmd_test_npu(args):
     design and dispatch it once through the hrx HAL, checking the result. That single
     ERT_START_NPU dispatch is what the compiler emits; it is the gate.
 
-    --chain instead runs patch 0003's chained testbench, which dispatches the same
-    kernel several times through one recorded runlist. On Linux driver/firmware
+    --chain instead runs the HRX chained testbench (shipped upstream in mlir-aie),
+    which dispatches the same kernel several times through one recorded runlist. On Linux driver/firmware
     stacks known not to handle parent ERT_CMD_CHAIN submissions, hrx now detects the
     stack and falls back to serial dispatch. Chaining remains an hrx runlist feature
     rather than compiler output, so it is opt-in and does not gate CI.
@@ -2788,8 +2810,8 @@ def cmd_test_npu(args):
     ddir = PROJ / "iron-tools" / "programming_examples" / "basic" / design
     if not ddir.is_dir():
         sys.exit(f"{design}: no such design under programming_examples/basic")
-    # The hrx IRON host-runtime is added by patch 0003 and registered in the built
-    # package by its python/CMakeLists.txt hunk; without both, IRON_RUNTIME=hrx raises.
+    # The hrx IRON host-runtime ships upstream in mlir-aie and is registered in the built
+    # package by its python/CMakeLists.txt; without it, IRON_RUNTIME=hrx raises.
     _require_hrx_runtime(getattr(args, "compiler_prefix", None))
 
     env = _iron_env(getattr(args, "compiler_prefix", None))
@@ -2809,7 +2831,7 @@ def cmd_test_npu(args):
 
     if getattr(args, "chain", False):
         if not (ddir / "test_chain_hrx.py").exists():
-            sys.exit(f"{design}: no chained testbench (patch 0003 only adds one for vector_scalar_add)")
+            sys.exit(f"{design}: no chained testbench (only vector_scalar_add ships one)")
         testbench = [venv_py(), "test_chain_hrx.py"]
     else:
         testbench = [venv_py(), ROOT / "tests" / "npu" / "single_dispatch.py"]
@@ -2830,7 +2852,7 @@ def _require_hrx_runtime(compiler_prefix=None):
     if not (python_root / "aie" / "utils" / "hostruntime" / "hrxruntime"
             / "discovery.py").exists():
         sys.exit("hrxruntime missing from the built aie package — "
-                 "is patches/iron-tools/0003 applied? (run: python dev.py fetch, then build iron-tools)")
+                 "rebuild against a current iron-tools (run: python dev.py build iron-tools)")
     if not _libhrx_path():
         library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
         sys.exit(f"{library_name} not found — run: python dev.py build hrx")

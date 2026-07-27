@@ -37,7 +37,6 @@ _PINNED_SUBMODULES = (
     ("llvm", "llvm-project"),
     ("iron_tools", "iron-tools"),
     ("hrx", "hrx"),
-    ("hrx_xclbinutil", "hrx-xclbinutil"),
     ("fastflowlm", "FastFlowLM"),
     ("iron_ops", "iron-ops"),
 )
@@ -45,7 +44,7 @@ _PINNED_SUBMODULES = (
 PIN_SECTION_TO_SUBMODULE = dict(_PINNED_SUBMODULES)
 
 _COMPILER_STACK = frozenset(
-    {"llvm-project", "iron-tools", "hrx", "hrx-xclbinutil", "iron-ops"}
+    {"llvm-project", "iron-tools", "hrx", "iron-ops"}
 )
 _FASTFLOWLM = frozenset({"hrx", "FastFlowLM"})
 

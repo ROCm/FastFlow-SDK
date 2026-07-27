@@ -1,10 +1,10 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index cae6e453..bba4c4eb 100644
+index 8089d533435..0ef89f00011 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -239,7 +239,13 @@ cmake_dependent_option(AIECC_LINK_WITH_XCHESSCC
- # If we need runtime libs, then statically link them.
- set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+@@ -228,7 +228,13 @@ if(MSVC AND OPENSSL_USE_STATIC_LIBS)
+   set(OPENSSL_MSVC_STATIC_RT TRUE)
+ endif()
  
 -add_flag_if_supported("-Werror=sign-compare" WERROR_SIGN_COMPARE)
 +# Not an error under an MSVC ABI (cl/clang-cl): enums whose enumerators are all
@@ -18,11 +18,11 @@ index cae6e453..bba4c4eb 100644
  
  # What happens when you have a non-void function with no return?
 diff --git a/runtime_lib/test_lib/CMakeLists.txt b/runtime_lib/test_lib/CMakeLists.txt
-index df0e4992..da9328b1 100644
+index 5ea94c6da9a..ff4479ad779 100644
 --- a/runtime_lib/test_lib/CMakeLists.txt
 +++ b/runtime_lib/test_lib/CMakeLists.txt
-@@ -68,6 +68,14 @@ if (BUILD_TEST_UTILS_LIBRARY)
-   set_target_properties(test_utils PROPERTIES PUBLIC_HEADER "test_utils.h;xrt_test_wrapper.h;cxxopts.hpp;parameter_scratchpad.h")
+@@ -45,6 +45,14 @@ if (BUILD_TEST_UTILS_LIBRARY)
+   set_target_properties(test_utils PROPERTIES PUBLIC_HEADER "test_utils.h;xrt_test_wrapper.h;hrx_test_wrapper.h;cxxopts.hpp;parameter_scratchpad.h")
    add_runtime_pic_flag(test_utils)
  
 +  # /EHsc: test_utils.h pulls in cxxopts, whose throw_or_mimic() throws. MSVC-style
@@ -37,7 +37,7 @@ index df0e4992..da9328b1 100644
    # available.  Skip XRT integration there; the core helpers (load_instr_*,
    # nearly_equal, etc.) are still usable without it.
 diff --git a/test/CppTests/CMakeLists.txt b/test/CppTests/CMakeLists.txt
-index 9dd18b52..def4e877 100644
+index 92f9c72a55e..e38973853ce 100644
 --- a/test/CppTests/CMakeLists.txt
 +++ b/test/CppTests/CMakeLists.txt
 @@ -4,6 +4,15 @@
@@ -57,10 +57,10 @@ index 9dd18b52..def4e877 100644
  
  add_executable(target_model  target_model.cpp)
 diff --git a/tools/bootgen/CMakeLists.txt b/tools/bootgen/CMakeLists.txt
-index b4b898ea..ee8a67f7 100644
+index c97b80794f8..54d0fe41c6a 100644
 --- a/tools/bootgen/CMakeLists.txt
 +++ b/tools/bootgen/CMakeLists.txt
-@@ -135,7 +135,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+@@ -174,7 +174,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
  else()
    set(bootgen_warning_ignores)
  endif()
@@ -72,8 +72,8 @@ index b4b898ea..ee8a67f7 100644
    target_compile_definitions(bootgen-lib PRIVATE YY_NO_UNISTD_H)
    # Enable correct unwind semantics on MSVC
    target_compile_options(bootgen-lib PRIVATE /EHsc)
-@@ -160,7 +163,7 @@ add_executable(bootgen ${BOOTGEN_SOURCE}/main.cpp)
- target_include_directories(bootgen PUBLIC ${BOOTGEN_SOURCE} ${OPENSSL_INCLUDE_DIR}
+@@ -207,7 +210,7 @@ set_target_properties(bootgen PROPERTIES POSITION_INDEPENDENT_CODE ON)
+ target_include_directories(bootgen PUBLIC ${bootgen_include_dirs} ${OPENSSL_INCLUDE_DIR}
    ${CMAKE_CURRENT_BINARY_DIR}/include)
  target_compile_options(bootgen PRIVATE ${bootgen_warning_ignores})
 -if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")

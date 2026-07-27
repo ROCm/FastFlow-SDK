@@ -98,7 +98,7 @@ jobs:
       # which --reset restores on its own. (-x would also delete the editable install's
       # egg-info, which `dev.py setup` puts there.)
       - name: Initialize submodules
-        run: python3 dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools iron-ops --reset --clean iron-tools --shallow
+        run: python3 dev.py submodules llvm-project hrx iron-tools iron-ops --reset --clean iron-tools --shallow
       # setup creates .venv, installs the hash-pinned requirements.lock, applies the
       # temporary patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + hash-pinned deps + prefetch)
