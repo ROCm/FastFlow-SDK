@@ -98,6 +98,10 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
             self.assertIn("if: ${{ inputs.publish_target == 'none' }}", validation)
             self.assertNotIn("id-token: write", validation)
             self.assertNotIn("attestations: write", validation)
+        publish = workflow.split("\n  publish_github_prerelease:", 1)[1]
+        self.assertIn("always() &&", publish)
+        self.assertIn("needs.prepare.result == 'success'", publish)
+        self.assertIn("needs.collect.result == 'success'", publish)
 
     def test_release_uses_neutral_public_names_and_shared_release_lock(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
