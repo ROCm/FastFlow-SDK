@@ -1716,9 +1716,11 @@ def _verify_compiler_product_inventory(product):
             f"{build_metadata[0]}")
     _assert_no_symlinks(product)
 
+    # aiecc is a native binary in bin/ (verified via required_tools below), not a
+    # Python module: upstream mlir-aie rewrote the former python/aie/compiler/aiecc/
+    # entry point as the C++ tool tools/aiecc, so there is no main.py to check here.
     required_files = [
         "python/aie/ir.py",
-        "python/aie/compiler/aiecc/main.py",
         "include/aie_api/aie.hpp",
         "aie_runtime_lib/AIE2P/vec_math.h",
         *manifest.get("required_tools", []),

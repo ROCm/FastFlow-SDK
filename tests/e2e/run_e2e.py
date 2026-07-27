@@ -186,7 +186,9 @@ def toolchain_env(xclbinutil: Path,
         raise E2EError(
             "iron-tools not built from source (run: python dev.py build iron-tools)"
         )
-    if not (aie_python / "aie" / "compiler" / "aiecc" / "main.py").exists():
+    # aiecc is a native bin/ tool now (checked above via aie-opt); the Python bindings
+    # are marked by the assembled aie package (aie/ir.py), not a python aiecc/main.py.
+    if not (aie_python / "aie" / "ir.py").exists():
         raise E2EError(
             "iron-tools python bindings not built (run: python dev.py build iron-tools)"
         )

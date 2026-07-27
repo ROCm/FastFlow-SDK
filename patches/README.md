@@ -223,3 +223,33 @@ product sets this option to `OFF`, so neither `_xrt` nor
 
 **Remove when:** upstream gates `_parameter_scratchpad` with the XRT Python
 bindings option.
+
+### 0006-eudsl-download-no-build-isolation.patch
+Adds `--no-build-isolation` to the `pip download` in `vendor_eudsl.py`'s `install_eudsl`,
+mirroring the flag already on its `pip install` step. eudsl is vendored from an sdist
+(`--no-binary`), so pip must build its metadata; by default that happens in an isolated
+env that tries to provision `setuptools>=64` from an index. The iron-tools build runs
+with `PIP_NO_INDEX=1` (see `dev.py`), so offline that env cannot find setuptools and the
+download fails. Reusing the active venv's build backend (which `requirements.txt` already
+installs `setuptools`/`wheel` into, precisely because "venvs omit setuptools") keeps the
+step network-free.
+
+**Why:** upstream added `--no-build-isolation` to the *install* step but not the *download*
+step, so the download regressed to isolated builds that break under `PIP_NO_INDEX`.
+
+**Remove when:** mlir-aie's `vendor_eudsl.py` passes `--no-build-isolation` on the download
+command upstream too.
+
+### 0007-mlir-core-type-stubs-from-build-tree.patch
+Makes the "Staging MLIR core type stubs for pyright" step in `python/CMakeLists.txt` pick
+the stub directory that actually exists: the install layout
+(`${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/`) when present,
+else the LLVM **build tree** (`${LLVM_BINARY_DIR}/tools/mlir/python/type_stubs/`).
+
+**Why:** upstream (mlir-aie #3171) copies the `.pyi` stubs only from the MLIR *install*
+prefix. This stack builds iron-tools against the LLVM **build tree** (no MLIR install), so
+`MLIR_INSTALL_PREFIX` is empty and the copy resolved to a nonexistent `/src/python/...`,
+failing the build. The stubs are generated in the build tree, just at a different path.
+
+**Remove when:** mlir-aie sources these stubs from the build tree (or this stack builds
+against an installed MLIR).

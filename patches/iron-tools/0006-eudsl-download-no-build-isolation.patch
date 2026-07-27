@@ -1,0 +1,15 @@
+diff --git a/utils/mlir_aie_wheels/vendor_eudsl.py b/utils/mlir_aie_wheels/vendor_eudsl.py
+index 1ad3d7c735b..14fb5d4051f 100644
+--- a/utils/mlir_aie_wheels/vendor_eudsl.py
++++ b/utils/mlir_aie_wheels/vendor_eudsl.py
+@@ -93,6 +93,10 @@ def install_eudsl(req_file, target_dir):
+             "--no-binary",
+             "eudsl-python-extras",
+             "--no-cache-dir",
++            # An sdist (`--no-binary`) must be built to produce metadata, which pip does
++            # in an isolated env by default. Offline (PIP_NO_INDEX), that env can't fetch
++            # setuptools>=64, so reuse the active env's build backend like install_cmd does.
++            "--no-build-isolation",
+             "-f",
+             find_links,
+             "-d",
