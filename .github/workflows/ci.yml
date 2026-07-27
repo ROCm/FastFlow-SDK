@@ -25,12 +25,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  workflow_lint:
-    name: GitHub Actions lint
+  presubmit:
+    name: Presubmit
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate Python symbol resolution
+        run: |
+          python -m pip install --quiet --disable-pip-version-check ruff==0.15.21
+          python -m ruff check --select F821 dev.py build_tools tests
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -43,7 +53,7 @@ jobs:
 
   linux:
     name: Linux
-    needs: workflow_lint
+    needs: presubmit
     uses: ./.github/workflows/build_rocm_npu_staging_linux.yml
     permissions:
       contents: read
@@ -54,7 +64,7 @@ jobs:
 
   windows:
     name: Windows
-    needs: workflow_lint
+    needs: presubmit
     uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
     permissions:
       contents: read
@@ -65,7 +75,7 @@ jobs:
 
   linux_flm:
     name: Linux FLM
-    needs: workflow_lint
+    needs: presubmit
     uses: ./.github/workflows/fastflowlm_hrx_linux.yml
     permissions:
       contents: read
@@ -75,7 +85,7 @@ jobs:
 
   windows_flm:
     name: Windows FLM
-    needs: workflow_lint
+    needs: presubmit
     uses: ./.github/workflows/fastflowlm_hrx_windows.yml
     permissions:
       contents: read

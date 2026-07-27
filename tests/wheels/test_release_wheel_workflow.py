@@ -11,9 +11,10 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
-    def test_ci_lints_workflows_before_expensive_jobs(self):
+    def test_ci_runs_presubmit_before_expensive_jobs(self):
         workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 
+        self.assertIn("presubmit:", workflow)
         self.assertIn(
             "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16", workflow
         )
@@ -21,7 +22,11 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
             "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
             workflow,
         )
-        self.assertEqual(workflow.count("needs: workflow_lint"), 4)
+        self.assertIn(
+            "ruff check --select F821 dev.py build_tools tests",
+            workflow,
+        )
+        self.assertEqual(workflow.count("needs: presubmit"), 4)
 
     def test_release_is_dispatch_only_and_reuses_both_npu_validations(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
@@ -34,14 +39,29 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
         self.assertNotIn("schedule:", workflow)
         self.assertIn("uses: ./.github/workflows/fastflowlm_hrx_linux.yml", workflow)
         self.assertIn("uses: ./.github/workflows/fastflowlm_hrx_windows.yml", workflow)
+        self.assertEqual(
+            workflow.count("uses: ./.github/workflows/fastflowlm_hrx_linux.yml"),
+            2,
+        )
+        self.assertEqual(
+            workflow.count("uses: ./.github/workflows/fastflowlm_hrx_windows.yml"),
+            2,
+        )
         self.assertIn(
             "package_version: ${{ needs.prepare.outputs.package_version }}",
             workflow,
         )
         self.assertEqual(
-            workflow.count("ref: ${{ needs.prepare.outputs.source_sha }}"), 3
+            workflow.count("ref: ${{ needs.prepare.outputs.source_sha }}"), 5
         )
         self.assertIn("source_sha: ${{ steps.source.outputs.sha }}", workflow)
+        self.assertIn("git merge-base --is-ancestor", workflow)
+        self.assertIn('"${GITHUB_REF}" != refs/heads/main', workflow)
+        self.assertIn(
+            "if: ${{ inputs.publish_target == 'github-prerelease' }}",
+            workflow,
+        )
+        self.assertIn("fetch-depth: 0", workflow)
         self.assertNotIn("--release-platform", workflow)
         self.assertIn('--publish-target "${INPUT_PUBLISH_TARGET}"', workflow)
         self.assertIn("rocm-npu-runtime-fastflowlm-linux-x86_64", workflow)
@@ -49,7 +69,10 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
         self.assertIn("python -m twine check --strict wheelhouse/*/*.whl", workflow)
         self.assertIn("python build_tools/rocm_npu_wheel_release_cli.py", workflow)
         self.assertIn("--expected-wheel-tag py3-none-manylinux_2_28_x86_64", workflow)
+        self.assertIn("--expected-wheel-tag py3-none-linux_x86_64", workflow)
         self.assertIn("--expected-wheel-tag py3-none-win_amd64", workflow)
+        self.assertIn("--platform linux_x86_64", workflow)
+        self.assertIn("--platform manylinux_2_28_x86_64", workflow)
         self.assertIn('"rocm-npu-fastflowlm==${ROCM_NPU_PACKAGE_VERSION}"', workflow)
         self.assertIn('"rocm-npu-runtime": version', workflow)
         self.assertIn(
@@ -58,15 +81,23 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
         )
         self.assertIn("commit: ${{ needs.prepare.outputs.source_sha }}", workflow)
         self.assertNotIn("needs.collect.outputs.source_sha", workflow)
-        self.assertEqual(
-            workflow.count(
-                "attest_wheels: ${{ inputs.publish_target == 'github-prerelease' }}"
-            ),
-            2,
-        )
+        self.assertEqual(workflow.count("attest_wheels: false"), 2)
+        self.assertEqual(workflow.count("attest_wheels: true"), 2)
         self.assertEqual(workflow.count("id-token: write"), 2)
         self.assertEqual(workflow.count("attestations: write"), 2)
+        self.assertIn("always() &&", workflow)
         self.assertNotIn("actions/attest-build-provenance@", workflow)
+
+        linux_validation = workflow.split("\n  linux_wheels:", 1)[1].split(
+            "\n  windows_wheels:", 1
+        )[0]
+        windows_validation = workflow.split("\n  windows_wheels:", 1)[1].split(
+            "\n  linux_publish_wheels:", 1
+        )[0]
+        for validation in (linux_validation, windows_validation):
+            self.assertIn("if: ${{ inputs.publish_target == 'none' }}", validation)
+            self.assertNotIn("id-token: write", validation)
+            self.assertNotIn("attestations: write", validation)
 
     def test_release_uses_neutral_public_names_and_shared_release_lock(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
@@ -109,7 +140,7 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
             "ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}",
             workflow,
         )
-        metadata_check = workflow.index("python -m twine check --strict")
+        metadata_check = workflow.index("-m twine check --strict")
         transitive_command = (
             "build_tools/rocm_npu_windows_wheel_cli.py verify"
             if platform == "windows"

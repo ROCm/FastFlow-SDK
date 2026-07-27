@@ -66,10 +66,14 @@ from build_tools.fastflowlm_artifact import (
 )
 from build_tools import npu_test_package
 from build_tools.rocm_npu_linux_wheels import (
+    FASTFLOWLM_LINUX_WHEEL_TAG,
     FASTFLOWLM_DISTRIBUTION,
+    LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION,
+    auditwheel_policy,
     build_runtime_fastflowlm_wheels,
     find_rocm_npu_wheels,
+    validate_auditwheel_policy,
     verify_wheels_do_not_have_text_path_references,
 )
 from build_tools.rocm_npu_wheel_common import (
@@ -1314,14 +1318,22 @@ def _python_executable_tool(name):
 def cmd_audit_fastflowlm_wheels(args):
     if IS_WINDOWS:
         sys.exit("audit-fastflowlm-wheels is Linux-only")
-    auditwheel = _python_executable_tool("auditwheel")
-    if not auditwheel:
-        sys.exit("auditwheel is required to audit Linux rocm-npu wheels")
     wheels = find_rocm_npu_wheels(Path(args.dir))
     verify_wheel_checksums(wheels)
+    expected_tags = {
+        RUNTIME_DISTRIBUTION: LINUX_WHEEL_TAG,
+        FASTFLOWLM_DISTRIBUTION: FASTFLOWLM_LINUX_WHEEL_TAG,
+    }
     for product in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
-        print(f"== auditwheel show: {wheels[product].name} ==")
-        sh([auditwheel, "show", wheels[product]])
+        print(f"== auditwheel analyze: {wheels[product].name} ==")
+        if not wheels[product].name.endswith(f"-{expected_tags[product]}.whl"):
+            raise RuntimeError(
+                f"{product} wheel does not use expected tag {expected_tags[product]}: "
+                f"{wheels[product].name}"
+            )
+        policy = auditwheel_policy(wheels[product])
+        print(f"auditwheel overall policy: {policy}")
+        validate_auditwheel_policy(product, policy)
 
 
 def _venv_python(venv_dir):

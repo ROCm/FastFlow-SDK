@@ -1,10 +1,23 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
+import csv
+import hashlib
+import io
+import json
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+try:
+    from cyclonedx.schema import SchemaVersion
+    from cyclonedx.validation.json import JsonStrictValidator
+    from packageurl import PackageURL
+except ImportError:
+    SchemaVersion = None
+    JsonStrictValidator = None
+    PackageURL = None
 
 from build_tools import rocm_npu_wheel_common
 from build_tools.rocm_npu_wheel_common import (
@@ -56,6 +69,7 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 root / "dist",
                 summary="example",
                 tag="py3-none-test_platform",
+                license_expression="MIT",
             )
             self.assertEqual(
                 wheel.name,
@@ -67,6 +81,10 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
             )
             verify_wheel_checksums({"example-package": wheel})
 
+    @unittest.skipUnless(
+        JsonStrictValidator is not None,
+        "CycloneDX validation dependencies are not installed",
+    )
     def test_wheel_metadata_record_modes_and_console_scripts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -77,6 +95,36 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
             executable = package / "bin" / "tool"
             executable.parent.mkdir()
             executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            (package / "licenses").mkdir()
+            (package / "licenses" / "LICENSE").write_text(
+                "example license\n", encoding="utf-8"
+            )
+            executable_digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+            (package / "manifest.json").write_text(
+                json.dumps({
+                    "sources": {
+                        "example": {
+                            "revision": "abc123",
+                            "dirty": False,
+                            "tracked_diff_sha256": "0" * 64,
+                        }
+                    },
+                    "toolchain": {"python": "3.12"},
+                    "dependencies": {
+                        "provider": "vcpkg",
+                        "resolved_packages": [
+                            {"package": "zlib", "version": "1.3.1"}
+                        ],
+                        "runtime_file_packages": {"tool": "zlib"},
+                    },
+                    "files": [{
+                        "path": "bin/tool",
+                        "size": executable.stat().st_size,
+                        "sha256": executable_digest,
+                    }],
+                }),
+                encoding="utf-8",
+            )
             wheel = build_wheel(
                 tree,
                 "example-package",
@@ -84,7 +132,9 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 root / "dist",
                 summary="example",
                 tag="py3-none-test_platform",
+                requires=("rocm-npu-runtime ==1.2.3",),
                 console_scripts={"example": "example_package:main"},
+                license_expression="MIT",
             )
 
             with zipfile.ZipFile(wheel) as archive:
@@ -94,19 +144,88 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 self.assertIn(f"{dist_info}/METADATA", names)
                 self.assertIn(f"{dist_info}/WHEEL", names)
                 self.assertIn(f"{dist_info}/RECORD", names)
+                self.assertIn(f"{dist_info}/licenses/LICENSE", names)
+                self.assertIn(f"{dist_info}/sboms/cyclonedx.json", names)
                 self.assertEqual(
                     archive.read(f"{dist_info}/entry_points.txt").decode("utf-8"),
                     "[console_scripts]\nexample = example_package:main\n",
                 )
                 metadata = archive.read(f"{dist_info}/METADATA").decode("utf-8")
+                self.assertIn("Metadata-Version: 2.4\n", metadata)
                 self.assertIn("Name: example-package\n", metadata)
+                self.assertIn("License-Expression: MIT\n", metadata)
+                self.assertIn("License-File: LICENSE\n", metadata)
                 self.assertIn("Description-Content-Type: text/markdown\n", metadata)
                 self.assertTrue(metadata.endswith("\n\nexample\n"))
+                sbom = json.loads(
+                    archive.read(f"{dist_info}/sboms/cyclonedx.json")
+                )
+                self.assertEqual(sbom["bomFormat"], "CycloneDX")
+                self.assertEqual(sbom["specVersion"], "1.6")
+                validation_errors = JsonStrictValidator(
+                    SchemaVersion.V1_6
+                ).validate_str(json.dumps(sbom))
+                self.assertFalse(validation_errors, validation_errors)
+                components = {
+                    component["name"]: component
+                    for component in sbom["components"]
+                }
+                self.assertIn("rocm-npu-runtime", components)
+                self.assertEqual(
+                    components["rocm-npu-runtime"]["purl"],
+                    "pkg:pypi/rocm-npu-runtime@1.2.3",
+                )
+                self.assertEqual(components["zlib"]["version"], "1.3.1")
+                self.assertEqual(
+                    components["bin/tool"]["hashes"],
+                    [{"alg": "SHA-256", "content": executable_digest}],
+                )
+                for component in sbom["components"]:
+                    if component.get("purl"):
+                        self.assertEqual(
+                            PackageURL.from_string(component["purl"]).to_string(),
+                            component["purl"],
+                        )
+                root_component = sbom["metadata"]["component"]
+                self.assertEqual(
+                    root_component["licenses"], [{"expression": "MIT"}]
+                )
+                self.assertEqual(
+                    root_component["pedigree"]["ancestors"][0]["version"],
+                    "abc123",
+                )
+                self.assertEqual(
+                    sbom["metadata"]["tools"],
+                    [{"name": "python", "version": "3.12"}],
+                )
                 wheel_metadata = archive.read(f"{dist_info}/WHEEL").decode("utf-8")
                 self.assertIn("Tag: py3-none-test_platform\n", wheel_metadata)
                 record = archive.read(f"{dist_info}/RECORD").decode("utf-8")
                 self.assertIn(f"{dist_info}/entry_points.txt,sha256=", record)
                 self.assertIn(f"{dist_info}/RECORD,,", record)
+                record_hashes = {
+                    row[0]: row[1] for row in csv.reader(io.StringIO(record))
+                }
+                manifest = json.loads(
+                    archive.read("example_package/manifest.json")
+                )
+                manifest_files = {
+                    item["path"]: item["sha256"] for item in manifest["files"]
+                }
+                sbom_files = {
+                    component["name"]: component["hashes"][0]["content"]
+                    for component in sbom["components"]
+                    if component["type"] == "file"
+                }
+                self.assertEqual(sbom_files, manifest_files)
+                for path, digest in sbom_files.items():
+                    wheel_path = f"example_package/{path}"
+                    payload = archive.read(wheel_path)
+                    self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
+                    self.assertEqual(
+                        record_hashes[wheel_path],
+                        rocm_npu_wheel_common._wheel_hash(payload),
+                    )
                 package_mode = (
                     archive.getinfo("example_package/__init__.py").external_attr >> 16
                 )
@@ -133,12 +252,14 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 root / "dist-a",
                 summary="example",
                 tag="py3-none-test_platform",
+                license_expression="MIT",
             )
             second = build_wheel(
                 *arguments,
                 root / "dist-b",
                 summary="example",
                 tag="py3-none-test_platform",
+                license_expression="MIT",
             )
             self.assertEqual(first.read_bytes(), second.read_bytes())
 
@@ -173,6 +294,7 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 root / "dist",
                 summary="example",
                 tag="py3-none-test_platform",
+                license_expression="MIT",
             )
             references = find_wheel_path_references(
                 {"example-package": wheel}, (forbidden,)
@@ -198,6 +320,7 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 root / "dist",
                 summary="example",
                 tag="py3-none-test_platform",
+                license_expression="MIT",
             )
             references = find_wheel_path_references(
                 {"example-package": wheel}, (forbidden,)

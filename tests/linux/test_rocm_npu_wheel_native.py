@@ -3,24 +3,32 @@
 
 import io
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
 import zipfile
 from contextlib import contextmanager, redirect_stdout
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest import mock
 
 import dev
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
+    FASTFLOWLM_LINUX_WHEEL_TAG,
     FASTFLOWLM_PACKAGE,
     LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
+    _copy_hrx_soname,
     _copy_runtime_native_closure,
     _patch_and_verify_linux_products,
+    auditwheel_policy,
     build_wheel,
     find_rocm_npu_wheels,
+    fastflowlm_wheel_tag,
+    validate_auditwheel_policy,
     verify_wheels_do_not_have_text_path_references,
     wheel_tag,
 )
@@ -201,8 +209,88 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
 
     def test_linux_wheel_tag(self):
         self.assertEqual(wheel_tag("Linux"), LINUX_WHEEL_TAG)
+        self.assertEqual(
+            fastflowlm_wheel_tag("Linux"), FASTFLOWLM_LINUX_WHEEL_TAG
+        )
         with self.assertRaisesRegex(RuntimeError, "x86-64"):
             wheel_tag("Linux", "arm64")
+
+    def test_auditwheel_policy_matches_product_tags(self):
+        self.assertEqual(
+            validate_auditwheel_policy(
+                RUNTIME_DISTRIBUTION,
+                "manylinux_2_27_x86_64",
+            ),
+            "manylinux_2_27_x86_64",
+        )
+        self.assertEqual(
+            validate_auditwheel_policy(
+                FASTFLOWLM_DISTRIBUTION,
+                "linux_x86_64",
+            ),
+            "linux_x86_64",
+        )
+        with self.assertRaisesRegex(RuntimeError, "not manylinux_2_28"):
+            validate_auditwheel_policy(
+                RUNTIME_DISTRIBUTION,
+                "linux_x86_64",
+            )
+
+    def test_auditwheel_policy_uses_pinned_structured_analyzer(self):
+        wheel = Path("example-py3-none-linux_x86_64.whl")
+        analyze = mock.Mock(
+            return_value=types.SimpleNamespace(
+                overall_policy=types.SimpleNamespace(name="linux_x86_64")
+            )
+        )
+        auditwheel = types.ModuleType("auditwheel")
+        auditwheel.__path__ = []
+        error = types.ModuleType("auditwheel.error")
+        error.NonPlatformWheelError = type("NonPlatformWheelError", (Exception,), {})
+        error.WheelToolsError = type("WheelToolsError", (Exception,), {})
+        wheel_abi = types.ModuleType("auditwheel.wheel_abi")
+        wheel_abi.analyze_wheel_abi = analyze
+        wheeltools = types.ModuleType("auditwheel.wheeltools")
+        wheeltools.get_wheel_architecture = mock.Mock(return_value="x86_64")
+        wheeltools.get_wheel_libc = mock.Mock(return_value="glibc")
+        modules = {
+            "auditwheel": auditwheel,
+            "auditwheel.error": error,
+            "auditwheel.wheel_abi": wheel_abi,
+            "auditwheel.wheeltools": wheeltools,
+        }
+        with (
+            mock.patch(
+                "build_tools.rocm_npu_linux_wheels.distribution_version",
+                return_value="6.7.0",
+            ),
+            mock.patch.dict(sys.modules, modules),
+        ):
+            self.assertEqual(auditwheel_policy(wheel), "linux_x86_64")
+        analyze.assert_called_once_with(
+            "glibc",
+            "x86_64",
+            wheel,
+            frozenset(),
+            disable_isa_ext_check=False,
+            allow_graft=False,
+        )
+
+    def test_auditwheel_policy_rejects_unpinned_api_version(self):
+        with mock.patch(
+            "build_tools.rocm_npu_linux_wheels.distribution_version",
+            return_value="6.8.0",
+        ):
+            with self.assertRaisesRegex(RuntimeError, "expected 6.7.0"):
+                auditwheel_policy(Path("example.whl"))
+
+    def test_auditwheel_policy_requires_pinned_tool(self):
+        with mock.patch(
+            "build_tools.rocm_npu_linux_wheels.distribution_version",
+            side_effect=PackageNotFoundError,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "auditwheel 6.7.0 is required"):
+                auditwheel_policy(Path("example.whl"))
 
     def test_runtime_native_closure_copies_needed_bundle_libraries(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -219,6 +307,30 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
                 _copy_runtime_native_closure(source, runtime_root)
 
             self.assertTrue((runtime_root / "lib" / "libdep.so").is_file())
+
+    def test_runtime_stages_only_hrx_soname(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "bundle"
+            runtime_root = root / RUNTIME_PACKAGE
+            for name in ("libhrx.so", "libhrx.so.0", "libhrx.so.0.1.0"):
+                self._write_elf(source / "lib" / name)
+
+            with self._mock_patchelf(
+                needed={},
+                sonames={
+                    "libhrx.so": "libhrx.so.0",
+                    "libhrx.so.0": "libhrx.so.0",
+                    "libhrx.so.0.1.0": "libhrx.so.0",
+                },
+            ):
+                soname = _copy_hrx_soname(source, runtime_root)
+
+            self.assertEqual(soname, "libhrx.so.0")
+            self.assertEqual(
+                [path.name for path in (runtime_root / "lib").iterdir()],
+                ["libhrx.so.0"],
+            )
 
     def test_runtime_native_closure_copies_needed_soname_filename(self):
         with tempfile.TemporaryDirectory() as temporary:
