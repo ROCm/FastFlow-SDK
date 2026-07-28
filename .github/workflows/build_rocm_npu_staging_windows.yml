@@ -24,6 +24,15 @@ on:
       name:
         type: string
         default: Build + smoke (Windows)
+      ref:
+        type: string
+        default: ""
+      package_version:
+        type: string
+        default: ""
+      attest_wheels:
+        type: boolean
+        default: false
       run_npu_e2e:
         description: Package the compiler stack and validate it on the Windows NPU runner
         type: boolean
@@ -45,7 +54,11 @@ jobs:
     # (CCACHE_DIR) speeds up warm runs but the first run is long.
     timeout-minutes: 180
     env:
+      RNS_BUILD_IMAGE: azure-windows-scale-rocm
+      ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
       PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
+      UV_CACHE_DIR: ${{ github.workspace }}/build/caches/uv
+      UV_LINK_MODE: hardlink
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
       CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
       # RNS_LLVM_BUILD_DIR is set in a step below (the `runner` context is not allowed in
@@ -65,6 +78,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Adjust git config
         run: git config --global --add safe.directory "$PWD"
@@ -76,6 +91,18 @@ jobs:
           # Newer 3.12 patch releases have no Windows assets in the official
           # actions/python-versions manifest.
           python-version: '3.12.10'
+
+      - name: Restore Python package caches
+        id: python-packages
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ github.workspace }}/build/caches/uv
+            ${{ github.workspace }}/build/caches/pip
+          key: python-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements*.txt', 'requirements*.lock', 'dev.py') }}
+          restore-keys: |
+            python-packages-v2-${{ runner.os }}-${{ runner.arch }}-
+            uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
       # VS Developer environment: puts the MSVC headers/libs + toolchain on PATH.
       # F821 only: see the Linux workflow. `python`, not `python3`: this job uses the
@@ -131,13 +158,24 @@ jobs:
 
       # vcpkg's openssl port builds from source (~3 min); persist its binary-package store so
       # that happens once. `files` provider, not `x-gha`: x-gha uses the legacy cache API.
-      - name: Cache vcpkg binary packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Identify vcpkg cache inputs
+        id: vcpkg-cache
+        run: |
+          root="$(dirname "$(command -v vcpkg)")"
+          revision="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+          if [ -z "$revision" ]; then
+            revision="$(vcpkg version | sha256sum | cut -d' ' -f1)"
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Restore vcpkg binary packages
+        id: vcpkg-binaries
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.vcpkg-bincache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake') }}-${{ github.run_id }}
+          key: vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache.outputs.revision }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake') }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake') }}-
+            vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-
 
       # OpenSSL (bootgen's find_package(OpenSSL)) is the ONLY system library dep — the
       # Linux job likewise installs just openssl-devel. Use vcpkg (not choco's openssl,
@@ -150,6 +188,9 @@ jobs:
         run: |
           set -eu
           mkdir -p .vcpkg-bincache
+          # The runner exports the VS-bundled root even though PATH selects C:/vcpkg.
+          # Do not leak that conflicting root into vcpkg's CMake subprocesses.
+          unset VCPKG_ROOT
           triplets="$PWD/.github/vcpkg/triplets"
           if command -v cygpath >/dev/null; then triplets="$(cygpath -m "$triplets")"; fi
 
@@ -173,6 +214,16 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if install_openssl; then ok=1; break; fi
+            buildtrees="$(dirname "$(command -v vcpkg)")/buildtrees"
+            for log in \
+              "$buildtrees"/detect_compiler/config-x64-windows-out.log \
+              "$buildtrees"/detect_compiler/config-x64-windows-rel-*.log; do
+              if [ -f "$log" ]; then
+                echo "::group::$(basename "$log")"
+                tail -n 200 "$log"
+                echo "::endgroup::"
+              fi
+            done
             echo "::warning::vcpkg install openssl failed (attempt $attempt/3) — retrying"
             sleep 20
           done
@@ -186,6 +237,15 @@ jobs:
           if command -v cygpath >/dev/null; then root="$(cygpath -m "$root")"; fi   # -> C:/vcpkg (CMake-friendly)
           echo "OPENSSL_ROOT_DIR=$root/installed/x64-windows-rel" >> "$GITHUB_ENV"
 
+      # Persist immediately: later compiler/test failures must not discard the expensive
+      # OpenSSL build and force the next retry to install Perl and rebuild it again.
+      - name: Save vcpkg binary packages
+        if: success() && steps.vcpkg-binaries.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-bincache
+          key: ${{ steps.vcpkg-binaries.outputs.cache-primary-key }}
+
       # Same submodules as Linux. --depth 1 (fetch only the pinned commit, not full
       # history — big for the LLVM monorepo) + --jobs (clone in parallel): cloning is
       # markedly slower on this runner than on Linux. The build needs the pinned trees,
@@ -198,8 +258,19 @@ jobs:
       - name: Setup (venv + pinned deps + prefetch)
         run: python dev.py setup
 
+      # Preserve dependency downloads even when a later compiler build or test fails.
+      - name: Save Python package caches
+        if: success() && steps.python-packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ github.workspace }}/build/caches/uv
+            ${{ github.workspace }}/build/caches/pip
+          key: ${{ steps.python-packages.outputs.cache-primary-key }}
+
       # Gate: system prereqs (clang-cl/git) + submodule-pins-vs-manifest + patches
-      # + prefetch + version drift.
+      # + prefetch + version drift. Setup already applies the patches; the Linux
+      # build performs the one full ordered replay for the shared source pins.
       - name: Doctor
         run: .venv/Scripts/python.exe dev.py doctor compiler-stack
 
@@ -224,12 +295,13 @@ jobs:
         run: choco install --no-progress -y ccache
 
       # Ephemeral runners: without this CCACHE_DIR is empty every job and the hit rate is 0.
-      - name: Cache ccache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/build/caches/ccache
-          key: ccache-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-
+          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py') }}
+          restore-keys: ccache-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
         run: |
@@ -239,6 +311,15 @@ jobs:
       - name: Build amdxdna HAL conformance binaries
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/Scripts/python.exe dev.py build hrx-cts
+
+      # Save immediately after compilation so later smoke, packaging, or wheel failures
+      # cannot discard a warm LLVM/MLIR object cache.
+      - name: Save ccache
+        if: success() && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/caches/ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       # Print the hit rate rather than assume it. Watch this one: LLVM builds under
       # $RUNNER_TEMP (MAX_PATH workaround), so if that path is not stable across jobs the -I
@@ -275,6 +356,66 @@ jobs:
       # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).
       - name: iron-ops (build operators off-device)
         run: .venv/Scripts/python.exe dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-windows-x86_64
+
+      - name: Set up Python 3.13 for compiler wheel validation
+        id: python313
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up Python 3.14 for compiler wheel validation
+        id: python314
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Package compiler wheels
+        run: |
+          .venv/Scripts/python.exe dev.py package-compiler-wheels \
+            --product build/rocm-npu-compiler-product \
+            --binding build/iron-tools-install/python
+
+      - name: Verify compiler wheels on Python 3.12
+        run: |
+          .venv/Scripts/python.exe dev.py verify-compiler-wheels \
+            --venv build/compiler-wheel-verify-312 \
+            --consumer-root build/compiler-wheel-consumer
+
+      - name: Verify compiler wheels on Python 3.13
+        run: |
+          "${{ steps.python313.outputs.python-path }}" dev.py verify-compiler-wheels \
+            --venv build/compiler-wheel-verify-313 \
+            --consumer-root build/compiler-wheel-consumer \
+            --consumer-only \
+            --consumer-e2e
+
+      - name: Verify compiler wheels on Python 3.14
+        run: |
+          "${{ steps.python314.outputs.python-path }}" dev.py verify-compiler-wheels \
+            --venv build/compiler-wheel-verify-314 \
+            --consumer-root build/compiler-wheel-consumer \
+            --consumer-only \
+            --consumer-e2e
+
+      - name: Attest Windows compiler wheels
+        if: ${{ inputs.attest_wheels }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: build/artifacts/rocm_npu_compiler_{core,bindings}*.whl
+
+      - name: Upload compiler wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-compiler-wheels-windows-x86_64
+          path: |
+            build/artifacts/rocm_npu_compiler_core*.whl
+            build/artifacts/rocm_npu_compiler_core*.whl.sha256
+            build/artifacts/rocm_npu_compiler_bindings*.whl
+            build/artifacts/rocm_npu_compiler_bindings*.whl.sha256
+            build/artifacts/rocm-npu-compiler-wheel-report.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
       - name: Package run prerequisites
         if: ${{ inputs.run_npu_e2e }}

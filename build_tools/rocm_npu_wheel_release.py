@@ -15,7 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from build_tools.fastflowlm_artifact import reset_directory
+from build_tools.rocm_npu_compiler_wheels import (
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
+)
 from build_tools.rocm_npu_wheel_common import (
+    COMPILER_BINDINGS_DISTRIBUTION,
+    COMPILER_CORE_DISTRIBUTION,
+    COMPILER_DISTRIBUTION,
+    COMPILER_STABLE_ABI_MINOR,
     FASTFLOWLM_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
     sha256_file,
@@ -29,6 +36,9 @@ RELEASE_POLICY_PATH = ROOT / "release.toml"
 RELEASE_DISTRIBUTIONS = (
     RUNTIME_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
+    COMPILER_DISTRIBUTION,
+    COMPILER_CORE_DISTRIBUTION,
+    COMPILER_BINDINGS_DISTRIBUTION,
 )
 
 
@@ -48,6 +58,53 @@ def release_base_version(policy_path: Path = RELEASE_POLICY_PATH) -> str:
             f"{policy_path}"
         )
     return validate_version(base_version)
+
+
+def compiler_python_versions(
+    policy_path: Path = RELEASE_POLICY_PATH,
+) -> tuple[str, ...]:
+    with Path(policy_path).open("rb") as policy_file:
+        policy = tomllib.load(policy_file)
+    release = policy.get("wheel_release")
+    versions = release.get("compiler_python_versions") if isinstance(release, dict) else None
+    if not isinstance(versions, list) or not versions:
+        raise RuntimeError(
+            "wheel_release.compiler_python_versions must be a non-empty list: "
+            f"{policy_path}"
+        )
+    result = tuple(str(version) for version in versions)
+    if (
+        len(set(result)) != len(result)
+        or any(not re.fullmatch(r"3\.[0-9]+", version) for version in result)
+    ):
+        raise RuntimeError(
+            f"wheel_release.compiler_python_versions is invalid: {policy_path}"
+        )
+    return result
+
+
+def compiler_python_stable_abi(
+    policy_path: Path = RELEASE_POLICY_PATH,
+) -> str:
+    with Path(policy_path).open("rb") as policy_file:
+        policy = tomllib.load(policy_file)
+    release = policy.get("wheel_release")
+    stable_abi = (
+        release.get("compiler_python_stable_abi")
+        if isinstance(release, dict)
+        else None
+    )
+    if (
+        not isinstance(stable_abi, str)
+        or not re.fullmatch(r"3\.[0-9]+", stable_abi)
+        or stable_abi != COMPILER_STABLE_ABI_MINOR
+        or stable_abi not in compiler_python_versions(policy_path)
+    ):
+        raise RuntimeError(
+            "wheel_release.compiler_python_stable_abi must match the pinned "
+            f"MLIR stable ABI floor {COMPILER_STABLE_ABI_MINOR}: {policy_path}"
+        )
+    return stable_abi
 
 
 def validate_release_version(
@@ -150,15 +207,21 @@ def _copy_release_wheel(wheel: Path, output_directory: Path) -> dict[str, object
 def _find_release_wheels(
     wheel_directory: Path, expected_wheel_tags: tuple[str, ...]
 ) -> list[Path]:
-    def release_platform(tag: str) -> str:
-        if tag.endswith("win_amd64"):
-            return "windows-x86_64"
-        if tag.endswith("_x86_64") and (
-            "manylinux_" in tag or tag.endswith("-linux_x86_64")
-        ):
-            return "linux-x86_64"
-        return tag
-
+    if not expected_wheel_tags:
+        tags = {
+            "py3-none-any",
+            "py3-none-manylinux_2_28_x86_64",
+            "py3-none-linux_x86_64",
+            "py3-none-win_amd64",
+        }
+        abi = "cp" + compiler_python_stable_abi().replace(".", "")
+        tags.update(
+            {
+                f"{abi}-abi3-manylinux_2_28_x86_64",
+                f"{abi}-abi3-win_amd64",
+            }
+        )
+        expected_wheel_tags = tuple(sorted(tags))
     expected_tags = set(expected_wheel_tags)
     wheels: dict[tuple[str, str], Path] = {}
     unexpected = []
@@ -173,13 +236,12 @@ def _find_release_wheels(
                 f"{distribution} wheel tags {_wheel_tags(wheel)} do not include exactly "
                 f"one expected tag: {expected_wheel_tags}"
             )
-        platform_tag = next(iter(matched_tags), "")
-        platform = release_platform(platform_tag)
-        key = (distribution, platform)
+        wheel_tag = next(iter(matched_tags), "")
+        key = (distribution, wheel_tag)
         if key in wheels:
             raise RuntimeError(
                 f"release wheel set contains duplicate {distribution} wheels "
-                f"for platform {platform or '<unspecified>'}"
+                f"for tag {wheel_tag or '<unspecified>'}"
             )
         wheels[key] = wheel
     if unexpected:
@@ -188,19 +250,47 @@ def _find_release_wheels(
             + "\n  ".join(unexpected)
         )
 
-    platforms = {
-        release_platform(tag) for tag in (expected_wheel_tags or ("",))
-    }
+    manylinux = next(
+        (
+            tag for tag in expected_tags
+            if tag.startswith("py3-none-manylinux_") and tag.endswith("_x86_64")
+        ),
+        None,
+    )
+    linux = "py3-none-linux_x86_64"
+    windows = "py3-none-win_amd64"
+    required_base_tags = {"py3-none-any", linux, windows}
+    if manylinux:
+        required_base_tags.add(manylinux)
+    missing_tags = sorted(required_base_tags - expected_tags)
+    if missing_tags:
+        raise RuntimeError(
+            "release wheel expected tags omit required compiler/runtime tags: "
+            + ", ".join(missing_tags)
+        )
+    if not manylinux:
+        raise RuntimeError("release wheel expected tags omit a manylinux x86_64 tag")
     expected_keys = {
-        (distribution, platform)
-        for distribution in RELEASE_DISTRIBUTIONS
-        for platform in platforms
+        (RUNTIME_DISTRIBUTION, manylinux),
+        (RUNTIME_DISTRIBUTION, windows),
+        (FASTFLOWLM_DISTRIBUTION, linux),
+        (FASTFLOWLM_DISTRIBUTION, windows),
+        (COMPILER_DISTRIBUTION, "py3-none-any"),
+        (COMPILER_CORE_DISTRIBUTION, manylinux),
+        (COMPILER_CORE_DISTRIBUTION, windows),
     }
+    abi = "cp" + compiler_python_stable_abi().replace(".", "")
+    expected_keys.add(
+        (COMPILER_BINDINGS_DISTRIBUTION, f"{abi}-abi3-{manylinux.split('-', 2)[2]}")
+    )
+    expected_keys.add(
+        (COMPILER_BINDINGS_DISTRIBUTION, f"{abi}-abi3-win_amd64")
+    )
     missing = sorted(expected_keys.difference(wheels))
     if missing:
         details = ", ".join(
-            f"{distribution}[{platform or 'unspecified'}]"
-            for distribution, platform in missing
+            f"{distribution}[{tag or 'unspecified'}]"
+            for distribution, tag in missing
         )
         raise RuntimeError(f"release wheel set is incomplete; missing {details}")
     return [wheels[key] for key in sorted(expected_keys)]
@@ -273,7 +363,7 @@ def _write_release_checksums(release_directory: Path) -> None:
     )
 
 
-def prepare_runtime_fastflowlm_release_payload(
+def prepare_rocm_npu_release_payload(
     wheel_directory: Path,
     release_directory: Path,
     *,
@@ -310,11 +400,38 @@ def prepare_runtime_fastflowlm_release_payload(
             raise RuntimeError(
                 f"{distribution} version mismatch: {metadata['Version']} != {version}"
             )
-        if distribution == FASTFLOWLM_DISTRIBUTION:
-            requirement = f"{RUNTIME_DISTRIBUTION} =={version}"
-            if requirement not in (metadata.get_all("Requires-Dist") or []):
+        expected_requirements = {
+            FASTFLOWLM_DISTRIBUTION: {
+                f"{RUNTIME_DISTRIBUTION} =={version}",
+            },
+            COMPILER_DISTRIBUTION: {
+                f"{COMPILER_CORE_DISTRIBUTION} =={version}",
+                f"{COMPILER_BINDINGS_DISTRIBUTION} =={version}",
+            },
+            COMPILER_BINDINGS_DISTRIBUTION: {
+                f"{COMPILER_CORE_DISTRIBUTION} =={version}",
+                *COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
+            },
+            RUNTIME_DISTRIBUTION: set(),
+            COMPILER_CORE_DISTRIBUTION: set(),
+        }[distribution]
+        actual_requirements = set(metadata.get_all("Requires-Dist") or [])
+        if actual_requirements != expected_requirements:
+            raise RuntimeError(
+                f"{distribution} requirements mismatch: "
+                f"{sorted(actual_requirements)} != "
+                f"{sorted(expected_requirements)}"
+            )
+        if distribution == COMPILER_BINDINGS_DISTRIBUTION:
+            tags = _wheel_tags(wheel)
+            stable_abi = "cp" + compiler_python_stable_abi().replace(".", "")
+            if not any(
+                re.fullmatch(rf"{stable_abi}-abi3-.+", tag) for tag in tags
+            ):
                 raise RuntimeError(
-                    f"{FASTFLOWLM_DISTRIBUTION} must require {requirement}"
+                    f"{COMPILER_BINDINGS_DISTRIBUTION} must use the "
+                    f"{stable_abi}-abi3 stable ABI tag: "
+                    f"{tags}"
                 )
         artifacts.append(_copy_release_wheel(wheel, release_directory))
 
@@ -338,3 +455,7 @@ def prepare_runtime_fastflowlm_release_payload(
     _write_simple_index(release_directory, artifacts)
     _write_release_checksums(release_directory)
     return release_directory
+
+
+# Backward-compatible import for callers migrating with the expanded release.
+prepare_runtime_fastflowlm_release_payload = prepare_rocm_npu_release_payload

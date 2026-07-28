@@ -26,12 +26,22 @@ FIXED_ZIP_DATE = (2000, 1, 1, 0, 0, 0)
 PACKAGE_VERSION_ENV = "ROCM_NPU_PACKAGE_VERSION"
 RUNTIME_DISTRIBUTION = "rocm-npu-runtime"
 FASTFLOWLM_DISTRIBUTION = "rocm-npu-fastflowlm"
+COMPILER_DISTRIBUTION = "rocm-npu-compiler"
+COMPILER_CORE_DISTRIBUTION = "rocm-npu-compiler-core"
+COMPILER_BINDINGS_DISTRIBUTION = "rocm-npu-compiler-bindings"
+COMPILER_STABLE_ABI_MINOR = "3.12"
 RUNTIME_PACKAGE = "rocm_npu_runtime"
 FASTFLOWLM_PACKAGE = "rocm_npu_fastflowlm"
+COMPILER_PACKAGE = "rocm_npu_compiler"
+COMPILER_BINDINGS_PACKAGE = "rocm_npu_compiler_bindings"
 LICENSE_EXPRESSIONS = {
     RUNTIME_DISTRIBUTION: "MIT AND Apache-2.0",
     FASTFLOWLM_DISTRIBUTION:
         "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
+    COMPILER_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
+    COMPILER_CORE_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
+    COMPILER_BINDINGS_DISTRIBUTION:
+        "MIT AND (Apache-2.0 WITH LLVM-exception)",
 }
 _VERSION_RE = re.compile(
     r"^[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+|\.post[0-9]+|\.dev[0-9]+)?"
@@ -237,8 +247,11 @@ def _write_wheel_entry(
     name: str,
     data: bytes,
     mode: int = 0o100644,
+    compression_level: int = 9,
 ) -> None:
-    output.writestr(_zip_info(name, mode), data, compresslevel=9)
+    output.writestr(
+        _zip_info(name, mode), data, compresslevel=compression_level
+    )
     records.append((name, _wheel_hash(data), str(len(data))))
 
 
@@ -614,6 +627,9 @@ def build_wheel(
     requires: tuple[str, ...] = (),
     console_scripts: dict[str, str] | None = None,
     license_expression: str | None = None,
+    requires_python: str = ">=3.11",
+    root_is_purelib: bool = False,
+    compression_level: int = 9,
 ) -> Path:
     """Builds a deterministic wheel from an already staged package tree."""
     version = validate_version(version)
@@ -639,7 +655,7 @@ def build_wheel(
         f"Name: {distribution}",
         f"Version: {version}",
         f"Summary: {summary}",
-        "Requires-Python: >=3.11",
+        f"Requires-Python: {requires_python}",
         f"License-Expression: {license_expression}",
         "Description-Content-Type: text/markdown",
     ]
@@ -651,7 +667,7 @@ def build_wheel(
             [
                 "Wheel-Version: 1.0",
                 "Generator: rocm-npu-wheel-common",
-                "Root-Is-Purelib: false",
+                f"Root-Is-Purelib: {str(root_is_purelib).lower()}",
                 f"Tag: {tag}",
             ]
         )
@@ -661,7 +677,10 @@ def build_wheel(
     wheel = output_directory / wheel_filename(distribution, version, tag)
     records: list[tuple[str, str, str]] = []
     with zipfile.ZipFile(
-        wheel, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+        wheel,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=compression_level,
     ) as output:
         for path in sorted(item for item in tree_root.rglob("*") if item.is_file()):
             relative = path.relative_to(tree_root).as_posix()
@@ -672,10 +691,15 @@ def build_wheel(
                 relative,
                 path.read_bytes(),
                 _wheel_file_mode(relative, mode),
+                compression_level,
             )
         for name, data in license_entries:
             _write_wheel_entry(
-                output, records, f"{dist_info}/licenses/{name}", data
+                output,
+                records,
+                f"{dist_info}/licenses/{name}",
+                data,
+                compression_level=compression_level,
             )
         _write_wheel_entry(
             output,
@@ -688,9 +712,14 @@ def build_wheel(
                 package_manifest,
                 license_expression,
             ),
+            compression_level=compression_level,
         )
         _write_wheel_entry(
-            output, records, f"{dist_info}/METADATA", metadata.encode("utf-8")
+            output,
+            records,
+            f"{dist_info}/METADATA",
+            metadata.encode("utf-8"),
+            compression_level=compression_level,
         )
         if console_scripts:
             entry_points = "[console_scripts]\n" + "".join(
@@ -702,13 +731,20 @@ def build_wheel(
                 records,
                 f"{dist_info}/entry_points.txt",
                 entry_points.encode("utf-8"),
+                compression_level=compression_level,
             )
         _write_wheel_entry(
-            output, records, f"{dist_info}/WHEEL", wheel_metadata.encode("utf-8")
+            output,
+            records,
+            f"{dist_info}/WHEEL",
+            wheel_metadata.encode("utf-8"),
+            compression_level=compression_level,
         )
         record_name = f"{dist_info}/RECORD"
         record = _record_csv([*records, (record_name, "", "")]).encode("utf-8")
-        output.writestr(_zip_info(record_name), record, compresslevel=9)
+        output.writestr(
+            _zip_info(record_name), record, compresslevel=compression_level
+        )
     wheel.with_name(wheel.name + ".sha256").write_text(
         f"{sha256_file(wheel)}  {wheel.name}\n", encoding="ascii"
     )

@@ -253,6 +253,7 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 summary="example",
                 tag="py3-none-test_platform",
                 license_expression="MIT",
+                compression_level=6,
             )
             second = build_wheel(
                 *arguments,
@@ -260,6 +261,7 @@ class RocmNpuWheelCommonTest(unittest.TestCase):
                 summary="example",
                 tag="py3-none-test_platform",
                 license_expression="MIT",
+                compression_level=6,
             )
             self.assertEqual(first.read_bytes(), second.read_bytes())
 

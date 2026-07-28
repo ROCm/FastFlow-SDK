@@ -16,6 +16,15 @@ on:
       name:
         type: string
         default: Build + smoke
+      ref:
+        type: string
+        default: ""
+      package_version:
+        type: string
+        default: ""
+      attest_wheels:
+        type: boolean
+        default: false
       run_npu_e2e:
         # Package the compiler stack and validate it on the Linux NPU runner.
         type: boolean
@@ -35,15 +44,28 @@ jobs:
     container:
       image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
     env:
+      RNS_BUILD_IMAGE: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
+      ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
       PIP_CACHE_DIR: ${{ github.workspace }}/build/caches/pip
+      UV_CACHE_DIR: ${{ github.workspace }}/build/caches/uv
+      UV_LINK_MODE: hardlink
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
       CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Adjust git config
         run: git config --global --add safe.directory "$PWD"
+
+      - name: Cache uv packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/caches/uv
+          key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements*.txt', 'requirements*.lock', 'dev.py') }}
+          restore-keys: uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
       # F821 only: a rebase that keeps a call and drops its definition otherwise surfaces
       # as a NameError on the NPU runner, an hour in. No style rules -- this is a
@@ -82,10 +104,14 @@ jobs:
       - name: Setup (venv + hash-pinned deps + prefetch)
         run: python3 dev.py setup
 
+      - name: Install Linux wheel audit tooling
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-packaging-linux.lock
+
       # Gate: system prereqs (clang/lld/python3-dev) + submodule-pins-vs-manifest
-      # + patches + prefetch + version drift.
+      # + patches + prefetch + version drift. This is the one full ordered patch
+      # replay; Windows uses the quick post-setup check for the same source pins.
       - name: Doctor
-        run: .venv/bin/python dev.py doctor compiler-stack
+        run: .venv/bin/python dev.py doctor compiler-stack --deep
 
       - name: Test cross-platform FastFlowLM smoke driver
         run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
@@ -110,8 +136,8 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/build/caches/ccache
-          key: ccache-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-
+          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py') }}
+          restore-keys: ccache-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
         run: |
@@ -159,6 +185,74 @@ jobs:
       # later on the shared NPU runners. Which operators: tests/iron-ops/suite.py.
       - name: iron-ops (build operators off-device)
         run: .venv/bin/python dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-linux-x86_64
+
+      # The pinned manylinux image already provides wheel-building interpreters under
+      # /opt/python. actions/setup-python does not publish builds for this container OS
+      # and fails before it can use the runner tool cache.
+      - name: Locate Python 3.13 for compiler wheel validation
+        id: python313
+        run: |
+          python_path=/opt/python/cp313-cp313/bin/python
+          test -x "${python_path}"
+          echo "python-path=${python_path}" >> "${GITHUB_OUTPUT}"
+          "${python_path}" --version
+
+      - name: Locate Python 3.14 for compiler wheel validation
+        id: python314
+        run: |
+          python_path=/opt/python/cp314-cp314/bin/python
+          test -x "${python_path}"
+          echo "python-path=${python_path}" >> "${GITHUB_OUTPUT}"
+          "${python_path}" --version
+
+      - name: Package compiler wheels
+        run: |
+          .venv/bin/python dev.py package-compiler-wheels \
+            --product build/rocm-npu-compiler-product \
+            --binding build/iron-tools-install/python
+
+      - name: Audit compiler wheel matrix
+        run: .venv/bin/python dev.py audit-compiler-wheels
+
+      - name: Verify compiler wheels on Python 3.12
+        run: |
+          .venv/bin/python dev.py verify-compiler-wheels \
+            --venv build/compiler-wheel-verify-312 \
+            --consumer-root build/compiler-wheel-consumer
+
+      - name: Verify compiler wheels on Python 3.13
+        run: |
+          "${{ steps.python313.outputs.python-path }}" dev.py verify-compiler-wheels \
+            --venv build/compiler-wheel-verify-313 \
+            --consumer-root build/compiler-wheel-consumer \
+            --consumer-only \
+            --consumer-e2e
+
+      - name: Verify compiler wheels on Python 3.14
+        run: |
+          "${{ steps.python314.outputs.python-path }}" dev.py verify-compiler-wheels \
+            --venv build/compiler-wheel-verify-314 \
+            --consumer-root build/compiler-wheel-consumer \
+            --consumer-only \
+            --consumer-e2e
+
+      - name: Attest Linux compiler wheels
+        if: ${{ inputs.attest_wheels }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: build/artifacts/rocm_npu_compiler*.whl
+
+      - name: Upload compiler wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-compiler-wheels-linux-x86_64
+          path: |
+            build/artifacts/rocm_npu_compiler*.whl
+            build/artifacts/rocm_npu_compiler*.whl.sha256
+            build/artifacts/rocm-npu-compiler-wheel-report.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
       # Package + verify live in dev.py so the logic is testable off CI and shared with
       # any other consumer; see cmd_package_npu_prereqs / cmd_verify_npu_prereqs.

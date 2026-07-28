@@ -124,6 +124,18 @@ that require XRT.
 
 **Remove when:** iron-ops avoids eager cross-operator imports upstream.
 
+## patches/llvm-project/
+
+### 0001-link-python-support-to-stable-abi.patch
+Makes MLIR's private Python support DLL link `Python3::SABIModule` when
+`MLIR_ENABLE_PYTHON_STABLE_ABI` is enabled. Upstream otherwise links
+`Python3_LIBRARY_RELEASE` unconditionally on Windows, causing
+`MLIRPythonSupport-mlir.dll` to import `python312.dll` inside an abi3 wheel.
+Non-stable builds retain the existing version-specific linkage.
+
+**Remove when:** upstream MLIR selects the stable-ABI import library for private
+Python support DLLs.
+
 ## patches/iron-tools/
 
 ### 0003-add-hrx-iron-path.patch
@@ -230,3 +242,13 @@ build actually changes.
 
 **Remove when:** upstreamed to mlir-aie. All hunks are upstreamable as-is; none is
 specific to this stack.
+
+### 0005-gate-xrt-scratchpad-binding.patch
+Makes `_parameter_scratchpad` honor `AIE_ENABLE_XRT_PYTHON_BINDINGS`. The helper
+is part of the XRT host-runtime API but upstream builds it whenever pybind11 is
+found, even when the rest of the XRT Python API is disabled. The HRX compiler
+product sets this option to `OFF`, so neither `_xrt` nor
+`_parameter_scratchpad` is built.
+
+**Remove when:** upstream gates `_parameter_scratchpad` with the XRT Python
+bindings option.

@@ -6,7 +6,8 @@
 Builds the NPU stack together (everything except llvm-aie, which comes
 from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
-  python dev.py doctor [PROFILE]      # validate compiler-stack (default), fastflowlm, or all
+  python dev.py doctor [PROFILE]      # quick validation: compiler-stack (default), fastflowlm, or all
+                                     #   --deep: replay every patch series in a temporary index
   python dev.py setup [--profile P]   # venv + python deps (incl. pip cmake/ninja) + fetch
                                      #   --iron-ops-tests: + what iron-ops' own tests need
                                      #     (torch, pytest); the NPU job only
@@ -23,6 +24,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py unpack-fastflowlm     # checksum, extract, and verify the bundle
   python dev.py package-compiler-product # relocatable rocm-npu-compiler product artifact
   python dev.py verify-compiler-product  # verify compiler product and relocation smoke
+  python dev.py package-compiler-wheels  # compiler meta/core/CPython abi3 wheels
+  python dev.py verify-compiler-wheels   # clean pip install, native closure, and e2e
   python dev.py build all             # everything above, in dependency order
   python dev.py test [DESIGN] [-- ...] # e2e build test (no NPU run); Linux + Windows
   python dev.py test-iron-ops [OP]    # build the iron-ops operators' xclbins (no NPU run)
@@ -43,7 +46,7 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, errno, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile
+import argparse, contextlib, ctypes, errno, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile, time
 from pathlib import Path
 
 from build_tools.fastflowlm_deps import (
@@ -57,6 +60,7 @@ from build_tools.fastflowlm_artifact import (
     directory_state,
     extract_archive as extract_fastflowlm_archive,
     git_source_state,
+    pe_imports,
     sha256_file,
     stage_runtime_bundle,
     validate_directory_target,
@@ -65,6 +69,23 @@ from build_tools.fastflowlm_artifact import (
     verify_bundle as verify_fastflowlm_bundle,
 )
 from build_tools import npu_test_package
+from build_tools.rocm_npu_compiler_wheels import (
+    COMPILER_BINDINGS_DISTRIBUTION,
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
+    COMPILER_CORE_DISTRIBUTION,
+    COMPILER_DISTRIBUTION,
+    _is_loadable_elf,
+    _linux_system_runtime,
+    _windows_system_runtime,
+    build_compiler_wheel_family,
+    compiler_core_shared_library_names,
+    compiler_product_report,
+    relocate_linux_compiler_rpaths,
+    verify_compiler_binding_stable_abi,
+    verify_compiler_wheel_path_references,
+    verify_linux_compiler_wheels,
+    verify_windows_compiler_wheels,
+)
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_LINUX_WHEEL_TAG,
     FASTFLOWLM_DISTRIBUTION,
@@ -77,6 +98,7 @@ from build_tools.rocm_npu_linux_wheels import (
     verify_wheels_do_not_have_text_path_references,
 )
 from build_tools.rocm_npu_wheel_common import (
+    COMPILER_PACKAGE,
     PACKAGE_VERSION_ENV,
     default_package_version,
     verify_wheel_checksums,
@@ -112,6 +134,8 @@ FASTFLOWLM_WHEEL_VENV = BUILD / "rocm-npu-wheel-venv"
 COMPILER_PRODUCT_STAGE = BUILD / "rocm-npu-compiler-product"
 COMPILER_PRODUCT_EXTRACTED = BUILD / "rocm-npu-compiler-extracted"
 COMPILER_PRODUCT_RELOCATED = BUILD / "rocm-npu-compiler-relocated"
+COMPILER_WHEEL_STAGE = BUILD / "rocm-npu-compiler-wheel-stage"
+COMPILER_WHEEL_VENV = BUILD / "rocm-npu-compiler-wheel-venv"
 NPU_TEST_PACKAGE_STAGE = BUILD / "npu-test-package"
 NPU_TEST_PACKAGE_EXTRACTED = BUILD / "npu-test-package-extracted"
 ARCHIVE_FIXED_MTIME = 946684800  # 2000-01-01T00:00:00Z
@@ -125,6 +149,7 @@ BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or NPROC
 IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and MSVC differ on Windows
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
+UV_VERSION = "0.11.33"
 _WINDOWS_BUILD_ENV = None
 
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
@@ -158,6 +183,32 @@ def sh(cmd, cwd=None, env=None, check=True):
 
 def venv_py():
     return VENV / _VBIN / f"python{_EXE}"
+
+
+def uv_bin():
+    return VENV / _VBIN / f"uv{_EXE}"
+
+
+def _python_install(python, *arguments, refresh_packages=()):
+    """Installs with the shared uv cache, with pip as a standalone fallback."""
+    uv = uv_bin()
+    if uv.is_file():
+        refresh = [
+            item
+            for package in refresh_packages
+            for item in ("--refresh-package", package)
+        ]
+        command = [uv, "pip", "install", "--python", python, *refresh, *arguments]
+    else:
+        command = [
+            python, "-m", "pip", "install",
+            "--disable-pip-version-check", "--no-compile", *arguments,
+        ]
+    env = dict(os.environ)
+    ssl_cert_file = env.get("SSL_CERT_FILE")
+    if ssl_cert_file and not Path(ssl_cert_file).is_file():
+        env.pop("SSL_CERT_FILE")
+    subprocess.run([str(item) for item in command], check=True, env=env)
 
 
 def cmake_bin():
@@ -572,28 +623,130 @@ def apply_patches(submodule_names=None):
 
 
 def _declared_patch_expected_state(component, source):
-    """Builds the expected source state from the pin and ordered patch series."""
-    BUILD.mkdir(parents=True, exist_ok=True)
-    temporary_parent = Path(tempfile.mkdtemp(
-        prefix=f"patch-state-{component}-", dir=BUILD))
-    worktree = temporary_parent / "source"
+    """Builds the expected source state without materializing another checkout."""
+    temporary_root = Path(
+        os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
+    ).resolve()
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    temporary_parent = Path(tempfile.mkdtemp(prefix="rns-patch-", dir=temporary_root))
+    index = temporary_parent / "index"
+    env = dict(os.environ, GIT_INDEX_FILE=str(index))
     try:
         subprocess.run(
-            ["git", "-C", str(source), "worktree", "add", "--quiet",
-             "--detach", str(worktree), "HEAD"], check=True)
+            ["git", "-C", str(source), "read-tree", "HEAD"],
+            check=True,
+            env=env,
+            capture_output=True,
+        )
         for patch in sorted((PATCHES / component).glob("*.patch")):
-            state, options = _patch_state(patch, worktree)
-            if state == "appliable":
+            resolved = False
+            for options in ((), ("--ignore-space-change",)):
+                reverse = subprocess.run(
+                    ["git", "-C", str(source), "apply", "--cached", "--reverse",
+                     "--check", *options, str(patch)],
+                    env=env,
+                    capture_output=True,
+                )
+                if reverse.returncode == 0:
+                    resolved = True
+                    break
+                result = subprocess.run(
+                    ["git", "-C", str(source), "apply", "--cached", "--check",
+                     *options, str(patch)],
+                    env=env,
+                    capture_output=True,
+                )
+                if result.returncode:
+                    continue
                 subprocess.run(
-                    ["git", "-C", str(worktree), "apply", *options, str(patch)],
-                    check=True)
-            elif state != "applied":
+                    ["git", "-C", str(source), "apply", "--cached",
+                     *options, str(patch)],
+                    check=True,
+                    env=env,
+                    capture_output=True,
+                )
+                resolved = True
+                break
+            if not resolved:
                 raise RuntimeError(f"declared patch does not apply: {patch}")
-        return git_source_state(worktree)
+
+        changed_output = subprocess.run(
+            ["git", "-C", str(source), "diff", "--cached", "--name-only",
+             "--diff-filter=ACDMRTUXB", "-z", "HEAD"],
+            check=True,
+            env=env,
+            capture_output=True,
+        ).stdout
+        changed_paths = sorted(
+            item.decode("utf-8", errors="surrogateescape")
+            for item in changed_output.split(b"\0") if item
+        )
+        tracked_paths = []
+        changed_files = []
+        for relative in changed_paths:
+            existed = subprocess.run(
+                ["git", "-C", str(source), "cat-file", "-e", f"HEAD:{relative}"],
+                capture_output=True,
+            ).returncode == 0
+            if existed:
+                tracked_paths.append(relative)
+            else:
+                ignored = subprocess.run(
+                    ["git", "-C", str(source), "check-ignore", "--no-index",
+                     "--quiet", "--", relative],
+                    capture_output=True,
+                ).returncode == 0
+                if ignored:
+                    continue
+
+            staged = subprocess.run(
+                ["git", "-C", str(source), "ls-files", "--stage", "-z",
+                 "--", relative],
+                check=True,
+                env=env,
+                capture_output=True,
+            ).stdout
+            record = {"path": relative.replace("\\", "/")}
+            if not staged:
+                record["deleted"] = True
+            else:
+                header = staged.split(b"\t", 1)[0].decode("ascii")
+                blob = header.split()[1]
+                data = subprocess.run(
+                    ["git", "-C", str(source), "cat-file", "blob", blob],
+                    check=True,
+                    capture_output=True,
+                ).stdout
+                record.update({
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                })
+            changed_files.append(record)
+
+        diff_command = [
+            "git", "-C", str(source), "diff", "--cached", "--binary",
+            "--no-ext-diff", "HEAD",
+        ]
+        if tracked_paths:
+            diff_command.extend(["--", *tracked_paths])
+            diff = subprocess.run(
+                diff_command, check=True, env=env, capture_output=True
+            ).stdout
+        else:
+            diff = b""
+        revision = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return {
+            "revision": revision,
+            "dirty": bool(changed_files),
+            "tracked_diff_sha256": hashlib.sha256(diff).hexdigest(),
+            "changed_files": changed_files,
+        }
     finally:
-        subprocess.run(
-            ["git", "-C", str(source), "worktree", "remove", "--force",
-             str(worktree)], capture_output=True)
         shutil.rmtree(temporary_parent, ignore_errors=True)
 
 
@@ -683,15 +836,41 @@ def check_pins(submodules):
     return problems
 
 
+def _doctor_patch_states(component, source, patches, *, deep=False):
+    """Checks a patch series, replaying it only when requested or ambiguous."""
+    states = [_patch_state(patch, source)[0] for patch in patches]
+    if not deep and "broken" not in states:
+        return states
+    try:
+        exact = git_source_state(source) == _declared_patch_expected_state(
+            component, source)
+        series_valid = True
+    except RuntimeError:
+        exact = False
+        series_valid = False
+    if exact:
+        return ["applied"] * len(patches)
+    if series_valid:
+        return ["pending" if state == "broken" else state for state in states]
+    return states
+
+
 def cmd_doctor(args):
     """Check the selected build path's prerequisites, pins, patches, and fetches."""
+    started = time.perf_counter()
     profile = args.profile
+    deep = getattr(args, "deep", False)
     selected_submodules = DOCTOR_PROFILE_SUBMODULES[profile]
-    print(f"doctor profile: {profile}")
+    mode = "deep" if deep else "quick"
+    print(f"doctor profile: {profile} ({mode} patch validation)")
     print("system prerequisites (cmake + ninja come from pip via `setup`):")
+    section_started = time.perf_counter()
     system_ok, missing = check_system(profile)
+    print(f"  [time] system prerequisites: {time.perf_counter() - section_started:.2f}s")
     print("\nsubmodule pins vs manifests/versions.toml:")
+    section_started = time.perf_counter()
     pin_bad = check_pins(selected_submodules)
+    print(f"  [time] submodule pins: {time.perf_counter() - section_started:.2f}s")
     print("\ntemporary submodule patches (patches/, applied by builds or `dev.py fetch`):")
     patch_bad = []
     for sub_dir in sorted(p for p in PATCHES.iterdir() if p.is_dir()) if PATCHES.exists() else []:
@@ -702,33 +881,22 @@ def cmd_doctor(args):
             print(f"  [ABSENT] {sub_dir.name}: cannot check patches")
             continue
         patches = sorted(sub_dir.glob("*.patch"))
-        states = [_patch_state(patch, submodule_dir)[0] for patch in patches]
-        try:
-            exact = git_source_state(
-                submodule_dir) == _declared_patch_expected_state(
-                    sub_dir.name, submodule_dir)
-            series_valid = True
-        except RuntimeError:
-            exact = False
-            series_valid = False
-        if exact:
-            states = ["applied"] * len(patches)
-        elif series_valid:
-            # A later patch may overlap an earlier patch's reverse context.
-            # The clean ordered replay above is authoritative; "pending" means
-            # setup/fetch still needs to apply that valid sequence.
-            states = ["pending" if state == "broken" else state
-                      for state in states]
+        component_started = time.perf_counter()
+        states = _doctor_patch_states(
+            sub_dir.name, submodule_dir, patches, deep=deep)
         for patch, st in zip(patches, states):
             print(f"  [{'ok   ' if st == 'applied' else st.upper()}] {sub_dir.name}/{patch.name}")
             if st == "broken":
                 patch_bad.append(patch.name)
+        print(f"  [time] {sub_dir.name} patches: "
+              f"{time.perf_counter() - component_started:.2f}s")
 
     needs_eudsl = profile in ("compiler-stack", "all")
     eudsl_ok = True
     ver_ok = True
     if needs_eudsl:
         print("\nbuild-time prefetch (run `dev.py fetch` to populate):")
+        section_started = time.perf_counter()
         eudsl_ok = _eudsl_cache_ok()
         print(f"  [{'ok  ' if eudsl_ok else 'MISS '}] eudsl sdist cached + sha256 verified")
         # Cross-check the two declarations so a pin change cannot silently use stale input.
@@ -737,6 +905,8 @@ def cmd_doctor(args):
         pm = re.search(r"\+eudsl-python-extras==(\S+)", patch_f.read_text()) if patch_f.exists() else None
         ver_ok = bool(eudsl_ver) and pm is not None and pm.group(1) == eudsl_ver
         print(f"  [{'ok  ' if ver_ok else 'DRIFT'}] eudsl version: patch=={pm.group(1) if pm else '?'} == manifest=={eudsl_ver or '?'}")
+        print(f"  [time] build-time prefetch: "
+              f"{time.perf_counter() - section_started:.2f}s")
     rc = 0
     if not ver_ok:
         print("\neudsl version DRIFT: patches/iron-tools/0001-… and versions.toml [eudsl] disagree — sync them")
@@ -758,6 +928,7 @@ def cmd_doctor(args):
         rc = 1
     if rc == 0:
         print(f"\nall good: {profile} prerequisites, pins, and patches are ready.")
+    print(f"doctor elapsed: {time.perf_counter() - started:.2f}s")
     return rc
 
 
@@ -864,9 +1035,17 @@ def cmd_setup(args):
             print("  install them, then re-run; see `python dev.py doctor compiler-stack`")
     if not venv_py().exists():
         sh([sys.executable, "-m", "venv", str(VENV)])
-    pip = [str(venv_py()), "-m", "pip", "install"]
-    if args.profile != "fastflowlm":
-        sh(pip + ["--upgrade", "pip"])
+    # Bootstrap one pinned uv wheel with pip, then let uv populate the environment
+    # from its hard-linkable shared cache. This avoids pip repeatedly unpacking the
+    # large Peano and native build-tool wheels on ephemeral CI runners.
+    sh([
+        str(venv_py()), "-m", "pip", "install",
+        "--disable-pip-version-check", "--no-compile",
+        f"uv=={UV_VERSION}",
+    ])
+    pip = [
+        str(uv_bin()), "pip", "install", "--python", str(venv_py()),
+    ]
     lock = ROOT / "requirements.lock"
     if args.profile == "fastflowlm":
         src = ROOT / "requirements-fastflowlm.lock"
@@ -1007,7 +1186,9 @@ def cmd_build_llvm(args):
         "-S", cmake_path(PROJ / "llvm-project" / "llvm"), "-B", cmake_path(LLVM_BUILD),
         "-DLLVM_ENABLE_PROJECTS=mlir", "-DLLVM_TARGETS_TO_BUILD=host",
         "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
-        "-DMLIR_ENABLE_BINDINGS_PYTHON=ON", "-DCMAKE_BUILD_TYPE=Release",
+        "-DMLIR_ENABLE_BINDINGS_PYTHON=ON",
+        "-DMLIR_ENABLE_PYTHON_STABLE_ABI=ON",
+        "-DCMAKE_BUILD_TYPE=Release",
         "-DLLVM_INSTALL_UTILS=ON", *_ccache_flags(),
         # Nothing in this stack consumes the LLVM/MLIR examples or benchmarks, and the
         # default target builds them. Dropping them cuts build time, and it removes
@@ -1022,6 +1203,7 @@ def cmd_build_llvm(args):
         "-DLLVM_INCLUDE_TESTS=OFF", "-DMLIR_INCLUDE_TESTS=OFF",
         *_cc_flags(cc, cxx), *crt,
         f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
+        f"-DPython_EXECUTABLE={cmake_path(venv_py())}",
     ]
     # clang+lld; gcc uses its default linker. Skipped on Windows: "clang" matches
     # "clang-cl" there, but the MSVC-style driver picks its own linker (link/lld-link).
@@ -1033,12 +1215,18 @@ def cmd_build_llvm(args):
     print("build llvm: ok ->", LLVM_BUILD / "lib" / "cmake")
 
 
-def cmd_build_iron_tools(args):
-    """aie-opt/aie-translate against build/llvm (NOT the wheel)."""
+def _build_iron_tools(python_executable, bdir, install_dir):
     if not _eudsl_cache_ok():
         sys.exit("eudsl not prefetched/verified — run: python dev.py fetch  (or: python dev.py setup)")
     src = PROJ / "iron-tools"
-    bdir = BUILD / "iron-tools"
+    # Keep a virtualenv's python path intact. On POSIX it is commonly a symlink;
+    # resolving it selects the base interpreter, whose site-packages do not
+    # contain the build dependencies installed in the virtualenv.
+    python_executable = Path(os.path.abspath(python_executable))
+    bdir = Path(bdir)
+    install_dir = Path(install_dir)
+    if not python_executable.is_file():
+        raise RuntimeError(f"compiler binding Python executable missing: {python_executable}")
     cc, cxx = _compilers()   # match the compiler used for build/llvm
     env = cmake_env()
     # Network-free eudsl vendoring: the patch points mlir-aie's find-links at the local
@@ -1059,14 +1247,33 @@ def cmd_build_iron_tools(args):
         f"-DCMAKE_INSTALL_PREFIX={cmake_path(bdir)}",
         "-DAIE_RUNTIME_TARGETS=x86_64", "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_ENABLE_RTTI=OFF",
         "-DAIE_ENABLE_BINDINGS_PYTHON=ON",
-        f"-DPython3_EXECUTABLE={cmake_path(venv_py())}",
+        # This compiler product uses HRX exclusively. Do not let a host XRT
+        # installation silently add unsupported _xrt bindings or dependencies.
+        "-DAIE_ENABLE_XRT_PYTHON_BINDINGS=OFF",
+        # The omnibus Python-passes mode requires RTTI and creates extension
+        # aliases itself. This product uses the standard MLIR-declared modules.
+        "-DAIE_ENABLE_PYTHON_PASSES=OFF",
+        "-DMLIR_ENABLE_PYTHON_STABLE_ABI=ON",
+        # MLIR uses both CMake's FindPython3 and FindPython modules. Pin both;
+        # otherwise a generic Python lookup can escape the virtual environment.
+        f"-DPython3_EXECUTABLE={cmake_path(python_executable)}",
+        f"-DPython_EXECUTABLE={cmake_path(python_executable)}",
     ]
     sh(cfg, env=env)
     sh([cmake_bin(), "--build", cmake_path(bdir), "-j", NPROC], env=env)
-    _reset_build_child(IRON_TOOLS_INSTALL)
+    if install_dir.parent.resolve() != BUILD.resolve():
+        raise RuntimeError(f"compiler binding install must be under {BUILD}: {install_dir}")
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
+    install_dir.mkdir(parents=True)
     sh([cmake_bin(), "--install", cmake_path(bdir),
-        "--prefix", cmake_path(IRON_TOOLS_INSTALL), "--config", "Release"], env=env)
+        "--prefix", cmake_path(install_dir), "--config", "Release"], env=env)
     print("build iron-tools: ok ->", bdir / "bin")
+
+
+def cmd_build_iron_tools(args):
+    """aie-opt/aie-translate against build/llvm (NOT the wheel)."""
+    _build_iron_tools(venv_py(), BUILD / "iron-tools", IRON_TOOLS_INSTALL)
 
 
 def cmd_build_hrx_xclbinutil(args):
@@ -1729,6 +1936,15 @@ def cmd_submodules(args):
 # are not shipped.
 NPU_PREREQ_TOOLS = ["aiecc", "aie-opt", "aie-translate", "bootgen",
                     "target_model", "target_model_rtti", "register_database"]
+COMPILER_PRODUCT_LICENSES = (
+    "rocm-npu-staging-LICENSE",
+    "iron-tools-LICENSE",
+    "hrx-xclbinutil-LICENSE",
+    "llvm-LICENSE.txt",
+    "aie-api-LICENSE",
+    "aie-runtime-LICENSE.txt",
+    "bootgen-LICENSE",
+)
 NPU_PREREQ_DIR = BUILD / "artifacts"
 
 
@@ -1873,7 +2089,12 @@ _BUILD_INTERMEDIATE_SUFFIXES = {".obj", ".pdb", ".ilk", ".pyc", ".pyo"}
 
 def _is_build_metadata(path):
     path = Path(path)
-    return ("CMakeFiles" in path.parts or
+    return (any(
+                part == "CMakeFiles"
+                or part.startswith("objects-")
+                or part.endswith("Tmp")
+                for part in path.parts
+            ) or
             path.name in _BUILD_METADATA_NAMES or
             path.suffix.lower() in _BUILD_INTERMEDIATE_SUFFIXES)
 
@@ -1894,6 +2115,201 @@ def _peano_prefix():
             f"Peano is not installed in this Python environment: {peano}\n"
             "run: python dev.py setup")
     return peano
+
+
+def _stage_compiler_openssl_license(product, copied):
+    if not any(
+        name.casefold().startswith(("libssl", "libcrypto"))
+        for name in copied
+    ):
+        return
+    openssl_root = Path(os.environ.get("OPENSSL_ROOT_DIR", "/usr"))
+    license_candidates = (
+        openssl_root / "share" / "openssl" / "copyright",
+        openssl_root.parent / "share" / "openssl" / "copyright",
+        Path("/usr/share/licenses/openssl/LICENSE.txt"),
+        Path("/usr/share/doc/openssl/copyright"),
+    )
+    license_path = next(
+        (path for path in license_candidates if path.is_file()), None
+    )
+    if license_path:
+        _stage(
+            license_path,
+            product / "licenses" / "openssl-copyright",
+        )
+
+
+def _stage_compiler_linux_native_dependencies(product):
+    """Bundles non-manylinux shared libraries required by the compiler product."""
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        raise RuntimeError("patchelf is required to close Linux compiler dependencies")
+    roots = []
+    openssl_root = os.environ.get("OPENSSL_ROOT_DIR")
+    if openssl_root:
+        root = Path(openssl_root)
+        roots.extend((root, root / "lib", root / "lib64"))
+    roots.extend(
+        Path(path)
+        for path in (
+            "/usr/local/lib64",
+            "/usr/local/lib",
+            "/usr/lib64",
+            "/usr/lib/x86_64-linux-gnu",
+            "/lib64",
+            "/lib/x86_64-linux-gnu",
+        )
+    )
+    candidates = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in root.glob("*.so*"):
+            if path.is_file():
+                candidates.setdefault(path.name, path)
+
+    provided = {
+        path.name
+        for path in product.rglob("*")
+        if path.is_file() and _is_loadable_elf(path)
+    }
+    copied = {}
+    queue = [
+        path for path in product.rglob("*")
+        if path.is_file() and _is_loadable_elf(path)
+    ]
+    while queue:
+        path = queue.pop(0)
+        needed_libraries = subprocess.run(
+            [patchelf, "--print-needed", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        for needed in needed_libraries:
+            if needed in provided or _linux_system_runtime(needed):
+                continue
+            source = candidates.get(needed)
+            if source is None:
+                relative = path.relative_to(product).as_posix()
+                raise RuntimeError(
+                    "compiler product dependency is not available from standard "
+                    f"Linux library roots: {relative} -> {needed}"
+                )
+            destination = product / "lib" / needed
+            _stage(source, destination)
+            provided.add(needed)
+            copied[needed] = str(source)
+            queue.append(destination)
+    _stage_compiler_openssl_license(product, copied)
+    return copied
+
+
+def _stage_compiler_native_dependencies(product):
+    """Closes non-system native imports required by the compiler product."""
+    if not IS_WINDOWS:
+        return _stage_compiler_linux_native_dependencies(product)
+
+    def is_pe(path):
+        try:
+            return path.read_bytes()[:2] == b"MZ"
+        except OSError:
+            return False
+
+    candidate_roots = []
+    for variable in ("OPENSSL_ROOT_DIR", "VCPKG_INSTALLED_DIR"):
+        value = os.environ.get(variable)
+        if value and Path(value).is_dir():
+            candidate_roots.append(Path(value))
+    candidates = {
+        path.name.casefold(): path
+        for root in candidate_roots
+        for path in root.rglob("*.dll")
+        if path.is_file()
+    }
+    provided = {
+        path.name.casefold()
+        for path in product.rglob("*")
+        if path.is_file() and is_pe(path)
+    }
+    copied = {}
+    queue = [
+        path for path in product.rglob("*")
+        if path.is_file() and is_pe(path)
+    ]
+    while queue:
+        path = queue.pop(0)
+        for needed in pe_imports(path):
+            folded = needed.casefold()
+            if re.fullmatch(r"python3[0-9]{1,2}\.dll", folded):
+                relative = path.relative_to(product).as_posix()
+                raise RuntimeError(
+                    "compiler product imports a versioned CPython DLL instead of "
+                    f"the stable-ABI python3.dll: {relative} -> {needed}"
+                )
+            if folded in provided or _windows_system_runtime(needed):
+                continue
+            source = candidates.get(folded)
+            if source is None:
+                relative = path.relative_to(product).as_posix()
+                raise RuntimeError(
+                    "compiler product dependency is not available from its "
+                    f"configured native dependency roots: {relative} -> {needed}"
+                )
+            destination = product / "bin" / source.name
+            _stage(source, destination)
+            provided.add(folded)
+            copied[needed] = str(source)
+            queue.append(destination)
+
+    _stage_compiler_openssl_license(product, copied)
+    return copied
+
+
+def _verify_compiler_native_dependencies(product):
+    if not IS_WINDOWS:
+        return {}
+
+    def is_pe(path):
+        try:
+            return path.read_bytes()[:2] == b"MZ"
+        except OSError:
+            return False
+
+    binaries = [
+        path for path in product.rglob("*")
+        if path.is_file() and is_pe(path)
+    ]
+    provided = {path.name.casefold() for path in binaries}
+    graph = {}
+    missing = []
+    versioned_python_imports = []
+    for path in binaries:
+        imports = pe_imports(path)
+        relative = path.relative_to(product).as_posix()
+        graph[relative] = imports
+        for name in imports:
+            folded = name.casefold()
+            if re.fullmatch(r"python3[0-9]{1,2}\.dll", folded):
+                versioned_python_imports.append(f"{relative} -> {name}")
+            if (
+                folded not in provided
+                and not _windows_system_runtime(name)
+            ):
+                missing.append(f"{relative} -> {name}")
+    if versioned_python_imports:
+        raise RuntimeError(
+            "compiler product imports a versioned CPython DLL instead of "
+            "the stable-ABI python3.dll:\n  "
+            + "\n  ".join(sorted(versioned_python_imports))
+        )
+    if missing:
+        raise RuntimeError(
+            "compiler product Windows dependency closure is incomplete:\n  "
+            + "\n  ".join(sorted(missing))
+        )
+    return graph
 
 
 def _manifest_file_record(path, root=ROOT):
@@ -1976,10 +2392,34 @@ def _stage_compiler_product():
     _stage(aie_api, product / "third_party" / "aie_api")
     _stage(_peano_prefix(), product / "peano" / "llvm-aie")
 
+    native_dependencies = _stage_compiler_native_dependencies(product)
+    relocated_rpaths = (
+        {}
+        if IS_WINDOWS
+        else relocate_linux_compiler_rpaths(product)
+    )
+
     license_sources = (
         (ROOT / "LICENSE", "rocm-npu-staging-LICENSE"),
         (PROJ / "iron-tools" / "LICENSE", "iron-tools-LICENSE"),
-        (PROJ / "hrx-xclbinutil" / "LICENSE", "hrx-xclbinutil-LICENSE"),
+        # hrx-xclbinutil declares Apache-2.0 in its checked-in CMakeLists.txt,
+        # but its trimmed source checkout does not carry a standalone LICENSE.
+        # Stage this repository's identical Apache-2.0 terms under the
+        # component-specific name so the product remains license-complete.
+        (ROOT / "LICENSE", "hrx-xclbinutil-LICENSE"),
+        (PROJ / "llvm-project" / "llvm" / "LICENSE.TXT", "llvm-LICENSE.txt"),
+        (
+            PROJ / "iron-tools" / "third_party" / "aie_api" / "LICENSE",
+            "aie-api-LICENSE",
+        ),
+        (
+            PROJ / "iron-tools" / "third_party" / "aie-rt" / "license.txt",
+            "aie-runtime-LICENSE.txt",
+        ),
+        (
+            PROJ / "iron-tools" / "third_party" / "bootgen" / "LICENSE",
+            "bootgen-LICENSE",
+        ),
     )
     for source, name in license_sources:
         if source.is_file():
@@ -2005,6 +2445,8 @@ def _stage_compiler_product():
                 _manifest_file_record(ROOT / "requirements.txt"),
                 _manifest_file_record(ROOT / "requirements.lock"),
             ],
+            "native_runtime_files": native_dependencies,
+            "relocated_elf_rpaths": relocated_rpaths,
         },
         "toolchain": {
             "python": platform.python_version(),
@@ -2150,6 +2592,10 @@ def _verify_compiler_product_inventory(product):
     for relative in ("peano/llvm-aie", "third_party/aie_api", "lib"):
         if not (product / relative).is_dir():
             raise RuntimeError(f"compiler product is missing directory: {relative}")
+    for name in COMPILER_PRODUCT_LICENSES:
+        if not (product / "licenses" / name).is_file():
+            raise RuntimeError(f"compiler product is missing license: {name}")
+    _verify_compiler_native_dependencies(product)
     return manifest
 
 
@@ -2206,6 +2652,343 @@ def cmd_package_compiler_product(args):
     print("  product: ", product)
     print("  archive: ", archive)
     print(f"  files:   {len(manifest['files'])}")
+
+
+def _compiler_binding_root(value):
+    root = Path(value) if value else IRON_TOOLS_INSTALL / "python"
+    if not (root / "aie").is_dir():
+        raise RuntimeError(f"compiler binding aie package missing: {root}")
+    return root
+
+
+def _compiler_wheel_files(directory):
+    directory = Path(directory)
+    prefixes = tuple(
+        distribution.replace("-", "_") + "-"
+        for distribution in (
+            COMPILER_DISTRIBUTION,
+            COMPILER_CORE_DISTRIBUTION,
+            COMPILER_BINDINGS_DISTRIBUTION,
+        )
+    )
+    wheels = sorted(
+        path for path in directory.glob("*.whl")
+        if path.name.startswith(prefixes)
+    )
+    counts = {
+        distribution: len([
+            wheel for wheel in wheels
+            if wheel.name.startswith(distribution.replace("-", "_") + "-")
+        ])
+        for distribution in (
+            COMPILER_DISTRIBUTION,
+            COMPILER_CORE_DISTRIBUTION,
+            COMPILER_BINDINGS_DISTRIBUTION,
+        )
+    }
+    if counts[COMPILER_DISTRIBUTION] != 1 or counts[COMPILER_CORE_DISTRIBUTION] != 1:
+        raise RuntimeError(
+            f"expected one compiler meta and core wheel in {directory}: {counts}"
+        )
+    if counts[COMPILER_BINDINGS_DISTRIBUTION] != 1:
+        raise RuntimeError(
+            f"expected one compiler bindings wheel in {directory}: {counts}"
+        )
+    return wheels
+
+
+def cmd_package_compiler_wheels(args):
+    version = args.version or default_package_version(ROOT)
+    try:
+        if args.product:
+            product = _compiler_product_root(args.product)
+            _verify_compiler_product_inventory(product)
+        else:
+            product, _ = _stage_compiler_product()
+        binding_root = _compiler_binding_root(args.binding)
+        platform_tag = "win_amd64" if IS_WINDOWS else "manylinux_2_28_x86_64"
+        report = compiler_product_report(product)
+        report_path = FASTFLOWLM_ARTIFACTS / "rocm-npu-compiler-wheel-report.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        wheels = build_compiler_wheel_family(
+            product,
+            binding_root,
+            COMPILER_WHEEL_STAGE,
+            FASTFLOWLM_ARTIFACTS,
+            version=version,
+            platform_tag=platform_tag,
+            include_meta=not args.no_meta,
+        )
+        verify_compiler_binding_stable_abi(
+            wheels[COMPILER_BINDINGS_DISTRIBUTION]
+        )
+    except RuntimeError as error:
+        sys.exit(str(error))
+    for name, wheel in wheels.items():
+        print(f"{name}: {wheel}")
+    print("compiler wheel report:", report_path)
+
+
+def cmd_audit_compiler_wheels(args):
+    if IS_WINDOWS:
+        sys.exit("audit-compiler-wheels is Linux-only")
+    wheels = _compiler_wheel_files(args.dir)
+    verify_linux_compiler_wheels(wheels)
+    core_wheels = [
+        wheel for wheel in wheels
+        if wheel.name.startswith(
+            COMPILER_CORE_DISTRIBUTION.replace("-", "_") + "-"
+        )
+    ]
+    if len(core_wheels) != 1:
+        sys.exit("audit-compiler-wheels requires exactly one compiler core wheel")
+    core_libraries = compiler_core_shared_library_names(core_wheels[0])
+    for wheel in wheels:
+        if wheel.name.startswith(COMPILER_DISTRIBUTION.replace("-", "_") + "-"):
+            continue
+        distribution = (
+            COMPILER_CORE_DISTRIBUTION
+            if wheel.name.startswith(
+                COMPILER_CORE_DISTRIBUTION.replace("-", "_") + "-"
+            )
+            else COMPILER_BINDINGS_DISTRIBUTION
+        )
+        policy = auditwheel_policy(
+            wheel,
+            exclude=(
+                core_libraries
+                if distribution == COMPILER_BINDINGS_DISTRIBUTION
+                else frozenset()
+            ),
+        )
+        validate_auditwheel_policy(distribution, policy)
+        if "manylinux_2_28_x86_64" in wheel.name and not policy.startswith(
+            "manylinux_"
+        ):
+            raise RuntimeError(
+                f"{wheel.name} claims manylinux_2_28 but auditwheel reports {policy}"
+            )
+        print(f"{wheel.name}: {policy}")
+
+
+def _compiler_installed_prefix(python):
+    result = subprocess.run(
+        [
+            python,
+            "-c",
+            "import rocm_npu_compiler as c; print(c.compiler_prefix())",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def _verify_installed_compiler_bindings(python, env=None):
+    expected_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+    subprocess.run(
+        [
+            python,
+            ROOT / "tests" / "compiler" / "verify_compiler_bindings.py",
+            "--expected-python",
+            expected_python,
+        ],
+        check=True,
+        env=env,
+    )
+
+
+def _compiler_e2e_env(prefix, env=None):
+    result = dict(os.environ if env is None else env)
+    result["ROCM_NPU_COMPILER_PREFIX"] = str(prefix)
+    result["ROCM_NPU_CMAKE"] = cmake_bin()
+    return result
+
+
+def _hardlink_or_copy(source, destination):
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+    return destination
+
+
+def _compiler_site_packages(python):
+    result = subprocess.run(
+        [
+            python,
+            "-c",
+            "import sysconfig; print(sysconfig.get_path('purelib'))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def _export_compiler_consumer_root(python, destination):
+    """Hard-links the installed compiler packages for cross-minor ABI checks."""
+    destination = Path(destination)
+    validate_directory_target(destination, BUILD)
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    site_packages = _compiler_site_packages(python)
+    names = {
+        "aie",
+        COMPILER_DISTRIBUTION.replace("-", "_"),
+        COMPILER_CORE_DISTRIBUTION.replace("-", "_"),
+        COMPILER_BINDINGS_DISTRIBUTION.replace("-", "_"),
+    }
+    sources = [
+        path for path in site_packages.iterdir()
+        if path.name in names
+        or any(path.name.startswith(name + "-") and path.name.endswith(".dist-info")
+               for name in names)
+    ]
+    if not any(path.name == "aie" for path in sources):
+        raise RuntimeError(f"installed compiler bindings missing from {site_packages}")
+    for source in sources:
+        target = destination / source.name
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                target,
+                copy_function=_hardlink_or_copy,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+        else:
+            _hardlink_or_copy(source, target)
+    return destination
+
+
+def _verify_compiler_wheel_consumer(args):
+    if not args.consumer_root:
+        raise RuntimeError("--consumer-only requires --consumer-root")
+    consumer_root = Path(args.consumer_root)
+    if not (consumer_root / "aie").is_dir():
+        raise RuntimeError(
+            f"shared compiler consumer root is missing or incomplete: {consumer_root}"
+        )
+    venv_dir = Path(args.venv)
+    validate_directory_target(venv_dir, BUILD)
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+    python = venv_dir / _VBIN / f"python{_EXE}"
+    _python_install(python, *COMPILER_BINDINGS_RUNTIME_REQUIREMENTS)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(consumer_root.resolve()), env.get("PYTHONPATH", "")]
+    )
+    _verify_installed_compiler_bindings(python, env=env)
+    subprocess.run(
+        [
+            python,
+            "-c",
+            "import aie.dialects.transform.interpreter; "
+            "import rocm_npu_compiler as c; "
+            "print(c.compiler_prefix()); print(c.native_library_dir())",
+        ],
+        check=True,
+        env=env,
+    )
+    if getattr(args, "consumer_e2e", False):
+        prefix = consumer_root / COMPILER_PACKAGE
+        subprocess.run(
+            [
+                python,
+                ROOT / "tests" / "e2e" / "run_e2e.py",
+                "--compiler-prefix",
+                prefix,
+            ],
+            check=True,
+            env=_compiler_e2e_env(prefix, env),
+        )
+    print(f"verify compiler wheel consumer: ok -> {venv_dir}")
+
+
+def cmd_verify_compiler_wheels(args):
+    if getattr(args, "consumer_only", False):
+        try:
+            _verify_compiler_wheel_consumer(args)
+        except RuntimeError as error:
+            sys.exit(str(error))
+        return
+    wheels = _compiler_wheel_files(args.dir)
+    version = args.version
+    if not version:
+        meta = next(
+            wheel for wheel in wheels
+            if wheel.name.startswith(COMPILER_DISTRIBUTION.replace("-", "_") + "-")
+        )
+        version = meta.name[
+            len(COMPILER_DISTRIBUTION.replace("-", "_")) + 1:
+        ].split("-py3-none-any.whl", 1)[0]
+    verify_wheel_checksums({
+        f"compiler-{index}": wheel for index, wheel in enumerate(wheels)
+    })
+    verify_compiler_wheel_path_references(wheels, (ROOT, BUILD))
+    if IS_WINDOWS:
+        graph = verify_windows_compiler_wheels(wheels)
+    else:
+        graph = verify_linux_compiler_wheels(wheels)
+    venv_dir = Path(args.venv)
+    validate_directory_target(venv_dir, BUILD)
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+    python = venv_dir / _VBIN / f"python{_EXE}"
+    _python_install(
+        python,
+        "--find-links",
+        str(Path(args.dir).resolve()),
+        f"{COMPILER_DISTRIBUTION}=={version}",
+        refresh_packages=(
+            COMPILER_DISTRIBUTION,
+            COMPILER_CORE_DISTRIBUTION,
+            COMPILER_BINDINGS_DISTRIBUTION,
+        ),
+    )
+    subprocess.run([python, "-m", "pip", "check"], check=True)
+    _verify_installed_compiler_bindings(python)
+    subprocess.run(
+        [
+            python,
+            "-c",
+            "import aie.dialects.transform.interpreter; "
+            "import rocm_npu_compiler as c; "
+            "print(c.compiler_prefix()); print(c.native_library_dir())",
+        ],
+        check=True,
+    )
+    scripts = venv_dir / _VBIN
+    for tool, argument in (("aie-opt", "--version"), ("aiecc", "--help")):
+        subprocess.run([scripts / f"{tool}{_EXE}", argument], check=True)
+    prefix = _compiler_installed_prefix(python)
+    subprocess.run(
+        [
+            python,
+            ROOT / "tests" / "e2e" / "run_e2e.py",
+            "--compiler-prefix",
+            prefix,
+        ],
+        check=True,
+        env=_compiler_e2e_env(prefix),
+    )
+    if getattr(args, "consumer_root", None):
+        exported = _export_compiler_consumer_root(python, args.consumer_root)
+        print("compiler wheel consumer root:", exported)
+    print(
+        f"verify compiler wheels: ok ({len(graph)} native dependency records) "
+        f"-> {venv_dir}"
+    )
 
 
 def cmd_unpack_compiler_product(args):
@@ -3011,6 +3794,11 @@ def main():
     d = sub.add_parser("doctor")
     d.add_argument("profile", nargs="?", choices=sorted(DOCTOR_PROFILE_SUBMODULES),
                    default="compiler-stack", help="dependency closure to validate")
+    d.add_argument(
+        "--deep",
+        action="store_true",
+        help="replay every patch series in a temporary Git index",
+    )
     s = sub.add_parser("setup")
     s.add_argument("--profile", choices=sorted(SETUP_PROFILE_SUBMODULES),
                    default="compiler-stack", help="dependency closure to prepare")
@@ -3063,6 +3851,43 @@ def main():
     vfw.add_argument("--venv", default=str(FASTFLOWLM_WHEEL_VENV),
                      help="fresh venv to create for wheel install testing")
     sub.add_parser("package-compiler-product")
+    pcw = sub.add_parser("package-compiler-wheels")
+    pcw.add_argument("--version",
+                     help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})")
+    pcw.add_argument(
+        "--product",
+        help="reuse an existing validated compiler product root or parent directory",
+    )
+    pcw.add_argument(
+        "--binding",
+        metavar="PYTHON_ROOT",
+        help="installed stable-ABI iron-tools Python root",
+    )
+    pcw.add_argument(
+        "--no-meta",
+        action="store_true",
+        help="omit the platform-neutral meta wheel (Windows release job)",
+    )
+    acw = sub.add_parser("audit-compiler-wheels")
+    acw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS))
+    vcw = sub.add_parser("verify-compiler-wheels")
+    vcw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS))
+    vcw.add_argument("--version")
+    vcw.add_argument("--venv", default=str(COMPILER_WHEEL_VENV))
+    vcw.add_argument(
+        "--consumer-root",
+        help="export or reuse a hard-linked compiler tree for cross-minor ABI checks",
+    )
+    vcw.add_argument(
+        "--consumer-only",
+        action="store_true",
+        help="skip static/core/e2e checks and validate bindings against --consumer-root",
+    )
+    vcw.add_argument(
+        "--consumer-e2e",
+        action="store_true",
+        help="also run the compiler e2e with a shared cross-minor consumer tree",
+    )
     uf = sub.add_parser("unpack-fastflowlm")
     uf.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
     vf = sub.add_parser("verify-fastflowlm")
@@ -3125,6 +3950,9 @@ def main():
     elif a.cmd == "audit-fastflowlm-wheels": cmd_audit_fastflowlm_wheels(a)
     elif a.cmd == "verify-fastflowlm-wheels": cmd_verify_fastflowlm_wheels(a)
     elif a.cmd == "package-compiler-product": cmd_package_compiler_product(a)
+    elif a.cmd == "package-compiler-wheels": cmd_package_compiler_wheels(a)
+    elif a.cmd == "audit-compiler-wheels": cmd_audit_compiler_wheels(a)
+    elif a.cmd == "verify-compiler-wheels": cmd_verify_compiler_wheels(a)
     elif a.cmd == "unpack-fastflowlm": cmd_unpack_fastflowlm(a)
     elif a.cmd == "verify-fastflowlm": cmd_verify_fastflowlm(a)
     elif a.cmd == "unpack-compiler-product": cmd_unpack_compiler_product(a)
