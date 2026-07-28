@@ -25,6 +25,7 @@ derived from `sys.executable`, so there is no venv layout to guess at.
 """
 
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -94,9 +95,14 @@ def cmake_path(path: Path) -> str:
     return path.as_posix()
 
 
+def cmake_candidate() -> Path:
+    override = os.environ.get("ROCM_NPU_CMAKE")
+    return Path(override) if override else VENV_BIN / f"cmake{EXE}"
+
+
 def cmake_exe() -> Path:
-    """The pip cmake from the venv this script runs in."""
-    cmake = VENV_BIN / f"cmake{EXE}"
+    """The explicitly supplied test CMake, or the one beside this interpreter."""
+    cmake = cmake_candidate()
     if not cmake.exists():
         raise E2EError(f"cmake not in the venv (run: python dev.py setup)\n  {cmake}")
     return cmake
@@ -133,6 +139,14 @@ def compiler_prefix_from_env() -> Path | None:
     return Path(value).resolve() if value else None
 
 
+def installed_aie_python_root() -> Path | None:
+    """Find the Python root containing an installed or PYTHONPATH-provided aie."""
+    spec = importlib.util.find_spec("aie")
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    return Path(next(iter(spec.submodule_search_locations))).resolve().parent
+
+
 def require_xclbinutil(compiler_prefix: Path | None = None) -> Path:
     """aiecc invokes plain `xclbinutil`; `dev.py build hrx-xclbinutil` publishes ours
     under that name in tools-bin/. Depend on it rather than re-publish it here: the
@@ -155,7 +169,12 @@ def toolchain_env(xclbinutil: Path,
     """IRON toolchain env from either build trees or a relocated rocm-npu-compiler product."""
     if compiler_prefix:
         aie_bin = compiler_prefix / "bin"
-        aie_python = compiler_prefix / "python"
+        product_aie_python = compiler_prefix / "python"
+        aie_python = (
+            product_aie_python
+            if (product_aie_python / "aie").is_dir()
+            else installed_aie_python_root() or product_aie_python
+        )
         peano = compiler_prefix / "peano" / "llvm-aie"
         aieopt_dir = compiler_prefix / "third_party" / "aie_api"
     else:
@@ -177,7 +196,7 @@ def toolchain_env(xclbinutil: Path,
         raise E2EError(f"aie_api not available to this toolchain\n  {aieopt_dir}")
 
     env = dict(os.environ)
-    path_entries = [xclbinutil.parent, aie_bin, VENV_BIN]
+    path_entries = [xclbinutil.parent, aie_bin, VENV_BIN, cmake_candidate().parent]
     if compiler_prefix and os.name == "nt":
         path_entries.append(compiler_prefix / "lib")
     env["PATH"] = os.pathsep.join([*(str(entry) for entry in path_entries),

@@ -20,6 +20,8 @@ from build_tools.fastflowlm_artifact import (
     verify_bundle,
 )
 from build_tools.rocm_npu_wheel_common import (
+    COMPILER_BINDINGS_DISTRIBUTION,
+    COMPILER_CORE_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
@@ -47,6 +49,57 @@ FASTFLOWLM_LINUX_WHEEL_TAG = "py3-none-linux_x86_64"
 AUDITWHEEL_API_VERSION = "6.7.0"
 
 
+def _auditwheel_policy_diagnostics(wheel_info, target_policy_name: str) -> str:
+    """Formats the structured reasons a wheel misses its claimed policy."""
+    target = wheel_info.policies.get_policy_by_name(target_policy_name)
+    components = (
+        ("external references", wheel_info.ref_policy),
+        ("versioned symbols", wheel_info.sym_policy),
+        ("UCS-2 symbols", wheel_info.ucs_policy),
+        ("PyFPE symbols", wheel_info.pyfpe_policy),
+        ("blacklisted symbols", wheel_info.blacklist_policy),
+        ("machine ISA", wheel_info.machine_policy),
+    )
+    lines = [
+        f"auditwheel policy diagnostics for {target_policy_name}:",
+        f"  overall: {wheel_info.overall_policy.name}",
+    ]
+    for label, policy in components:
+        marker = "LIMITING" if policy < target else "ok"
+        lines.append(f"  {label}: {policy.name} ({marker})")
+
+    target_refs = wheel_info.external_refs[target.name]
+    if target_refs.libs:
+        lines.append("  external libraries:")
+        lines.extend(
+            f"    {name}: {path if path is not None else '<unresolved>'}"
+            for name, path in sorted(target_refs.libs.items())
+        )
+    if target_refs.blacklist:
+        lines.append("  blacklisted symbol references:")
+        lines.extend(
+            f"    {name}: {', '.join(sorted(symbols))}"
+            for name, symbols in sorted(target_refs.blacklist.items())
+        )
+
+    if wheel_info.sym_policy < target:
+        allowed = {
+            f"{prefix}_{version}"
+            for prefix, versions in target.symbol_versions.items()
+            for version in versions
+        }
+        required = {
+            symbol
+            for symbols in wheel_info.versioned_symbols.values()
+            for symbol in symbols
+        }
+        unsupported = sorted(required - allowed)
+        if unsupported:
+            lines.append("  unsupported versioned symbols:")
+            lines.extend(f"    {symbol}" for symbol in unsupported)
+    return "\n".join(lines)
+
+
 def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
     system = (system or platform.system()).lower()
     if system != "linux":
@@ -66,7 +119,11 @@ def fastflowlm_wheel_tag(
     return FASTFLOWLM_LINUX_WHEEL_TAG
 
 
-def auditwheel_policy(wheel: Path) -> str:
+def auditwheel_policy(
+    wheel: Path,
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> str:
     """Returns auditwheel's structured overall policy for a wheel."""
     try:
         installed_version = distribution_version("auditwheel")
@@ -95,16 +152,25 @@ def auditwheel_policy(wheel: Path) -> str:
         libc,
         architecture,
         wheel,
-        frozenset(),
+        exclude,
         disable_isa_ext_check=False,
         allow_graft=False,
     )
+    claimed_policy = re.search(r"manylinux_\d+_\d+_x86_64", wheel.name)
+    if claimed_policy:
+        target = wheel_info.policies.get_policy_by_name(claimed_policy.group())
+        if wheel_info.overall_policy < target:
+            print(_auditwheel_policy_diagnostics(wheel_info, target.name))
     return wheel_info.overall_policy.name
 
 
 def validate_auditwheel_policy(distribution: str, policy: str) -> str:
     """Checks auditwheel's structured policy against the claimed wheel policy."""
-    if distribution == RUNTIME_DISTRIBUTION:
+    if distribution in (
+        RUNTIME_DISTRIBUTION,
+        COMPILER_CORE_DISTRIBUTION,
+        COMPILER_BINDINGS_DISTRIBUTION,
+    ):
         manylinux = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", policy)
         if not manylinux or tuple(map(int, manylinux.groups())) > (2, 28):
             raise RuntimeError(

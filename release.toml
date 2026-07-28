@@ -5,3 +5,5 @@ schema_version = 1
 
 [wheel_release]
 base_version = "0.1.0"
+compiler_python_stable_abi = "3.12"
+compiler_python_versions = ["3.12", "3.13", "3.14"]

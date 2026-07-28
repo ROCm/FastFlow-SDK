@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from build_tools.rocm_npu_wheel_release import (
-    prepare_runtime_fastflowlm_release_payload,
+    prepare_rocm_npu_release_payload,
     resolve_release_inputs,
 )
 
@@ -46,7 +46,7 @@ def _resolve(args: argparse.Namespace) -> int:
 
 
 def _prepare(args: argparse.Namespace) -> int:
-    release_directory = prepare_runtime_fastflowlm_release_payload(
+    release_directory = prepare_rocm_npu_release_payload(
         args.dir,
         args.output_dir,
         version=args.version,

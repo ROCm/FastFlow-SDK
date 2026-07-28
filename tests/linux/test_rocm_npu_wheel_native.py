@@ -21,6 +21,7 @@ from build_tools.rocm_npu_linux_wheels import (
     LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
+    _auditwheel_policy_diagnostics,
     _copy_hrx_soname,
     _copy_runtime_native_closure,
     _patch_and_verify_linux_products,
@@ -33,6 +34,7 @@ from build_tools.rocm_npu_linux_wheels import (
     wheel_tag,
 )
 from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
+from build_tools.rocm_npu_wheel_common import COMPILER_BINDINGS_DISTRIBUTION
 
 
 class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
@@ -230,11 +232,68 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ),
             "linux_x86_64",
         )
+        self.assertEqual(
+            validate_auditwheel_policy(
+                COMPILER_BINDINGS_DISTRIBUTION,
+                "manylinux_2_28_x86_64",
+            ),
+            "manylinux_2_28_x86_64",
+        )
         with self.assertRaisesRegex(RuntimeError, "not manylinux_2_28"):
             validate_auditwheel_policy(
                 RUNTIME_DISTRIBUTION,
                 "linux_x86_64",
             )
+
+    def test_auditwheel_policy_diagnostics_identify_limiting_constraints(self):
+        class Policy:
+            def __init__(self, name, priority, symbol_versions=None):
+                self.name = name
+                self.priority = priority
+                self.symbol_versions = symbol_versions or {}
+
+            def __lt__(self, other):
+                return self.priority < other.priority
+
+        linux = Policy("linux_x86_64", 0)
+        target = Policy(
+            "manylinux_2_28_x86_64",
+            10,
+            {"GLIBC": frozenset({"2.28"})},
+        )
+        highest = Policy("manylinux_2_39_x86_64", 20)
+        policies = types.SimpleNamespace(
+            get_policy_by_name=lambda name: {
+                target.name: target,
+            }[name]
+        )
+        wheel_info = types.SimpleNamespace(
+            policies=policies,
+            overall_policy=linux,
+            ref_policy=linux,
+            sym_policy=linux,
+            ucs_policy=highest,
+            pyfpe_policy=highest,
+            blacklist_policy=highest,
+            machine_policy=target,
+            external_refs={
+                target.name: types.SimpleNamespace(
+                    libs={"libmissing.so.1": None},
+                    blacklist={"libz.so.1": ["inflate"]},
+                )
+            },
+            versioned_symbols={"libc.so.6": {"GLIBC_2.28", "GLIBC_2.34"}},
+        )
+
+        diagnostics = _auditwheel_policy_diagnostics(wheel_info, target.name)
+
+        self.assertIn("external references: linux_x86_64 (LIMITING)", diagnostics)
+        self.assertIn("versioned symbols: linux_x86_64 (LIMITING)", diagnostics)
+        self.assertIn("machine ISA: manylinux_2_28_x86_64 (ok)", diagnostics)
+        self.assertIn("libmissing.so.1: <unresolved>", diagnostics)
+        self.assertIn("libz.so.1: inflate", diagnostics)
+        self.assertIn("GLIBC_2.34", diagnostics)
+        self.assertNotIn("    GLIBC_2.28", diagnostics)
 
     def test_auditwheel_policy_uses_pinned_structured_analyzer(self):
         wheel = Path("example-py3-none-linux_x86_64.whl")
@@ -266,12 +325,18 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ),
             mock.patch.dict(sys.modules, modules),
         ):
-            self.assertEqual(auditwheel_policy(wheel), "linux_x86_64")
+            self.assertEqual(
+                auditwheel_policy(
+                    wheel,
+                    exclude=frozenset({"libAIEAggregateCAPI.so"}),
+                ),
+                "linux_x86_64",
+            )
         analyze.assert_called_once_with(
             "glibc",
             "x86_64",
             wheel,
-            frozenset(),
+            frozenset({"libAIEAggregateCAPI.so"}),
             disable_isa_ext_check=False,
             allow_graft=False,
         )

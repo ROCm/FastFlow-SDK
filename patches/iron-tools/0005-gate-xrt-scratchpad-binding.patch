@@ -1,0 +1,16 @@
+diff --git a/python/CMakeLists.txt b/python/CMakeLists.txt
+index 9379b133..ff283174 100644
+--- a/python/CMakeLists.txt
++++ b/python/CMakeLists.txt
+@@ -372,7 +372,10 @@ target_include_directories(AIEPythonModules.extension._aie.dso PUBLIC ${VITIS_A
+ # ParameterScratchpad pybind11 module (no MLIR/XRT deps — uses buffer pointer)
+ ################################################################################
+ find_package(pybind11 CONFIG QUIET)
+-if(pybind11_FOUND)
++# This helper belongs to the XRT host-runtime API even though it does not link
++# XRT itself. Honor the same product option as the other XRT Python bindings so
++# disabling that API produces a complete, rather than partial, installation.
++if(pybind11_FOUND AND AIE_ENABLE_XRT_PYTHON_BINDINGS)
+   pybind11_add_module(_parameter_scratchpad
+     ${CMAKE_CURRENT_SOURCE_DIR}/ParameterScratchpadModule.cpp
+   )

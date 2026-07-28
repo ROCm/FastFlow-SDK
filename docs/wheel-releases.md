@@ -1,6 +1,6 @@
 # ROCm NPU wheel releases
 
-ROCm NPU runtime and FastFlowLM wheels use
+ROCm NPU compiler, runtime, and FastFlowLM wheels use
 [PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/)
 versions. The release train targets one stable version while development and
 release-candidate builds approach that version:
@@ -24,16 +24,17 @@ train. To begin a new train, change only:
 ```toml
 [wheel_release]
 base_version = "<new stable target>"
+compiler_python_stable_abi = "3.12"
+compiler_python_versions = ["3.12", "3.13", "3.14"]
 ```
 
 The release tooling reads this value when it generates an automatic development
 version. Workflows and documentation must not duplicate the current numeric
 base version.
 
-The top-level `schema_version` identifies the format of `release.toml`; it is
-independent of the wheel version. Leave it at `1` when changing
-`wheel_release.base_version`. Increment it only for an incompatible change to
-the policy file format, together with corresponding release-tooling support.
+The top-level `schema_version` identifies the policy format, not the wheel
+version. `compiler_python_stable_abi` sets the bindings ABI floor, and
+`compiler_python_versions` lists the supported interpreters.
 
 An explicit `package_version` supplied to a manual workflow dispatch overrides
 automatic development-version generation. Use that override for release
@@ -60,11 +61,23 @@ native closure satisfies that policy. The FastFlowLM wheel is conservatively
 tagged `linux_x86_64`: it resolves `libhrx.so.0` from the separately installed
 runtime wheel, while manylinux policy evaluates each wheel independently.
 
-The unified workflow builds Linux and Windows wheels in parallel from one
-immutable source commit, completes the platform-specific NPU validation, and
-publishes all four wheels under the platform-neutral `rocm-npu-v<version>` tag.
-Publication is atomic: a failed platform prevents creation of the immutable
-GitHub release.
+The compiler is a coordinated split distribution:
+
+- `rocm-npu-compiler` is the platform-neutral user-facing meta-package.
+- `rocm-npu-compiler-core` contains the LLVM/MLIR/IRON tools, headers, Peano
+  payload, and Python-independent native libraries once per platform.
+- `rocm-npu-compiler-bindings` contains the `aie` Python package and native
+  extensions built once against CPython 3.12's stable ABI. Its wheel tag is
+  `cp312-abi3`, which supports the validated Python 3.12 through 3.14 range.
+
+Both the meta-package and bindings require the matching core at exactly the
+same version. Moving the 127 MB `AIEAggregateCAPI` library into the core avoids
+duplicating it in every CPython bindings wheel. Importing `aie` activates the
+core wheel's native-library directory before loading its extension modules.
+
+The unified workflow builds and validates Linux and Windows wheels from one
+source commit. Publication under `rocm-npu-v<version>` occurs only after both
+platforms succeed.
 
 ## Manual workflow
 
@@ -74,6 +87,9 @@ uploads a temporary Actions artifact. With
 `publish_target=github-prerelease`, the final job publishes one GitHub
 prerelease after both builds, metadata checks, dependency resolution, and all
 NPU validations succeed.
+
+Pull-request CI builds one stable-ABI bindings wheel per platform and validates
+that same wheel on Python 3.12, 3.13, and 3.14.
 
 The workflow resolves the requested ref once and passes its immutable commit
 SHA through build, NPU validation, manifest generation, and release assembly.
@@ -104,6 +120,12 @@ py -m pip install --no-cache-dir --only-binary=:all: `
   --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" `
   "rocm-npu-fastflowlm==<version>"
 py -m pip check
+py -m pip install --no-cache-dir --only-binary=:all: `
+  --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" `
+  "rocm-npu-compiler==<version>"
+py -m pip check
+aie-opt --version
+aiecc --help
 ```
 
 ```bash
@@ -111,6 +133,12 @@ python3 -m pip install --no-cache-dir --only-binary=:all: \
   --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" \
   "rocm-npu-fastflowlm==<version>"
 python3 -m pip check
+python3 -m pip install --no-cache-dir --only-binary=:all: \
+  --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" \
+  "rocm-npu-compiler==<version>"
+python3 -m pip check
+aie-opt --version
+aiecc --help
 ```
 
 The release workflow creates GitHub build-provenance attestations for published

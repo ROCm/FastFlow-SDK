@@ -162,14 +162,15 @@ hrx-xclbinutil (xclbin packaging) ───────────────�
 ```
 
 System prerequisites for the compiler-stack flow (apt; cmake/ninja come from
-pip after setup): `sudo apt-get install -y gcc g++ python3-dev git make
+the uv-managed environment after setup): `sudo apt-get install -y gcc g++ python3-dev git make
 libssl-dev`. The canonical build toolchain is **gcc** (matching TheRock's
 pinned manylinux gcc-toolset). To build with clang locally instead, install
 `clang lld` and set `CC=clang CXX=clang++`.
 
 ```bash
-python3 dev.py doctor compiler-stack # check system prereqs, pins, patches, and prefetch
-python3 dev.py setup              # .venv + Python deps; cmake/ninja/Peano via pip
+python3 dev.py doctor compiler-stack # quick post-setup check: prereqs, pins, patches, prefetch
+python3 dev.py doctor compiler-stack --deep # also replay every patch series in a temporary Git index
+python3 dev.py setup              # .venv + cached uv install; cmake/ninja/Peano from wheels
 python3 dev.py build hrx-xclbinutil
 python3 dev.py build llvm         # LLVM+MLIR from the amd-llvm pin
 python3 dev.py build iron-tools   # aie-opt/aie-translate/bootgen against build/llvm

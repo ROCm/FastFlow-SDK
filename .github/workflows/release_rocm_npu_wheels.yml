@@ -152,6 +152,70 @@ jobs:
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: true
 
+  linux_compiler_wheels:
+    name: Build and validate Linux compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/build_rocm_npu_staging_linux.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Linux compiler wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+      run_npu_e2e: false
+
+  windows_compiler_wheels:
+    name: Build and validate Windows compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Windows compiler wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+      run_npu_e2e: false
+
+  linux_publish_compiler_wheels:
+    name: Build, validate, and attest Linux compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    uses: ./.github/workflows/build_rocm_npu_staging_linux.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      name: Linux compiler wheel prerelease
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: true
+      run_npu_e2e: false
+
+  windows_publish_compiler_wheels:
+    name: Build, validate, and attest Windows compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      name: Windows compiler wheel prerelease
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: true
+      run_npu_e2e: false
+
   collect:
     name: Collect release artifacts
     needs:
@@ -160,6 +224,10 @@ jobs:
       - windows_wheels
       - linux_publish_wheels
       - windows_publish_wheels
+      - linux_compiler_wheels
+      - windows_compiler_wheels
+      - linux_publish_compiler_wheels
+      - windows_publish_compiler_wheels
     if: >-
       ${{
         always() &&
@@ -168,12 +236,16 @@ jobs:
           (
             inputs.publish_target == 'none' &&
             needs.linux_wheels.result == 'success' &&
-            needs.windows_wheels.result == 'success'
+            needs.windows_wheels.result == 'success' &&
+            needs.linux_compiler_wheels.result == 'success' &&
+            needs.windows_compiler_wheels.result == 'success'
           ) ||
           (
             inputs.publish_target == 'github-prerelease' &&
             needs.linux_publish_wheels.result == 'success' &&
-            needs.windows_publish_wheels.result == 'success'
+            needs.windows_publish_wheels.result == 'success' &&
+            needs.linux_publish_compiler_wheels.result == 'success' &&
+            needs.windows_publish_compiler_wheels.result == 'success'
           )
         )
       }}
@@ -203,6 +275,18 @@ jobs:
           name: rocm-npu-runtime-fastflowlm-windows-x86_64
           path: wheelhouse/windows
 
+      - name: Download tested Linux compiler wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rocm-npu-compiler-wheels-linux-x86_64
+          path: wheelhouse/linux
+
+      - name: Download tested Windows compiler wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rocm-npu-compiler-wheels-windows-x86_64
+          path: wheelhouse/windows
+
       - name: Install release validation tools
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-release-wheels.lock
 
@@ -227,9 +311,12 @@ jobs:
             --tag-name "${ROCM_NPU_RELEASE_TAG}" \
             --source-ref "${ROCM_NPU_RELEASE_REF}" \
             --source-sha "${ROCM_NPU_SOURCE_SHA}" \
+            --expected-wheel-tag py3-none-any \
             --expected-wheel-tag py3-none-manylinux_2_28_x86_64 \
             --expected-wheel-tag py3-none-linux_x86_64 \
-            --expected-wheel-tag py3-none-win_amd64
+            --expected-wheel-tag py3-none-win_amd64 \
+            --expected-wheel-tag cp312-abi3-manylinux_2_28_x86_64 \
+            --expected-wheel-tag cp312-abi3-win_amd64
 
       - name: Resolve FastFlowLM runtime dependency for both platforms
         shell: bash
@@ -272,6 +359,66 @@ jobs:
           PY
           done
 
+      - name: Resolve compiler core and bindings for every supported Python
+        shell: bash
+        env:
+          ROCM_NPU_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          compiler_meta="release/rocm_npu_compiler-${ROCM_NPU_PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "${compiler_meta}"
+          for platform in linux windows; do
+            for python_minor in 3.12 3.13 3.14; do
+              python_tag="cp${python_minor/./}"
+              target="compiler-release-install-${platform}-${python_tag}"
+              if [[ "${platform}" == linux ]]; then
+                platform_args=(--platform manylinux_2_28_x86_64)
+              else
+                platform_args=(--platform win_amd64)
+              fi
+              python -m pip install \
+                --disable-pip-version-check \
+                --find-links release \
+                --only-binary=:all: \
+                "${platform_args[@]}" \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                --abi abi3 \
+                --target "${target}" \
+                "${compiler_meta}"
+              ROCM_NPU_INSTALL_TARGET="${target}" python - <<'PY'
+          import importlib.metadata as metadata
+          import os
+
+          from packaging.requirements import Requirement
+          from packaging.utils import canonicalize_name
+
+          from build_tools.rocm_npu_compiler_wheels import (
+              COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
+          )
+
+          version = os.environ["ROCM_NPU_PACKAGE_VERSION"]
+          target = os.environ["ROCM_NPU_INSTALL_TARGET"]
+          installed = {
+              canonicalize_name(distribution.metadata["Name"]): distribution.version
+              for distribution in metadata.distributions(path=[target])
+          }
+          expected = {
+              "rocm-npu-compiler": version,
+              "rocm-npu-compiler-core": version,
+              "rocm-npu-compiler-bindings": version,
+          }
+          for requirement_text in COMPILER_BINDINGS_RUNTIME_REQUIREMENTS:
+              requirement = Requirement(requirement_text)
+              specifiers = list(requirement.specifier)
+              assert len(specifiers) == 1 and specifiers[0].operator == "=="
+              expected[canonicalize_name(requirement.name)] = specifiers[0].version
+          assert expected.items() <= installed.items(), (expected, installed)
+          PY
+            done
+          done
+
       - name: Upload release payload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -311,7 +458,9 @@ jobs:
           name: ${{ needs.prepare.outputs.release_name }}
           commit: ${{ needs.prepare.outputs.source_sha }}
           body: |
-            Linux and Windows prerelease wheels for rocm-npu-runtime and rocm-npu-fastflowlm.
+            Linux and Windows prerelease wheels for the ROCm NPU compiler,
+            runtime, and FastFlowLM. Compiler bindings support CPython
+            3.12, 3.13, and 3.14.
 
             Source ref: ${{ needs.prepare.outputs.ref }}
             Source commit: ${{ needs.prepare.outputs.source_sha }}
@@ -321,6 +470,12 @@ jobs:
 
             ```console
             python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" rocm-npu-fastflowlm==${{ needs.prepare.outputs.package_version }}
+            ```
+
+            Install the matching compiler core and CPython bindings with:
+
+            ```console
+            python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" rocm-npu-compiler==${{ needs.prepare.outputs.package_version }}
             ```
           artifacts: "release/*.whl,release/*.sha256,release/SHA256SUMS,release/rocm-npu-release-manifest.json,release/index.html"
           artifactErrorsFailBuild: true
