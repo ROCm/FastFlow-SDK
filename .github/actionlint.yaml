@@ -8,5 +8,6 @@ self-hosted-runner:
     - linux-gfx1150-gpu-rocm-npu
     - linux-gfx1151-gpu-rocm
     - linux-gfx1152-gpu-rocm
+    - linux-gfx1153-gpu-rocm
     - windows-gfx1151-gpu-rocm
     - windows-gfx1152-gpu-rocm
