@@ -44,11 +44,16 @@ Ubuntu prerequisites:
 ```bash
 sudo apt-get install -y \
   bash build-essential ca-certificates curl git libdrm-dev libipc-cmd-perl \
-  linux-libc-dev make nasm patchelf perl pkg-config python3 python3-venv unzip \
-  zip zstd
+  linux-libc-dev make nasm perl pkg-config python3 python3-venv unzip zip
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
   sh -s -- -y --profile minimal --default-toolchain 1.97.0
 export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Extra Linux packaging prerequisites:
+
+```bash
+sudo apt-get install -y patchelf zstd
 ```
 
 Windows prerequisites (PowerShell, no WSL):
@@ -66,9 +71,8 @@ git config --global core.longpaths true
 
 On Linux and Windows, `dev.py setup --profile fastflowlm` installs the pinned
 Python and native dependencies into gitignored repository caches. The host
-package manager supplies only build tools and platform interfaces such as Linux
-libdrm, Linux UAPI headers, NASM, and Perl modules required by native build
-systems. CMake and Ninja come from `requirements-fastflowlm.lock`.
+package manager supplies only build tools and platform interfaces. CMake and
+Ninja come from `requirements-fastflowlm.lock`.
 
 FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
 HRX is installed to a clean prefix and FastFlowLM consumes its exported
@@ -86,13 +90,19 @@ python3 dev.py setup --profile fastflowlm
 python3 dev.py doctor fastflowlm
 python3 dev.py build hrx --fresh
 python3 dev.py build fastflowlm --fresh
-python3 dev.py package-fastflowlm
 python3 dev.py test-fastflowlm
 ```
 
 `package-fastflowlm` creates a relocatable Windows `.zip` or Linux `.tar.zst`,
 verifies it, and re-extracts it under `build/FastFlowLM-extracted/`. To recheck
-the extracted archive later, run:
+the packaging prerequisites and create the archive, run:
+
+```bash
+python3 dev.py doctor fastflowlm-packaging
+python3 dev.py package-fastflowlm
+```
+
+To recheck the extracted archive later, run:
 
 ```bash
 python3 dev.py verify-fastflowlm

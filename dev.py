@@ -412,7 +412,6 @@ def _check_fastflowlm_linux_host(verbose):
         ("git", bool(shutil.which("git")), "git"),
         ("make", bool(shutil.which("make")), "build-essential"),
         ("nasm", bool(shutil.which("nasm")), "nasm"),
-        ("patchelf", bool(shutil.which("patchelf")), "patchelf"),
         ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
         ("tar", bool(shutil.which("tar")), "tar"),
         ("unzip", bool(shutil.which("unzip")), "unzip"),
@@ -432,6 +431,31 @@ def _check_fastflowlm_linux_host(verbose):
         if not ok and package not in missing:
             missing.append(package)
     return not missing, missing
+
+
+def _check_fastflowlm_linux_packaging_tools(*, archive=False, verbose=False):
+    """Checks Linux-only tools needed after build, when packaging artifacts."""
+    checks = [("patchelf", bool(shutil.which("patchelf")), "patchelf")]
+    if archive:
+        checks.append(("zstd", bool(shutil.which("zstd")), "zstd"))
+    missing = []
+    for label, ok, package in checks:
+        if verbose:
+            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
+        if not ok and package not in missing:
+            missing.append(package)
+    return not missing, missing
+
+
+def _require_fastflowlm_linux_packaging_tools(*, archive=False):
+    if IS_WINDOWS:
+        return
+    ok, missing = _check_fastflowlm_linux_packaging_tools(archive=archive)
+    if not ok:
+        sys.exit(
+            "FastFlowLM Linux packaging prerequisite(s) are missing; install: "
+            "sudo apt-get install -y " + " ".join(sorted(set(missing)))
+        )
 
 
 def _check_compiler_stack_system(verbose):
@@ -509,10 +533,24 @@ def _check_fastflowlm_system(verbose):
     return (host_ok and not native_errors, missing)
 
 
+def _check_fastflowlm_packaging_system(verbose):
+    """Return (ok, missing_packages) for the HRX/FLM artifact packaging path."""
+    build_ok, build_missing = _check_fastflowlm_system(verbose)
+    if IS_WINDOWS:
+        return build_ok, build_missing
+    if verbose:
+        print("  packaging:")
+    package_ok, package_missing = _check_fastflowlm_linux_packaging_tools(
+        archive=True, verbose=verbose)
+    return build_ok and package_ok, sorted(set(build_missing + package_missing))
+
+
 def check_system(profile="compiler-stack", verbose=True):
     """Return (ok, missing_apt_packages) for a doctor profile."""
     if profile == "fastflowlm":
         return _check_fastflowlm_system(verbose)
+    if profile == "fastflowlm-packaging":
+        return _check_fastflowlm_packaging_system(verbose)
     if profile == "compiler-stack":
         return _check_compiler_stack_system(verbose)
     if profile == "all":
@@ -801,6 +839,7 @@ PIN_SECTION_TO_SUBMODULE = {
 DOCTOR_PROFILE_SUBMODULES = {
     "compiler-stack": {"llvm-project", "iron-tools", "hrx", "hrx-xclbinutil", "iron-ops"},
     "fastflowlm": {"hrx", "FastFlowLM"},
+    "fastflowlm-packaging": {"hrx", "FastFlowLM"},
     "all": set(PIN_SECTION_TO_SUBMODULE.values()),
 }
 SETUP_PROFILE_SUBMODULES = {
@@ -1488,6 +1527,7 @@ def _verify_fastflowlm_fresh_installs():
 
 def cmd_package_fastflowlm(args):
     """Create and independently re-extract the relocatable FLM + HRX runtime."""
+    _require_fastflowlm_linux_packaging_tools(archive=True)
     _verify_fastflowlm_fresh_installs()
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
                                   FASTFLOWLM_BUNDLE_STAGE)
@@ -1503,6 +1543,7 @@ def cmd_package_fastflowlm_wheels(args):
     """Build split rocm-npu-runtime and rocm-npu-fastflowlm Linux wheels."""
     if IS_WINDOWS:
         sys.exit("rocm-npu runtime/FastFlowLM wheel packaging is Linux-only for now")
+    _require_fastflowlm_linux_packaging_tools()
     _verify_fastflowlm_fresh_installs()
     version = args.version or default_package_version(ROOT)
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
