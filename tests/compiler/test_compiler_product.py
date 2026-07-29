@@ -617,7 +617,7 @@ class CompilerProductTest(unittest.TestCase):
             prefix = Path(temporary)
             self.write_file(prefix / "bin" / f"aie-opt{run_e2e.EXE}", executable=True)
             self.write_file(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", executable=True)
-            self.write_file(prefix / "python" / "aie" / "compiler" / "aiecc" / "main.py")
+            self.write_file(prefix / "python" / "aie" / "ir.py")
             self.write_file(prefix / "python" / "probe.py", b"VALUE = 1\n")
             (prefix / "peano" / "llvm-aie").mkdir(parents=True)
             (prefix / "third_party" / "aie_api").mkdir(parents=True)
@@ -648,7 +648,7 @@ class CompilerProductTest(unittest.TestCase):
             self.write_file(prefix / "bin" / f"aie-opt{run_e2e.EXE}", executable=True)
             self.write_file(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", executable=True)
             self.write_file(
-                site_packages / "aie" / "compiler" / "aiecc" / "main.py"
+                site_packages / "aie" / "ir.py"
             )
             (prefix / "peano" / "llvm-aie").mkdir(parents=True)
             (prefix / "third_party" / "aie_api").mkdir(parents=True)

@@ -1543,6 +1543,11 @@ def _stage_compiler_product():
     license_sources = (
         (ROOT / "LICENSE", "rocm-npu-staging-LICENSE"),
         (PROJ / "iron-tools" / "LICENSE", "iron-tools-LICENSE"),
+        # hrx-xclbinutil declares Apache-2.0 in its checked-in CMakeLists.txt,
+        # but the copy now vendored under mlir-aie's third_party does not carry a
+        # standalone LICENSE. Stage this repository's identical Apache-2.0 terms
+        # under the component-specific name so the product remains license-complete.
+        (ROOT / "LICENSE", "hrx-xclbinutil-LICENSE"),
         (PROJ / "llvm-project" / "llvm" / "LICENSE.TXT", "llvm-LICENSE.txt"),
         (
             PROJ / "iron-tools" / "third_party" / "aie_api" / "LICENSE",

@@ -214,17 +214,7 @@ build actually changes.
 **Remove when:** upstreamed to mlir-aie. All hunks are upstreamable as-is; none is
 specific to this stack.
 
-### 0005-gate-xrt-scratchpad-binding.patch
-Makes `_parameter_scratchpad` honor `AIE_ENABLE_XRT_PYTHON_BINDINGS`. The helper
-is part of the XRT host-runtime API but upstream builds it whenever pybind11 is
-found, even when the rest of the XRT Python API is disabled. The HRX compiler
-product sets this option to `OFF`, so neither `_xrt` nor
-`_parameter_scratchpad` is built.
-
-**Remove when:** upstream gates `_parameter_scratchpad` with the XRT Python
-bindings option.
-
-### 0006-eudsl-download-no-build-isolation.patch
+### 0005-eudsl-download-no-build-isolation.patch
 Adds `--no-build-isolation` to the `pip download` in `vendor_eudsl.py`'s `install_eudsl`,
 mirroring the flag already on its `pip install` step. eudsl is vendored from an sdist
 (`--no-binary`), so pip must build its metadata; by default that happens in an isolated
@@ -240,7 +230,7 @@ step, so the download regressed to isolated builds that break under `PIP_NO_INDE
 **Remove when:** mlir-aie's `vendor_eudsl.py` passes `--no-build-isolation` on the download
 command upstream too.
 
-### 0007-mlir-core-type-stubs-from-build-tree.patch
+### 0006-mlir-core-type-stubs-from-build-tree.patch
 Makes the "Staging MLIR core type stubs for pyright" step in `python/CMakeLists.txt` pick
 the stub directory that actually exists: the install layout
 (`${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/`) when present,
