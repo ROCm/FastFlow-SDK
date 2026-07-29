@@ -126,6 +126,7 @@ jobs:
       - name: Validate and test build tooling
         run: |
           .venv/bin/python dev.py doctor fastflowlm
+          .venv/bin/python dev.py doctor fastflowlm-packaging
           .venv/bin/python -m unittest discover -s tests/npu -p 'test_npu_probe.py'
           .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
           .venv/bin/python -m unittest discover -s tests/wheels -p 'test_*.py'

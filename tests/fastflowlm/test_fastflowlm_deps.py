@@ -4,8 +4,10 @@
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
+import dev
 from build_tools.fastflowlm_deps import (
     dependency_errors,
     dependency_policy,
@@ -70,14 +72,60 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
         self.assertIn("VersionInfo.FileVersion", workflow)
         self.assertNotIn("(& cl 2>&1", workflow)
 
-    def test_linux_ci_installs_vcpkg_host_prerequisites(self):
+    def test_linux_ci_separates_build_and_packaging_prerequisites(self):
         workflow = (
             ROOT / ".github/workflows/fastflowlm_hrx_linux.yml"
         ).read_text()
         for package in (
-            "bash", "kernel-headers", "nasm", "patchelf", "perl", "perl-IPC-Cmd"
+            "bash", "kernel-headers", "nasm", "patchelf", "perl",
+            "perl-IPC-Cmd", "zstd"
         ):
             self.assertIn(package, workflow)
+        self.assertIn("dev.py doctor fastflowlm-packaging", workflow)
+
+    def test_fastflowlm_build_gate_requires_nasm_but_not_packaging_tools(self):
+        available = {
+            "bash", "curl", "gcc", "g++", "git", "make", "pkg-config", "tar",
+            "nasm", "unzip",
+        }
+
+        def which(name):
+            return f"/usr/bin/{name}" if name in available else None
+
+        with (
+            mock.patch.object(dev.shutil, "which", side_effect=which),
+            mock.patch.object(dev, "_compilers", return_value=("gcc", "g++")),
+            mock.patch.object(dev, "_have_header", return_value=True),
+            mock.patch.object(dev, "_have_perl_module", return_value=True),
+        ):
+            ok, missing = dev._check_fastflowlm_linux_host(verbose=False)
+
+        self.assertTrue(ok)
+        self.assertEqual(missing, [])
+
+        with (
+            mock.patch.object(
+                dev.shutil,
+                "which",
+                side_effect=lambda name: which(name) if name != "nasm" else None,
+            ),
+            mock.patch.object(dev, "_compilers", return_value=("gcc", "g++")),
+            mock.patch.object(dev, "_have_header", return_value=True),
+            mock.patch.object(dev, "_have_perl_module", return_value=True),
+        ):
+            ok, missing = dev._check_fastflowlm_linux_host(verbose=False)
+
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["nasm"])
+
+    def test_fastflowlm_packaging_gate_reports_packaging_tools_only(self):
+        with mock.patch.object(dev.shutil, "which", return_value=None):
+            ok, missing = dev._check_fastflowlm_linux_packaging_tools(
+                archive=True, verbose=False)
+
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["patchelf", "zstd"])
+        self.assertNotIn("nasm", missing)
 
     def test_vcpkg_caches_are_saved_only_after_complete_setup(self):
         for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):
