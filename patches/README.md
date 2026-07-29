@@ -261,3 +261,17 @@ failing the build. The stubs are generated in the build tree, just at a differen
 
 **Remove when:** mlir-aie sources these stubs from the build tree (or this stack builds
 against an installed MLIR).
+
+### 0007-aiecc-capture-stdio-maybe-unused.patch
+Marks the `CaptureStdio` members `out`, `savedOut`, and `savedErr` in
+`tools/aiecc/Utils.h` as `[[maybe_unused]]`. These are only read inside the
+class's `#ifndef _WIN32` stdout/stderr redirect implementation; on Windows the
+constructor and destructor bodies compile out, leaving these trivial members
+unread. clang-cl then emits `-Wunused-private-field`, which the native `aiecc`
+target promotes to an error via `-Werror=unused`, breaking the Windows build.
+(`tmpPath` needs no annotation — its `std::string` destructor already counts as
+a use.) gcc does not implement this clang-only diagnostic, so the change is a
+no-op on Linux.
+
+**Remove when:** upstream mlir-aie compiles `tools/aiecc/Utils.h` cleanly under
+clang-cl (annotates the fields, or `#if`-guards them out on Windows).

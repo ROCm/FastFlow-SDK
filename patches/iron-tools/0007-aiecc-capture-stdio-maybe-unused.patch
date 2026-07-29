@@ -1,0 +1,20 @@
+diff --git a/tools/aiecc/Utils.h b/tools/aiecc/Utils.h
+index e8609ab486d..0252bc4004a 100644
+--- a/tools/aiecc/Utils.h
++++ b/tools/aiecc/Utils.h
+@@ -88,8 +88,13 @@ public:
+   CaptureStdio &operator=(const CaptureStdio &) = delete;
+ 
+ private:
+-  std::string &out;
+-  int savedOut = -1, savedErr = -1;
++  // Only read inside the non-Windows redirect implementation above; on Windows
++  // the constructor/destructor bodies compile out, leaving these trivial members
++  // unread. Mark them [[maybe_unused]] so clang-cl's -Wunused-private-field
++  // (promoted by -Werror=unused) does not fail the Windows build. (tmpPath needs
++  // no annotation: its std::string destructor already counts as a use.)
++  [[maybe_unused]] std::string &out;
++  [[maybe_unused]] int savedOut = -1, savedErr = -1;
+   std::string tmpPath;
+ };
+ 
