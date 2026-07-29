@@ -312,6 +312,7 @@ jobs:
           - linux-gfx1150-gpu-rocm-npu
           - linux-gfx1151-gpu-rocm
           - linux-gfx1152-gpu-rocm
+          - linux-gfx1153-gpu-rocm
     runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 60
     container:
