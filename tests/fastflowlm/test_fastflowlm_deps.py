@@ -144,10 +144,19 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
         if not cmake.exists():
             self.skipTest("FastFlowLM submodule is not initialized")
         contents = cmake.read_text()
+        # Guard against the misspelled command name.
         self.assertNotIn("install(RUNTIME_DEPENDENCIES", contents)
+        # Windows bundles its runtime dependencies via an install-time
+        # RUNTIME_DEPENDENCY_SET.
         self.assertGreaterEqual(
-            contents.count("install(RUNTIME_DEPENDENCY_SET"), 2
+            contents.count("install(RUNTIME_DEPENDENCY_SET"), 1
         )
+        # Linux resolves the closure with CMake's dependency machinery too, but
+        # scans flm together with the prebuilt engine .so as ROOTS via
+        # file(GET_RUNTIME_DEPENDENCIES). Roots are traversed for their deps but
+        # never emitted, so the engine libs' private deps (libgomp/libmvec) are
+        # bundled without dropping unpatched engine copies into the lib dir.
+        self.assertIn("file(GET_RUNTIME_DEPENDENCIES", contents)
 
     def test_windows_and_linux_use_repository_managed_trees(self):
         with tempfile.TemporaryDirectory() as temporary:

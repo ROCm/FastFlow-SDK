@@ -75,17 +75,7 @@ or upstream hrx carries equivalent driver/firmware capability gating.
 
 ## patches/FastFlowLM/
 
-### 0001-use-hrx-map-with-mode.patch
-Updates the FastFlowLM C++ HRX wrapper to call `hrx_buffer_map_with_mode` with
-`HRX_MAPPING_MODE_PERSISTENT` instead of the removed `hrx_buffer_map_persistent`
-helper.
-
-**Why:** the pinned HRX public header no longer declares `hrx_buffer_map_persistent`
-for new code.
-
-**Remove when:** FastFlowLM PR #602 is updated for the current HRX API.
-
-### 0002-support-redirected-windows-cli-input.patch
+### 0001-support-redirected-windows-cli-input.patch
 Keeps FastFlowLM's Unicode console editor for an interactive Windows console,
 but reads from `std::cin` when stdin is redirected. It also changes console modes
 only when `GetConsoleMode` confirms that the corresponding standard handle is a
@@ -97,7 +87,7 @@ causes a busy loop at the prompt. The POSIX CLI already treats EOF as `/bye`.
 
 **Remove when:** equivalent redirected-input handling lands in FastFlowLM.
 
-### 0003-remove-configured-runtime-paths.patch
+### 0002-remove-configured-runtime-paths.patch
 Removes compile-time install and xclbin prefixes from `flm.exe`, together with
 their obsolete runtime fallback branches. FastFlowLM already checks explicit
 environment variables and paths relative to its executable.
