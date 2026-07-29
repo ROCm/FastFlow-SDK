@@ -1,0 +1,60 @@
+diff --git a/iron/common/compilation/base.py b/iron/common/compilation/base.py
+index dd20199..21b75d0 100644
+--- a/iron/common/compilation/base.py
++++ b/iron/common/compilation/base.py
+@@ -507,9 +507,9 @@ class AieccFullElfCompilationRule(AieccCompilationRule):
+         for artifact in worklist:
+             compile_cmd = [
+                 str(self.aiecc_path),
+-                "-v",
+-                "-j1",
+-                "--no-compile-host",
++                "--verbose",
++                "-j",
++                "1",
+             ]
+             if self.use_chess:
+                 compile_cmd += [
+@@ -525,7 +525,7 @@ class AieccFullElfCompilationRule(AieccCompilationRule):
+                 ]
+             compile_cmd += [
+                 "--expand-load-pdis",
+-                "--generate-full-elf",
++                "--get-full-elf",
+                 "--full-elf-name",
+                 os.path.abspath(artifact.filename),
+                 os.path.abspath(artifact.mlir_input.filename),
+@@ -561,9 +561,9 @@ class AieccXclbinInstsCompilationRule(AieccCompilationRule):
+         for mlir_source in mlir_sources:
+             compile_cmd = [
+                 str(self.aiecc_path),
+-                "-v",
+-                "-j1",
+-                "--no-compile-host",
++                "--verbose",
++                "-j",
++                "1",
+             ]
+             if self.use_chess:
+                 compile_cmd += [
+@@ -587,7 +587,7 @@ class AieccXclbinInstsCompilationRule(AieccCompilationRule):
+                     0
+                 ]  # TODO: this does not handle the case of multiple xclbins with different kernel names or flags from the same MLIR
+                 compile_cmd += first_xclbin.extra_flags + [
+-                    "--aie-generate-xclbin",
++                    "--get-xclbin",
+                     "--xclbin-name=" + os.path.abspath(first_xclbin.filename),
+                     "--xclbin-kernel-name=" + first_xclbin.kernel_name,
+                 ]
+@@ -600,10 +600,8 @@ class AieccXclbinInstsCompilationRule(AieccCompilationRule):
+                 first_insts_bin = mlir_sources_to_insts[mlir_source][
+                     0
+                 ]  # TODO: this does not handle the case of multiple insts.bins with different flags from the same MLIR
+-                if not do_compile_xclbin:
+-                    compile_cmd += ["--no-compile"]
+                 compile_cmd += first_insts_bin.extra_flags + [
+-                    "--aie-generate-npu-insts",
++                    "--get-npu-insts",
+                     "--npu-insts-name=" + os.path.abspath(first_insts_bin.filename),
+                 ]
+             compile_cmd += [os.path.abspath(mlir_source.filename)]
