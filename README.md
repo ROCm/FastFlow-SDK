@@ -168,8 +168,12 @@ The stack, built from source against one ROCm LLVM except for the Peano wheel:
 LLVM+MLIR (ROCm amd-llvm pin, LLVM 23) ──┐
                                          ├─ iron-tools/IRON design ─ .xclbin
 Peano (llvm-aie wheel, AIE codegen) ─────┘                         │
-hrx-xclbinutil (xclbin packaging) ─────────────────────────────────┘  ─ HRX amdxdna HAL extracts PDI
+hrx-xclbinutil (xclbin packaging; vendored in mlir-aie) ───────────┘  ─ HRX amdxdna HAL extracts PDI
 ```
+
+`hrx-xclbinutil` is no longer a standalone submodule: it lives inside mlir-aie at
+`projects/iron-tools/third_party/hrx-xclbinutil` and is pulled in by the recursive
+`iron-tools` submodule init. `dev.py build hrx-xclbinutil` builds that nested checkout.
 
 System prerequisites for the compiler-stack flow (apt; cmake/ninja come from
 the uv-managed environment after setup): `sudo apt-get install -y gcc g++ python3-dev git make

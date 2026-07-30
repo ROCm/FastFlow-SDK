@@ -1,0 +1,35 @@
+diff --git a/python/CMakeLists.txt b/python/CMakeLists.txt
+index 9af332d1ea8..d8825a864ff 100644
+--- a/python/CMakeLists.txt
++++ b/python/CMakeLists.txt
+@@ -231,13 +231,26 @@ install(
+ # `from ._mlir_libs._mlir.ir import *`; the .py sources we assemble don't carry
+ # their types, so a static type checker can only resolve them from these stubs.
+ # They ship with the MLIR distro but aren't copied by add_mlir_python_modules.
++#
++# The stubs live at different paths depending on how MLIR is consumed: an install
++# tree exposes them under
++# ${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/, while a
++# from-source build against the LLVM build tree (no install) generates them under
++# ${LLVM_BINARY_DIR}/tools/mlir/python/type_stubs/. Pick whichever exists so both
++# the wheel build and a source build against build/llvm work.
++set(_aie_mlir_core_stub_dir
++    "${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/_mlir_libs/_mlir")
++if(NOT EXISTS "${_aie_mlir_core_stub_dir}/ir.pyi")
++  set(_aie_mlir_core_stub_dir
++      "${LLVM_BINARY_DIR}/tools/mlir/python/type_stubs/_mlir_libs/_mlir")
++endif()
+ add_custom_command(
+   TARGET AIEPythonModules POST_BUILD
+   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+-    "${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/_mlir_libs/_mlir/__init__.pyi"
+-    "${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/_mlir_libs/_mlir/ir.pyi"
+-    "${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/_mlir_libs/_mlir/passmanager.pyi"
+-    "${MLIR_INSTALL_PREFIX}/src/python/MLIRPythonExtension.Core.type_stub_gen/_mlir_libs/_mlir/rewrite.pyi"
++    "${_aie_mlir_core_stub_dir}/__init__.pyi"
++    "${_aie_mlir_core_stub_dir}/ir.pyi"
++    "${_aie_mlir_core_stub_dir}/passmanager.pyi"
++    "${_aie_mlir_core_stub_dir}/rewrite.pyi"
+     "${AIE_PYTHON_PACKAGES_DIR}/aie/_mlir_libs/_mlir/"
+   COMMENT "Staging MLIR core type stubs for pyright"
+ )

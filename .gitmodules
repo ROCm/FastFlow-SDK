@@ -10,10 +10,6 @@
 	url = https://github.com/jtuyls/hrx.git
 	branch = amdxdna-hal-native-rel
 	ignore = dirty
-[submodule "projects/hrx-xclbinutil"]
-	path = projects/hrx-xclbinutil
-	url = https://github.com/jtuyls/hrx-xclbinutil.git
-	branch = main
 [submodule "projects/iron-ops"]
 	path = projects/iron-ops
 	url = https://github.com/amd/IRON.git

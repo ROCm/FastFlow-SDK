@@ -251,7 +251,7 @@ jobs:
       # markedly slower on this runner than on Linux. The build needs the pinned trees,
       # not history; check_pins/patches work on shallow checkouts.
       - name: Initialize submodules
-        run: python dev.py submodules llvm-project hrx hrx-xclbinutil iron-tools iron-ops --shallow
+        run: python dev.py submodules llvm-project hrx iron-tools iron-ops --shallow
       # setup creates .venv, installs the pinned requirements (including the Python
       # zstandard codec used to package the compiler product), applies the temporary
       # patches, and prefetches the eudsl sdist (the single network step).
