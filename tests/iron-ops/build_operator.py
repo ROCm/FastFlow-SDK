@@ -35,7 +35,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
 sys.path[:0] = [str(HERE), str(ROOT / "tests" / "e2e"), str(ROOT)]
-import dev  # noqa: E402   (TXN DevGen check + the NPU generation table)
+from build_tools.dev import iron  # noqa: E402
 import run_e2e  # noqa: E402   (toolchain paths + the xclbin section check)
 import suite  # noqa: E402   (the operator table)
 
@@ -151,7 +151,7 @@ def build(operator_spec: suite.Operator, device: str, build_root: Path) -> None:
         run_e2e.require_xclbinutil(run_e2e.compiler_prefix_from_env()),
         xclbin,
     )
-    dev._require_txn_devgen(insts, device)
+    iron.require_txn_devgen(insts, device)
 
 
 def main(argv: list[str]) -> int:

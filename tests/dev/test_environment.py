@@ -51,7 +51,7 @@ class EnvironmentTest(unittest.TestCase):
             uv.touch()
             with mock.patch.object(environment, "uv_bin", return_value=uv), \
                     mock.patch.object(environment.subprocess, "run") as run:
-                environment._python_install(
+                environment.python_install(
                     Path("python"),
                     "example",
                     refresh_packages=("one", "two"),
@@ -83,7 +83,7 @@ class EnvironmentTest(unittest.TestCase):
                     return_value=Path(temporary) / "missing-uv",
                 ), \
                 mock.patch.object(environment.subprocess, "run") as run:
-            environment._python_install("python", "--upgrade", "example")
+            environment.python_install("python", "--upgrade", "example")
 
         self.assertEqual(
             run.call_args.args[0],
@@ -113,7 +113,7 @@ class EnvironmentTest(unittest.TestCase):
                     clear=True,
                 ), \
                 mock.patch.object(environment.subprocess, "run") as run:
-            environment._python_install("python", "example")
+            environment.python_install("python", "example")
 
         self.assertNotIn("SSL_CERT_FILE", run.call_args.kwargs["env"])
 
@@ -131,7 +131,7 @@ class EnvironmentTest(unittest.TestCase):
                         clear=True,
                     ), \
                     mock.patch.object(environment.subprocess, "run") as run:
-                environment._python_install("python", "example")
+                environment.python_install("python", "example")
 
         self.assertEqual(
             run.call_args.kwargs["env"]["SSL_CERT_FILE"],
@@ -148,7 +148,7 @@ class EnvironmentTest(unittest.TestCase):
 
     def test_cmake_source_override_is_empty_when_unset(self):
         with mock.patch.dict(environment.os.environ, {}, clear=True):
-            self.assertEqual(environment._cmake_source_override("TEST_SOURCE"), [])
+            self.assertEqual(environment.cmake_source_override("TEST_SOURCE"), [])
 
 
 if __name__ == "__main__":

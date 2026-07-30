@@ -3,6 +3,7 @@
 
 import json
 import os
+import platform
 import subprocess
 import sys
 import sysconfig
@@ -19,9 +20,11 @@ sys.path[:0] = [
     str(ROOT / "tests" / "compiler"),
 ]
 
-import dev  # noqa: E402
+from build_tools import compiler_product, compiler_wheels, npu_prereqs, npu_test_package  # noqa: E402
+from build_tools.fastflowlm_artifact import extract_archive, sha256_file  # noqa: E402
 import run_e2e  # noqa: E402
 import verify_compiler_bindings  # noqa: E402
+from build_tools.dev import build, paths  # noqa: E402
 
 
 class CompilerProductTest(unittest.TestCase):
@@ -39,19 +42,22 @@ class CompilerProductTest(unittest.TestCase):
     ) -> Path:
         product = root / artifact
         required_tools = []
-        for name in [*dev.NPU_PREREQ_TOOLS, "xclbinutil"]:
-            tool = f"{name}{dev._EXE}"
+        for name in [
+            *compiler_product.NPU_PREREQ_TOOLS,
+            "xclbinutil",
+            "llvm-objcopy",
+        ]:
+            tool = f"{name}{compiler_product._EXE}"
             self.write_file(product / "bin" / tool, executable=True)
             required_tools.append(f"bin/{tool}")
         for relative in (
             "python/aie/ir.py",
-            "python/aie/compiler/aiecc/main.py",
             "include/aie_api/aie.hpp",
             "aie_runtime_lib/AIE2P/vec_math.h",
             "peano/llvm-aie/README.txt",
             "third_party/aie_api/README.txt",
             "lib/.keep",
-            *(f"licenses/{name}" for name in dev.COMPILER_PRODUCT_LICENSES),
+            *(f"licenses/{name}" for name in compiler_product.COMPILER_PRODUCT_LICENSES),
         ):
             self.write_file(product / relative)
         if include_build_metadata:
@@ -61,7 +67,7 @@ class CompilerProductTest(unittest.TestCase):
         for path in sorted(p for p in product.rglob("*") if p.is_file()):
             files.append({"path": path.relative_to(product).as_posix(),
                           "size": path.stat().st_size,
-                          "sha256": dev.sha256_file(path)})
+                          "sha256": sha256_file(path)})
         (product / "manifest.json").write_text(json.dumps({
             "schema_version": 1,
             "product": "rocm-npu-compiler",
@@ -73,10 +79,10 @@ class CompilerProductTest(unittest.TestCase):
 
     def test_product_name_is_public_and_platform_normalized(self):
         self.assertEqual(
-            dev._compiler_product_name("Linux", "AMD64"),
+            compiler_product._compiler_product_name("Linux", "AMD64"),
             "rocm-npu-compiler-linux-x86_64",
         )
-        self.assertNotIn("staging", dev._compiler_product_name("Windows", "x86_64"))
+        self.assertNotIn("staging", compiler_product._compiler_product_name("Windows", "x86_64"))
 
     def test_iron_tools_build_does_not_resolve_virtualenv_python(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -95,25 +101,35 @@ class CompilerProductTest(unittest.TestCase):
                 return original_resolve(path, *args, **kwargs)
 
             with (
-                mock.patch.object(dev, "BUILD", root),
-                mock.patch.object(dev, "_eudsl_cache_ok", return_value=True),
-                mock.patch.object(dev, "_compilers", return_value=("cc", "c++")),
-                mock.patch.object(dev, "_cc_flags", return_value=[]),
-                mock.patch.object(dev, "_ccache_flags", return_value=[]),
-                mock.patch.object(dev, "cmake_env", return_value={}),
-                mock.patch.object(dev, "cmake_bin", return_value="cmake"),
-                mock.patch.object(dev, "sh") as run,
+                mock.patch.object(paths, "BUILD", root),
+                mock.patch.object(
+                    build.patches, "eudsl_cache_ok", return_value=True
+                ),
+                mock.patch.object(
+                    build.environment,
+                    "compilers",
+                    return_value=("cc", "c++"),
+                ),
+                mock.patch.object(build, "_cc_flags", return_value=[]),
+                mock.patch.object(build, "_ccache_flags", return_value=[]),
+                mock.patch.object(
+                    build.environment, "cmake_env", return_value={}
+                ),
+                mock.patch.object(
+                    build.environment, "cmake_bin", return_value="cmake"
+                ),
+                mock.patch.object(build.environment, "sh") as run,
                 mock.patch.object(Path, "resolve", reject_python_resolve),
             ):
-                dev._build_iron_tools(venv_python, bdir, install_dir)
+                build.build_iron_tools(venv_python, bdir, install_dir)
 
             configure_command = run.call_args_list[0].args[0]
             self.assertIn(
-                f"-DPython3_EXECUTABLE={dev.cmake_path(venv_python.absolute())}",
+                f"-DPython3_EXECUTABLE={build.environment.cmake_path(venv_python.absolute())}",
                 configure_command,
             )
             self.assertIn(
-                f"-DPython_EXECUTABLE={dev.cmake_path(venv_python.absolute())}",
+                f"-DPython_EXECUTABLE={build.environment.cmake_path(venv_python.absolute())}",
                 configure_command,
             )
             self.assertIn("-DMLIR_ENABLE_PYTHON_STABLE_ABI=ON", configure_command)
@@ -138,8 +154,8 @@ class CompilerProductTest(unittest.TestCase):
         )
 
     def test_wheel_verification_runs_binding_conformance_with_current_minor(self):
-        with mock.patch.object(dev.subprocess, "run") as run:
-            dev._verify_installed_compiler_bindings(Path("venv-python"))
+        with mock.patch.object(compiler_wheels.subprocess, "run") as run:
+            compiler_wheels._verify_installed_compiler_bindings(Path("venv-python"))
 
         command = run.call_args.args[0]
         self.assertEqual(command[0], Path("venv-python"))
@@ -152,10 +168,14 @@ class CompilerProductTest(unittest.TestCase):
     def test_consumer_only_verification_skips_static_wheel_scans(self):
         args = SimpleNamespace(consumer_only=True)
         with (
-            mock.patch.object(dev, "_verify_compiler_wheel_consumer") as consumer,
-            mock.patch.object(dev, "_compiler_wheel_files") as static_scan,
+            mock.patch.object(
+                compiler_wheels, "_verify_compiler_wheel_consumer"
+            ) as consumer,
+            mock.patch.object(
+                compiler_wheels, "_compiler_wheel_files"
+            ) as static_scan,
         ):
-            dev.cmd_verify_compiler_wheels(args)
+            compiler_wheels.cmd_verify_compiler_wheels(args)
 
         consumer.assert_called_once_with(args)
         static_scan.assert_not_called()
@@ -179,12 +199,14 @@ class CompilerProductTest(unittest.TestCase):
             self.write_file(site_packages / "numpy" / "__init__.py", b"")
             destination = root / "build" / "consumer"
             with (
-                mock.patch.object(dev, "BUILD", root / "build"),
+                mock.patch.object(compiler_wheels, "BUILD", root / "build"),
                 mock.patch.object(
-                    dev, "_compiler_site_packages", return_value=site_packages
+                    compiler_wheels,
+                    "_compiler_site_packages",
+                    return_value=site_packages,
                 ),
             ):
-                dev._export_compiler_consumer_root(
+                compiler_wheels._export_compiler_consumer_root(
                     Path("python"), destination)
 
             self.assertTrue((destination / "aie" / "__init__.py").is_file())
@@ -196,7 +218,7 @@ class CompilerProductTest(unittest.TestCase):
 
     def test_compiler_site_packages_uses_platform_purelib(self):
         self.assertEqual(
-            dev._compiler_site_packages(Path(sys.executable)),
+            compiler_wheels._compiler_site_packages(Path(sys.executable)),
             Path(sysconfig.get_path("purelib")),
         )
 
@@ -214,12 +236,16 @@ class CompilerProductTest(unittest.TestCase):
                 venv=str(root / "build" / "venv"),
             )
             with (
-                mock.patch.object(dev, "BUILD", root / "build"),
-                mock.patch.object(dev, "_python_install"),
-                mock.patch.object(dev, "_verify_installed_compiler_bindings"),
-                mock.patch.object(dev.subprocess, "run") as run,
+                mock.patch.object(compiler_wheels, "BUILD", root / "build"),
+                mock.patch.object(
+                    compiler_wheels.environment, "python_install"
+                ),
+                mock.patch.object(
+                    compiler_wheels, "_verify_installed_compiler_bindings"
+                ),
+                mock.patch.object(compiler_wheels.subprocess, "run") as run,
             ):
-                dev._verify_compiler_wheel_consumer(args)
+                compiler_wheels._verify_compiler_wheel_consumer(args)
 
             e2e = run.call_args_list[-1]
             self.assertTrue(str(e2e.args[0][1]).endswith("run_e2e.py"))
@@ -229,7 +255,7 @@ class CompilerProductTest(unittest.TestCase):
             )
             self.assertEqual(
                 e2e.kwargs["env"]["ROCM_NPU_CMAKE"],
-                dev.cmake_bin(),
+                compiler_wheels.cmake_bin(),
             )
 
     def test_compiler_product_can_extract_to_explicit_short_root(self):
@@ -237,14 +263,18 @@ class CompilerProductTest(unittest.TestCase):
             short_root = Path(temporary) / "rnc"
             archive = Path(temporary) / "compiler.zip"
             with (
-                mock.patch.object(dev, "_find_compiler_product_archive",
-                                  return_value=archive),
                 mock.patch.object(
-                    dev, "extract_fastflowlm_archive",
+                    compiler_product,
+                    "_find_compiler_product_archive",
+                    return_value=archive,
+                ),
+                mock.patch.object(
+                    compiler_product,
+                    "extract_archive",
                     return_value=short_root / "rocm-npu-compiler-windows-x86_64",
                 ) as extract,
             ):
-                dev.cmd_unpack_compiler_product(SimpleNamespace(
+                compiler_product.cmd_unpack_compiler_product(SimpleNamespace(
                     dir=Path(temporary), output_dir=str(short_root)))
 
             extract.assert_called_once_with(
@@ -253,7 +283,7 @@ class CompilerProductTest(unittest.TestCase):
     def test_inventory_accepts_complete_product(self):
         with tempfile.TemporaryDirectory() as temporary:
             product = self.make_product(Path(temporary))
-            manifest = dev._verify_compiler_product_inventory(product)
+            manifest = compiler_product.verify_product_inventory(product)
             self.assertEqual(manifest["product"], "rocm-npu-compiler")
 
     def test_inventory_rejects_staging_artifact_name(self):
@@ -261,14 +291,14 @@ class CompilerProductTest(unittest.TestCase):
             product = self.make_product(
                 Path(temporary), "rocm-npu-staging-compiler-linux-x86_64")
             with self.assertRaisesRegex(RuntimeError, "must not include staging"):
-                dev._verify_compiler_product_inventory(product)
+                compiler_product.verify_product_inventory(product)
 
     def test_inventory_rejects_build_system_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             product = self.make_product(
                 Path(temporary), include_build_metadata=True)
             with self.assertRaisesRegex(RuntimeError, "build-system metadata"):
-                dev._verify_compiler_product_inventory(product)
+                compiler_product.verify_product_inventory(product)
 
     def test_runtime_staging_excludes_build_intermediates(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -293,7 +323,7 @@ class CompilerProductTest(unittest.TestCase):
             )
 
             destination = root / "destination"
-            dev._stage_runtime_tree(source, destination)
+            compiler_product._stage_runtime_tree(source, destination)
 
             self.assertTrue((destination / "lib" / "runtime.lib").is_file())
             self.assertTrue((destination / "lib" / "crt0.o").is_file())
@@ -323,7 +353,7 @@ class CompilerProductTest(unittest.TestCase):
         )
         cache_inputs = (
             "hashFiles('manifests/versions.toml', 'patches/**/*.patch', "
-            "'dev.py', 'build_tools/dev/**/*.py')"
+            "'dev.py', 'build_tools/**/*.py')"
         )
         self.assertIn(cache_inputs, linux)
         self.assertIn(cache_inputs, windows)
@@ -337,30 +367,30 @@ class CompilerProductTest(unittest.TestCase):
             self.write_file(hrx_install / "include/hrx/hrx_runtime.h")
             self.write_file(hrx_install / "include/hrx/hrx_amdxdna.h")
             cts_source = root / "cts"
-            for name in dev.HRX_CTS_TESTS:
+            for name in build.HRX_CTS_TESTS:
                 self.write_file(
-                    cts_source / f"{name}{dev._EXE}", executable=True)
+                    cts_source / f"{name}{compiler_product._EXE}", executable=True)
 
             stage = root / "stage"
-            dev._stage_npu_runtime_prereqs(stage, hrx_install, cts_source)
+            npu_prereqs._stage_npu_runtime_prereqs(stage, hrx_install, cts_source)
 
             self.assertTrue(
                 (stage / "build/hrx-install/include/hrx/hrx_runtime.h").is_file())
             cts_stage = stage.joinpath(
-                "projects", "hrx", "build", "cmake", *dev.HRX_CTS_DIR)
-            for name in dev.HRX_CTS_TESTS:
-                self.assertTrue((cts_stage / f"{name}{dev._EXE}").is_file())
+                "projects", "hrx", "build", "cmake", *build.HRX_CTS_DIR)
+            for name in build.HRX_CTS_TESTS:
+                self.assertTrue((cts_stage / f"{name}{compiler_product._EXE}").is_file())
             self.assertFalse((stage / "build/iron-tools").exists())
             self.assertFalse((stage / "tools-bin").exists())
 
     def test_npu_test_package_contains_only_xadx_and_numeric_cases(self):
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)
-            _, test_cases = dev._npu_test_modules()
+            _, test_cases = npu_test_package._npu_test_modules()
             case_records = []
             for name in ("vector_scalar_add", "elementwise_add", "relu", "gemv"):
                 case_records.append(
-                    dev.npu_test_package.write_case(
+                    npu_test_package.write_case(
                         stage,
                         test_cases.generate_case(name),
                         b"\x00\x00\x00\x00XADX",
@@ -375,11 +405,11 @@ class CompilerProductTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            system = dev.platform.system().lower()
-            dev.npu_test_package.write_manifest(
+            system = platform.system().lower()
+            npu_test_package.write_manifest(
                 stage, case_records, revision, system, "x86_64"
             )
-            manifest = dev.npu_test_package.verify_tree(
+            manifest = npu_test_package.verify_tree(
                 stage,
                 ("vector_scalar_add", "elementwise_add", "relu", "gemv"),
                 revision,
@@ -398,35 +428,35 @@ class CompilerProductTest(unittest.TestCase):
             root = Path(temporary)
             product = self.make_product(
                 root, artifact="rocm-npu-compiler-windows-x86_64")
-            with mock.patch.object(dev, "IS_WINDOWS", True):
-                first = dev._create_compiler_product_archive(
+            with mock.patch.object(compiler_product, "IS_WINDOWS", True):
+                first = compiler_product._create_compiler_product_archive(
                     product, root / "first")
-                second = dev._create_compiler_product_archive(
+                second = compiler_product._create_compiler_product_archive(
                     product, root / "second")
 
             self.assertTrue(first.name.endswith(".tar.zst"))
             self.assertEqual(first.read_bytes(), second.read_bytes())
             self.assertTrue(first.with_name(first.name + ".sha256").is_file())
-            extracted = dev.extract_fastflowlm_archive(
+            extracted = extract_archive(
                 first, root / "extracted", allowed_root=root)
             self.assertEqual(
                 (extracted / "python" / "aie" / "ir.py").read_bytes(), b"x")
-            dev._verify_compiler_product_inventory(extracted)
+            compiler_product.verify_product_inventory(extracted)
 
     def test_product_smoke_reports_python_extension_import_failure(self):
         aieopt_result = mock.Mock(returncode=0, stderr=b"")
         import_result = mock.Mock(
             returncode=1, stderr="ImportError: DLL filename is too long")
         with (
-            mock.patch.object(dev, "_verify_compiler_product_inventory",
+            mock.patch.object(compiler_product, "verify_product_inventory",
                               return_value={"files": []}),
-            mock.patch.object(dev, "_compiler_product_env", return_value={}),
-            mock.patch.object(dev, "sh"),
-            mock.patch.object(dev.subprocess, "run",
+            mock.patch.object(compiler_product, "_compiler_product_env", return_value={}),
+            mock.patch.object(compiler_product, "sh"),
+            mock.patch.object(compiler_product.subprocess, "run",
                               side_effect=[aieopt_result, import_result]) as run,
             self.assertRaisesRegex(RuntimeError, "DLL filename is too long"),
         ):
-            dev._smoke_compiler_product(Path("compiler"))
+            compiler_product._smoke_compiler_product(Path("compiler"))
 
         self.assertEqual(
             run.call_args_list[1].args[0][-1],
@@ -462,7 +492,7 @@ class CompilerProductTest(unittest.TestCase):
                 "MLIRPythonSupport-mlir.dll": ["python3.dll"],
             }
             with (
-                mock.patch.object(dev, "IS_WINDOWS", True),
+                mock.patch.object(compiler_product, "IS_WINDOWS", True),
                 mock.patch.dict(
                     os.environ,
                     {
@@ -472,12 +502,12 @@ class CompilerProductTest(unittest.TestCase):
                     clear=False,
                 ),
                 mock.patch.object(
-                    dev,
+                    compiler_product,
                     "pe_imports",
                     side_effect=lambda path: imports[Path(path).name],
                 ),
             ):
-                copied = dev._stage_compiler_native_dependencies(product)
+                copied = compiler_product._stage_compiler_native_dependencies(product)
             self.assertTrue((product / "bin" / "libcrypto-3-x64.dll").is_file())
             self.assertIn("libcrypto-3-x64.dll", copied)
             self.assertFalse((product / "bin" / "python3.dll").exists())
@@ -494,15 +524,15 @@ class CompilerProductTest(unittest.TestCase):
             )
             self.write_file(support, b"MZsupport")
             with (
-                mock.patch.object(dev, "IS_WINDOWS", True),
+                mock.patch.object(compiler_product, "IS_WINDOWS", True),
                 mock.patch.object(
-                    dev,
+                    compiler_product,
                     "pe_imports",
                     return_value=["python312.dll"],
                 ),
                 self.assertRaisesRegex(RuntimeError, "versioned CPython DLL"),
             ):
-                dev._stage_compiler_native_dependencies(product)
+                compiler_product._stage_compiler_native_dependencies(product)
 
     def test_windows_product_verifier_accepts_stable_abi_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -510,10 +540,10 @@ class CompilerProductTest(unittest.TestCase):
             support = product / "python" / "MLIRPythonSupport-mlir.dll"
             self.write_file(support, b"MZsupport")
             with (
-                mock.patch.object(dev, "IS_WINDOWS", True),
-                mock.patch.object(dev, "pe_imports", return_value=["python3.dll"]),
+                mock.patch.object(compiler_product, "IS_WINDOWS", True),
+                mock.patch.object(compiler_product, "pe_imports", return_value=["python3.dll"]),
             ):
-                graph = dev._verify_compiler_native_dependencies(product)
+                graph = compiler_product._verify_compiler_native_dependencies(product)
             self.assertEqual(
                 graph["python/MLIRPythonSupport-mlir.dll"],
                 ["python3.dll"],
@@ -525,15 +555,15 @@ class CompilerProductTest(unittest.TestCase):
             support = product / "python" / "MLIRPythonSupport-mlir.dll"
             self.write_file(support, b"MZsupport")
             with (
-                mock.patch.object(dev, "IS_WINDOWS", True),
+                mock.patch.object(compiler_product, "IS_WINDOWS", True),
                 mock.patch.object(
-                    dev,
+                    compiler_product,
                     "pe_imports",
                     return_value=["python312.dll"],
                 ),
                 self.assertRaisesRegex(RuntimeError, "versioned CPython DLL"),
             ):
-                dev._verify_compiler_native_dependencies(product)
+                compiler_product._verify_compiler_native_dependencies(product)
 
     def test_linux_compiler_product_bundles_non_manylinux_dependencies(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -571,20 +601,20 @@ class CompilerProductTest(unittest.TestCase):
                 )
 
             with (
-                mock.patch.object(dev, "IS_WINDOWS", False),
+                mock.patch.object(compiler_product, "IS_WINDOWS", False),
                 mock.patch.dict(
                     os.environ,
                     {"OPENSSL_ROOT_DIR": str(openssl)},
                     clear=False,
                 ),
                 mock.patch.object(
-                    dev.shutil,
+                    compiler_product.shutil,
                     "which",
                     return_value="/usr/bin/patchelf",
                 ),
-                mock.patch.object(dev.subprocess, "run", side_effect=run),
+                mock.patch.object(compiler_product.subprocess, "run", side_effect=run),
             ):
-                copied = dev._stage_compiler_native_dependencies(product)
+                copied = compiler_product._stage_compiler_native_dependencies(product)
 
             self.assertEqual(
                 set(copied),
@@ -603,13 +633,13 @@ class CompilerProductTest(unittest.TestCase):
             product = self.make_product(root / "stage")
             with mock.patch("build_tools.fastflowlm_artifact.shutil.which",
                             lambda name: None):
-                archive = dev._create_compiler_product_archive(product, root / "artifacts")
+                archive = compiler_product._create_compiler_product_archive(product, root / "artifacts")
 
             self.assertTrue(archive.name.endswith(".tar.gz"))
             self.assertTrue(archive.with_name(archive.name + ".sha256").is_file())
-            extracted = dev.extract_fastflowlm_archive(
+            extracted = extract_archive(
                 archive, root / "extracted", allowed_root=root)
-            dev._verify_compiler_product_inventory(extracted)
+            compiler_product.verify_product_inventory(extracted)
             self.assertTrue(os.access(extracted / "bin" / "xclbinutil", os.X_OK))
 
     def test_relocated_toolchain_env_uses_product_paths(self):

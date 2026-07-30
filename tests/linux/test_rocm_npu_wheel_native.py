@@ -13,7 +13,8 @@ from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest import mock
 
-import dev
+from build_tools import fastflowlm_package
+from build_tools.dev import paths
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_LINUX_WHEEL_TAG,
@@ -43,7 +44,9 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             Path(__file__).resolve().parents[2] /
             ".github" / "workflows" / "fastflowlm_hrx_linux.yml"
         ).read_text(encoding="utf-8")
-        venv = dev.FASTFLOWLM_WHEEL_VENV.relative_to(dev.ROOT).as_posix()
+        venv = fastflowlm_package.FASTFLOWLM_WHEEL_VENV.relative_to(
+            paths.ROOT
+        ).as_posix()
         expected_python = f"{venv}/bin/python"
 
         self.assertIn(
