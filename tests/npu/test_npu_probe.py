@@ -14,17 +14,18 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import dev  # noqa: E402
+from build_tools import linux_npu  # noqa: E402
 
 
 class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
     def _mock_devnode_context(self, kernel_release: str, srcversion: str):
         sys_node = Path("/sys/class/accel/accel0")
-        module_dir = Path("/sys/module/amdxdna")
-        st = SimpleNamespace(st_mode=stat.S_IFCHR | 0o660, st_rdev=os.makedev(261, 0))
+        device_stat = SimpleNamespace(
+            st_mode=stat.S_IFCHR | 0o660, st_rdev=123
+        )
 
         def read_sysfs(path: Path):
-            text = str(path)
+            text = str(path).replace("\\", "/")
             if text == "/sys/class/accel/accel0/dev":
                 return "261:0"
             if text == "/sys/class/accel/accel0/device/iommu_group/type":
@@ -34,24 +35,37 @@ class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
             return None
 
         return (
-            mock.patch.object(dev, "_sys_accel_nodes", return_value=[sys_node]),
-            mock.patch.object(dev, "_read_sysfs_text", side_effect=read_sysfs),
-            mock.patch.object(Path, "exists", return_value=True),
-            mock.patch.object(Path, "stat", return_value=st),
-            mock.patch.object(dev.os, "access", return_value=True),
             mock.patch.object(
-                dev.os, "uname", return_value=SimpleNamespace(release=kernel_release)
+                linux_npu, "sys_accel_nodes", return_value=[sys_node]
+            ),
+            mock.patch.object(
+                linux_npu, "read_sysfs_text", side_effect=read_sysfs
+            ),
+            mock.patch.object(Path, "exists", return_value=True),
+            mock.patch.object(Path, "stat", return_value=device_stat),
+            mock.patch.object(linux_npu.os, "access", return_value=True),
+            mock.patch.object(
+                linux_npu.os,
+                "uname",
+                return_value=SimpleNamespace(release=kernel_release),
+                create=True,
+            ),
+            mock.patch.object(
+                linux_npu.os, "major", return_value=261, create=True
+            ),
+            mock.patch.object(
+                linux_npu.os, "minor", return_value=0, create=True
             ),
         )
 
     def test_known_ubuntu_617_sva_regression_tuple(self):
         self.assertTrue(
-            dev._known_amdxdna_sva_regression(
+            linux_npu.known_amdxdna_sva_regression(
                 "6.17.0-22-generic", "2DBDA75956CAFA9D029EA89"
             )
         )
         self.assertFalse(
-            dev._known_amdxdna_sva_regression(
+            linux_npu.known_amdxdna_sva_regression(
                 "6.17.0-20-generic", "2DBDA75956CAFA9D029EA89"
             )
         )
@@ -67,11 +81,13 @@ class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
             patches[3],
             patches[4],
             patches[5],
-            mock.patch.object(dev.os, "open", return_value=7) as open_mock,
-            mock.patch.object(dev.os, "close") as close_mock,
+            patches[6],
+            patches[7],
+            mock.patch.object(linux_npu.os, "open", return_value=7) as open_mock,
+            mock.patch.object(linux_npu.os, "close") as close_mock,
             mock.patch("builtins.print"),
         ):
-            rc, usable = dev._probe_npu_devnodes()
+            rc, usable = linux_npu.probe_npu_devnodes()
 
         self.assertEqual(rc, 0)
         self.assertEqual(usable, [Path("/dev/accel/accel0")])
@@ -90,10 +106,12 @@ class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
             patches[3],
             patches[4],
             patches[5],
-            mock.patch.object(dev.os, "open", side_effect=open_error),
+            patches[6],
+            patches[7],
+            mock.patch.object(linux_npu.os, "open", side_effect=open_error),
             mock.patch("builtins.print") as print_mock,
         ):
-            rc, usable = dev._probe_npu_devnodes()
+            rc, usable = linux_npu.probe_npu_devnodes()
 
         self.assertEqual(rc, 1)
         self.assertEqual(usable, [])

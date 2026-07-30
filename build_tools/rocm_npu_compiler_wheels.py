@@ -740,6 +740,11 @@ def _is_loadable_elf(path: Path) -> bool:
     return int.from_bytes(header[16:18], byteorder) in (2, 3)
 
 
+def is_loadable_elf(path: Path) -> bool:
+    """Public compiler-product predicate for runtime-loadable ELF files."""
+    return _is_loadable_elf(path)
+
+
 def relocate_linux_compiler_rpaths(product: Path) -> dict[str, str]:
     """Replaces build-tree ELF search paths with product-relative locations."""
     product = Path(product)
@@ -789,6 +794,11 @@ def _windows_system_runtime(name: str) -> bool:
     return (
         Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / name
     ).is_file()
+
+
+def windows_system_runtime(name: str) -> bool:
+    """Public compiler-product predicate for Windows-owned runtime DLLs."""
+    return _windows_system_runtime(name)
 
 
 def verify_windows_compiler_wheels(
@@ -884,6 +894,11 @@ def _linux_system_runtime(name: str) -> bool:
             "libz.so.1",
         }
     )
+
+
+def linux_system_runtime(name: str) -> bool:
+    """Public compiler-product predicate for Linux-owned runtime libraries."""
+    return _linux_system_runtime(name)
 
 
 def verify_linux_compiler_wheels(

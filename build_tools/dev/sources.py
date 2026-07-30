@@ -1,0 +1,42 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+"""Source checkout operations for developer commands."""
+
+import sys
+
+from build_tools.dev import environment, paths
+
+
+# Submodules with nested submodules of their own, and those a patch touches.
+RECURSIVE_SUBMODULES = ("iron-tools", "FastFlowLM")
+
+
+def cmd_deps(args):
+    """Print the in-repository dependency manifest."""
+    print((paths.ROOT / "requirements.txt").read_text())
+
+
+def cmd_submodules(args):
+    """Initialize, reset, or clean the requested source submodules."""
+    force = ["--force"] if args.reset else []
+    shallow = ["--depth", "1", "--jobs", "4"] if args.shallow else []
+    update = ["git", "submodule", "update", "--init", *force]
+    flat = [name for name in args.names if name not in RECURSIVE_SUBMODULES]
+    if flat:
+        environment.sh(
+            [*update, *shallow, *[f"projects/{name}" for name in flat]],
+            cwd=paths.ROOT,
+        )
+    for name in args.names:
+        if name in RECURSIVE_SUBMODULES:
+            environment.sh(
+                [*update, "--recursive", *shallow, f"projects/{name}"],
+                cwd=paths.ROOT,
+            )
+    for name in args.clean:
+        if name not in args.names:
+            sys.exit(f"--clean {name}: not among the initialized submodules")
+        environment.sh(
+            ["git", "-C", str(paths.PROJ / name), "clean", "-qfdx"]
+        )
+    print(f"submodules: ok ({', '.join(args.names)})")

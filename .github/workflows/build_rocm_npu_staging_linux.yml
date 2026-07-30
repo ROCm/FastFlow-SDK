@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/build/caches/uv
-          key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements*.txt', 'requirements*.lock', 'dev.py') }}
+          key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements*.txt', 'requirements*.lock', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
       # F821 only: a rebase that keeps a call and drops its definition otherwise surfaces
@@ -73,7 +73,7 @@ jobs:
       - name: Lint (undefined names)
         run: |
           python3 -m pip install --quiet --disable-pip-version-check ruff==0.15.21
-          python3 -m ruff check --select F821 dev.py tests
+          python3 -m ruff check --select F821 dev.py build_tools tests
 
       # The manylinux image has the gcc-toolset but not OpenSSL dev headers, which
       # iron-tools' bootgen needs (find_package(OpenSSL)). Retry: this is the only step
@@ -136,7 +136,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/build/caches/ccache
-          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py', 'build_tools/dev/**/*.py') }}
+          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: ccache-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)

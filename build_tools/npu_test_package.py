@@ -4,11 +4,16 @@
 
 import contextlib
 import json
+import os
+import platform
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
+from build_tools import hrx_runtime, npu_prereqs
+from build_tools.dev import iron, paths
 from build_tools.fastflowlm_artifact import sha256_file
 
 
@@ -199,3 +204,158 @@ def verify_tree(package, expected_cases, source_revision, system):
                     f"{case['name']}.{buffer['name']}: missing {field} data"
                 )
     return manifest
+
+ROOT = paths.ROOT
+PROJ = paths.PROJ
+OUT = paths.OUT
+NPU_TEST_PACKAGE_STAGE = paths.BUILD / "npu-test-package"
+NPU_TEST_PACKAGE_EXTRACTED = paths.BUILD / "npu-test-package-extracted"
+IS_WINDOWS = paths.is_windows()
+def _npu_test_modules():
+    module_dir = ROOT / "tests" / "npu"
+    if str(module_dir) not in sys.path:
+        sys.path.insert(0, str(module_dir))
+    import hrx_api
+    import test_cases
+    return hrx_api, test_cases
+
+
+def _single_artifact(directory, pattern, description):
+    matches = sorted(Path(directory).glob(pattern))
+    if len(matches) != 1:
+        names = ", ".join(path.name for path in matches) or "none"
+        raise RuntimeError(
+            f"{directory}: expected one {description} ({pattern}), found {len(matches)}: {names}"
+        )
+    return matches[0]
+
+
+def cmd_package_npu_test_package(args):
+    """Build execute-only XADX kernels and deterministic numeric cases for NPU CI."""
+    hrx_api, test_cases = _npu_test_modules()
+    libhrx_env = hrx_runtime.add_hrx_install_env(os.environ.copy())
+    serializer = hrx_api.HrxApi(
+        hrx_api.load_libhrx(libhrx_env, "nt" if IS_WINDOWS else "posix")
+    )
+
+    if NPU_TEST_PACKAGE_STAGE.exists():
+        shutil.rmtree(NPU_TEST_PACKAGE_STAGE)
+    NPU_TEST_PACKAGE_STAGE.mkdir(parents=True)
+    cases = []
+
+    # The on-device single-dispatch gate uses vector_scalar_add, which differs
+    # from the matrix_scalar_add compiler/HAL contract gate run earlier.
+    design = "vector_scalar_add"
+    design_dir = PROJ / "iron-tools" / "programming_examples" / "basic" / design
+    run_e2e = iron.run_e2e_module()
+    artifacts = run_e2e.build_design(
+        design_dir, iron.NPU_TARGETS["npu2"]["device"], [], iron.iron_env()
+    )
+    iron.require_txn_devgen(artifacts.insts, "npu2")
+    cases.append(
+        write_case(
+            NPU_TEST_PACKAGE_STAGE,
+            test_cases.generate_case(design),
+            serializer.serialize_xadx(
+                artifacts.xclbin.read_bytes(), artifacts.insts.read_bytes(), "MLIR_AIE"
+            ),
+            {"kind": "iron-tools-design", "name": design, "device": "npu2"},
+        )
+    )
+
+    suite = iron.iron_ops_suite()
+    for operator in suite.OPERATORS:
+        build_dir = OUT / "iron-ops" / operator.name
+        xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
+        insts = _single_artifact(build_dir, "*.bin", "operator transaction")
+        iron.require_txn_devgen(insts, operator.device)
+        cases.append(
+            write_case(
+                NPU_TEST_PACKAGE_STAGE,
+                test_cases.generate_case(operator.name),
+                serializer.serialize_xadx(
+                    xclbin.read_bytes(), insts.read_bytes(), "MLIR_AIE"
+                ),
+                {
+                    "kind": "iron-ops",
+                    "name": operator.name,
+                    "device": operator.device,
+                    "build_kwargs": operator.build_kwargs,
+                },
+            )
+        )
+
+    write_manifest(
+        NPU_TEST_PACKAGE_STAGE,
+        cases,
+        _source_revision(),
+        platform.system().lower(),
+        platform.machine().lower(),
+    )
+    verify_npu_test_package(NPU_TEST_PACKAGE_STAGE)
+    archive = create_archive(
+        NPU_TEST_PACKAGE_STAGE,
+        npu_prereqs.NPU_PREREQ_DIR,
+        npu_prereqs.archive_codec(),
+    )
+    print(
+        f"package-npu-test-package: ok ({len(cases)} XADX cases) -> "
+        f"{archive} ({archive.stat().st_size / 1e6:.1f} MB)"
+    )
+
+
+def _source_revision():
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def verify_npu_test_package(package):
+    expected_cases = ["vector_scalar_add"] + [
+        operator.name for operator in iron.iron_ops_suite().OPERATORS
+    ]
+    return verify_tree(
+        package, expected_cases, _source_revision(), platform.system().lower()
+    )
+
+
+def cmd_verify_npu_test_package(args):
+    if args.extracted:
+        package = NPU_TEST_PACKAGE_EXTRACTED
+        try:
+            manifest = verify_npu_test_package(package)
+        except RuntimeError as error:
+            sys.exit(str(error))
+        print(f"verify-npu-test-package: ok ({len(manifest['cases'])} XADX cases)")
+        return
+
+    archive = find_archive(npu_prereqs.NPU_PREREQ_DIR)
+    if archive is None:
+        sys.exit(
+            "no npu-test-package.tar.* under "
+            f"{npu_prereqs.NPU_PREREQ_DIR} — "
+            "run: python dev.py package-npu-test-package"
+        )
+    try:
+        extract_archive(archive, NPU_TEST_PACKAGE_EXTRACTED)
+        manifest = verify_npu_test_package(NPU_TEST_PACKAGE_EXTRACTED)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print(f"verify-npu-test-package: ok ({len(manifest['cases'])} XADX cases)")
+
+
+def cmd_unpack_npu_test_package(args):
+    archive = find_archive(args.dir)
+    if archive is None:
+        sys.exit(f"no npu-test-package.tar.* under {args.dir}")
+    try:
+        extract_archive(archive, NPU_TEST_PACKAGE_EXTRACTED)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    print(
+        f"unpack-npu-test-package: ok ({archive.name} -> {NPU_TEST_PACKAGE_EXTRACTED})"
+    )

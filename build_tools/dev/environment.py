@@ -42,7 +42,7 @@ def uv_bin(
     )
 
 
-def _python_install(python, *arguments, refresh_packages=()):
+def python_install(python, *arguments, refresh_packages=()):
     """Installs with the shared uv cache, with pip as a standalone fallback."""
     uv = uv_bin()
     if uv.is_file():
@@ -84,7 +84,7 @@ def cmake_path(p: Path) -> str:
     return p.as_posix()
 
 
-def _cmake_source_override(name: str):
+def cmake_source_override(name: str):
     """Forwards an explicitly prepared FetchContent source into CMake."""
     value = os.environ.get(name)
     if not value:

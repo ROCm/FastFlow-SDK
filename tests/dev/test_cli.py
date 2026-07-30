@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,35 @@ import dev
 
 
 class DevCliTest(unittest.TestCase):
+    def test_dev_module_is_a_structural_cli_facade(self):
+        root = Path(__file__).resolve().parents[2]
+        tree = ast.parse((root / "dev.py").read_text(encoding="utf-8"))
+        allowed_functions = {
+            "argparse_positive_int",
+            "_dispatch_build",
+            "_add_command",
+            "dispatch",
+            "create_parser",
+            "main",
+        }
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name.startswith("cmd_"):
+                self.assertEqual(len(node.body), 1, node.name)
+                self.assertIsInstance(node.body[0], ast.Return, node.name)
+                self.assertIsInstance(node.body[0].value, ast.Call, node.name)
+            else:
+                self.assertIn(node.name, allowed_functions)
+
+        imported = {
+            alias.name.split(".")[0]
+            for node in tree.body
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        self.assertEqual(imported, {"argparse", "sys"})
+
     def test_presubmit_runs_dev_core_tests(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github" / "workflows" / "ci.yml").read_text()
@@ -64,13 +94,62 @@ class DevCliTest(unittest.TestCase):
             mock.patch.object(dev.dev_patches, "cmd_fetch", return_value="fetch") as fetch,
             mock.patch.object(dev.dev_doctor, "cmd_doctor", return_value="doctor") as doctor,
             mock.patch.object(dev.dev_setup, "cmd_setup", return_value="setup") as setup,
+            mock.patch.object(
+                dev.dev_build, "cmd_build_llvm", return_value="build"
+            ) as build,
+            mock.patch.object(
+                dev.dev_sources, "cmd_submodules", return_value="sources"
+            ) as sources,
+            mock.patch.object(
+                dev.dev_testing, "cmd_smoke", return_value="smoke"
+            ) as smoke,
         ):
             self.assertEqual(dev.cmd_fetch(args, {"hrx"}), "fetch")
             self.assertEqual(dev.cmd_doctor(args), "doctor")
             self.assertEqual(dev.cmd_setup(args), "setup")
+            self.assertEqual(dev.cmd_build_llvm(args), "build")
+            self.assertEqual(dev.cmd_submodules(args), "sources")
+            self.assertEqual(dev.cmd_smoke(args), "smoke")
         fetch.assert_called_once_with(args, {"hrx"})
         doctor.assert_called_once_with(args)
         setup.assert_called_once_with(args)
+        build.assert_called_once_with(args)
+        sources.assert_called_once_with(args)
+        smoke.assert_called_once_with(args)
+
+    def test_artifact_wrappers_delegate_to_product_owners(self):
+        args = SimpleNamespace()
+        routes = {
+            "cmd_package_fastflowlm": (
+                dev.fastflowlm_package,
+                "cmd_package_fastflowlm",
+            ),
+            "cmd_package_compiler_product": (
+                dev.compiler_product,
+                "cmd_package_compiler_product",
+            ),
+            "cmd_verify_compiler_wheels": (
+                dev.compiler_wheels,
+                "cmd_verify_compiler_wheels",
+            ),
+            "cmd_package_npu_prereqs": (
+                dev.npu_prereqs,
+                "cmd_package_npu_prereqs",
+            ),
+            "cmd_package_npu_test_package": (
+                dev.npu_test_package,
+                "cmd_package_npu_test_package",
+            ),
+        }
+        for wrapper_name, (owner, owner_name) in routes.items():
+            with self.subTest(wrapper=wrapper_name):
+                with mock.patch.object(
+                    owner, owner_name, return_value=wrapper_name
+                ) as operation:
+                    self.assertEqual(
+                        getattr(dev, wrapper_name)(args), wrapper_name
+                    )
+                operation.assert_called_once_with(args)
 
     def test_dispatch_returns_for_regular_commands(self):
         handler = mock.Mock(return_value=7)
@@ -113,6 +192,28 @@ class DevCliTest(unittest.TestCase):
         args = dispatch.call_args.args[0]
         self.assertEqual(args.profile, "fastflowlm")
         self.assertTrue(args.deep)
+
+    def test_artifact_defaults_come_from_owner_modules(self):
+        parser = dev.create_parser()
+        fastflowlm = parser.parse_args(["verify-fastflowlm-wheels"])
+        self.assertEqual(
+            fastflowlm.dir,
+            str(dev.fastflowlm_package.FASTFLOWLM_ARTIFACTS),
+        )
+        self.assertEqual(
+            fastflowlm.venv,
+            str(dev.fastflowlm_package.FASTFLOWLM_WHEEL_VENV),
+        )
+
+        compiler = parser.parse_args(["verify-compiler-wheels"])
+        self.assertEqual(
+            compiler.dir,
+            str(dev.compiler_wheels.COMPILER_WHEEL_ARTIFACTS),
+        )
+        self.assertEqual(
+            compiler.venv,
+            str(dev.compiler_wheels.COMPILER_WHEEL_VENV),
+        )
 
 
 if __name__ == "__main__":
