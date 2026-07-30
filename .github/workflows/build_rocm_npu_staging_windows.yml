@@ -254,6 +254,9 @@ jobs:
       - name: Setup (venv + pinned deps + prefetch)
         run: python dev.py setup
 
+      - name: Install test runner
+        run: .venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+
       # Preserve dependency downloads even when a later compiler build or test fails.
       - name: Save Python package caches
         if: success() && steps.python-packages.outputs.cache-hit != 'true'
@@ -270,20 +273,8 @@ jobs:
       - name: Doctor
         run: .venv/Scripts/python.exe dev.py doctor compiler-stack
 
-      - name: Test cross-platform FastFlowLM smoke driver
-        run: .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p 'test_*.py'
-
-      - name: Test wheel tooling
-        run: .venv/Scripts/python.exe -m unittest discover -s tests/wheels -p 'test_*.py'
-
-      - name: Test compiler product artifact helpers
-        run: .venv/Scripts/python.exe -m unittest discover -s tests/compiler -p 'test_*.py'
-
-      - name: Test HRX amdxdna ABI declarations
-        run: .venv/Scripts/python.exe -m unittest discover -s tests/hrx -p 'test_*.py'
-
-      - name: Run Windows unit tests
-        run: .venv/Scripts/python.exe -m unittest discover -s tests/windows -p 'test_*.py'
+      - name: Test compiler-stack tooling
+        run: .venv/Scripts/python.exe -m pytest -m "compiler_stack or presubmit"
 
       # ccache was never installed here, so dev.py silently compiled uncached. It supports
       # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.

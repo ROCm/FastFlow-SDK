@@ -136,6 +136,9 @@ jobs:
         id: fastflowlm-deps
         run: python dev.py setup --profile fastflowlm
 
+      - name: Install test runner
+        run: .venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+
       - name: Install release validation tools
         run: .venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r requirements-release-wheels.lock
 
@@ -156,9 +159,7 @@ jobs:
       - name: Validate and test build tooling
         run: |
           .venv/Scripts/python.exe dev.py doctor fastflowlm
-          .venv/Scripts/python.exe -m unittest discover -s tests/fastflowlm -p "test_*.py"
-          .venv/Scripts/python.exe -m unittest discover -s tests/wheels -p "test_*.py"
-          .venv/Scripts/python.exe -m unittest discover -s tests/windows -p "test_*.py"
+          .venv/Scripts/python.exe -m pytest -m fastflowlm
 
       - name: Build HRX
         run: .venv/Scripts/python.exe dev.py build hrx --fresh

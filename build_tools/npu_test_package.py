@@ -216,8 +216,8 @@ def _npu_test_modules():
     if str(module_dir) not in sys.path:
         sys.path.insert(0, str(module_dir))
     import hrx_api
-    import test_cases
-    return hrx_api, test_cases
+    import npu_cases
+    return hrx_api, npu_cases
 
 
 def _single_artifact(directory, pattern, description):
