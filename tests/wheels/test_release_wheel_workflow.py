@@ -158,6 +158,20 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
             with self.subTest(platform=platform):
                 self._assert_platform_workflow_contract(platform)
 
+    def test_compiler_workflows_inherit_caller_permissions(self):
+        for platform in ("linux", "windows"):
+            with self.subTest(platform=platform):
+                workflow = (
+                    WORKFLOWS / f"build_rocm_npu_staging_{platform}.yml"
+                ).read_text(encoding="utf-8")
+                workflow_header = workflow.split("\njobs:", 1)[0]
+                self.assertNotIn(
+                    "\npermissions:",
+                    workflow_header,
+                    "reusable workflow permissions would cap the caller's "
+                    "OIDC and attestation grants",
+                )
+
     def test_pr_compiler_ci_builds_once_and_tests_every_python_minor(self):
         ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
         for platform in ("linux", "windows"):

@@ -30,10 +30,6 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-  actions: read
-
 jobs:
   build_rocm_npu_staging_linux:
     name: ${{ inputs.name }}

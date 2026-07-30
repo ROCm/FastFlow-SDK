@@ -38,10 +38,6 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-  actions: read
-
 defaults:
   run:
     shell: bash   # Git Bash on the Windows runner -> git/dev.py steps match Linux
