@@ -40,7 +40,6 @@ class ProfilesTest(unittest.TestCase):
                 "llvm-project",
                 "iron-tools",
                 "hrx",
-                "hrx-xclbinutil",
                 "iron-ops",
             },
         )
