@@ -228,6 +228,11 @@ class RocmNpuReleaseWheelWorkflowTest(unittest.TestCase):
             self.assertIn(f"Save {cache}", windows_workflow)
         self.assertIn("build/caches/pip", windows_workflow)
         self.assertNotIn("vcpkg-downloads", windows_workflow)
+        self.assertIn(
+            "subject-path: build/artifacts/rocm_npu_compiler_*.whl",
+            windows_workflow,
+        )
+        self.assertNotIn("{core,bindings}", windows_workflow)
 
     def _assert_platform_workflow_contract(self, platform: str):
         workflow = (WORKFLOWS / f"fastflowlm_hrx_{platform}.yml").read_text(
