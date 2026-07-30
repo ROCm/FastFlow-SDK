@@ -46,14 +46,12 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
 
 Build-only: running on the NPU needs the amdxdna driver + an NPU (not here).
 """
-import argparse, contextlib, ctypes, errno, hashlib, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile, tempfile, time
+import argparse, contextlib, ctypes, errno, json, os, platform, re, shutil, stat, subprocess, sys, sysconfig, tarfile
 from pathlib import Path
 
 from build_tools.fastflowlm_deps import (
-    MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
     dependency_errors as fastflowlm_dependency_errors,
     dependency_paths as fastflowlm_dependency_paths,
-    vcpkg_commit as fastflowlm_vcpkg_commit,
 )
 from build_tools.fastflowlm_artifact import (
     create_archive as create_fastflowlm_archive,
@@ -106,6 +104,32 @@ from build_tools.rocm_npu_wheel_common import (
 from build_tools.windows_npu import (
     probe_runtime as probe_windows_npu_runtime,
 )
+from build_tools.dev import doctor as dev_doctor
+from build_tools.dev import environment as dev_environment
+from build_tools.dev import patches as dev_patches
+from build_tools.dev import setup as dev_setup
+from build_tools.dev.environment import (
+    _cmake_source_override,
+    _python_install,
+    cmake_bin,
+    cmake_env,
+    cmake_path,
+    compilers as _compilers,
+    have_header as _have_header,
+    rustc_version as _rustc_version,
+    sh,
+    venv_py,
+    which as _which,
+)
+from build_tools.dev.patches import (
+    apply_patches,
+    eudsl_cache_ok as _eudsl_cache_ok,
+    validate_declared_patch_state as _validate_declared_patch_state,
+)
+from build_tools.dev.profiles import (
+    doctor_profile_names,
+    setup_profile_names,
+)
 
 ROOT = Path(__file__).resolve().parent
 PROJ = ROOT / "projects"
@@ -142,15 +166,12 @@ ARCHIVE_FIXED_MTIME = 946684800  # 2000-01-01T00:00:00Z
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27  # 128 MiB: finds duplicate large LLVM binaries.
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
-PATCHES = ROOT / "patches"                      # temporary submodule patches (see patches/README.md)
 FETCH_CACHE = ROOT / ".cache" / "find-links"   # prefetched, hash-verified sdists (gitignored)
 NPROC = str(os.cpu_count() or 8)
 BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or NPROC
 IS_WINDOWS = os.name == "nt"                    # venv layout, .exe suffix, and MSVC differ on Windows
 _VBIN = "Scripts" if IS_WINDOWS else "bin"      # venv exe dir: POSIX bin/, Windows Scripts/
 _EXE = ".exe" if IS_WINDOWS else ""
-UV_VERSION = "0.11.33"
-_WINDOWS_BUILD_ENV = None
 
 # Peano (AIE codegen) — pulled from the wheel, not built from llvm-aie source.
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -176,964 +197,17 @@ NPU_TARGETS = {
 }
 
 
-def sh(cmd, cwd=None, env=None, check=True):
-    print(f"+ {' '.join(map(str, cmd))}", flush=True)
-    return subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, check=check)
-
-
-def venv_py():
-    return VENV / _VBIN / f"python{_EXE}"
-
-
-def uv_bin():
-    return VENV / _VBIN / f"uv{_EXE}"
-
-
-def _python_install(python, *arguments, refresh_packages=()):
-    """Installs with the shared uv cache, with pip as a standalone fallback."""
-    uv = uv_bin()
-    if uv.is_file():
-        refresh = [
-            item
-            for package in refresh_packages
-            for item in ("--refresh-package", package)
-        ]
-        command = [uv, "pip", "install", "--python", python, *refresh, *arguments]
-    else:
-        command = [
-            python, "-m", "pip", "install",
-            "--disable-pip-version-check", "--no-compile", *arguments,
-        ]
-    env = dict(os.environ)
-    ssl_cert_file = env.get("SSL_CERT_FILE")
-    if ssl_cert_file and not Path(ssl_cert_file).is_file():
-        env.pop("SSL_CERT_FILE")
-    subprocess.run([str(item) for item in command], check=True, env=env)
-
-
-def cmake_bin():
-    """cmake from the venv (pip, >=3.30) if set up, else system cmake."""
-    c = VENV / _VBIN / f"cmake{_EXE}"
-    return str(c) if c.exists() else "cmake"
-
-
-def cmake_path(p: Path) -> str:
-    r"""A path in the form CMake always parses correctly (forward slashes; no-op on POSIX).
-
-    CMake accepts '/' on every platform, and it re-emits some cache values verbatim into
-    generated CMake code — CMAKE_MODULE_PATH, for instance, is forwarded into the
-    try_compile scratch project. A Windows backslash there is read as an escape:
-        set(CMAKE_MODULE_PATH "C:\home\...")  ->  Invalid character escape '\h'
-    which fails the compiler-ABI check before any of our code is compiled.
-    """
-    return p.as_posix()
-
-
-def _cmake_source_override(name: str):
-    """Forwards an explicitly prepared FetchContent source into CMake."""
-    value = os.environ.get(name)
-    if not value:
-        return []
-    source = Path(value).resolve()
-    if not source.is_dir():
-        sys.exit(f"{name} is not a directory: {source}")
-    return [f"-D{name}={cmake_path(source)}"]
-
-
-def _env_path(env=None):
-    e = env or os.environ
-    if IS_WINDOWS:
-        return e.get("Path") or e.get("PATH") or e.get("path") or ""
-    return e.get("PATH", "")
-
-
-def _set_env_path(env, value):
-    if IS_WINDOWS:
-        for key in list(env):
-            if key.lower() == "path":
-                del env[key]
-        env["Path"] = value
-    else:
-        env["PATH"] = value
-
-
-def _prepend_env_path(env, entries):
-    parts = [str(entry) for entry in entries if str(entry)]
-    current = _env_path(env)
-    if current:
-        parts.append(current)
-    _set_env_path(env, os.pathsep.join(parts))
-
-
-def _which(exe, env=None):
-    return shutil.which(exe, path=_env_path(env))
-
-
-def _windows_vcvars64_path():
-    if not IS_WINDOWS:
-        return None
-    for key in ("RNS_VCVARS64", "VCVARS64"):
-        value = os.environ.get(key)
-        if value and Path(value).is_file():
-            return Path(value)
-    candidates = []
-    for root in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
-        if not root:
-            continue
-        base = Path(root) / "Microsoft Visual Studio"
-        if base.exists():
-            candidates.extend(base.glob("*/*/VC/Auxiliary/Build/vcvars64.bat"))
-    return sorted(candidates, reverse=True)[0] if candidates else None
-
-
-def _windows_msvc_env():
-    """Return an environment with the installed VS x64 toolchain loaded."""
-    global _WINDOWS_BUILD_ENV
-    if not IS_WINDOWS:
-        return dict(os.environ)
-    if _WINDOWS_BUILD_ENV is not None:
-        return dict(_WINDOWS_BUILD_ENV)
-
-    env = dict(os.environ)
-    vcvars = _windows_vcvars64_path()
-    if not _which("cl", env) and vcvars:
-        # A wrapper avoids cmd.exe /c quoting edge cases for VS paths with spaces.
-        with tempfile.TemporaryDirectory(prefix="rns-vs-env-") as td:
-            wrapper = Path(td) / "load-vs.cmd"
-            wrapper.write_text(f'@echo off\r\ncall "{vcvars}" >nul\r\nset\r\n', encoding="utf-8")
-            result = subprocess.run([str(wrapper)], capture_output=True, text=True)
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                if "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                if key.lower() == "path":
-                    _set_env_path(env, value)
-                else:
-                    env[key] = value
-        else:
-            print(f"warning: failed to load {vcvars}: {result.stderr.strip()}", file=sys.stderr)
-
-    cargo_bin = Path.home() / ".cargo" / "bin"
-    if cargo_bin.is_dir():
-        _prepend_env_path(env, [cargo_bin])
-    if not env.get("ASM") and _which("ml64", env):
-        env["ASM"] = "ml64"
-    _WINDOWS_BUILD_ENV = env
-    return dict(env)
-
-
-def cmake_env():
-    """PATH with the venv bin first so the pip-provided cmake/ninja are used."""
-    e = _windows_msvc_env() if IS_WINDOWS else dict(os.environ)
-    _prepend_env_path(e, [VENV / _VBIN])
-    return e
-
-
-# System (apt) prerequisites NOT installed by pip (cmake/ninja come from pip).
-_SYS_HEADERS = [
-    ("Python.h", "python3-dev"),              # MLIR Python bindings
-    ("openssl/opensslv.h", "libssl-dev"),     # iron-tools' bootgen find_package(OpenSSL)
-]
-
-
-def _compilers():
-    """(cc, cxx) for the build. Canonical toolchain is gcc — matching TheRock, whose
-    manylinux image pins a gcc-toolset to build amd-llvm. Override locally with the
-    standard CC/CXX env vars (e.g. `CC=clang CXX=clang++ python dev.py build llvm`).
-    Falls back to clang only if gcc is unavailable."""
-    cc, cxx = os.environ.get("CC"), os.environ.get("CXX")
-    if cc and cxx:
-        return cc, cxx
-    if IS_WINDOWS:
-        # Windows wants clang-cl (see check_system): MSVC cl rejects the GNU-only syntax
-        # in hrx-xclbinutil's vendored sources. CC/CXX are handled above; with neither set,
-        # return None rather than hardcode -DCMAKE_*_COMPILER, and let CMake pick from the
-        # VS Developer environment. doctor flags a missing clang-cl.
-        return None, None
-    if shutil.which("gcc") and shutil.which("g++"):
-        return "gcc", "g++"
-    if shutil.which("clang") and shutil.which("clang++"):
-        return "clang", "clang++"
-    return None, None
-
-
-def _rustc_version(env=None):
-    rustc = _which("rustc", env)
-    if not rustc:
-        return None
-    r = subprocess.run([rustc, "--version"], capture_output=True, text=True, env=env)
-    if r.returncode != 0:
-        return None
-    parts = r.stdout.split()
-    if len(parts) < 2:
-        return None
-    nums = parts[1].split("-", 1)[0].split(".")
-    try:
-        return tuple(int(n) for n in nums[:3])
-    except ValueError:
-        return None
-
-
-def _have_header(hdr, language="c"):
-    if hdr == "Python.h":  # lives under the python include dir, not a default search path
-        import sysconfig
-        inc = sysconfig.get_path("include")
-        return bool(inc) and (Path(inc) / "Python.h").exists()
-    if language == "c++":
-        compiler = (os.environ.get("CXX") or shutil.which("clang++") or
-                    shutil.which("c++") or shutil.which("g++"))
-    else:
-        compiler = (os.environ.get("CC") or shutil.which("clang") or
-                    shutil.which("cc") or shutil.which("gcc"))
-    if not compiler:
-        return False
-    p = subprocess.run([compiler, "-fsyntax-only", "-x", language, "-"],
-                       input=f"#include <{hdr}>\nint main(){{return 0;}}\n".encode(),
-                       capture_output=True)
-    return p.returncode == 0
-
-
-def _have_perl_module(module):
-    perl = shutil.which("perl")
-    if not perl:
-        return False
-    return subprocess.run(
-        [perl, f"-M{module}", "-e", "1"], capture_output=True
-    ).returncode == 0
-
-
-def _check_fastflowlm_linux_host(verbose):
-    """Checks host tools/interfaces needed before vcpkg can build FLM deps."""
-    missing = []
-    cc, cxx = _compilers()
-    checks = [
-        ("bash", bool(shutil.which("bash")), "bash"),
-        ("git", bool(shutil.which("git")), "git"),
-        ("make", bool(shutil.which("make")), "build-essential"),
-        ("nasm", bool(shutil.which("nasm")), "nasm"),
-        ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
-        ("tar", bool(shutil.which("tar")), "tar"),
-        ("unzip", bool(shutil.which("unzip")), "unzip"),
-        ("curl or wget", bool(shutil.which("curl") or shutil.which("wget")), "curl"),
-        ("Perl IPC::Cmd", _have_perl_module("IPC::Cmd"), "libipc-cmd-perl"),
-        ("<linux/types.h>", _have_header("linux/types.h"), "linux-libc-dev"),
-        ("<libdrm/drm.h>", _have_header("libdrm/drm.h"), "libdrm-dev"),
-    ]
-    if verbose:
-        print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: "
-              f"{(cc + '/' + cxx) if cc else 'need gcc/g++ (or set CC/CXX)'}")
-    if not cc:
-        missing.append("build-essential")
-    for label, ok, package in checks:
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
-        if not ok and package not in missing:
-            missing.append(package)
-    return not missing, missing
-
-
-def _check_fastflowlm_linux_packaging_tools(*, archive=False, verbose=False):
-    """Checks Linux-only tools needed after build, when packaging artifacts."""
-    checks = [("patchelf", bool(shutil.which("patchelf")), "patchelf")]
-    if archive:
-        checks.append(("zstd", bool(shutil.which("zstd")), "zstd"))
-    missing = []
-    for label, ok, package in checks:
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
-        if not ok and package not in missing:
-            missing.append(package)
-    return not missing, missing
-
-
-def _require_fastflowlm_linux_packaging_tools(*, archive=False):
-    if IS_WINDOWS:
-        return
-    ok, missing = _check_fastflowlm_linux_packaging_tools(archive=archive)
-    if not ok:
-        sys.exit(
-            "FastFlowLM Linux packaging prerequisite(s) are missing; install: "
-            "sudo apt-get install -y " + " ".join(sorted(set(missing)))
-        )
-
-
-def _check_compiler_stack_system(verbose):
-    """Return (ok, missing_apt_packages) for the LLVM/IRON compiler stack."""
-    missing = []
-    cc, cxx = _compilers()
-    if IS_WINDOWS:
-        # Windows deps come from the VS toolchain + choco/vcpkg, not apt; _compilers()
-        # returns None by design, so probe the toolchain directly. clang-cl is REQUIRED,
-        # not merely preferred: MSVC cl rejects the GNU-only syntax in hrx-xclbinutil's
-        # vendored sources (__attribute__((aligned))/((visibility)), __builtin_bswap64).
-        # Finding only cl is a fail here rather than a confusing compile error later.
-        # Relax this to "cl or clang-cl" once those five sites are made portable.
-        env = _windows_msvc_env()
-        has_clang_cl = bool(_which("clang-cl", env))
-        has_git = bool(_which("git", env))
-        if verbose:
-            print(f"  [{'ok ' if has_clang_cl else 'MISS'}] clang-cl (required; MSVC cl cannot build hrx-xclbinutil)")
-            if not has_clang_cl and shutil.which("cl"):
-                print("         found MSVC cl but not clang-cl — install the VS 'C++ Clang tools' component")
-            print(f"  [{'ok ' if has_git else 'MISS'}] git")
-            print("  [note] set CC=CXX=clang-cl so the builds dev.py drives pin the compiler")
-            print("  [note] OpenSSL (bootgen) comes from choco/vcpkg on Windows; no apt package list")
-        return (has_clang_cl and has_git, [])   # apt package names are not meaningful on Windows
-    if verbose:
-        print(f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: {(cc + '/' + cxx) if cc else 'need gcc (or set CC/CXX)'} (canonical: gcc; set CC/CXX for clang)")
-        print(f"  [{'ok ' if shutil.which('ld.lld') else '--  '}] ld.lld (optional; used with clang)")
-    if not cc:
-        missing.append("build-essential")  # provides gcc/g++
-    for probe, pkg in [("git", "git"), ("make", "build-essential")]:
-        ok = shutil.which(probe) is not None
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] {probe}")
-        if not ok and pkg not in missing:
-            missing.append(pkg)
-    for hdr, pkg in _SYS_HEADERS:
-        ok = _have_header(hdr)
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] <{hdr}>")
-        if not ok and pkg not in missing:
-            missing.append(pkg)
-    return (not missing, missing)
-
-
-def _check_fastflowlm_system(verbose):
-    """Return (ok, missing_apt_packages) for the minimal HRX/FLM build."""
-    missing = []
-    env = _windows_msvc_env() if IS_WINDOWS else dict(os.environ)
-    paths = fastflowlm_dependency_paths(ROOT)
-    native_errors = fastflowlm_dependency_errors(
-        paths,
-        cargo_available=bool(_which("cargo", env)),
-        rustc_version=_rustc_version(env),
-    )
-    if IS_WINDOWS:
-        compiler = _which("cl", env) or _which("clang-cl", env)
-        has_git = bool(_which("git", env))
-        if verbose:
-            print(f"  [{'ok ' if compiler else 'MISS'}] C/C++ compiler: {Path(compiler).name if compiler else 'need MSVC cl or clang-cl'}")
-            print(f"  [{'ok ' if has_git else 'MISS'}] git")
-            for error in native_errors:
-                print(f"  [MISS] {error}")
-            if not native_errors:
-                print(f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}")
-                print(f"  [ok ] vcpkg FastFlowLM dependencies: {paths['triplet_root']}")
-        return (bool(compiler) and has_git and not native_errors, [])
-
-    host_ok, missing = _check_fastflowlm_linux_host(verbose)
-    if verbose:
-        for error in native_errors:
-            print(f"  [MISS] {error}")
-        if not native_errors:
-            print(f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}")
-            print(f"  [ok ] vcpkg FastFlowLM dependencies: {paths['triplet_root']}")
-    return (host_ok and not native_errors, missing)
-
-
-def _check_fastflowlm_packaging_system(verbose):
-    """Return (ok, missing_packages) for the HRX/FLM artifact packaging path."""
-    build_ok, build_missing = _check_fastflowlm_system(verbose)
-    if IS_WINDOWS:
-        return build_ok, build_missing
-    if verbose:
-        print("  packaging:")
-    package_ok, package_missing = _check_fastflowlm_linux_packaging_tools(
-        archive=True, verbose=verbose)
-    return build_ok and package_ok, sorted(set(build_missing + package_missing))
-
-
-def check_system(profile="compiler-stack", verbose=True):
-    """Return (ok, missing_apt_packages) for a doctor profile."""
-    if profile == "fastflowlm":
-        return _check_fastflowlm_system(verbose)
-    if profile == "fastflowlm-packaging":
-        return _check_fastflowlm_packaging_system(verbose)
-    if profile == "compiler-stack":
-        return _check_compiler_stack_system(verbose)
-    if profile == "all":
-        if verbose:
-            print("  compiler-stack:")
-        compiler_ok, compiler_missing = _check_compiler_stack_system(verbose)
-        if verbose:
-            print("  fastflowlm:")
-        flm_ok, flm_missing = _check_fastflowlm_system(verbose)
-        return compiler_ok and flm_ok, sorted(set(compiler_missing + flm_missing))
-    raise ValueError(f"unknown doctor profile: {profile}")
-
-
-# NOTE: the IRON toolchain env (PATH/PYTHONPATH/PEANO_INSTALL_DIR/AIEOPT_DIR + the
-# "is iron-tools built?" check) lives in tests/e2e/run_e2e.py, its only consumer. It used
-# to be duplicated here as build_env(); the copy drifted — it looked for `aie-opt` with no
-# `.exe` and put `.venv/bin` (not Scripts) on PATH, so `dev.py test` aborted on Windows
-# before run_e2e.py ever ran. One definition, in the place that uses it.
-
-
-# ---- commands ----
-
-def _manifest():
-    import tomllib
-    return tomllib.load(open(ROOT / "manifests" / "versions.toml", "rb"))
-
-
-def _sha256(path):
-    import hashlib
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 16), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _eudsl_sdist():
-    """(cache_path, pin) for the pinned eudsl sdist. cache_path may not exist yet."""
-    pin = _manifest().get("eudsl", {})
-    if not pin:
-        return None, {}
-    fname = f"{pin['package'].replace('-', '_')}-{pin['version']}.tar.gz"
-    return FETCH_CACHE / fname, pin
-
-
-def _eudsl_cache_ok():
-    """True iff the pinned eudsl sdist is in the cache and its sha256 matches."""
-    path, pin = _eudsl_sdist()
-    return bool(pin) and path.exists() and _sha256(path) == pin.get("sha256")
-
-
-def _patch_state(patch, sub):
-    """Return (state, apply options) for a patch against submodule dir `sub`.
-
-    Patches are normalized to LF. Some upstream files are tracked as CRLF, so if
-    strict matching fails, retry context matching without treating line-ending
-    whitespace as semantic. Non-whitespace source drift still fails.
-    """
-    for options in ((), ("--ignore-space-change",)):
-        rev = subprocess.run(
-            ["git", "-C", str(sub), "apply", "--reverse", "--check", *options, str(patch)],
-            capture_output=True,
-        )
-        if rev.returncode == 0:
-            return "applied", options
-        fwd = subprocess.run(
-            ["git", "-C", str(sub), "apply", "--check", *options, str(patch)],
-            capture_output=True,
-        )
-        if fwd.returncode == 0:
-            return "appliable", options
-    return "broken", ()
-
-
-def apply_patches(submodule_names=None):
-    """Apply the temporary submodule patches (idempotent). These live only in
-    rocm-npu-staging and are upstreamable as-is; see patches/README.md."""
-    if not PATCHES.exists():
-        return
-    selected = set(submodule_names) if submodule_names is not None else None
-    for sub_dir in sorted(p for p in PATCHES.iterdir() if p.is_dir()):
-        if selected is not None and sub_dir.name not in selected:
-            continue
-        sub = PROJ / sub_dir.name
-        if not sub.exists():
-            sys.exit(f"submodule missing for patches/{sub_dir.name} (run: git submodule update --init projects/{sub_dir.name})")
-        patches = sorted(sub_dir.glob("*.patch"))
-        states = [_patch_state(patch, sub) for patch in patches]
-        if any(state == "broken" for state, _ in states):
-            try:
-                exact = git_source_state(sub) == _declared_patch_expected_state(
-                    sub_dir.name, sub)
-            except RuntimeError:
-                exact = False
-            if exact:
-                for patch in patches:
-                    print(f"patch: {sub_dir.name}/{patch.name} already applied")
-                continue
-        for patch in patches:
-            st, options = _patch_state(patch, sub)
-            if st == "applied":
-                print(f"patch: {sub_dir.name}/{patch.name} already applied")
-            elif st == "appliable":
-                sh(["git", "-C", str(sub), "apply", *options, str(patch)])
-                print(f"patch: applied {sub_dir.name}/{patch.name}")
-            else:
-                sys.exit(f"patch does not apply cleanly: {patch} (submodule moved? regenerate it)")
-
-
-def _declared_patch_expected_state(component, source):
-    """Builds the expected source state without materializing another checkout."""
-    temporary_root = Path(
-        os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
-    ).resolve()
-    temporary_root.mkdir(parents=True, exist_ok=True)
-    temporary_parent = Path(tempfile.mkdtemp(prefix="rns-patch-", dir=temporary_root))
-    index = temporary_parent / "index"
-    env = dict(os.environ, GIT_INDEX_FILE=str(index))
-    try:
-        subprocess.run(
-            ["git", "-C", str(source), "read-tree", "HEAD"],
-            check=True,
-            env=env,
-            capture_output=True,
-        )
-        for patch in sorted((PATCHES / component).glob("*.patch")):
-            resolved = False
-            for options in ((), ("--ignore-space-change",)):
-                reverse = subprocess.run(
-                    ["git", "-C", str(source), "apply", "--cached", "--reverse",
-                     "--check", *options, str(patch)],
-                    env=env,
-                    capture_output=True,
-                )
-                if reverse.returncode == 0:
-                    resolved = True
-                    break
-                result = subprocess.run(
-                    ["git", "-C", str(source), "apply", "--cached", "--check",
-                     *options, str(patch)],
-                    env=env,
-                    capture_output=True,
-                )
-                if result.returncode:
-                    continue
-                subprocess.run(
-                    ["git", "-C", str(source), "apply", "--cached",
-                     *options, str(patch)],
-                    check=True,
-                    env=env,
-                    capture_output=True,
-                )
-                resolved = True
-                break
-            if not resolved:
-                raise RuntimeError(f"declared patch does not apply: {patch}")
-
-        changed_output = subprocess.run(
-            ["git", "-C", str(source), "diff", "--cached", "--name-only",
-             "--diff-filter=ACDMRTUXB", "-z", "HEAD"],
-            check=True,
-            env=env,
-            capture_output=True,
-        ).stdout
-        changed_paths = sorted(
-            item.decode("utf-8", errors="surrogateescape")
-            for item in changed_output.split(b"\0") if item
-        )
-        tracked_paths = []
-        changed_files = []
-        for relative in changed_paths:
-            existed = subprocess.run(
-                ["git", "-C", str(source), "cat-file", "-e", f"HEAD:{relative}"],
-                capture_output=True,
-            ).returncode == 0
-            if existed:
-                tracked_paths.append(relative)
-            else:
-                ignored = subprocess.run(
-                    ["git", "-C", str(source), "check-ignore", "--no-index",
-                     "--quiet", "--", relative],
-                    capture_output=True,
-                ).returncode == 0
-                if ignored:
-                    continue
-
-            staged = subprocess.run(
-                ["git", "-C", str(source), "ls-files", "--stage", "-z",
-                 "--", relative],
-                check=True,
-                env=env,
-                capture_output=True,
-            ).stdout
-            record = {"path": relative.replace("\\", "/")}
-            if not staged:
-                record["deleted"] = True
-            else:
-                header = staged.split(b"\t", 1)[0].decode("ascii")
-                blob = header.split()[1]
-                data = subprocess.run(
-                    ["git", "-C", str(source), "cat-file", "blob", blob],
-                    check=True,
-                    capture_output=True,
-                ).stdout
-                record.update({
-                    "size": len(data),
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                })
-            changed_files.append(record)
-
-        diff_command = [
-            "git", "-C", str(source), "diff", "--cached", "--binary",
-            "--no-ext-diff", "HEAD",
-        ]
-        if tracked_paths:
-            diff_command.extend(["--", *tracked_paths])
-            diff = subprocess.run(
-                diff_command, check=True, env=env, capture_output=True
-            ).stdout
-        else:
-            diff = b""
-        revision = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        return {
-            "revision": revision,
-            "dirty": bool(changed_files),
-            "tracked_diff_sha256": hashlib.sha256(diff).hexdigest(),
-            "changed_files": changed_files,
-        }
-    finally:
-        shutil.rmtree(temporary_parent, ignore_errors=True)
-
-
-def _validate_declared_patch_state(component, source):
-    """Proves the source tree equals its pin plus the ordered patch sequence."""
-    expected = _declared_patch_expected_state(component, source)
-    actual = git_source_state(source)
-    if actual != expected:
-        expected_files = {item["path"]: item for item in expected["changed_files"]}
-        actual_files = {item["path"]: item for item in actual["changed_files"]}
-        differing = sorted(
-            path for path in set(expected_files) | set(actual_files)
-            if expected_files.get(path) != actual_files.get(path))
-        raise RuntimeError(
-            f"{component} source differs from its pin plus declared patches: "
-            f"{', '.join(differing) or 'tracked diff metadata'}")
-
 
 def cmd_fetch(args, submodule_names=None):
-    """Prepare sources for an offline build (the single network step): apply temporary
-    patches + prefetch the build-time-fetched eudsl sdist into a gitignored,
-    hash-verified cache. Idempotent."""
-    apply_patches(submodule_names)
-    if submodule_names is not None and "iron-tools" not in submodule_names:
-        print("fetch: selected source patches are ready (no compiler-stack prefetch needed)")
-        return
-    path, pin = _eudsl_sdist()
-    if not pin:
-        sys.exit("manifests/versions.toml has no [eudsl] section")
-    if _eudsl_cache_ok():
-        print(f"fetch: eudsl already cached + verified ({path.name})")
-        return
-    FETCH_CACHE.mkdir(parents=True, exist_ok=True)
-    print(f"fetch: downloading {pin['package']}=={pin['version']}")
-    sh([str(venv_py()), "-m", "pip", "download", f"{pin['package']}=={pin['version']}",
-        "-f", pin["find_links"], "--no-deps", "--no-binary", ":all:", "-d", str(FETCH_CACHE)])
-    got = _sha256(path) if path.exists() else "<missing>"
-    if got != pin["sha256"]:
-        path.unlink(missing_ok=True)
-        sys.exit(f"fetch: sha256 mismatch for {path.name}\n  expected {pin['sha256']}\n  got      {got}")
-    print(f"fetch: ok -> {path} (sha256 verified)")
-
-
-PIN_SECTION_TO_SUBMODULE = {
-    "llvm": "llvm-project",
-    "iron_tools": "iron-tools",
-    "hrx": "hrx",
-    "hrx_xclbinutil": "hrx-xclbinutil",
-    "fastflowlm": "FastFlowLM",
-    "iron_ops": "iron-ops",
-}
-DOCTOR_PROFILE_SUBMODULES = {
-    "compiler-stack": {"llvm-project", "iron-tools", "hrx", "hrx-xclbinutil", "iron-ops"},
-    "fastflowlm": {"hrx", "FastFlowLM"},
-    "fastflowlm-packaging": {"hrx", "FastFlowLM"},
-    "all": set(PIN_SECTION_TO_SUBMODULE.values()),
-}
-SETUP_PROFILE_SUBMODULES = {
-    "compiler-stack": DOCTOR_PROFILE_SUBMODULES["compiler-stack"],
-    "fastflowlm": DOCTOR_PROFILE_SUBMODULES["fastflowlm"],
-    "npu-e2e": {"hrx", "iron-tools", "iron-ops"},
-    "npu-runtime": set(),
-}
-
-
-def check_pins(submodules):
-    """Verify selected submodule checkouts against manifests/versions.toml."""
-    man = _manifest()
-    problems = []
-    for sec, sub in PIN_SECTION_TO_SUBMODULE.items():
-        if sub not in submodules:
-            continue
-        pinned = man.get(sec, {}).get("commit")
-        if not pinned:
-            continue
-        sub_dir = PROJ / sub
-        if not (sub_dir / ".git").exists():   # not checked out — rev-parse here would walk up to the superproject
-            print(f"  [ABSENT] {sub}: required by this doctor profile")
-            problems.append(sub)
-            continue
-        r = subprocess.run(["git", "-C", str(sub_dir), "rev-parse", "HEAD"],
-                           capture_output=True, text=True)
-        head = r.stdout.strip()
-        match = head == pinned
-        print(f"  [{'ok  ' if match else 'DRIFT'}] {sub}: manifest {pinned[:12]} vs HEAD {(head[:12] or '?')}")
-        if not match:
-            problems.append(sub)
-    return problems
-
-
-def _doctor_patch_states(component, source, patches, *, deep=False):
-    """Checks a patch series, replaying it only when requested or ambiguous."""
-    states = [_patch_state(patch, source)[0] for patch in patches]
-    if not deep and "broken" not in states:
-        return states
-    try:
-        exact = git_source_state(source) == _declared_patch_expected_state(
-            component, source)
-        series_valid = True
-    except RuntimeError:
-        exact = False
-        series_valid = False
-    if exact:
-        return ["applied"] * len(patches)
-    if series_valid:
-        return ["pending" if state == "broken" else state for state in states]
-    return states
+    return dev_patches.cmd_fetch(args, submodule_names)
 
 
 def cmd_doctor(args):
-    """Check the selected build path's prerequisites, pins, patches, and fetches."""
-    started = time.perf_counter()
-    profile = args.profile
-    deep = getattr(args, "deep", False)
-    selected_submodules = DOCTOR_PROFILE_SUBMODULES[profile]
-    mode = "deep" if deep else "quick"
-    print(f"doctor profile: {profile} ({mode} patch validation)")
-    print("system prerequisites (cmake + ninja come from pip via `setup`):")
-    section_started = time.perf_counter()
-    system_ok, missing = check_system(profile)
-    print(f"  [time] system prerequisites: {time.perf_counter() - section_started:.2f}s")
-    print("\nsubmodule pins vs manifests/versions.toml:")
-    section_started = time.perf_counter()
-    pin_bad = check_pins(selected_submodules)
-    print(f"  [time] submodule pins: {time.perf_counter() - section_started:.2f}s")
-    print("\ntemporary submodule patches (patches/, applied by builds or `dev.py fetch`):")
-    patch_bad = []
-    for sub_dir in sorted(p for p in PATCHES.iterdir() if p.is_dir()) if PATCHES.exists() else []:
-        if sub_dir.name not in selected_submodules:
-            continue
-        submodule_dir = PROJ / sub_dir.name
-        if not (submodule_dir / ".git").exists():
-            print(f"  [ABSENT] {sub_dir.name}: cannot check patches")
-            continue
-        patches = sorted(sub_dir.glob("*.patch"))
-        component_started = time.perf_counter()
-        states = _doctor_patch_states(
-            sub_dir.name, submodule_dir, patches, deep=deep)
-        for patch, st in zip(patches, states):
-            print(f"  [{'ok   ' if st == 'applied' else st.upper()}] {sub_dir.name}/{patch.name}")
-            if st == "broken":
-                patch_bad.append(patch.name)
-        print(f"  [time] {sub_dir.name} patches: "
-              f"{time.perf_counter() - component_started:.2f}s")
-
-    needs_eudsl = profile in ("compiler-stack", "all")
-    eudsl_ok = True
-    ver_ok = True
-    if needs_eudsl:
-        print("\nbuild-time prefetch (run `dev.py fetch` to populate):")
-        section_started = time.perf_counter()
-        eudsl_ok = _eudsl_cache_ok()
-        print(f"  [{'ok  ' if eudsl_ok else 'MISS '}] eudsl sdist cached + sha256 verified")
-        # Cross-check the two declarations so a pin change cannot silently use stale input.
-        eudsl_ver = _manifest().get("eudsl", {}).get("version", "")
-        patch_f = PATCHES / "iron-tools" / "0001-eudsl-for-amd-llvm-23.patch"
-        pm = re.search(r"\+eudsl-python-extras==(\S+)", patch_f.read_text()) if patch_f.exists() else None
-        ver_ok = bool(eudsl_ver) and pm is not None and pm.group(1) == eudsl_ver
-        print(f"  [{'ok  ' if ver_ok else 'DRIFT'}] eudsl version: patch=={pm.group(1) if pm else '?'} == manifest=={eudsl_ver or '?'}")
-        print(f"  [time] build-time prefetch: "
-              f"{time.perf_counter() - section_started:.2f}s")
-    rc = 0
-    if not ver_ok:
-        print("\neudsl version DRIFT: patches/iron-tools/0001-… and versions.toml [eudsl] disagree — sync them")
-        rc = 1
-    if patch_bad:
-        print(f"\nPATCH does not apply: {', '.join(patch_bad)} — regenerate against the current submodule")
-        rc = 1
-    if not system_ok:
-        if missing:
-            print("\nMISSING system deps — install with:\n  sudo apt-get install -y " + " ".join(sorted(set(missing))))
-        else:
-            print("\nMISSING system prerequisites shown above")
-        rc = 1
-    if pin_bad:
-        print(f"\nSUBMODULE PIN problems in: {', '.join(pin_bad)} — initialize it or update its manifest pin")
-        rc = 1
-    if needs_eudsl and not eudsl_ok:
-        print("\neudsl not prefetched — run: python dev.py fetch")
-        rc = 1
-    if rc == 0:
-        print(f"\nall good: {profile} prerequisites, pins, and patches are ready.")
-    print(f"doctor elapsed: {time.perf_counter() - started:.2f}s")
-    return rc
-
-
-def _install_fastflowlm_deps():
-    """Installs the manifest-defined native dependencies into the managed cache."""
-    if not IS_WINDOWS:
-        host_ok, missing = _check_fastflowlm_linux_host(verbose=False)
-        if not host_ok:
-            sys.exit(
-                "FastFlowLM host build prerequisites are missing; install: "
-                "sudo apt-get install -y " + " ".join(sorted(set(missing)))
-            )
-    paths = fastflowlm_dependency_paths(ROOT)
-    source = Path(paths["source"])
-    install_root = Path(paths["install_root"])
-    binary_cache = ROOT / ".cache" / "vcpkg-bincache"
-    downloads = ROOT / ".cache" / "vcpkg-downloads"
-    for path in (source.parent, install_root, binary_cache, downloads):
-        path.mkdir(parents=True, exist_ok=True)
-
-    source_changed = False
-    if not (source / ".git").is_dir():
-        sh(["git", "init", str(source)])
-        sh(["git", "-C", str(source), "remote", "add", "origin",
-            "https://github.com/microsoft/vcpkg.git"])
-        source_changed = True
-    else:
-        sh(["git", "-C", str(source), "remote", "set-url", "origin",
-            "https://github.com/microsoft/vcpkg.git"])
-    head = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=False,
-    ).stdout.strip()
-    vcpkg_commit = fastflowlm_vcpkg_commit(ROOT)
-    if head != vcpkg_commit:
-        sh(["git", "-C", str(source), "fetch", "--depth", "1", "origin",
-            vcpkg_commit])
-        sh(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
-        source_changed = True
-    executable = Path(paths["executable"])
-    if source_changed or not executable.is_file():
-        if IS_WINDOWS:
-            sh(["cmd.exe", "/d", "/c", str(source / "bootstrap-vcpkg.bat"),
-                "-disableMetrics"])
-        else:
-            sh([str(source / "bootstrap-vcpkg.sh"), "-disableMetrics"])
-
-    env = os.environ.copy()
-    env["VCPKG_BINARY_SOURCES"] = (
-        f"clear;files,{cmake_path(binary_cache)},readwrite"
-    )
-    env["VCPKG_DOWNLOADS"] = str(downloads)
-    # Some managed Windows runners expose different TLS/revocation behavior
-    # through WinHTTP and system curl. This transport adapter tries both and
-    # preserves vcpkg's required SHA-512 verification; dependency policy and
-    # package resolution remain entirely owned by vcpkg.
-    powershell = shutil.which("powershell.exe") if IS_WINDOWS else None
-    downloader = ROOT / ".github" / "scripts" / "vcpkg-download.ps1"
-    if powershell and downloader.is_file():
-        template = (
-            f'"{powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass '
-            f'-File "{downloader}" -Url {{url}} -Sha512 {{sha512}} '
-            '-Destination {dst}'
-        )
-        env["X_VCPKG_ASSET_SOURCES"] = f"clear;x-script,{template}"
-
-    sh([
-        executable, "install",
-        "--triplet", paths["triplet"],
-        f"--overlay-triplets={ROOT / '.github' / 'vcpkg' / 'triplets'}",
-        f"--x-manifest-root={ROOT / '.github' / 'vcpkg' / 'fastflowlm'}",
-        f"--x-install-root={install_root}",
-    ], env=env)
-    marker = Path(paths["marker"])
-    marker_tmp = marker.with_suffix(".tmp")
-    marker_tmp.write_text(
-        json.dumps(paths["policy"], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    marker_tmp.replace(marker)
-    print("setup: FastFlowLM native dependencies ->",
-          paths["triplet_root"])
+    return dev_doctor.cmd_doctor(args)
 
 
 def cmd_setup(args):
-    """Prepare the selected dependency closure in the repository-local cache.
-
-    Compiler-stack Python deps come from the hash-pinned requirements.lock;
-    FastFlowLM installs its pinned CMake/Ninja tooling and the same
-    manifest-defined native dependency graph on Linux and Windows.
-
-    requirements.txt is the human-edited input; regenerate the lock after editing it:
-      .venv/bin/uv pip compile requirements.txt --generate-hashes --emit-index-url \\
-          --emit-find-links --python-version 3.12 -o requirements.lock
-    iron-tools/LLVM/bootgen/aie_api/aie-rt build from source; eudsl is prefetched (fetch)."""
-    OUT.mkdir(exist_ok=True)
-    if args.profile == "compiler-stack":
-        ok, missing = check_system(verbose=False)
-        if not ok:
-            if missing:
-                print("WARNING: missing system deps (apt): " + " ".join(sorted(missing)))
-            else:
-                print("WARNING: compiler-stack system prerequisites are missing")
-            print("  install them, then re-run; see `python dev.py doctor compiler-stack`")
-    if not venv_py().exists():
-        sh([sys.executable, "-m", "venv", str(VENV)])
-    # Bootstrap one pinned uv wheel with pip, then let uv populate the environment
-    # from its hard-linkable shared cache. This avoids pip repeatedly unpacking the
-    # large Peano and native build-tool wheels on ephemeral CI runners.
-    sh([
-        str(venv_py()), "-m", "pip", "install",
-        "--disable-pip-version-check", "--no-compile",
-        f"uv=={UV_VERSION}",
-    ])
-    pip = [
-        str(uv_bin()), "pip", "install", "--python", str(venv_py()),
-    ]
-    lock = ROOT / "requirements.lock"
-    if args.profile == "fastflowlm":
-        src = ROOT / "requirements-fastflowlm.lock"
-    elif args.profile == "npu-runtime":
-        src = ROOT / "requirements-npu-runtime.txt"
-    # requirements.lock is hash-pinned for LINUX wheels; on Windows the platform-specific
-    # wheels (llvm-aie, cmake, ...) have different sha256s, so those hashes can't match.
-    # Use the unpinned requirements.txt there — same version pins + find-links, no hashes.
-    elif IS_WINDOWS:
-        src = ROOT / "requirements.txt"
-    else:
-        src = lock if lock.exists() else ROOT / "requirements.txt"   # lock = reproducible (hashes)
-    pip_args = ["--require-hashes"] if args.profile == "fastflowlm" else []
-    sh(pip + pip_args + ["-r", str(src)])
-    cmd_fetch(args, SETUP_PROFILE_SUBMODULES[args.profile])
-    if args.profile not in ("fastflowlm", "npu-runtime"):
-        install_iron_ops(pip, with_tests=getattr(args, "iron_ops_tests", False))
-    if args.profile == "fastflowlm":
-        _install_fastflowlm_deps()
-    print(f"setup: ok ({args.profile} dependencies are ready)")
-
-
-def install_iron_ops(pip, with_tests=False):
-    """Put `iron` (the operator library) on the venv's path, WITHOUT its dependencies.
-
-    --no-deps is the whole point. iron-ops' pyproject pins the mlir_aie and llvm-aie WHEELS;
-    installing those would put a second, wheel-built `aie` package in site-packages, where it
-    would shadow the source-built one this stack exists to test (for an installed
-    distribution, site-packages beats PYTHONPATH). Its real deps are ours to pin, and
-    requirements.txt does.
-
-    Editable: the checkout IS the source of truth -- its aie_kernels/*.cc are what the
-    operator build compiles -- and it keeps the venv valid when the submodule pin moves.
-
-    with_tests adds what iron-ops' OWN tests need (torch, for the golden references), which
-    only the NPU job runs. The build jobs deliberately do without: torch is a ~200 MB wheel
-    they would download to import and never call. Compiling an operator does not need it --
-    but only because patches/iron-ops/0002 made iron.operators import lazily. Before that,
-    `import iron.operators.elementwise_add.op` eagerly imported mha, and mha imports torch."""
-    if not (PROJ / "iron-ops" / "pyproject.toml").exists():
-        print("setup: projects/iron-ops not checked out; skipping the `iron` install")
-        return
-    sh(pip + ["--no-deps", "-e", str(PROJ / "iron-ops")])
-    if with_tests:
-        # Same lock-vs-txt split as the base deps above: the lock's hashes are for the Linux
-        # wheels, and the NPU job is Linux, so this is the reproducible path in practice.
-        lock = ROOT / "requirements-iron-ops.lock"
-        src = ROOT / "requirements-iron-ops.txt" if IS_WINDOWS or not lock.exists() else lock
-        sh(pip + ["-r", str(src)])
+    return dev_setup.cmd_setup(args)
 
 
 def _cc_flags(cc: str | None, cxx: str | None) -> list[str]:
@@ -1527,7 +601,7 @@ def _verify_fastflowlm_fresh_installs():
 
 def cmd_package_fastflowlm(args):
     """Create and independently re-extract the relocatable FLM + HRX runtime."""
-    _require_fastflowlm_linux_packaging_tools(archive=True)
+    dev_environment.require_fastflowlm_linux_packaging_tools(archive=True)
     _verify_fastflowlm_fresh_installs()
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
                                   FASTFLOWLM_BUNDLE_STAGE)
@@ -1543,7 +617,7 @@ def cmd_package_fastflowlm_wheels(args):
     """Build split rocm-npu-runtime and rocm-npu-fastflowlm Linux wheels."""
     if IS_WINDOWS:
         sys.exit("rocm-npu runtime/FastFlowLM wheel packaging is Linux-only for now")
-    _require_fastflowlm_linux_packaging_tools()
+    dev_environment.require_fastflowlm_linux_packaging_tools()
     _verify_fastflowlm_fresh_installs()
     version = args.version or default_package_version(ROOT)
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
@@ -3829,33 +2903,66 @@ def argparse_positive_int(value):
     return parsed
 
 
-def main():
+_BUILD_HANDLERS = {
+    "llvm": cmd_build_llvm,
+    "iron-tools": cmd_build_iron_tools,
+    "hrx-xclbinutil": cmd_build_hrx_xclbinutil,
+    "hrx": cmd_build_hrx,
+    "hrx-cts": cmd_build_hrx_cts,
+    "fastflowlm": cmd_build_fastflowlm,
+    "all": cmd_build_all,
+}
+
+
+def _dispatch_build(args):
+    return _BUILD_HANDLERS[args.what](args)
+
+
+def _add_command(subparsers, name, handler, *, exit_on_return=False):
+    parser = subparsers.add_parser(name)
+    parser.set_defaults(
+        _handler=handler,
+        _exit_on_return=exit_on_return,
+    )
+    return parser
+
+
+def dispatch(args):
+    """Dispatches using metadata owned by the selected argparse subparser."""
+    result = args._handler(args)
+    if args._exit_on_return:
+        raise SystemExit(result)
+    return result
+
+
+def create_parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("doctor")
-    d.add_argument("profile", nargs="?", choices=sorted(DOCTOR_PROFILE_SUBMODULES),
+    d = _add_command(sub, "doctor", cmd_doctor, exit_on_return=True)
+    d.add_argument("profile", nargs="?", choices=doctor_profile_names(),
                    default="compiler-stack", help="dependency closure to validate")
     d.add_argument(
         "--deep",
         action="store_true",
         help="replay every patch series in a temporary Git index",
     )
-    s = sub.add_parser("setup")
-    s.add_argument("--profile", choices=sorted(SETUP_PROFILE_SUBMODULES),
+    s = _add_command(sub, "setup", cmd_setup)
+    s.add_argument("--profile", choices=setup_profile_names(),
                    default="compiler-stack", help="dependency closure to prepare")
     s.add_argument("--iron-ops-tests", action="store_true",
                    help="also install what iron-ops' own tests need (torch, pytest); "
                         "the NPU job does, the build jobs do not")
-    sub.add_parser("fetch")
-    b = sub.add_parser("build"); b.add_argument("what",
-        choices=["llvm", "iron-tools", "hrx-xclbinutil", "hrx", "hrx-cts", "fastflowlm", "all"])
+    _add_command(sub, "fetch", cmd_fetch)
+    b = _add_command(sub, "build", _dispatch_build); b.add_argument(
+        "what", choices=sorted(_BUILD_HANDLERS)
+    )
     b.add_argument("--fresh", action="store_true",
                    help="clear generated CMake state and outputs before configuring")
-    t = sub.add_parser("test"); t.add_argument("design", nargs="?")
+    t = _add_command(sub, "test", cmd_test); t.add_argument("design", nargs="?")
     t.add_argument("--compiler-prefix",
                    help="relocated rocm-npu-compiler product prefix to test")
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
-    tf = sub.add_parser("test-fastflowlm")
+    tf = _add_command(sub, "test-fastflowlm", cmd_test_fastflowlm)
     tf.add_argument("--bundle", help="run only from an extracted runtime bundle")
     tf.add_argument("--wheel-package", action="store_true",
                     help="run from installed rocm-npu-runtime/fastflowlm wheels")
@@ -3866,33 +2973,43 @@ def main():
         metavar="N",
         help="run N independent two-turn FLM inference processes before the benchmark",
     )
-    to = sub.add_parser("test-iron-ops"); to.add_argument("operator", nargs="?",
+    to = _add_command(sub, "test-iron-ops", cmd_test_iron_ops); to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
     to.add_argument("--compiler-prefix",
                     help="relocated rocm-npu-compiler product prefix to test")
     to.add_argument("--device", choices=sorted(NPU_TARGETS),
                     help="override the NPU generation the suite pins for the operator")
-    sub.add_parser("smoke")
-    sm = sub.add_parser("submodules"); sm.add_argument("names", nargs="+")
+    _add_command(sub, "smoke", cmd_smoke, exit_on_return=True)
+    sm = _add_command(sub, "submodules", cmd_submodules); sm.add_argument("names", nargs="+")
     sm.add_argument("--reset", action="store_true", help="force-reset tracked files")
     sm.add_argument("--clean", nargs="*", default=[],
                     help="also remove untracked+ignored files (needed where a patch adds them)")
     sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
-    sub.add_parser("package-npu-prereqs")
-    sub.add_parser("package-npu-test-package")
-    sub.add_parser("package-fastflowlm")
-    pfw = sub.add_parser("package-fastflowlm-wheels")
+    _add_command(sub, "package-npu-prereqs", cmd_package_npu_prereqs)
+    _add_command(sub, "package-npu-test-package", cmd_package_npu_test_package)
+    _add_command(sub, "package-fastflowlm", cmd_package_fastflowlm)
+    pfw = _add_command(
+        sub, "package-fastflowlm-wheels", cmd_package_fastflowlm_wheels
+    )
     pfw.add_argument("--version", help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})")
-    afw = sub.add_parser("audit-fastflowlm-wheels")
+    afw = _add_command(
+        sub, "audit-fastflowlm-wheels", cmd_audit_fastflowlm_wheels
+    )
     afw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS),
                      help="directory containing the produced rocm-npu wheels")
-    vfw = sub.add_parser("verify-fastflowlm-wheels")
+    vfw = _add_command(
+        sub, "verify-fastflowlm-wheels", cmd_verify_fastflowlm_wheels
+    )
     vfw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS),
                      help="directory containing the produced rocm-npu wheels")
     vfw.add_argument("--venv", default=str(FASTFLOWLM_WHEEL_VENV),
                      help="fresh venv to create for wheel install testing")
-    sub.add_parser("package-compiler-product")
-    pcw = sub.add_parser("package-compiler-wheels")
+    _add_command(
+        sub, "package-compiler-product", cmd_package_compiler_product
+    )
+    pcw = _add_command(
+        sub, "package-compiler-wheels", cmd_package_compiler_wheels
+    )
     pcw.add_argument("--version",
                      help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})")
     pcw.add_argument(
@@ -3909,9 +3026,13 @@ def main():
         action="store_true",
         help="omit the platform-neutral meta wheel (Windows release job)",
     )
-    acw = sub.add_parser("audit-compiler-wheels")
+    acw = _add_command(
+        sub, "audit-compiler-wheels", cmd_audit_compiler_wheels
+    )
     acw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS))
-    vcw = sub.add_parser("verify-compiler-wheels")
+    vcw = _add_command(
+        sub, "verify-compiler-wheels", cmd_verify_compiler_wheels
+    )
     vcw.add_argument("--dir", default=str(FASTFLOWLM_ARTIFACTS))
     vcw.add_argument("--version")
     vcw.add_argument("--venv", default=str(COMPILER_WHEEL_VENV))
@@ -3929,88 +3050,74 @@ def main():
         action="store_true",
         help="also run the compiler e2e with a shared cross-minor consumer tree",
     )
-    uf = sub.add_parser("unpack-fastflowlm")
+    uf = _add_command(sub, "unpack-fastflowlm", cmd_unpack_fastflowlm)
     uf.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
-    vf = sub.add_parser("verify-fastflowlm")
+    vf = _add_command(sub, "verify-fastflowlm", cmd_verify_fastflowlm)
     vf.add_argument("--dir", default=str(FASTFLOWLM_EXTRACTED),
                     help="extracted bundle root or its parent directory")
-    uc = sub.add_parser("unpack-compiler-product")
+    uc = _add_command(
+        sub, "unpack-compiler-product", cmd_unpack_compiler_product
+    )
     uc.add_argument("--dir", default=".artifact", help="directory containing the downloaded archive")
     uc.add_argument("--output-dir", default=str(COMPILER_PRODUCT_EXTRACTED),
                     help="physical extraction root (use a short path on Windows)")
-    vc = sub.add_parser("verify-compiler-product")
+    vc = _add_command(
+        sub, "verify-compiler-product", cmd_verify_compiler_product
+    )
     vc.add_argument("--dir", default=str(COMPILER_PRODUCT_STAGE),
                     help="compiler product root or its parent directory")
     vc.add_argument("--relocate", action="store_true",
                     help="copy the product to another prefix and run the off-device e2e")
-    u = sub.add_parser("unpack-npu-prereqs")
+    u = _add_command(sub, "unpack-npu-prereqs", cmd_unpack_npu_prereqs)
     u.add_argument("--dir", default=".artifact", help="where download-artifact put it")
-    v = sub.add_parser("verify-npu-prereqs")
+    v = _add_command(
+        sub,
+        "verify-npu-prereqs",
+        cmd_verify_npu_prereqs,
+        exit_on_return=True,
+    )
     v.add_argument("--extracted", action="store_true",
                    help="check an already-unpacked tree instead of the archive")
-    unt = sub.add_parser("unpack-npu-test-package")
+    unt = _add_command(
+        sub, "unpack-npu-test-package", cmd_unpack_npu_test_package
+    )
     unt.add_argument("--dir", default=".artifact", help="where download-artifact put it")
-    vnt = sub.add_parser("verify-npu-test-package")
+    vnt = _add_command(
+        sub, "verify-npu-test-package", cmd_verify_npu_test_package
+    )
     vnt.add_argument("--extracted", action="store_true",
                      help="check the unpacked package instead of the archive")
-    rnt = sub.add_parser("test-npu-package")
+    rnt = _add_command(sub, "test-npu-package", cmd_test_npu_package)
     rnt.add_argument("--case", dest="cases", action="append",
                      help="run only this packaged case; may be repeated")
-    np = sub.add_parser("npu-probe")
+    np = _add_command(
+        sub, "npu-probe", cmd_npu_probe, exit_on_return=True
+    )
     np.add_argument("--bundle", help="probe libHRX from an extracted runtime bundle")
     np.add_argument("--runtime-package", action="store_true",
                     help="probe libHRX from an installed rocm-npu-runtime wheel")
-    c = sub.add_parser("test-hrx-cts"); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
-    tno = sub.add_parser("test-npu-iron-ops"); tno.add_argument("operator", nargs="?",
+    c = _add_command(
+        sub, "test-hrx-cts", cmd_test_hrx_cts, exit_on_return=True
+    ); c.add_argument("suite", nargs="?", choices=HRX_CTS_TESTS)
+    tno = _add_command(
+        sub, "test-npu-iron-ops", cmd_test_npu_iron_ops
+    ); tno.add_argument("operator", nargs="?",
         help="operator to run on the NPU (default: every one in tests/iron-ops/suite.py)")
     tno.add_argument("--compiler-prefix",
                      help="relocated rocm-npu-compiler product prefix to test")
-    tn = sub.add_parser("test-npu"); tn.add_argument("design", nargs="?")
+    tn = _add_command(sub, "test-npu", cmd_test_npu); tn.add_argument("design", nargs="?")
     tn.add_argument("--compiler-prefix",
                     help="relocated rocm-npu-compiler product prefix to test")
     tn.add_argument("--device", choices=sorted(NPU_TARGETS), default="npu2",
                     help="NPU generation to build the design for (default: npu2/Strix)")
     tn.add_argument("--chain", action="store_true",
                     help="run the chained testbench instead of the single-dispatch gate")
-    sub.add_parser("deps")
-    a = p.parse_args()
-    if a.cmd == "doctor": sys.exit(cmd_doctor(a))
-    elif a.cmd == "setup": cmd_setup(a)
-    elif a.cmd == "fetch": cmd_fetch(a)
-    elif a.cmd == "deps": cmd_deps(a)
-    elif a.cmd == "test": cmd_test(a)
-    elif a.cmd == "test-fastflowlm": cmd_test_fastflowlm(a)
-    elif a.cmd == "test-iron-ops": cmd_test_iron_ops(a)
-    elif a.cmd == "test-npu-iron-ops": cmd_test_npu_iron_ops(a)
-    elif a.cmd == "smoke": sys.exit(cmd_smoke(a))
-    elif a.cmd == "submodules": cmd_submodules(a)
-    elif a.cmd == "package-npu-prereqs": cmd_package_npu_prereqs(a)
-    elif a.cmd == "package-npu-test-package": cmd_package_npu_test_package(a)
-    elif a.cmd == "package-fastflowlm": cmd_package_fastflowlm(a)
-    elif a.cmd == "package-fastflowlm-wheels": cmd_package_fastflowlm_wheels(a)
-    elif a.cmd == "audit-fastflowlm-wheels": cmd_audit_fastflowlm_wheels(a)
-    elif a.cmd == "verify-fastflowlm-wheels": cmd_verify_fastflowlm_wheels(a)
-    elif a.cmd == "package-compiler-product": cmd_package_compiler_product(a)
-    elif a.cmd == "package-compiler-wheels": cmd_package_compiler_wheels(a)
-    elif a.cmd == "audit-compiler-wheels": cmd_audit_compiler_wheels(a)
-    elif a.cmd == "verify-compiler-wheels": cmd_verify_compiler_wheels(a)
-    elif a.cmd == "unpack-fastflowlm": cmd_unpack_fastflowlm(a)
-    elif a.cmd == "verify-fastflowlm": cmd_verify_fastflowlm(a)
-    elif a.cmd == "unpack-compiler-product": cmd_unpack_compiler_product(a)
-    elif a.cmd == "verify-compiler-product": cmd_verify_compiler_product(a)
-    elif a.cmd == "unpack-npu-prereqs": cmd_unpack_npu_prereqs(a)
-    elif a.cmd == "verify-npu-prereqs": sys.exit(cmd_verify_npu_prereqs(a))
-    elif a.cmd == "unpack-npu-test-package": cmd_unpack_npu_test_package(a)
-    elif a.cmd == "verify-npu-test-package": cmd_verify_npu_test_package(a)
-    elif a.cmd == "test-npu-package": cmd_test_npu_package(a)
-    elif a.cmd == "npu-probe": sys.exit(cmd_npu_probe(a))
-    elif a.cmd == "test-hrx-cts": sys.exit(cmd_test_hrx_cts(a))
-    elif a.cmd == "test-npu": cmd_test_npu(a)
-    elif a.cmd == "build":
-        {"llvm": cmd_build_llvm, "iron-tools": cmd_build_iron_tools,
-         "hrx-xclbinutil": cmd_build_hrx_xclbinutil, "hrx": cmd_build_hrx,
-         "hrx-cts": cmd_build_hrx_cts, "fastflowlm": cmd_build_fastflowlm,
-         "all": cmd_build_all}[a.what](a)
+    _add_command(sub, "deps", cmd_deps)
+    return p
+
+
+def main():
+    dispatch(create_parser().parse_args())
 
 
 if __name__ == "__main__":

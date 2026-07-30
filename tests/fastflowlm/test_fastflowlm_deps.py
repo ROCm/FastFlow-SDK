@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-import dev
+from build_tools.dev import environment
 from build_tools.fastflowlm_deps import (
     dependency_errors,
     dependency_policy,
@@ -93,34 +93,46 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
             return f"/usr/bin/{name}" if name in available else None
 
         with (
-            mock.patch.object(dev.shutil, "which", side_effect=which),
-            mock.patch.object(dev, "_compilers", return_value=("gcc", "g++")),
-            mock.patch.object(dev, "_have_header", return_value=True),
-            mock.patch.object(dev, "_have_perl_module", return_value=True),
+            mock.patch.object(environment.shutil, "which", side_effect=which),
+            mock.patch.object(
+                environment, "compilers", return_value=("gcc", "g++")
+            ),
+            mock.patch.object(environment, "have_header", return_value=True),
+            mock.patch.object(
+                environment, "have_perl_module", return_value=True
+            ),
         ):
-            ok, missing = dev._check_fastflowlm_linux_host(verbose=False)
+            ok, missing = environment.check_fastflowlm_linux_host(
+                verbose=False
+            )
 
         self.assertTrue(ok)
         self.assertEqual(missing, [])
 
         with (
             mock.patch.object(
-                dev.shutil,
+                environment.shutil,
                 "which",
                 side_effect=lambda name: which(name) if name != "nasm" else None,
             ),
-            mock.patch.object(dev, "_compilers", return_value=("gcc", "g++")),
-            mock.patch.object(dev, "_have_header", return_value=True),
-            mock.patch.object(dev, "_have_perl_module", return_value=True),
+            mock.patch.object(
+                environment, "compilers", return_value=("gcc", "g++")
+            ),
+            mock.patch.object(environment, "have_header", return_value=True),
+            mock.patch.object(
+                environment, "have_perl_module", return_value=True
+            ),
         ):
-            ok, missing = dev._check_fastflowlm_linux_host(verbose=False)
+            ok, missing = environment.check_fastflowlm_linux_host(
+                verbose=False
+            )
 
         self.assertFalse(ok)
         self.assertEqual(missing, ["nasm"])
 
     def test_fastflowlm_packaging_gate_reports_packaging_tools_only(self):
-        with mock.patch.object(dev.shutil, "which", return_value=None):
-            ok, missing = dev._check_fastflowlm_linux_packaging_tools(
+        with mock.patch.object(environment.shutil, "which", return_value=None):
+            ok, missing = environment.check_fastflowlm_linux_packaging_tools(
                 archive=True, verbose=False)
 
         self.assertFalse(ok)

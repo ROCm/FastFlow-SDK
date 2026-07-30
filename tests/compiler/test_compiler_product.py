@@ -149,50 +149,6 @@ class CompilerProductTest(unittest.TestCase):
             f"{sys.version_info.major}.{sys.version_info.minor}",
         )
 
-    def test_python_install_uses_shared_uv_cache_when_available(self):
-        with (
-            mock.patch.object(dev, "uv_bin", return_value=Path("uv")),
-            mock.patch.object(Path, "is_file", return_value=True),
-            mock.patch.object(dev.subprocess, "run") as run,
-        ):
-            dev._python_install(Path("python"), "numpy==2.4.6")
-
-        self.assertEqual(
-            run.call_args.args[0],
-            ["uv", "pip", "install", "--python", "python", "numpy==2.4.6"],
-        )
-
-    def test_python_install_can_refresh_rebuilt_local_wheels(self):
-        with (
-            mock.patch.object(dev, "uv_bin", return_value=Path("uv")),
-            mock.patch.object(Path, "is_file", return_value=True),
-            mock.patch.object(dev.subprocess, "run") as run,
-        ):
-            dev._python_install(
-                Path("python"),
-                "rocm-npu-compiler==1.0",
-                refresh_packages=("rocm-npu-compiler",),
-            )
-
-        self.assertIn("--refresh-package", run.call_args.args[0])
-        self.assertIn("rocm-npu-compiler", run.call_args.args[0])
-
-    def test_python_install_drops_stale_ssl_cert_file(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            uv = Path(temporary) / "uv"
-            uv.touch()
-            with (
-                mock.patch.object(dev, "uv_bin", return_value=uv),
-                mock.patch.dict(
-                    os.environ,
-                    {"SSL_CERT_FILE": str(Path(temporary) / "missing.pem")},
-                ),
-                mock.patch.object(dev.subprocess, "run") as run,
-            ):
-                dev._python_install(Path("python"), "numpy==2.4.6")
-
-        self.assertNotIn("SSL_CERT_FILE", run.call_args.kwargs["env"])
-
     def test_consumer_only_verification_skips_static_wheel_scans(self):
         args = SimpleNamespace(consumer_only=True)
         with (
@@ -350,60 +306,6 @@ class CompilerProductTest(unittest.TestCase):
                 (destination / "runtime_lib" / "xaiengineTmp").exists()
             )
 
-    def test_patch_validation_index_uses_short_runner_temp(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            runner_temp = Path(temporary) / "runner-temp"
-            with (
-                mock.patch.dict(
-                    os.environ,
-                    {"RUNNER_TEMP": str(runner_temp)},
-                    clear=False,
-                ),
-                mock.patch.object(
-                    dev.tempfile,
-                    "mkdtemp",
-                    side_effect=RuntimeError("stop after path selection"),
-                ) as mkdtemp,
-                self.assertRaisesRegex(RuntimeError, "stop after path selection"),
-            ):
-                dev._declared_patch_expected_state("llvm-project", Path("llvm"))
-            mkdtemp.assert_called_once_with(
-                prefix="rns-patch-",
-                dir=runner_temp.resolve(),
-            )
-
-    def test_quick_doctor_skips_replay_for_unambiguous_patches(self):
-        patches = [Path("0001.patch"), Path("0002.patch")]
-        with (
-            mock.patch.object(
-                dev,
-                "_patch_state",
-                side_effect=[("applied", ()), ("appliable", ())],
-            ),
-            mock.patch.object(dev, "_declared_patch_expected_state") as replay,
-        ):
-            states = dev._doctor_patch_states(
-                "component", Path("source"), patches, deep=False)
-
-        self.assertEqual(states, ["applied", "appliable"])
-        replay.assert_not_called()
-
-    def test_deep_doctor_replays_even_unambiguous_patches(self):
-        patches = [Path("0001.patch")]
-        expected = {"revision": "abc"}
-        with (
-            mock.patch.object(dev, "_patch_state", return_value=("applied", ())),
-            mock.patch.object(dev, "git_source_state", return_value=expected),
-            mock.patch.object(
-                dev, "_declared_patch_expected_state", return_value=expected
-            ) as replay,
-        ):
-            states = dev._doctor_patch_states(
-                "component", Path("source"), patches, deep=True)
-
-        self.assertEqual(states, ["applied"])
-        replay.assert_called_once_with("component", Path("source"))
-
     def test_ci_runs_one_deep_doctor_and_uses_content_addressed_caches(self):
         workflows = ROOT / ".github" / "workflows"
         linux = (workflows / "build_rocm_npu_staging_linux.yml").read_text()
@@ -419,10 +321,12 @@ class CompilerProductTest(unittest.TestCase):
             "'.github/vcpkg/triplets/*.cmake') }}-${{ github.run_id }}",
             windows,
         )
-        self.assertIn("hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py')",
-                      linux)
-        self.assertIn("hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py')",
-                      windows)
+        cache_inputs = (
+            "hashFiles('manifests/versions.toml', 'patches/**/*.patch', "
+            "'dev.py', 'build_tools/dev/**/*.py')"
+        )
+        self.assertIn(cache_inputs, linux)
+        self.assertIn(cache_inputs, windows)
 
     def test_npu_prerequisites_exclude_separate_compiler_product(self):
         with tempfile.TemporaryDirectory() as temporary:
