@@ -14,7 +14,11 @@ from build_tools.rocm_npu_windows_wheels import (
     RUNTIME_DISTRIBUTION,
 )
 
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 class TestRocmNpuWindowsWheelCli:

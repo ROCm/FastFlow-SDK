@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-pytestmark = pytest.mark.compiler_stack
+pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
 
 
 ROOT = Path(__file__).resolve().parents[2]

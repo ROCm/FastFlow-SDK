@@ -32,7 +32,11 @@ from build_tools.fastflowlm_artifact import (
     verify_bundle,
 )
 
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 class TestFastFlowLMArtifact:

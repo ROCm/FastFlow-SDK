@@ -17,7 +17,11 @@ from build_tools.rocm_npu_linux_wheels import (
 )
 from build_tools.dev import testing
 
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 class TestFastFlowLMWheelPackageCli:

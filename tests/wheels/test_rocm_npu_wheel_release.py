@@ -28,7 +28,11 @@ from build_tools.rocm_npu_wheel_release import (
 )
 
 
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 class TestRocmNpuWheelRelease:

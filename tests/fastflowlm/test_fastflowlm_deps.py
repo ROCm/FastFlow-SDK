@@ -18,7 +18,11 @@ from build_tools.fastflowlm_deps import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 def populate_policy_files(root: Path) -> None:

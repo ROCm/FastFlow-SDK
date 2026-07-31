@@ -53,6 +53,16 @@ def test_presubmit_workflow_uses_marker_selection():
     assert "python -m pytest -m presubmit" in workflow
 
 
+def test_test_profile_covers_presubmit_runtime_dependencies():
+    source = (ROOT / "requirements/test.txt").read_text(encoding="utf-8")
+    entries = {
+        line.partition("#")[0].strip()
+        for line in source.splitlines()
+        if line.partition("#")[0].strip()
+    }
+    assert entries == {"numpy==1.26.4", "pytest==8.4.2", "zstandard==0.25.0"}
+
+
 @pytest.mark.parametrize(
     "requirements",
     ("requirements/compiler-stack.txt", "requirements/fastflowlm.txt"),
