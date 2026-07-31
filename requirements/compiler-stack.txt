@@ -13,7 +13,7 @@
 #   `dev.py setup`. cmake + ninja come from pip below (so the apt set stays
 #   minimal). (hrx-xclbinutil self-defines uuid_t — no uuid-dev needed.)
 #
-# Installed via requirements.lock (hash-pinned, uv pip compile). Edit this file,
+# Installed via requirements/compiler-stack.lock (hash-pinned, uv pip compile). Edit this file,
 # then regenerate the lock (see cmd_setup docstring).
 
 # --- build-system: LLVM/MLIR Python bindings + eudsl-from-source ---
@@ -45,5 +45,5 @@ llvm-aie==21.0.0.2026061501+acc2a72c
 # wheel-built `aie` package in site-packages would shadow the source-built one this whole
 # stack exists to test. Its runtime deps are numpy + ml_dtypes, both already pinned above.
 #
-# What its own TESTS need (torch, pytest) is NOT here: see requirements-iron-ops.txt, which
+# What its own TESTS need (torch, pytest) is NOT here: see iron-ops-test.txt, which
 # only the NPU job installs.

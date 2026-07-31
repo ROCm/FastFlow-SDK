@@ -60,7 +60,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/build/caches/uv
-          key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements*.txt', 'requirements*.lock', 'dev.py', 'build_tools/**/*.py') }}
+          key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements/**/*.txt', 'requirements/**/*.lock', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
       # F821 only: a rebase that keeps a call and drops its definition otherwise surfaces
@@ -95,16 +95,16 @@ jobs:
       # egg-info, which `dev.py setup` puts there.)
       - name: Initialize submodules
         run: python3 dev.py submodules llvm-project hrx iron-tools iron-ops --reset --clean iron-tools --shallow
-      # setup creates .venv, installs the hash-pinned requirements.lock, applies the
+      # setup creates .venv, installs requirements/compiler-stack.lock, applies the
       # temporary patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + hash-pinned deps + prefetch)
         run: python3 dev.py setup
 
       - name: Install test runner
-        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
 
       - name: Install Linux wheel audit tooling
-        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-packaging-linux.lock
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/packaging-linux.lock
 
       # Gate: system prereqs (clang/lld/python3-dev) + submodule-pins-vs-manifest
       # + patches + prefetch + version drift. This is the one full ordered patch
@@ -312,7 +312,7 @@ jobs:
         run: git config --global --add safe.directory "$PWD"
 
       - name: Set up NPU test environment
-        run: python3 dev.py setup --profile npu-runtime
+        run: python3 dev.py setup --profile npu-test-runtime
 
       - name: Download run prerequisites
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

@@ -3,7 +3,7 @@
 # rocm-npu-staging — version manifest (the pin authority). 2026-06-26.
 # Exact revisions the NPU stack is built/validated against. projects/ are
 # git submodules; this file records their pins. Build orchestration is in dev.py,
-# Python deps in requirements.txt.
+# Python deps in requirements/compiler-stack.txt.
 #
 # Everything is built FROM SOURCE (submodules) against one ROCm LLVM; Peano
 # (llvm-aie) is the ONLY wheel-sourced toolchain piece.
@@ -38,10 +38,10 @@ win_note2 = "0007 marks CaptureStdio's trivial members ([[maybe_unused]]) in too
 repo     = "github.com/amd/IRON"
 commit   = "17769b86a9a7dc68fb04ec6636a233b2adb4d543"
 provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, ...)", "aie_kernels C++ sources"]
-note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==v1.3.4); here it runs against the SOURCE-built iron-tools ([iron_tools] above) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: tests/iron-ops/suite.py."
+note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==v1.3.4); here it runs against the SOURCE-built iron-tools ([iron_tools] above) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: tests/iron-ops/suite.py."
 patches  = ["patches/iron-ops/0001-xrt-free-host-stack.patch", "patches/iron-ops/0002-lazy-operator-imports.patch", "patches/iron-ops/0003-adapt-aiecc-native-cli.patch"]
 xrt_note = "0001 is what lets IRON run without XRT at all: iron/common/{utils,sequence}.py did `import pyxrt` at module scope (so even COMPILING an operator needed XRT installed), and test_utils.py named XRTTensor directly + sized buffers with pyxrt's `bo.size()`. The patch makes the pyxrt imports optional, routes test buffers through aie.utils.DEFAULT_TENSOR_CLASS (HRXTensor here), and takes byte counts from the numpy view. The XRT-native OperatorSequence dispatch policies now raise a clear error instead of failing at import."
-lazy_note = "0002 makes iron.operators re-export lazily (PEP 562). Eagerly, importing ANY operator imported ALL of them — including mha (torch) and swiglu (pyxrt) — so the CPU build jobs would have had to install torch just to compile an elementwise add. See requirements-iron-ops.txt."
+lazy_note = "0002 makes iron.operators re-export lazily (PEP 562). Eagerly, importing ANY operator imported ALL of them — including mha (torch) and swiglu (pyxrt) — so the CPU build jobs would have had to install torch just to compile an elementwise add. See requirements/iron-ops-test.txt."
 aiecc_note = "0003 adapts iron/common/compilation/base.py to the native aiecc CLI shipped by the current iron-tools pin (4976487): the former python aiecc.py driver flags (-v, -j1, --no-compile-host, --aie-generate-xclbin, --aie-generate-npu-insts, --generate-full-elf, --no-compile) become the declarative driver's equivalents (--verbose, -j 1, host compile opt-in via -o, --get-xclbin, --get-npu-insts, --get-full-elf; requesting only the insts edge replaces --no-compile). iron-ops develops against the mlir_aie wheel, so it still emits the old CLI; without this the off-device operator build fails immediately with 'Unknown command line argument'."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)

@@ -1,0 +1,7 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# Shared repository test runner. Regenerate requirements/test.lock with:
+#   uv pip compile requirements/test.txt --generate-hashes \
+#     --python-version 3.12 --universal --system-certs \
+#     --output-file requirements/test.lock
+pytest==8.4.2

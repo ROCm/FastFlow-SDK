@@ -55,7 +55,7 @@ jobs:
           python -m ruff check --select F821 dev.py build_tools tests .github/scripts
 
       - name: Install test runner
-        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
 
       - name: Test developer command core
         run: python -m pytest -m presubmit

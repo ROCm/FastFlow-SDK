@@ -2,12 +2,31 @@
 # SPDX-License-Identifier: MIT
 
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
 from build_tools.dev import profiles
 
 pytestmark = pytest.mark.presubmit
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_requirement_profiles_are_grouped_and_locked():
+    expected = {
+        "compiler-stack",
+        "fastflowlm",
+        "iron-ops-test",
+        "npu-test-runtime",
+        "packaging-linux",
+        "release-wheels",
+        "test",
+    }
+    requirements = ROOT / "requirements"
+    assert {path.stem for path in requirements.glob("*.txt")} == expected
+    assert {path.stem for path in requirements.glob("*.lock")} == expected
+    assert not list(ROOT.glob("requirements*.txt"))
+    assert not list(ROOT.glob("requirements*.lock"))
 
 
 class TestProfiles:
@@ -29,11 +48,11 @@ class TestProfiles:
             "compiler-stack",
             "fastflowlm",
             "npu-e2e",
-            "npu-runtime",
+            "npu-test-runtime",
         }
         assert "all" not in profiles.setup_profile_names()
         assert "npu-e2e" not in profiles.doctor_profile_names()
-        assert "npu-runtime" not in profiles.doctor_profile_names()
+        assert "npu-test-runtime" not in profiles.doctor_profile_names()
 
     def test_profile_submodule_requirements(self):
         assert profiles.PROFILE_SPECS["compiler-stack"].submodules == {
@@ -51,7 +70,7 @@ class TestProfiles:
             "iron-tools",
             "iron-ops",
         }
-        assert not profiles.PROFILE_SPECS["npu-runtime"].submodules
+        assert not profiles.PROFILE_SPECS["npu-test-runtime"].submodules
         assert profiles.PROFILE_SPECS["all"].submodules == set(
             profiles.PIN_SECTION_TO_SUBMODULE.values()
         )
@@ -59,17 +78,18 @@ class TestProfiles:
     def test_profile_python_requirements(self):
         assert (
             profiles.profile("compiler-stack").requirements.default
-            == "requirements.lock"
+            == "requirements/compiler-stack.lock"
         )
         assert (
             profiles.profile("fastflowlm").requirements.default
-            == "requirements-fastflowlm.lock"
+            == "requirements/fastflowlm.lock"
         )
         assert profiles.profile("fastflowlm").requirements.require_hashes
         assert (
-            profiles.profile("npu-runtime").requirements.default
-            == "requirements-npu-runtime.txt"
+            profiles.profile("npu-test-runtime").requirements.default
+            == "requirements/npu-test-runtime.lock"
         )
+        assert profiles.profile("npu-test-runtime").requirements.require_hashes
         assert profiles.PROFILE_SPECS["all"].requirements is None
 
     @pytest.mark.parametrize(
@@ -78,7 +98,7 @@ class TestProfiles:
             ("compiler-stack", (True, False)),
             ("fastflowlm", (False, True)),
             ("npu-e2e", (True, False)),
-            ("npu-runtime", (False, False)),
+            ("npu-test-runtime", (False, False)),
         ],
     )
     def test_setup_actions_are_profile_policy(self, profile_name, actions):

@@ -92,9 +92,9 @@ def install_iron_ops(pip: list[str], with_tests: bool = False) -> None:
         return
     environment.sh(pip + ["--no-deps", "-e", str(paths.PROJ / "iron-ops")])
     if with_tests:
-        lock = paths.ROOT / "requirements-iron-ops.lock"
+        lock = paths.ROOT / "requirements/iron-ops-test.lock"
         source = (
-            paths.ROOT / "requirements-iron-ops.txt"
+            paths.ROOT / "requirements/iron-ops-test.txt"
             if paths.is_windows() or not lock.exists()
             else lock
         )

@@ -12,8 +12,8 @@ RECURSIVE_SUBMODULES = ("iron-tools", "FastFlowLM")
 
 
 def cmd_deps(args):
-    """Print the in-repository dependency manifest."""
-    print((paths.ROOT / "requirements.txt").read_text())
+    """Print the compiler-stack dependency manifest."""
+    print((paths.ROOT / "requirements" / "compiler-stack.txt").read_text())
 
 
 def cmd_submodules(args):

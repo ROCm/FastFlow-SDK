@@ -88,7 +88,11 @@ git config --global core.longpaths true
 On Linux and Windows, `dev.py setup --profile fastflowlm` installs the pinned
 Python and native dependencies into gitignored repository caches. The host
 package manager supplies only build tools and platform interfaces. CMake and
-Ninja come from `requirements-fastflowlm.lock`.
+Ninja come from `requirements/fastflowlm.lock`.
+
+Python environment manifests live under `requirements/`. Each editable `.txt`
+source has a generated, hash-pinned `.lock` companion; setup profiles select
+the smallest environment that supports their build or test responsibility.
 
 FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
 HRX is installed to a clean prefix and FastFlowLM consumes its exported
@@ -208,7 +212,7 @@ python3 dev.py build hrx          # the amdxdna HAL (IREE runtime)
 python3 dev.py build all          # all of the above, in order
 python3 dev.py test [DESIGN]      # e2e build test, no NPU run
 python3 dev.py test-iron-ops [OP] # build the iron-ops operators, no NPU run
-python3 dev.py deps               # print requirements.txt
+python3 dev.py deps               # print requirements/compiler-stack.txt
 ```
 
 Build-only works on a host without an NPU. The **e2e test** builds an
@@ -232,7 +236,7 @@ On a machine **with** an NPU, `dev.py test-npu` dispatches an iron-tools design 
 the HAL, and `dev.py test-npu-iron-ops` runs the iron-ops operators' own tests on the
 device (their references, their tolerances) with `IRON_RUNTIME=hrx`. The latter needs
 their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
-[requirements-iron-ops.txt](requirements-iron-ops.txt); the build path does not need them).
+[`requirements/iron-ops-test.txt`](requirements/iron-ops-test.txt); the build path does not need them).
 
 </details>
 
