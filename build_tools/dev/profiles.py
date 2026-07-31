@@ -55,9 +55,9 @@ PROFILE_SPECS = {
         system_checks=("compiler-stack",),
         setup=True,
         requirements=RequirementsSpec(
-            default="requirements.lock",
-            windows="requirements.txt",
-            fallback_if_missing="requirements.txt",
+            default="requirements/compiler-stack.lock",
+            windows="requirements/compiler-stack.txt",
+            fallback_if_missing="requirements/compiler-stack.txt",
         ),
         needs_eudsl=True,
         check_system_before_setup=True,
@@ -69,7 +69,7 @@ PROFILE_SPECS = {
         system_checks=("fastflowlm",),
         setup=True,
         requirements=RequirementsSpec(
-            default="requirements-fastflowlm.lock",
+            default="requirements/fastflowlm.lock",
             require_hashes=True,
         ),
         install_fastflowlm_native=True,
@@ -91,17 +91,20 @@ PROFILE_SPECS = {
         submodules=frozenset({"hrx", "iron-tools", "iron-ops"}),
         setup=True,
         requirements=RequirementsSpec(
-            default="requirements.lock",
-            windows="requirements.txt",
-            fallback_if_missing="requirements.txt",
+            default="requirements/compiler-stack.lock",
+            windows="requirements/compiler-stack.txt",
+            fallback_if_missing="requirements/compiler-stack.txt",
         ),
         install_iron_ops=True,
     ),
-    # Runtime-only setup has no source submodule requirement.
-    "npu-runtime": ProfileSpec(
+    # Execute-only NPU test setup has no source submodule requirement.
+    "npu-test-runtime": ProfileSpec(
         submodules=frozenset(),
         setup=True,
-        requirements=RequirementsSpec(default="requirements-npu-runtime.txt"),
+        requirements=RequirementsSpec(
+            default="requirements/npu-test-runtime.lock",
+            require_hashes=True,
+        ),
     ),
 }
 

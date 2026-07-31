@@ -95,7 +95,7 @@ jobs:
           path: |
             ${{ github.workspace }}/build/caches/uv
             ${{ github.workspace }}/build/caches/pip
-          key: python-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements*.txt', 'requirements*.lock', 'dev.py', 'build_tools/**/*.py') }}
+          key: python-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements/**/*.txt', 'requirements/**/*.lock', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: |
             python-packages-v2-${{ runner.os }}-${{ runner.arch }}-
             uv-v1-${{ runner.os }}-${{ runner.arch }}-
@@ -255,7 +255,7 @@ jobs:
         run: python dev.py setup
 
       - name: Install test runner
-        run: .venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+        run: .venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
 
       # Preserve dependency downloads even when a later compiler build or test fails.
       - name: Save Python package caches
@@ -482,7 +482,7 @@ jobs:
           python-version: '3.12.10'
 
       - name: Set up NPU test environment
-        run: python dev.py setup --profile npu-runtime
+        run: python dev.py setup --profile npu-test-runtime
 
       - name: Download run prerequisites
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

@@ -126,7 +126,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "tag: ${{ needs.prepare.outputs.tag_name }}" in workflow
         assert "name: ${{ needs.prepare.outputs.release_name }}" in workflow
         assert "environment: rocm-npu-prerelease" in workflow
-        assert "requirements-release-wheels.lock" in workflow
+        assert "requirements/release-wheels.lock" in workflow
         assert "0.1.0" not in workflow
         assert "rocm-npu-staging" not in workflow
         assert not (WORKFLOWS / "release_rocm_npu_wheels_windows.yml").exists()
@@ -173,7 +173,7 @@ class TestRocmNpuReleaseWheelWorkflow:
             encoding="utf-8"
         )
         assert "actions/setup-python@" not in linux_workflow
-        assert "--require-hashes -r requirements-packaging-linux.lock" in linux_workflow
+        assert "--require-hashes -r requirements/packaging-linux.lock" in linux_workflow
         for tag in ("cp313-cp313", "cp314-cp314"):
             assert f"/opt/python/{tag}/bin/python" in linux_workflow
 

@@ -70,7 +70,7 @@ jobs:
           arch: x64
 
       - name: Install Python build tools
-        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-fastflowlm.lock
+        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/fastflowlm.lock
 
       - name: Initialize source pins
         run: python dev.py submodules hrx FastFlowLM --reset --clean hrx FastFlowLM --shallow
@@ -137,10 +137,10 @@ jobs:
         run: python dev.py setup --profile fastflowlm
 
       - name: Install test runner
-        run: .venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+        run: .venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
 
       - name: Install release validation tools
-        run: .venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r requirements-release-wheels.lock
+        run: .venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r requirements/release-wheels.lock
 
       - name: Save vcpkg download cache
         if: success() && steps.fastflowlm-deps.outcome == 'success' && steps.vcpkg-downloads.outputs.cache-hit != 'true'

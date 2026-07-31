@@ -238,7 +238,7 @@ mirroring the flag already on its `pip install` step. eudsl is vendored from an 
 (`--no-binary`), so pip must build its metadata; by default that happens in an isolated
 env that tries to provision `setuptools>=64` from an index. The iron-tools build runs
 with `PIP_NO_INDEX=1` (see `dev.py`), so offline that env cannot find setuptools and the
-download fails. Reusing the active venv's build backend (which `requirements.txt` already
+download fails. Reusing the active venv's build backend (which `requirements/compiler-stack.txt` already
 installs `setuptools`/`wheel` into, precisely because "venvs omit setuptools") keeps the
 step network-free.
 

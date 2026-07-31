@@ -5,4 +5,8 @@
 # Kernels and expected outputs are built into the NPU test package on the CPU
 # runner. The hardware runner only needs NumPy for mapped buffers and numeric
 # comparison; it does not need Peano, MLIR Python bindings, torch, or pytest.
+# Regenerate requirements/npu-test-runtime.lock with:
+#   uv pip compile requirements/npu-test-runtime.txt --generate-hashes \
+#     --python-version 3.12 --universal --system-certs \
+#     --output-file requirements/npu-test-runtime.lock
 numpy==1.26.4

@@ -470,8 +470,12 @@ def stage_product():
         },
         "dependencies": {
             "requirements": [
-                _manifest_file_record(ROOT / "requirements.txt"),
-                _manifest_file_record(ROOT / "requirements.lock"),
+                _manifest_file_record(
+                    ROOT / "requirements" / "compiler-stack.txt"
+                ),
+                _manifest_file_record(
+                    ROOT / "requirements" / "compiler-stack.lock"
+                ),
             ],
             "native_runtime_files": native_dependencies,
             "relocated_elf_rpaths": relocated_rpaths,

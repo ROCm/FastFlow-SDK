@@ -104,13 +104,13 @@ jobs:
         run: python3 dev.py setup --profile fastflowlm
 
       - name: Install test runner
-        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
 
       - name: Install Linux wheel audit tooling
-        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-packaging-linux.lock
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/packaging-linux.lock
 
       - name: Install release validation tools
-        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-release-wheels.lock
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/release-wheels.lock
 
       - name: Save vcpkg download cache
         if: success() && steps.fastflowlm-deps.outcome == 'success' && steps.vcpkg-downloads.outputs.cache-hit != 'true'

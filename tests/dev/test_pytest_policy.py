@@ -53,7 +53,10 @@ def test_presubmit_workflow_uses_marker_selection():
     assert "python -m pytest -m presubmit" in workflow
 
 
-@pytest.mark.parametrize("requirements", ("requirements.txt", "requirements-fastflowlm.txt"))
+@pytest.mark.parametrize(
+    "requirements",
+    ("requirements/compiler-stack.txt", "requirements/fastflowlm.txt"),
+)
 def test_build_requirements_do_not_include_test_tools(requirements):
     source = (ROOT / requirements).read_text(encoding="utf-8")
     entries = [
@@ -61,7 +64,7 @@ def test_build_requirements_do_not_include_test_tools(requirements):
         for line in source.splitlines()
         if line.partition("#")[0].strip()
     ]
-    assert not any("requirements-test" in entry for entry in entries)
+    assert not any("requirements/test" in entry for entry in entries)
     assert not any(entry.startswith("pytest") for entry in entries)
 
 
@@ -80,7 +83,8 @@ def test_compiler_workflows_install_runner_and_use_marker_selection(
 ):
     workflow = (ROOT / workflow_path).read_text(encoding="utf-8")
     assert f"{python} -m pip install" in workflow
-    assert "-r requirements-test.lock" in workflow
+    assert "-r requirements/test.lock" in workflow
+    assert "hashFiles('requirements/**/*.txt', 'requirements/**/*.lock'" in workflow
     assert f'{python} -m pytest -m "compiler_stack or presubmit"' in workflow
 
 
@@ -99,5 +103,5 @@ def test_fastflowlm_workflows_install_runner_and_use_marker_selection(
 ):
     workflow = (ROOT / workflow_path).read_text(encoding="utf-8")
     assert f"{python} -m pip install" in workflow
-    assert "-r requirements-test.lock" in workflow
+    assert "-r requirements/test.lock" in workflow
     assert f"{python} -m pytest -m fastflowlm" in workflow

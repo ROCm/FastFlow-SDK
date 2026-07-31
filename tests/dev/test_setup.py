@@ -20,22 +20,24 @@ class TestRequirementsFile:
     def test_profile_requirements_are_explicit(self):
         root = Path("root")
         assert setup.requirements_file("fastflowlm", root=root, is_windows=True) == (
-            root / "requirements-fastflowlm.lock",
+            root / "requirements/fastflowlm.lock",
             True,
         )
-        assert setup.requirements_file("npu-runtime", root=root, is_windows=False) == (
-            root / "requirements-npu-runtime.txt",
-            False,
+        assert setup.requirements_file("npu-test-runtime", root=root, is_windows=False) == (
+            root / "requirements/npu-test-runtime.lock",
+            True,
         )
         assert setup.requirements_file(
             "compiler-stack", root=root, is_windows=True
-        ) == (root / "requirements.txt", False)
+        ) == (root / "requirements/compiler-stack.txt", False)
 
     def test_linux_compiler_stack_prefers_existing_lock(self, tmp_path):
-        (tmp_path / "requirements.lock").touch()
+        lock = tmp_path / "requirements" / "compiler-stack.lock"
+        lock.parent.mkdir()
+        lock.touch()
         assert setup.requirements_file(
             "compiler-stack", root=tmp_path, is_windows=False
-        ) == (tmp_path / "requirements.lock", False)
+        ) == (lock, False)
 
     @pytest.mark.parametrize(
         ("profile_name", "actions"),
@@ -43,7 +45,7 @@ class TestRequirementsFile:
             ("compiler-stack", (True, True, False)),
             ("fastflowlm", (False, False, True)),
             ("npu-e2e", (False, True, False)),
-            ("npu-runtime", (False, False, False)),
+            ("npu-test-runtime", (False, False, False)),
         ],
     )
     def test_setup_plan_resolves_profile_actions(self, profile_name, actions):
@@ -87,7 +89,10 @@ class TestSetupCommand:
             mock.patch.object(
                 setup,
                 "requirements_file",
-                return_value=(root / "requirements.lock", False),
+                return_value=(
+                    root / "requirements" / "compiler-stack.lock",
+                    False,
+                ),
             ),
             mock.patch.object(
                 setup.patches,
@@ -131,7 +136,7 @@ class TestSetupCommand:
                 setup,
                 "requirements_file",
                 return_value=(
-                    Path("requirements-fastflowlm.lock"),
+                    Path("requirements/fastflowlm.lock"),
                     True,
                 ),
             ),

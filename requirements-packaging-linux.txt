@@ -1,8 +1,0 @@
-# Copyright Advanced Micro Devices, Inc.
-# SPDX-License-Identifier: MIT
-# Linux-only wheel packaging and audit tools.
-# Regenerate requirements-packaging-linux.lock with:
-#   uv pip compile requirements-packaging-linux.txt --generate-hashes \
-#     --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
-#     --output-file requirements-packaging-linux.lock
-auditwheel==6.7.0
