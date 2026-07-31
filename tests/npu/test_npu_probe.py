@@ -22,6 +22,7 @@ pytestmark = [
     pytest.mark.compiler_stack,
     pytest.mark.fastflowlm,
     pytest.mark.linux,
+    pytest.mark.presubmit,
 ]
 
 

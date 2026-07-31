@@ -24,7 +24,11 @@ from build_tools.rocm_npu_windows_wheels import (
 from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 
 
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 class TestRocmNpuWheel:

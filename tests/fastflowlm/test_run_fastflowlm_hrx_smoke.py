@@ -17,7 +17,11 @@ SPEC = importlib.util.spec_from_file_location("fastflowlm_smoke", SCRIPT)
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
 
-pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.presubmit,
+]
 
 
 class TestFastFlowLMSmoke:
