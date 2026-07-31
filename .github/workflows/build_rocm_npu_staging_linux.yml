@@ -100,6 +100,9 @@ jobs:
       - name: Setup (venv + hash-pinned deps + prefetch)
         run: python3 dev.py setup
 
+      - name: Install test runner
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+
       - name: Install Linux wheel audit tooling
         run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-packaging-linux.lock
 
@@ -109,23 +112,8 @@ jobs:
       - name: Doctor
         run: .venv/bin/python dev.py doctor compiler-stack --deep
 
-      - name: Test cross-platform FastFlowLM smoke driver
-        run: .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
-
-      - name: Test wheel tooling
-        run: .venv/bin/python -m unittest discover -s tests/wheels -p 'test_*.py'
-
-      - name: Test Linux-native tooling
-        run: .venv/bin/python -m unittest discover -s tests/linux -p 'test_*.py'
-
-      - name: Test NPU probe diagnostics
-        run: .venv/bin/python -m unittest discover -s tests/npu -p 'test_npu_probe.py'
-
-      - name: Test compiler product artifact helpers
-        run: .venv/bin/python -m unittest discover -s tests/compiler -p 'test_*.py'
-
-      - name: Test HRX amdxdna ABI declarations
-        run: .venv/bin/python -m unittest discover -s tests/hrx -p 'test_*.py'
+      - name: Test compiler-stack tooling
+        run: .venv/bin/python -m pytest -m "compiler_stack or presubmit"
 
       # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
       - name: Cache ccache

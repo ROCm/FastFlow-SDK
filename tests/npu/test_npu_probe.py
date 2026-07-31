@@ -5,10 +5,11 @@ import errno
 import os
 import stat
 import sys
-import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,7 +18,14 @@ sys.path.insert(0, str(ROOT))
 from build_tools import linux_npu  # noqa: E402
 
 
-class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.linux,
+]
+
+
+class TestLinuxNpuProbeDiagnostic:
     def _mock_devnode_context(self, kernel_release: str, srcversion: str):
         sys_node = Path("/sys/class/accel/accel0")
         device_stat = SimpleNamespace(
@@ -59,15 +67,11 @@ class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
         )
 
     def test_known_ubuntu_617_sva_regression_tuple(self):
-        self.assertTrue(
-            linux_npu.known_amdxdna_sva_regression(
-                "6.17.0-22-generic", "2DBDA75956CAFA9D029EA89"
-            )
+        assert linux_npu.known_amdxdna_sva_regression(
+            "6.17.0-22-generic", "2DBDA75956CAFA9D029EA89"
         )
-        self.assertFalse(
-            linux_npu.known_amdxdna_sva_regression(
-                "6.17.0-20-generic", "2DBDA75956CAFA9D029EA89"
-            )
+        assert not linux_npu.known_amdxdna_sva_regression(
+            "6.17.0-20-generic", "2DBDA75956CAFA9D029EA89"
         )
 
     def test_healthy_linux_stack_accepts_successful_accel_open(self):
@@ -89,8 +93,8 @@ class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
         ):
             rc, usable = linux_npu.probe_npu_devnodes()
 
-        self.assertEqual(rc, 0)
-        self.assertEqual(usable, [Path("/dev/accel/accel0")])
+        assert rc == 0
+        assert usable == [Path("/dev/accel/accel0")]
         open_mock.assert_called_once_with(Path("/dev/accel/accel0"), mock.ANY)
         close_mock.assert_called_once_with(7)
 
@@ -113,13 +117,9 @@ class LinuxNpuProbeDiagnosticTest(unittest.TestCase):
         ):
             rc, usable = linux_npu.probe_npu_devnodes()
 
-        self.assertEqual(rc, 1)
-        self.assertEqual(usable, [])
+        assert rc == 1
+        assert usable == []
         output = "\n".join(str(call.args[0]) for call in print_mock.call_args_list)
-        self.assertIn("open(O_RDWR) failed", output)
-        self.assertIn("SVA bind device failed", output)
-        self.assertIn("known-bad Ubuntu 6.17.0-22", output)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert "open(O_RDWR) failed" in output
+        assert "SVA bind device failed" in output
+        assert "known-bad Ubuntu 6.17.0-22" in output

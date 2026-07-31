@@ -3,12 +3,12 @@
 
 import builtins
 import sys
-import tempfile
 import types
-import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 from build_tools import fastflowlm_package
 from build_tools.rocm_npu_linux_wheels import (
@@ -17,49 +17,48 @@ from build_tools.rocm_npu_linux_wheels import (
 )
 from build_tools.dev import testing
 
+pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
 
-class FastFlowLMWheelPackageCliTest(unittest.TestCase):
-    def test_verify_resolves_runtime_as_fastflowlm_dependency(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            wheel_directory = Path(temporary)
-            runtime_wheel = wheel_directory / "runtime.whl"
-            fastflowlm_wheel = wheel_directory / "fastflowlm.whl"
-            wheels = {
-                RUNTIME_DISTRIBUTION: runtime_wheel,
-                FASTFLOWLM_DISTRIBUTION: fastflowlm_wheel,
-            }
-            args = SimpleNamespace(
-                dir=str(wheel_directory),
-                venv=str(wheel_directory / "venv"),
-            )
-            with (
-                mock.patch.object(
-                    fastflowlm_package,
-                    "find_rocm_npu_wheels",
-                    return_value=wheels,
-                ),
-                mock.patch.object(fastflowlm_package, "verify_wheel_checksums"),
-                mock.patch.object(
-                    fastflowlm_package,
-                    "verify_wheels_do_not_have_text_path_references",
-                ),
-                mock.patch.object(
-                    fastflowlm_package, "validate_directory_target"
-                ),
-                mock.patch.object(
-                    fastflowlm_package,
-                    "_venv_python",
-                    return_value=Path("python"),
-                ),
-                mock.patch.object(fastflowlm_package, "sh") as sh,
-            ):
-                fastflowlm_package.cmd_verify_fastflowlm_wheels(args)
+
+class TestFastFlowLMWheelPackageCli:
+    def test_verify_resolves_runtime_as_fastflowlm_dependency(self, tmp_path):
+        wheel_directory = tmp_path
+        runtime_wheel = wheel_directory / "runtime.whl"
+        fastflowlm_wheel = wheel_directory / "fastflowlm.whl"
+        wheels = {
+            RUNTIME_DISTRIBUTION: runtime_wheel,
+            FASTFLOWLM_DISTRIBUTION: fastflowlm_wheel,
+        }
+        args = SimpleNamespace(
+            dir=str(wheel_directory),
+            venv=str(wheel_directory / "venv"),
+        )
+        with (
+            mock.patch.object(
+                fastflowlm_package,
+                "find_rocm_npu_wheels",
+                return_value=wheels,
+            ),
+            mock.patch.object(fastflowlm_package, "verify_wheel_checksums"),
+            mock.patch.object(
+                fastflowlm_package,
+                "verify_wheels_do_not_have_text_path_references",
+            ),
+            mock.patch.object(fastflowlm_package, "validate_directory_target"),
+            mock.patch.object(
+                fastflowlm_package,
+                "_venv_python",
+                return_value=Path("python"),
+            ),
+            mock.patch.object(fastflowlm_package, "sh") as sh,
+        ):
+            fastflowlm_package.cmd_verify_fastflowlm_wheels(args)
 
         install = sh.call_args_list[1].args[0]
-        self.assertIn("--find-links", install)
-        self.assertIn(wheel_directory, install)
-        self.assertIn(fastflowlm_wheel, install)
-        self.assertNotIn(runtime_wheel, install)
+        assert "--find-links" in install
+        assert wheel_directory in install
+        assert fastflowlm_wheel in install
+        assert runtime_wheel not in install
 
     def test_wheel_package_requires_installed_wheels(self):
         real_import = builtins.__import__
@@ -75,14 +74,14 @@ class FastFlowLMWheelPackageCliTest(unittest.TestCase):
             inference_iterations=1,
         )
         with mock.patch("builtins.__import__", side_effect=import_without_wheels):
-            with self.assertRaises(SystemExit) as error:
+            with pytest.raises(SystemExit) as error:
                 testing.cmd_test_fastflowlm(args)
 
-        message = str(error.exception)
-        self.assertIn("test-fastflowlm --wheel-package requires", message)
-        self.assertIn("rocm-npu-runtime", message)
-        self.assertIn("rocm-npu-fastflowlm", message)
-        self.assertIn("verify-fastflowlm-wheels", message)
+        message = str(error.value)
+        assert "test-fastflowlm --wheel-package requires" in message
+        assert "rocm-npu-runtime" in message
+        assert "rocm-npu-fastflowlm" in message
+        assert "verify-fastflowlm-wheels" in message
 
     def test_wheel_package_sets_installed_package_smoke_env(self):
         args = SimpleNamespace(
@@ -101,19 +100,15 @@ class FastFlowLMWheelPackageCliTest(unittest.TestCase):
                 "sh",
                 return_value=SimpleNamespace(returncode=7),
             ) as sh,
-            self.assertRaises(SystemExit) as error,
+            pytest.raises(SystemExit) as error,
         ):
             testing.cmd_test_fastflowlm(args)
 
-        self.assertEqual(error.exception.code, 7)
+        assert error.value.code == 7
         command = sh.call_args.args[0]
         env = sh.call_args.kwargs["env"]
-        self.assertEqual(command[0], sys.executable)
-        self.assertIn("run_fastflowlm_hrx_smoke.py", str(command[1]))
-        self.assertIn("--inference-iterations", command)
-        self.assertIn("3", command)
-        self.assertEqual(env["FASTFLOWLM_INSTALLED_PACKAGE"], "1")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert command[0] == sys.executable
+        assert "run_fastflowlm_hrx_smoke.py" in str(command[1])
+        assert "--inference-iterations" in command
+        assert "3" in command
+        assert env["FASTFLOWLM_INSTALLED_PACKAGE"] == "1"

@@ -103,6 +103,9 @@ jobs:
         id: fastflowlm-deps
         run: python3 dev.py setup --profile fastflowlm
 
+      - name: Install test runner
+        run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
+
       - name: Install Linux wheel audit tooling
         run: .venv/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-packaging-linux.lock
 
@@ -127,10 +130,7 @@ jobs:
         run: |
           .venv/bin/python dev.py doctor fastflowlm
           .venv/bin/python dev.py doctor fastflowlm-packaging
-          .venv/bin/python -m unittest discover -s tests/npu -p 'test_npu_probe.py'
-          .venv/bin/python -m unittest discover -s tests/fastflowlm -p 'test_*.py'
-          .venv/bin/python -m unittest discover -s tests/wheels -p 'test_*.py'
-          .venv/bin/python -m unittest discover -s tests/linux -p 'test_*.py'
+          .venv/bin/python -m pytest -m fastflowlm
 
       - name: Build HRX
         run: .venv/bin/python dev.py build hrx --fresh

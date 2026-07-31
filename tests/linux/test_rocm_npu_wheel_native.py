@@ -6,12 +6,13 @@ import subprocess
 import sys
 import tempfile
 import types
-import unittest
 import zipfile
 from contextlib import contextmanager, redirect_stdout
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 from build_tools import fastflowlm_package
 from build_tools.dev import paths
@@ -38,7 +39,14 @@ from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 from build_tools.rocm_npu_wheel_common import COMPILER_BINDINGS_DISTRIBUTION
 
 
-class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
+pytestmark = [
+    pytest.mark.compiler_stack,
+    pytest.mark.fastflowlm,
+    pytest.mark.linux,
+]
+
+
+class TestRocmNpuLinuxWheelNative:
     def test_linux_workflow_uses_verify_wheel_venv(self):
         workflow = (
             Path(__file__).resolve().parents[2] /
@@ -49,25 +57,25 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
         ).as_posix()
         expected_python = f"{venv}/bin/python"
 
-        self.assertIn(
-            f"run: {expected_python} dev.py npu-probe --runtime-package",
-            workflow,
+        assert (
+            f"run: {expected_python} dev.py npu-probe --runtime-package"
+            in workflow
         )
-        self.assertIn(
+        assert (
             f"run: {expected_python} dev.py test-fastflowlm --wheel-package "
-            "--inference-iterations 5",
-            workflow,
+            "--inference-iterations 5"
+            in workflow
         )
-        self.assertIn(
-            "image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:",
-            workflow,
+        assert (
+            "image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:"
+            in workflow
         )
-        self.assertIn("--device=/dev/accel/accel0", workflow)
-        self.assertIn("--ulimit memlock=-1:-1", workflow)
-        self.assertNotIn("name: Install Python venv support", workflow)
-        self.assertNotIn("python3-venv", workflow)
-        self.assertNotIn("python3-pip", workflow)
-        self.assertNotIn("rocm-npu-fastflowlm-wheel-venv", workflow)
+        assert "--device=/dev/accel/accel0" in workflow
+        assert "--ulimit memlock=-1:-1" in workflow
+        assert "name: Install Python venv support" not in workflow
+        assert "python3-venv" not in workflow
+        assert "python3-pip" not in workflow
+        assert "rocm-npu-fastflowlm-wheel-venv" not in workflow
 
     def test_build_wheel_writes_metadata_record_and_checksum(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -89,30 +97,30 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
                 tag=LINUX_WHEEL_TAG,
             )
 
-            self.assertEqual(
-                wheel.name,
-                f"rocm_npu_runtime-0.0.0.dev1-{LINUX_WHEEL_TAG}.whl",
+            assert (
+                wheel.name
+                == f"rocm_npu_runtime-0.0.0.dev1-{LINUX_WHEEL_TAG}.whl"
             )
-            self.assertTrue(wheel.with_name(wheel.name + ".sha256").is_file())
+            assert wheel.with_name(wheel.name + ".sha256").is_file()
 
             with zipfile.ZipFile(wheel) as archive:
                 names = set(archive.namelist())
                 dist_info = "rocm_npu_runtime-0.0.0.dev1.dist-info"
-                self.assertIn("rocm_npu_runtime/__init__.py", names)
-                self.assertIn(f"{dist_info}/METADATA", names)
-                self.assertIn(f"{dist_info}/WHEEL", names)
-                self.assertIn(f"{dist_info}/RECORD", names)
+                assert "rocm_npu_runtime/__init__.py" in names
+                assert f"{dist_info}/METADATA" in names
+                assert f"{dist_info}/WHEEL" in names
+                assert f"{dist_info}/RECORD" in names
                 metadata = archive.read(f"{dist_info}/METADATA").decode("utf-8")
-                self.assertIn("Name: rocm-npu-runtime\n", metadata)
+                assert "Name: rocm-npu-runtime\n" in metadata
                 wheel_metadata = archive.read(f"{dist_info}/WHEEL").decode("utf-8")
-                self.assertIn(f"Tag: {LINUX_WHEEL_TAG}\n", wheel_metadata)
+                assert f"Tag: {LINUX_WHEEL_TAG}\n" in wheel_metadata
                 record = archive.read(f"{dist_info}/RECORD").decode("utf-8")
-                self.assertIn(f"{dist_info}/RECORD,,", record)
+                assert f"{dist_info}/RECORD,," in record
                 mode = archive.getinfo(
                     "rocm_npu_runtime/__init__.py").external_attr >> 16
-                self.assertEqual(mode & 0o777, 0o644)
+                assert mode & 0o777 == 0o644
                 mode = archive.getinfo("rocm_npu_runtime/bin/tool").external_attr >> 16
-                self.assertEqual(mode & 0o777, 0o755)
+                assert mode & 0o777 == 0o755
 
     def test_build_wheel_writes_console_script_entry_points(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -131,12 +139,12 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
                 dist_info = "rocm_npu_fastflowlm-0.0.0.dev1.dist-info"
                 entry_points = archive.read(
                     f"{dist_info}/entry_points.txt").decode("utf-8")
-                self.assertEqual(
-                    entry_points,
-                    "[console_scripts]\nflm = rocm_npu_fastflowlm:main\n",
+                assert (
+                    entry_points
+                    == "[console_scripts]\nflm = rocm_npu_fastflowlm:main\n"
                 )
                 record = archive.read(f"{dist_info}/RECORD").decode("utf-8")
-                self.assertIn(f"{dist_info}/entry_points.txt,sha256=", record)
+                assert f"{dist_info}/entry_points.txt,sha256=" in record
 
     def test_find_rocm_npu_wheels_requires_one_of_each_product(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -160,8 +168,8 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             )
 
             wheels = find_rocm_npu_wheels(root / "dist")
-            self.assertEqual(wheels[RUNTIME_DISTRIBUTION], runtime)
-            self.assertEqual(wheels[FASTFLOWLM_DISTRIBUTION], fastflowlm)
+            assert wheels[RUNTIME_DISTRIBUTION] == runtime
+            assert wheels[FASTFLOWLM_DISTRIBUTION] == fastflowlm
             verify_wheel_checksums(wheels)
 
     def test_path_reference_check_fails_on_text_payload(self):
@@ -180,9 +188,9 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
                 tag=LINUX_WHEEL_TAG,
             )
 
-            with self.assertRaisesRegex(
+            with pytest.raises(
                 RuntimeError,
-                "wheel text payload contains local checkout/build paths",
+                match="wheel text payload contains local checkout/build paths",
             ):
                 verify_wheels_do_not_have_text_path_references(
                     {RUNTIME_DISTRIBUTION: wheel}, (root,))
@@ -207,42 +215,40 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             with redirect_stdout(output):
                 verify_wheels_do_not_have_text_path_references(
                     {RUNTIME_DISTRIBUTION: wheel}, (root,))
-            self.assertIn(
-                "wheel path audit: 1 native member(s) contain local path strings",
-                output.getvalue(),
+            assert (
+                "wheel path audit: 1 native member(s) contain local path strings"
+                in output.getvalue()
             )
 
     def test_linux_wheel_tag(self):
-        self.assertEqual(wheel_tag("Linux"), LINUX_WHEEL_TAG)
-        self.assertEqual(
-            fastflowlm_wheel_tag("Linux"), FASTFLOWLM_LINUX_WHEEL_TAG
-        )
-        with self.assertRaisesRegex(RuntimeError, "x86-64"):
+        assert wheel_tag("Linux") == LINUX_WHEEL_TAG
+        assert fastflowlm_wheel_tag("Linux") == FASTFLOWLM_LINUX_WHEEL_TAG
+        with pytest.raises(RuntimeError, match="x86-64"):
             wheel_tag("Linux", "arm64")
 
     def test_auditwheel_policy_matches_product_tags(self):
-        self.assertEqual(
+        assert (
             validate_auditwheel_policy(
                 RUNTIME_DISTRIBUTION,
                 "manylinux_2_27_x86_64",
-            ),
-            "manylinux_2_27_x86_64",
+            )
+            == "manylinux_2_27_x86_64"
         )
-        self.assertEqual(
+        assert (
             validate_auditwheel_policy(
                 FASTFLOWLM_DISTRIBUTION,
                 "linux_x86_64",
-            ),
-            "linux_x86_64",
+            )
+            == "linux_x86_64"
         )
-        self.assertEqual(
+        assert (
             validate_auditwheel_policy(
                 COMPILER_BINDINGS_DISTRIBUTION,
                 "manylinux_2_28_x86_64",
-            ),
-            "manylinux_2_28_x86_64",
+            )
+            == "manylinux_2_28_x86_64"
         )
-        with self.assertRaisesRegex(RuntimeError, "not manylinux_2_28"):
+        with pytest.raises(RuntimeError, match="not manylinux_2_28"):
             validate_auditwheel_policy(
                 RUNTIME_DISTRIBUTION,
                 "linux_x86_64",
@@ -290,13 +296,13 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
 
         diagnostics = _auditwheel_policy_diagnostics(wheel_info, target.name)
 
-        self.assertIn("external references: linux_x86_64 (LIMITING)", diagnostics)
-        self.assertIn("versioned symbols: linux_x86_64 (LIMITING)", diagnostics)
-        self.assertIn("machine ISA: manylinux_2_28_x86_64 (ok)", diagnostics)
-        self.assertIn("libmissing.so.1: <unresolved>", diagnostics)
-        self.assertIn("libz.so.1: inflate", diagnostics)
-        self.assertIn("GLIBC_2.34", diagnostics)
-        self.assertNotIn("    GLIBC_2.28", diagnostics)
+        assert "external references: linux_x86_64 (LIMITING)" in diagnostics
+        assert "versioned symbols: linux_x86_64 (LIMITING)" in diagnostics
+        assert "machine ISA: manylinux_2_28_x86_64 (ok)" in diagnostics
+        assert "libmissing.so.1: <unresolved>" in diagnostics
+        assert "libz.so.1: inflate" in diagnostics
+        assert "GLIBC_2.34" in diagnostics
+        assert "    GLIBC_2.28" not in diagnostics
 
     def test_auditwheel_policy_uses_pinned_structured_analyzer(self):
         wheel = Path("example-py3-none-linux_x86_64.whl")
@@ -328,12 +334,11 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ),
             mock.patch.dict(sys.modules, modules),
         ):
-            self.assertEqual(
+            assert (
                 auditwheel_policy(
-                    wheel,
-                    exclude=frozenset({"libAIEAggregateCAPI.so"}),
-                ),
-                "linux_x86_64",
+                    wheel, exclude=frozenset({"libAIEAggregateCAPI.so"})
+                )
+                == "linux_x86_64"
             )
         analyze.assert_called_once_with(
             "glibc",
@@ -349,7 +354,7 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             "build_tools.rocm_npu_linux_wheels.distribution_version",
             return_value="6.8.0",
         ):
-            with self.assertRaisesRegex(RuntimeError, "expected 6.7.0"):
+            with pytest.raises(RuntimeError, match="expected 6.7.0"):
                 auditwheel_policy(Path("example.whl"))
 
     def test_auditwheel_policy_requires_pinned_tool(self):
@@ -357,7 +362,9 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             "build_tools.rocm_npu_linux_wheels.distribution_version",
             side_effect=PackageNotFoundError,
         ):
-            with self.assertRaisesRegex(RuntimeError, "auditwheel 6.7.0 is required"):
+            with pytest.raises(
+                RuntimeError, match="auditwheel 6.7.0 is required"
+            ):
                 auditwheel_policy(Path("example.whl"))
 
     def test_runtime_native_closure_copies_needed_bundle_libraries(self):
@@ -374,7 +381,7 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ):
                 _copy_runtime_native_closure(source, runtime_root)
 
-            self.assertTrue((runtime_root / "lib" / "libdep.so").is_file())
+            assert (runtime_root / "lib" / "libdep.so").is_file()
 
     def test_runtime_stages_only_hrx_soname(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -394,11 +401,10 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ):
                 soname = _copy_hrx_soname(source, runtime_root)
 
-            self.assertEqual(soname, "libhrx.so.0")
-            self.assertEqual(
-                [path.name for path in (runtime_root / "lib").iterdir()],
-                ["libhrx.so.0"],
-            )
+            assert soname == "libhrx.so.0"
+            assert [
+                path.name for path in (runtime_root / "lib").iterdir()
+            ] == ["libhrx.so.0"]
 
     def test_runtime_native_closure_copies_needed_soname_filename(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -418,13 +424,8 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ):
                 license_names = _copy_runtime_native_closure(source, runtime_root)
 
-            self.assertTrue(
-                (runtime_root / "lib" / "libfftw3.so.3.6.9").is_file()
-            )
-            self.assertEqual(
-                license_names,
-                {"libfftw3.so.3", "libfftw3.so.3.6.9"},
-            )
+            assert (runtime_root / "lib" / "libfftw3.so.3.6.9").is_file()
+            assert license_names == {"libfftw3.so.3", "libfftw3.so.3.6.9"}
 
     def test_linux_dependency_closure_is_checked_per_product(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -437,9 +438,9 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             with self._mock_patchelf(
                 needed={"libhrx.so": ["libdep.so"], "libdep.so": []},
             ):
-                with self.assertRaisesRegex(
+                with pytest.raises(
                     RuntimeError,
-                    "rocm_npu_runtime/lib/libhrx.so -> libdep.so",
+                    match="rocm_npu_runtime/lib/libhrx.so -> libdep.so",
                 ):
                     _patch_and_verify_linux_products([runtime_root, fastflowlm_root])
 
@@ -457,9 +458,11 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
                 },
                 sonames={"libfftw3.so.3": "libfftw3.so.3.6.9"},
             ):
-                with self.assertRaisesRegex(
+                with pytest.raises(
                     RuntimeError,
-                    "rocm_npu_runtime/lib/libhrx.so -> libfftw3.so.3.6.9",
+                    match=(
+                        "rocm_npu_runtime/lib/libhrx.so -> libfftw3.so.3.6.9"
+                    ),
                 ):
                     _patch_and_verify_linux_products([runtime_root])
 
@@ -476,10 +479,7 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
             ):
                 graph = _patch_and_verify_linux_products([runtime_root, fastflowlm_root])
 
-            self.assertEqual(
-                graph[f"{FASTFLOWLM_PACKAGE}/bin/flm"],
-                ["libhrx.so"],
-            )
+            assert graph[f"{FASTFLOWLM_PACKAGE}/bin/flm"] == ["libhrx.so"]
 
     def _package_tree(self, root, name):
         tree = root / f"tree-{name}"
@@ -518,7 +518,3 @@ class RocmNpuLinuxWheelNativeTest(unittest.TestCase):
         with mock.patch("build_tools.rocm_npu_linux_wheels.shutil.which", fake_which), \
              mock.patch("build_tools.rocm_npu_linux_wheels.subprocess.run", fake_run):
             yield
-
-
-if __name__ == "__main__":
-    unittest.main()

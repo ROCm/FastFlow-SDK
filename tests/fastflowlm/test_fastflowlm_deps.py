@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: MIT
 
 import json
-import tempfile
-import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
+
+import pytest
 
 from build_tools.dev import environment
 from build_tools.fastflowlm_deps import (
@@ -18,6 +18,7 @@ from build_tools.fastflowlm_deps import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+pytestmark = [pytest.mark.compiler_stack, pytest.mark.fastflowlm]
 
 
 def populate_policy_files(root: Path) -> None:
@@ -49,28 +50,28 @@ def populate_dependency_tree(root: Path, system: str) -> dict[str, Path | str]:
     return paths
 
 
-class FastFlowLMDependenciesTest(unittest.TestCase):
+class TestFastFlowLMDependencies:
     def test_platform_triplets_are_release_only_overlays(self):
-        self.assertEqual(vcpkg_triplet("Windows"), "x64-windows-rel")
-        self.assertEqual(vcpkg_triplet("Linux"), "x64-linux-rel")
+        assert vcpkg_triplet("Windows") == "x64-windows-rel"
+        assert vcpkg_triplet("Linux") == "x64-linux-rel"
         for triplet in ("x64-windows-rel", "x64-linux-rel"):
             contents = (ROOT / ".github/vcpkg/triplets" / f"{triplet}.cmake").read_text()
-            self.assertIn("VCPKG_BUILD_TYPE release", contents)
-            self.assertIn("VCPKG_LIBRARY_LINKAGE dynamic", contents)
+            assert "VCPKG_BUILD_TYPE release" in contents
+            assert "VCPKG_LIBRARY_LINKAGE dynamic" in contents
         linux_contents = (
             ROOT / ".github/vcpkg/triplets/x64-linux-rel.cmake"
         ).read_text()
-        self.assertIn("VCPKG_TARGET_ARCHITECTURE x64", linux_contents)
-        self.assertIn("VCPKG_CRT_LINKAGE dynamic", linux_contents)
-        self.assertIn("VCPKG_CMAKE_SYSTEM_NAME Linux", linux_contents)
+        assert "VCPKG_TARGET_ARCHITECTURE x64" in linux_contents
+        assert "VCPKG_CRT_LINKAGE dynamic" in linux_contents
+        assert "VCPKG_CMAKE_SYSTEM_NAME Linux" in linux_contents
 
     def test_windows_cache_identity_does_not_execute_compiler(self):
         workflow = (
             ROOT / ".github/workflows/fastflowlm_hrx_windows.yml"
         ).read_text()
-        self.assertIn("(Get-Command cl.exe -ErrorAction Stop).Source", workflow)
-        self.assertIn("VersionInfo.FileVersion", workflow)
-        self.assertNotIn("(& cl 2>&1", workflow)
+        assert "(Get-Command cl.exe -ErrorAction Stop).Source" in workflow
+        assert "VersionInfo.FileVersion" in workflow
+        assert "(& cl 2>&1" not in workflow
 
     def test_linux_ci_separates_build_and_packaging_prerequisites(self):
         workflow = (
@@ -80,8 +81,8 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
             "bash", "kernel-headers", "nasm", "patchelf", "perl",
             "perl-IPC-Cmd", "zstd"
         ):
-            self.assertIn(package, workflow)
-        self.assertIn("dev.py doctor fastflowlm-packaging", workflow)
+            assert package in workflow
+        assert "dev.py doctor fastflowlm-packaging" in workflow
 
     def test_fastflowlm_build_gate_requires_nasm_but_not_packaging_tools(self):
         available = {
@@ -106,8 +107,8 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
                 verbose=False
             )
 
-        self.assertTrue(ok)
-        self.assertEqual(missing, [])
+        assert ok
+        assert missing == []
 
         with (
             mock.patch.object(
@@ -127,89 +128,83 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
                 verbose=False
             )
 
-        self.assertFalse(ok)
-        self.assertEqual(missing, ["nasm"])
+        assert not ok
+        assert missing == ["nasm"]
 
     def test_fastflowlm_packaging_gate_reports_packaging_tools_only(self):
         with mock.patch.object(environment.shutil, "which", return_value=None):
             ok, missing = environment.check_fastflowlm_linux_packaging_tools(
                 archive=True, verbose=False)
 
-        self.assertFalse(ok)
-        self.assertEqual(missing, ["patchelf", "zstd"])
-        self.assertNotIn("nasm", missing)
+        assert not ok
+        assert missing == ["patchelf", "zstd"]
+        assert "nasm" not in missing
 
     def test_vcpkg_caches_are_saved_only_after_complete_setup(self):
         for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):
             workflow = (ROOT / ".github/workflows" / name).read_text()
-            self.assertIn("id: fastflowlm-deps", workflow)
-            self.assertIn("fastflowlm-vcpkg-v2-downloads-", workflow)
-            self.assertIn("fastflowlm-vcpkg-v2-binaries-", workflow)
-            self.assertIn(
-                "if: success() && steps.fastflowlm-deps.outcome == 'success'",
-                workflow,
+            assert "id: fastflowlm-deps" in workflow
+            assert "fastflowlm-vcpkg-v2-downloads-" in workflow
+            assert "fastflowlm-vcpkg-v2-binaries-" in workflow
+            assert (
+                "if: success() && steps.fastflowlm-deps.outcome == 'success'"
+                in workflow
             )
-            self.assertNotIn("if: always() && steps.vcpkg", workflow)
+            assert "if: always() && steps.vcpkg" not in workflow
 
     def test_linux_runtime_uses_cmake_dependency_sets(self):
         cmake = ROOT / "projects/FastFlowLM/src/CMakeLists.txt"
         if not cmake.exists():
-            self.skipTest("FastFlowLM submodule is not initialized")
+            pytest.skip("FastFlowLM submodule is not initialized")
         contents = cmake.read_text()
         # Guard against the misspelled command name.
-        self.assertNotIn("install(RUNTIME_DEPENDENCIES", contents)
+        assert "install(RUNTIME_DEPENDENCIES" not in contents
         # Windows bundles its runtime dependencies via an install-time
         # RUNTIME_DEPENDENCY_SET.
-        self.assertGreaterEqual(
-            contents.count("install(RUNTIME_DEPENDENCY_SET"), 1
-        )
+        assert contents.count("install(RUNTIME_DEPENDENCY_SET") >= 1
         # Linux resolves the closure with CMake's dependency machinery too, but
         # scans flm together with the prebuilt engine .so as ROOTS via
         # file(GET_RUNTIME_DEPENDENCIES). Roots are traversed for their deps but
         # never emitted, so the engine libs' private deps (libgomp/libmvec) are
         # bundled without dropping unpatched engine copies into the lib dir.
-        self.assertIn("file(GET_RUNTIME_DEPENDENCIES", contents)
+        assert "file(GET_RUNTIME_DEPENDENCIES" in contents
 
-    def test_windows_and_linux_use_repository_managed_trees(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            populate_policy_files(root)
-            windows = dependency_paths(root, "Windows")
-            linux = dependency_paths(root, "Linux")
-        self.assertNotEqual(windows["install_root"], linux["install_root"])
-        self.assertEqual(
-            Path(windows["install_root"]).parent,
-            Path(linux["install_root"]).parent,
+    def test_windows_and_linux_use_repository_managed_trees(self, tmp_path):
+        populate_policy_files(tmp_path)
+        windows = dependency_paths(tmp_path, "Windows")
+        linux = dependency_paths(tmp_path, "Linux")
+        assert windows["install_root"] != linux["install_root"]
+        assert (
+            Path(windows["install_root"]).parent
+            == Path(linux["install_root"]).parent
         )
-        self.assertEqual(Path(windows["triplet_root"]).name, "x64-windows-rel")
-        self.assertEqual(Path(linux["triplet_root"]).name, "x64-linux-rel")
+        assert Path(windows["triplet_root"]).name == "x64-windows-rel"
+        assert Path(linux["triplet_root"]).name == "x64-linux-rel"
 
-    def test_complete_windows_dependency_tree_passes(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            paths = populate_dependency_tree(Path(temporary), "Windows")
-            self.assertEqual(dependency_errors(
-                paths, cargo_available=True, rustc_version=(1, 80, 0)), [])
+    def test_complete_windows_dependency_tree_passes(self, tmp_path):
+        paths = populate_dependency_tree(tmp_path, "Windows")
+        assert dependency_errors(
+            paths, cargo_available=True, rustc_version=(1, 80, 0)
+        ) == []
 
-    def test_policy_change_selects_a_new_install_tree(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            populate_policy_files(root)
-            before = dependency_paths(root, "Linux")
-            triplet = root / ".github/vcpkg/triplets/x64-linux-rel.cmake"
-            triplet.write_text(triplet.read_text() + "# policy change\n")
-            after = dependency_paths(root, "Linux")
-        self.assertNotEqual(before["install_root"], after["install_root"])
-        self.assertNotEqual(before["policy"], after["policy"])
+    def test_policy_change_selects_a_new_install_tree(self, tmp_path):
+        populate_policy_files(tmp_path)
+        before = dependency_paths(tmp_path, "Linux")
+        triplet = tmp_path / ".github/vcpkg/triplets/x64-linux-rel.cmake"
+        triplet.write_text(triplet.read_text() + "# policy change\n")
+        after = dependency_paths(tmp_path, "Linux")
+        assert before["install_root"] != after["install_root"]
+        assert before["policy"] != after["policy"]
 
-    def test_policy_marker_mismatch_is_rejected(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            paths = populate_dependency_tree(Path(temporary), "Linux")
-            marker = json.loads(Path(paths["marker"]).read_text())
-            marker["triplet_sha256"] = "0" * 64
-            Path(paths["marker"]).write_text(json.dumps(marker))
-            errors = dependency_errors(
-                paths, cargo_available=True, rustc_version=(1, 80, 0))
-        self.assertTrue(any("policy marker mismatch" in error for error in errors))
+    def test_policy_marker_mismatch_is_rejected(self, tmp_path):
+        paths = populate_dependency_tree(tmp_path, "Linux")
+        marker = json.loads(Path(paths["marker"]).read_text())
+        marker["triplet_sha256"] = "0" * 64
+        Path(paths["marker"]).write_text(json.dumps(marker))
+        errors = dependency_errors(
+            paths, cargo_available=True, rustc_version=(1, 80, 0)
+        )
+        assert any("policy marker mismatch" in error for error in errors)
 
     def test_manifest_owns_cross_platform_dependency_set(self):
         manifest = json.loads(
@@ -220,14 +215,10 @@ class FastFlowLMDependenciesTest(unittest.TestCase):
         }
         for name in ("boost-beast", "boost-program-options", "curl", "ffmpeg",
                      "fftw3", "readline"):
-            self.assertIn(name, dependencies)
-        self.assertEqual(dependencies["readline"]["platform"], "!windows")
-        self.assertEqual(vcpkg_commit(ROOT), manifest["builtin-baseline"])
-        self.assertEqual(
-            dependency_policy(ROOT, "Linux")["vcpkg_commit"],
-            manifest["builtin-baseline"],
+            assert name in dependencies
+        assert dependencies["readline"]["platform"] == "!windows"
+        assert vcpkg_commit(ROOT) == manifest["builtin-baseline"]
+        assert (
+            dependency_policy(ROOT, "Linux")["vcpkg_commit"]
+            == manifest["builtin-baseline"]
         )
-
-
-if __name__ == "__main__":
-    unittest.main()
