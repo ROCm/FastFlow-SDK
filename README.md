@@ -20,7 +20,6 @@ requirements; each sub-project has more information on these.
 [^3]: HRX: HIP Runtime Extended, HIP: Heterogeneous-compute Interface for Portability
 [^4]: MLIR-AIE: Multi-Level Intermediate Representation for AI Engines
 
-
 ## Getting Started
 
 What is your goal? Click to jump to the appropriate section.
@@ -34,6 +33,23 @@ What is your goal? Click to jump to the appropriate section.
 *FastFlowLM* provides a set of hand-optimized, blazingly fast large language 
 models that run natively on your AMD NPU. Follow below instructions to run 
 these.
+
+> [!WARNING]
+> **Current MoE xclbins can hang or produce invalid output**
+>
+> Current ROCm-NPU packages contain prebuilt AIE xclbins with incorrect address
+> carry handling when an MoE weight buffer straddles a 4 GiB-aligned GPU virtual
+> address boundary. The affected NPU2 models are:
+>
+> - `qwen3.6-moe:35b-a3b` (`Qwen3.6-35B-A3B-NPU2`)
+> - `gpt-oss:20b` (`GPT-OSS-20B-NPU2`)
+> - `gpt-oss-sg:20b` (`GPT-OSS-Safeguard-20b-NPU2`)
+>
+> This was observed on Windows, but the faulty address arithmetic is in the
+> xclbin and can be triggered on any platform whose allocator places a weight
+> buffer across such a boundary. The source fix has landed, but existing
+> packages remain affected until these xclbins are regenerated and released.
+> Retrying may change buffer placement, but it is not a reliable workaround.
 
 This is the entry point for NPU runtime validation. It builds only minimal HRX
 with the `amdxdna` HAL and the pinned FastFlowLM app, then pulls `qwen3:0.6b`,
