@@ -119,6 +119,7 @@ jobs:
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: false
+      allow_gfx1152_failure: true
 
   linux_publish_wheels:
     name: Build, validate, and attest Linux wheels
@@ -151,6 +152,7 @@ jobs:
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: true
+      allow_gfx1152_failure: true
 
   linux_compiler_wheels:
     name: Build and validate Linux compiler wheels

@@ -17,6 +17,9 @@ on:
       attest_wheels:
         type: boolean
         default: false
+      allow_gfx1152_failure:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       name:
@@ -31,6 +34,11 @@ on:
         description: Explicit PEP 440 wheel version
         required: false
         default: ""
+      allow_gfx1152_failure:
+        description: Allow the gfx1152 NPU validation job to fail
+        required: false
+        type: boolean
+        default: false
 
 # Reusable calls inherit the caller's permission ceiling. CI callers grant
 # read-only access; the release caller additionally grants attestation writes.
@@ -207,6 +215,9 @@ jobs:
   npu:
     name: ${{ inputs.name }} (${{ matrix.runner_label }})
     needs: build
+    # Temporary release escape hatch while gfx1152 enforces a WDAC policy that
+    # rejects the unsigned FastFlowLM model DLLs built by CI.
+    continue-on-error: ${{ inputs.allow_gfx1152_failure && matrix.runner_label == 'windows-gfx1152-gpu-rocm' }}
     strategy:
       fail-fast: false
       matrix:
