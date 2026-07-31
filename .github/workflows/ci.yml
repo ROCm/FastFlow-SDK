@@ -28,19 +28,31 @@ jobs:
   presubmit:
     name: Presubmit
     runs-on: ubuntu-24.04
+    outputs:
+      run_full_ci: ${{ steps.changes.outputs.run_full_ci }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
+      - name: Classify changed files
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python .github/scripts/classify_changes.py
+
       - name: Validate Python symbol resolution
         run: |
           python -m pip install --quiet --disable-pip-version-check ruff==0.15.21
-          python -m ruff check --select F821 dev.py build_tools tests
+          python -m ruff check --select F821 dev.py build_tools tests .github/scripts
 
       - name: Install test runner
         run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements-test.lock
@@ -60,6 +72,7 @@ jobs:
   linux:
     name: Linux
     needs: presubmit
+    if: needs.presubmit.outputs.run_full_ci == 'true'
     uses: ./.github/workflows/build_rocm_npu_staging_linux.yml
     permissions:
       contents: read
@@ -71,6 +84,7 @@ jobs:
   windows:
     name: Windows
     needs: presubmit
+    if: needs.presubmit.outputs.run_full_ci == 'true'
     uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
     permissions:
       contents: read
@@ -82,6 +96,7 @@ jobs:
   linux_flm:
     name: Linux FLM
     needs: presubmit
+    if: needs.presubmit.outputs.run_full_ci == 'true'
     uses: ./.github/workflows/fastflowlm_hrx_linux.yml
     permissions:
       contents: read
@@ -92,6 +107,7 @@ jobs:
   windows_flm:
     name: Windows FLM
     needs: presubmit
+    if: needs.presubmit.outputs.run_full_ci == 'true'
     uses: ./.github/workflows/fastflowlm_hrx_windows.yml
     permissions:
       contents: read
