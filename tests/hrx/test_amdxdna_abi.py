@@ -23,6 +23,42 @@ def _load_abi_helper():
     spec.loader.exec_module(abi)
 
 
+def test_builder_retains_four_distinct_run_records():
+    runs = [
+        (f"transaction-{index}".encode(), f"payload-{index}".encode())
+        for index in range(4)
+    ]
+    description = abi.AmdxdnaExecutableDescription(
+        b"xclbin", None, "MLIR_AIE", runs=runs
+    )
+    assert description.entry_point.run_count == 4
+    assert len(description.transaction_storages) == 4
+    assert len(description.data_payload_storages) == 4
+    for index, (transaction, payload) in enumerate(runs):
+        record = description.entry_point.runs[index]
+        assert (
+            ctypes.string_at(
+                record.transaction.data, record.transaction.data_length
+            )
+            == transaction
+        )
+        assert (
+            ctypes.string_at(
+                record.data_payload.data, record.data_payload.data_length
+            )
+            == payload
+        )
+
+
+def test_builder_rejects_empty_or_ambiguous_run_lists():
+    with pytest.raises(ValueError):
+        abi.AmdxdnaExecutableDescription(b"xclbin", None, "MLIR_AIE", runs=[])
+    with pytest.raises(ValueError):
+        abi.AmdxdnaExecutableDescription(
+            b"xclbin", b"txn", "MLIR_AIE", runs=[(b"other", b"")]
+        )
+
+
 def test_x64_public_record_layout():
     assert ctypes.sizeof(ctypes.c_void_p) == 8
     assert ctypes.sizeof(abi.HrxConstByteSpan) == 16

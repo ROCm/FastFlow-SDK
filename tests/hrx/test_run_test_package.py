@@ -70,11 +70,13 @@ class FakeRuntime:
         self.synchronize_count = 0
         self.closed = False
         self.executable = None
+        self.executables = []
         self.__class__.instances.append(self)
 
     def load_xadx(self, data):
         self.loaded.append(data)
         self.executable = FakeExecutable(self)
+        self.executables.append(self.executable)
         return self.executable
 
     def allocate_buffer(self, shape, dtype):
@@ -138,15 +140,22 @@ def test_runs_package_with_fake_runtime(package_root, capsys):
     assert failures == 0
     assert capsys.readouterr().out == "vector_scalar_add: PASS\n"
     runtime = FakeRuntime.instances[-1]
-    assert runtime.loaded == [b"XADX"]
-    assert runtime.export_names == ["MLIR_AIE"]
+    assert runtime.loaded == [b"XADX"] * 6
+    assert runtime.export_names == ["MLIR_AIE"] * 6
     assert runtime.dispatches[0][1] == 9
-    assert runtime.synchronize_count == 1
+    assert len(runtime.dispatches) == 15
+    assert runtime.synchronize_count == 15
     assert runtime.closed
-    assert runtime.executable.closed
+    assert all(executable.closed for executable in runtime.executables)
     assert all(buffer.closed for buffer in runtime.buffers)
-    assert [buffer.flush_count for buffer in runtime.buffers] == [1, 1]
-    assert [buffer.invalidate_count for buffer in runtime.buffers] == [0, 1]
+    assert [buffer.flush_count for buffer in runtime.buffers] == [
+        1,
+        2,
+    ] * 5 + [1, 11]
+    assert [buffer.invalidate_count for buffer in runtime.buffers] == [
+        0,
+        1,
+    ] * 5 + [0, 10]
 
 
 def test_reports_output_mismatch_and_returns_failure(package_root, capsys):

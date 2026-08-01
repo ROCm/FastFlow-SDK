@@ -197,6 +197,16 @@ def verify_tree(package, expected_cases, source_revision, system):
         data = (package / case["xadx"]).read_bytes()
         if len(data) < 8 or data[4:8] != b"XADX":
             raise RuntimeError(f"{case['name']}: malformed XADX container")
+        if case["name"] == "vector_scalar_add_chain4":
+            source = case.get("source", {})
+            if (
+                source.get("name") != "vector_scalar_add"
+                or source.get("run_count") != 4
+            ):
+                raise RuntimeError(
+                    "vector_scalar_add_chain4 source identity must declare "
+                    "vector_scalar_add with run_count 4"
+                )
         for buffer in case["buffers"]:
             field = "input" if buffer["direction"] == "input" else "expected"
             if not (package / buffer[field]).is_file():
@@ -252,14 +262,33 @@ def cmd_package_npu_test_package(args):
         design_dir, iron.NPU_TARGETS["npu2"]["device"], [], iron.iron_env()
     )
     iron.require_txn_devgen(artifacts.insts, "npu2")
+    vector_xclbin = artifacts.xclbin.read_bytes()
+    vector_transaction = artifacts.insts.read_bytes()
     cases.append(
         write_case(
             NPU_TEST_PACKAGE_STAGE,
             test_cases.generate_case(design),
             serializer.serialize_xadx(
-                artifacts.xclbin.read_bytes(), artifacts.insts.read_bytes(), "MLIR_AIE"
+                vector_xclbin, vector_transaction, "MLIR_AIE"
             ),
             {"kind": "iron-tools-design", "name": design, "device": "npu2"},
+        )
+    )
+    cases.append(
+        write_case(
+            NPU_TEST_PACKAGE_STAGE,
+            test_cases.generate_case("vector_scalar_add_chain4"),
+            serializer.serialize_xadx(
+                vector_xclbin,
+                entry_name="MLIR_AIE",
+                runs=[(vector_transaction, b"")] * 4,
+            ),
+            {
+                "kind": "iron-tools-design",
+                "name": design,
+                "device": "npu2",
+                "run_count": 4,
+            },
         )
     )
 
@@ -315,7 +344,7 @@ def _source_revision():
 
 
 def verify_npu_test_package(package):
-    expected_cases = ["vector_scalar_add"] + [
+    expected_cases = ["vector_scalar_add", "vector_scalar_add_chain4"] + [
         operator.name for operator in iron.iron_ops_suite().OPERATORS
     ]
     return verify_tree(

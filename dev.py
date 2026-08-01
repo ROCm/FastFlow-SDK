@@ -41,6 +41,8 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
   python dev.py test-npu [DESIGN]     # ON-DEVICE compile+run developer path (needs compiler)
                                      #   --device npu2|npu1   --chain (opt-in chained testbench)
   python dev.py test-fastflowlm       # pull qwen3:0.6b + run a 1k HRX benchmark
+  python dev.py package-fastflowlm-kernels # build checksummed production-xclbin helper
+  python dev.py test-fastflowlm-kernels # run Qwen3/LFM2 dequant+MM HRX stress
   python dev.py test-npu-iron-ops [OP] # ON-DEVICE e2e: an iron-ops operator, numerics checked (needs an NPU)
   python dev.py deps                  # print the dependency overview
 
@@ -52,6 +54,7 @@ import sys
 from build_tools import (
     compiler_product,
     compiler_wheels,
+    fastflowlm_kernel_tests,
     fastflowlm_package,
     npu_prereqs,
     npu_test_package,
@@ -102,6 +105,15 @@ def cmd_test(args):
 
 def cmd_test_fastflowlm(args):
     return dev_testing.cmd_test_fastflowlm(args)
+
+def cmd_package_fastflowlm_kernels(args):
+    return fastflowlm_kernel_tests.package_helper(args)
+
+def cmd_verify_fastflowlm_kernels(args):
+    return fastflowlm_kernel_tests.verify_helper(args)
+
+def cmd_test_fastflowlm_kernels(args):
+    return fastflowlm_kernel_tests.run_helper(args)
 
 def cmd_test_iron_ops(args):
     return dev_testing.cmd_test_iron_ops(args)
@@ -268,6 +280,24 @@ def create_parser():
         metavar="N",
         help="run N independent two-turn FLM inference processes before the benchmark",
     )
+    pfk = _add_command(
+        sub, "package-fastflowlm-kernels", cmd_package_fastflowlm_kernels
+    )
+    pfk.add_argument("--fresh", action="store_true",
+                     help="clear generated CMake state before building")
+    vfk = _add_command(
+        sub, "verify-fastflowlm-kernels", cmd_verify_fastflowlm_kernels
+    )
+    vfk.add_argument("--dir", default=".artifact",
+                     help="directory containing the helper archive")
+    tfk = _add_command(
+        sub, "test-fastflowlm-kernels", cmd_test_fastflowlm_kernels
+    )
+    tfk.add_argument("--dir", help="directory containing the helper archive")
+    tfk.add_argument("--wheel-package", action="store_true",
+                     help="use installed rocm-npu-runtime/fastflowlm wheels")
+    tfk.add_argument("--iterations", type=argparse_positive_int, default=20,
+                     help="resident round-robin iterations (default: 20)")
     to = _add_command(sub, "test-iron-ops", cmd_test_iron_ops)
     to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
@@ -387,6 +417,10 @@ def create_parser():
     rnt = _add_command(sub, "test-npu-package", cmd_test_npu_package)
     rnt.add_argument("--case", dest="cases", action="append",
                      help="run only this packaged case; may be repeated")
+    rnt.add_argument("--lifecycle-rounds", type=argparse_positive_int, default=5,
+                     help="load/dispatch/release rounds per case (default: 5)")
+    rnt.add_argument("--resident-rounds", type=argparse_positive_int, default=10,
+                     help="resident round-robin rounds (default: 10)")
     np = _add_command(
         sub, "npu-probe", cmd_npu_probe, exit_on_return=True
     )

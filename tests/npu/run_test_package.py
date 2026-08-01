@@ -93,14 +93,31 @@ def _compare(actual, expected, logical_dtype, rtol, atol):
     )
 
 
-def _run_case(runtime, package_root, case):
+class PreparedCase:
+    def __init__(self, case):
+        self.case = case
+        self.executable = None
+        self.export_ordinal = None
+        self.buffers = []
+        self.output_records = []
+
+    def close(self):
+        for buffer in reversed(self.buffers):
+            buffer.close()
+        self.buffers.clear()
+        if self.executable is not None:
+            self.executable.close()
+            self.executable = None
+
+
+def _prepare_case(runtime, package_root, case):
     name = case["name"]
-    executable = None
-    buffers = []
-    output_records = []
+    prepared = PreparedCase(case)
     try:
-        executable = runtime.load_xadx((package_root / case["xadx"]).read_bytes())
-        export_ordinal = executable.lookup_export(case["export"])
+        prepared.executable = runtime.load_xadx(
+            (package_root / case["xadx"]).read_bytes()
+        )
+        prepared.export_ordinal = prepared.executable.lookup_export(case["export"])
 
         for descriptor in case["buffers"]:
             buffer_name = descriptor["name"]
@@ -117,7 +134,7 @@ def _run_case(runtime, package_root, case):
                 )
 
             buffer = runtime.allocate_buffer(shape, dtype)
-            buffers.append(buffer)
+            prepared.buffers.append(buffer)
             if direction == "input":
                 source = _read_array(
                     package_root, descriptor["input"], dtype, shape
@@ -128,34 +145,47 @@ def _run_case(runtime, package_root, case):
                 expected = _read_array(
                     package_root, descriptor["expected"], dtype, shape
                 )
-                output_records.append((descriptor, buffer, expected))
+                prepared.output_records.append((descriptor, buffer, expected))
             buffer.flush()
-
-        runtime.dispatch(executable, export_ordinal, buffers)
-        runtime.synchronize()
-
-        failures = []
-        for descriptor, buffer, expected in output_records:
-            buffer.invalidate()
-            failure = _compare(
-                buffer.array,
-                expected,
-                descriptor.get("logical_dtype"),
-                float(descriptor.get("rtol", 0.0)),
-                float(descriptor.get("atol", 0.0)),
-            )
-            if failure:
-                failures.append(f"{descriptor['name']}: {failure}")
-        return failures
-    finally:
-        for buffer in reversed(buffers):
-            buffer.close()
-        if executable is not None:
-            executable.close()
+        return prepared
+    except Exception:
+        prepared.close()
+        raise
 
 
-def run_package(package_root, selected_cases=None, runtime_factory=HrxRuntime, stdout=None):
-    """Runs selected manifest cases and returns the number that failed."""
+def _dispatch_and_validate(runtime, prepared):
+    for _, buffer, _ in prepared.output_records:
+        buffer.array.fill(0)
+        buffer.flush()
+    runtime.dispatch(
+        prepared.executable, prepared.export_ordinal, prepared.buffers
+    )
+    runtime.synchronize()
+
+    failures = []
+    for descriptor, buffer, expected in prepared.output_records:
+        buffer.invalidate()
+        failure = _compare(
+            buffer.array,
+            expected,
+            descriptor.get("logical_dtype"),
+            float(descriptor.get("rtol", 0.0)),
+            float(descriptor.get("atol", 0.0)),
+        )
+        if failure:
+            failures.append(f"{descriptor['name']}: {failure}")
+    return failures
+
+
+def run_package(
+    package_root,
+    selected_cases=None,
+    runtime_factory=HrxRuntime,
+    stdout=None,
+    lifecycle_rounds=5,
+    resident_rounds=10,
+):
+    """Runs deterministic lifecycle and resident round-robin stress modes."""
     package_root = Path(package_root)
     stdout = sys.stdout if stdout is None else stdout
     manifest = json.loads((package_root / "manifest.json").read_text("utf-8"))
@@ -174,24 +204,60 @@ def run_package(package_root, selected_cases=None, runtime_factory=HrxRuntime, s
         cases = [case for case in cases if case["name"] in requested]
 
     runtime = runtime_factory()
-    failed = 0
+    failures_by_name = {case["name"]: [] for case in cases}
     try:
+        for round_index in range(lifecycle_rounds):
+            for case in cases:
+                prepared = None
+                try:
+                    prepared = _prepare_case(runtime, package_root, case)
+                    failures_by_name[case["name"]].extend(
+                        f"lifecycle round {round_index + 1}: {failure}"
+                        for failure in _dispatch_and_validate(runtime, prepared)
+                    )
+                except Exception as exc:
+                    failures_by_name[case["name"]].append(
+                        f"lifecycle round {round_index + 1}: {exc}"
+                    )
+                finally:
+                    if prepared is not None:
+                        prepared.close()
+
+        resident = []
         for case in cases:
-            name = case.get("name", "<unnamed>")
             try:
-                failures = _run_case(runtime, package_root, case)
+                resident.append(_prepare_case(runtime, package_root, case))
             except Exception as exc:
-                failures = [str(exc)]
-            if failures:
-                failed += 1
-                print(f"{name}: FAIL", file=stdout)
-                for failure in failures:
-                    print(f"  {failure}", file=stdout)
-            else:
-                print(f"{name}: PASS", file=stdout)
+                failures_by_name[case["name"]].append(
+                    f"resident setup: {exc}"
+                )
+        try:
+            for round_index in range(resident_rounds):
+                for prepared in resident:
+                    name = prepared.case["name"]
+                    try:
+                        failures_by_name[name].extend(
+                            f"resident round {round_index + 1}: {failure}"
+                            for failure in _dispatch_and_validate(
+                                runtime, prepared
+                            )
+                        )
+                    except Exception as exc:
+                        failures_by_name[name].append(
+                            f"resident round {round_index + 1}: {exc}"
+                        )
+        finally:
+            for prepared in reversed(resident):
+                prepared.close()
     finally:
         runtime.close()
-    return failed
+    for case in cases:
+        name = case["name"]
+        failures = failures_by_name[name]
+        print(f"{name}: {'FAIL' if failures else 'PASS'}", file=stdout)
+        for failure in failures:
+            print(f"  {failure}", file=stdout)
+    return sum(bool(failures_by_name[case["name"]]) for case in cases)
 
 
 def main(argv=None):
@@ -203,9 +269,18 @@ def main(argv=None):
         action="append",
         help="run only this case; may be repeated",
     )
+    parser.add_argument("--lifecycle-rounds", type=int, default=5)
+    parser.add_argument("--resident-rounds", type=int, default=10)
     arguments = parser.parse_args(argv)
     try:
-        return 1 if run_package(arguments.package_root, arguments.cases) else 0
+        if arguments.lifecycle_rounds < 0 or arguments.resident_rounds < 0:
+            raise ValueError("stress round counts must be nonnegative")
+        return 1 if run_package(
+            arguments.package_root,
+            arguments.cases,
+            lifecycle_rounds=arguments.lifecycle_rounds,
+            resident_rounds=arguments.resident_rounds,
+        ) else 0
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

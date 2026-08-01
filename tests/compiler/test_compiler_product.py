@@ -358,13 +358,23 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
     stage = tmp_path
     _, test_cases = npu_test_package._npu_test_modules()
     case_records = []
-    for name in ("vector_scalar_add", "elementwise_add", "relu", "gemv"):
+    names = (
+        "vector_scalar_add",
+        "vector_scalar_add_chain4",
+        "elementwise_add",
+        "relu",
+        "gemv",
+    )
+    for name in names:
+        source = {"kind": "test", "name": name}
+        if name == "vector_scalar_add_chain4":
+            source.update(name="vector_scalar_add", run_count=4)
         case_records.append(
             npu_test_package.write_case(
                 stage,
                 test_cases.generate_case(name),
                 b"\x00\x00\x00\x00XADX",
-                {"kind": "test", "name": name},
+                source,
             )
         )
 
@@ -379,12 +389,12 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
     npu_test_package.write_manifest(stage, case_records, revision, system, "x86_64")
     manifest = npu_test_package.verify_tree(
         stage,
-        ("vector_scalar_add", "elementwise_add", "relu", "gemv"),
+        names,
         revision,
         system,
     )
 
-    assert len(manifest["cases"]) == 4
+    assert len(manifest["cases"]) == 5
     packaged = {path.suffix for path in stage.rglob("*") if path.is_file()}
     assert ".xclbin" not in packaged
     assert ".mlir" not in packaged

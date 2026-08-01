@@ -61,6 +61,13 @@ def test_nan_remains_nan():
             ],
         ),
         (
+            "vector_scalar_add_chain4",
+            [
+                ("input", (1024,), "int32"),
+                ("output", (1024,), "int32"),
+            ],
+        ),
+        (
             "elementwise_add",
             [
                 ("lhs", (2048,), "uint16"),
@@ -103,6 +110,9 @@ def test_vector_scalar_add_reference_and_value_coverage():
     assert np.any(source < 0)
     assert np.any(source == 0)
     assert np.any(source > 0)
+    chained = cases.vector_scalar_add_chain4()
+    np.testing.assert_array_equal(chained["buffers"][0]["data"], source)
+    np.testing.assert_array_equal(chained["buffers"][1]["expected"], expected)
 
 
 def test_bf16_references_are_computed_from_rounded_inputs():

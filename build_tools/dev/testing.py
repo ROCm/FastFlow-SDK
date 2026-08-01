@@ -177,6 +177,12 @@ def cmd_test_npu_package(args):
     ]
     for case in args.cases or []:
         command += ["--case", case]
+    command += [
+        "--lifecycle-rounds",
+        str(args.lifecycle_rounds),
+        "--resident-rounds",
+        str(args.resident_rounds),
+    ]
     sys.exit(environment.sh(command, env=env, check=False).returncode)
 
 
