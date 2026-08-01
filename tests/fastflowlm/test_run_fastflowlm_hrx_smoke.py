@@ -108,6 +108,32 @@ class TestFastFlowLMSmoke:
         path.write_text("Prompt Length,TTFT\n1,2.5\n", encoding="utf-8")
         assert smoke.csv_has_1k_row(path)
 
+    def test_require_1k_checkpoint_accepts_actual_near_boundary(self):
+        text = "\x1b[31m[FLM] Creating checkpoint at context length 981\x1b[0m"
+        assert smoke.require_1k_checkpoint(text) == 981
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "benchmark completed without a checkpoint",
+            (
+                "Creating checkpoint at context length 981\n"
+                "Creating checkpoint at context length 982"
+            ),
+            "Creating checkpoint at context length unknown",
+        ],
+    )
+    def test_require_1k_checkpoint_rejects_missing_or_duplicate_report(self, text):
+        with pytest.raises(smoke.SmokeFailure):
+            smoke.require_1k_checkpoint(text)
+
+    @pytest.mark.parametrize("value", [949, 1025])
+    def test_require_1k_checkpoint_rejects_out_of_range_report(self, value):
+        with pytest.raises(smoke.SmokeFailure):
+            smoke.require_1k_checkpoint(
+                f"Creating checkpoint at context length {value}"
+            )
+
     def test_installed_package_paths_use_wheel_modules(self, tmp_path):
         flm = tmp_path / "flm"
         hrx = tmp_path / "libhrx.so"

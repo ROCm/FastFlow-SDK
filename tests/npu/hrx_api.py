@@ -115,32 +115,51 @@ class HrxBufferRef(ctypes.Structure):
 class AmdxdnaExecutableDescription:
     """Owns all borrowed storage referenced by an amdxdna description."""
 
-    def __init__(self, xclbin, transaction, entry_name, data_payload=b""):
+    def __init__(
+        self, xclbin, transaction, entry_name, data_payload=b"", *, runs=None
+    ):
         if not xclbin:
             raise ValueError("xclbin must not be empty")
-        if not transaction:
-            raise ValueError("transaction must not be empty")
         self.name_storage = entry_name.encode("utf-8")
         if not self.name_storage:
             raise ValueError("entry_name must not be empty")
+        if runs is None:
+            runs = [(transaction, data_payload)]
+        elif transaction is not None or data_payload:
+            raise ValueError("transaction/data_payload and runs are mutually exclusive")
+        runs = list(runs)
+        if not runs:
+            raise ValueError("runs must not be empty")
 
         self.xclbin_storage = _byte_storage(xclbin)
-        self.transaction_storage = _byte_storage(transaction)
-        self.data_payload_storage = (
-            _byte_storage(data_payload) if data_payload else None
-        )
         self.xclbins = (HrxConstByteSpan * 1)(
             _span(self.xclbin_storage, len(xclbin))
         )
-
-        self.run = HrxAmdxdnaExecutableRun()
-        self.run.record_length = ctypes.sizeof(self.run)
-        self.run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0
-        self.run.transaction = _span(self.transaction_storage, len(transaction))
-        if self.data_payload_storage is not None:
-            self.run.data_payload = _span(
-                self.data_payload_storage, len(data_payload)
+        self.transaction_storages = []
+        self.data_payload_storages = []
+        self.runs = (HrxAmdxdnaExecutableRun * len(runs))()
+        for index, record in enumerate(runs):
+            transaction_bytes, payload_bytes = record
+            if not transaction_bytes:
+                raise ValueError(f"run {index} transaction must not be empty")
+            transaction_storage = _byte_storage(transaction_bytes)
+            payload_storage = (
+                _byte_storage(payload_bytes) if payload_bytes else None
             )
+            self.transaction_storages.append(transaction_storage)
+            self.data_payload_storages.append(payload_storage)
+            run = self.runs[index]
+            run.record_length = ctypes.sizeof(run)
+            run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0
+            run.transaction = _span(
+                transaction_storage, len(transaction_bytes)
+            )
+            if payload_storage is not None:
+                run.data_payload = _span(payload_storage, len(payload_bytes))
+        # Compatibility aliases for callers and tests that inspect a single run.
+        self.transaction_storage = self.transaction_storages[0]
+        self.data_payload_storage = self.data_payload_storages[0]
+        self.run = self.runs[0]
 
         self.entry_point = HrxAmdxdnaExecutableEntryPoint()
         self.entry_point.record_length = ctypes.sizeof(self.entry_point)
@@ -151,8 +170,8 @@ class AmdxdnaExecutableDescription:
             self.name_storage, len(self.name_storage)
         )
         self.entry_point.context_mode = HRX_AMDXDNA_CONTEXT_MODE_CREATE
-        self.entry_point.runs = ctypes.pointer(self.run)
-        self.entry_point.run_count = 1
+        self.entry_point.runs = self.runs
+        self.entry_point.run_count = len(self.runs)
 
         self.params = HrxAmdxdnaExecutableCreateParams()
         self.params.record_length = ctypes.sizeof(self.params)
@@ -370,11 +389,12 @@ class HrxApi:
         raise HrxError(f"{operation} failed (status {code}): {text}")
 
     def serialize_xadx(
-        self, xclbin, transaction, entry_name="MLIR_AIE", data_payload=b""
+        self, xclbin, transaction=None, entry_name="MLIR_AIE", data_payload=b"",
+        *, runs=None
     ):
-        """Serializes xclbin and transaction bytes into an owned Python byte string."""
+        """Serializes one or more runs into an owned XADX byte string."""
         description = AmdxdnaExecutableDescription(
-            xclbin, transaction, entry_name, data_payload
+            xclbin, transaction, entry_name, data_payload, runs=runs
         )
         allocator = self.host_allocator_system()
         output = ctypes.POINTER(ctypes.c_uint8)()

@@ -167,6 +167,9 @@ jobs:
       - name: Build FastFlowLM
         run: .venv/Scripts/python.exe dev.py build fastflowlm --fresh
 
+      - name: Package FastFlowLM production-xclbin smoke helper
+        run: .venv/Scripts/python.exe dev.py package-fastflowlm-kernels --fresh
+
       - name: Package runtime
         run: .venv/Scripts/python.exe dev.py package-fastflowlm
 
@@ -201,6 +204,15 @@ jobs:
           path: |
             build/artifacts/rocm_npu_runtime-*.whl*
             build/artifacts/rocm_npu_fastflowlm-*.whl*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload FastFlowLM production-xclbin smoke helper
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fastflowlm-kernel-smoke-windows-x86_64
+          path: build/artifacts/fastflowlm-kernel-smoke/fastflowlm-kernel-smoke.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -245,11 +257,22 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
+      - name: Download FastFlowLM production-xclbin smoke helper
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflowlm-kernel-smoke-windows-x86_64
+          path: .kernel-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
       - name: Install and verify rocm-npu runtime wheels
         run: python build_tools/rocm_npu_windows_wheel_cli.py verify --dir .artifact
 
       - name: Probe NPU driver, firmware, and packaged libHRX
         run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py probe
 
+      - name: Run FastFlowLM production-xclbin HRX smoke
+        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm-kernels --wheel-package --dir .kernel-artifact --iterations 20
+
       - name: Run packaged FastFlowLM HRX soak
-        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py smoke --inference-iterations 5
+        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm --wheel-package --inference-iterations 5

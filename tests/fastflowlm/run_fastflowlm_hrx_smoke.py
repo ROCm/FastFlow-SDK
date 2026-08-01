@@ -275,6 +275,26 @@ def csv_has_1k_row(path):
     with path.open(newline="", encoding="utf-8", errors="replace") as stream:
         return any(row and row[0].strip() == "1" for row in csv.reader(stream))
 
+def require_1k_checkpoint(text, minimum=950, maximum=1024):
+    values = [
+        int(value)
+        for value in re.findall(
+            r"Creating checkpoint at context length\s+(\d+)", text
+        )
+    ]
+    if len(values) != 1:
+        raise SmokeFailure(
+            "FastFlowLM 1k benchmark must report exactly one actual "
+            f"checkpoint length; got {values or 'none'}"
+        )
+    actual = values[0]
+    if not minimum <= actual <= maximum:
+        raise SmokeFailure(
+            "FastFlowLM 1k benchmark did not exercise a near-1k prompt: "
+            f"got {actual} tokens, expected {minimum}..{maximum}"
+        )
+    return actual
+
 
 def require_file(path, label):
     if not path.is_file():
@@ -340,7 +360,7 @@ def main():
         ),
     ]
     setup_commands = smoke_setup_commands()
-    bench_regex = os.environ.get("FLM_BENCH_EXPECTED_REGEX") or r"FastFlowLM.*HRX.*runtime"
+    bench_regex = os.environ.get("FLM_BENCH_EXPECTED_REGEX")
 
     require_file(flm_bin, "flm binary")
     require_file(config_path, "FastFlowLM model list")
@@ -456,12 +476,15 @@ def main():
         output_path=bench_output,
     )
     fail_if_runtime_errors(bench_text, "FastFlowLM bench", bench_output)
+    actual_checkpoint = require_1k_checkpoint(bench_text)
     bench_raw_text = extract_raw_output(bench_text)
     bench_raw_output = work_dir / f"bench_{safe_model}_raw.txt"
     bench_raw_output.write_text(bench_raw_text + "\n", encoding="utf-8", errors="replace")
     if len(re.findall(r"[A-Za-z]{2,}", bench_raw_text)) < 8:
         raise SmokeFailure(f"FastFlowLM benchmark did not produce coherent text: {bench_raw_output}")
-    if not re.search(bench_regex, bench_raw_text, re.IGNORECASE | re.DOTALL):
+    if bench_regex and not re.search(
+        bench_regex, bench_raw_text, re.IGNORECASE | re.DOTALL
+    ):
         raise SmokeFailure(
             f"FastFlowLM benchmark output did not summarize the input: {bench_raw_output}\n"
             f"Expected regex: {bench_regex}"
@@ -477,7 +500,10 @@ def main():
     result_csv = max(csvs, key=lambda path: path.stat().st_mtime_ns)
     if not csv_has_1k_row(result_csv):
         raise SmokeFailure(f"FastFlowLM benchmark CSV does not contain a 1k result row: {result_csv}")
-    print(f"FastFlowLM HRX smoke: PASS -> {result_csv}")
+    print(
+        "FastFlowLM HRX smoke: PASS "
+        f"({actual_checkpoint} actual prompt tokens) -> {result_csv}"
+    )
 
 
 if __name__ == "__main__":

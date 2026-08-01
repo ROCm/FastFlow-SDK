@@ -85,6 +85,13 @@ def vector_scalar_add():
     }
 
 
+def vector_scalar_add_chain4():
+    """Generates vector-add numerics for a four-run XADX entry point."""
+    generated = vector_scalar_add()
+    generated["name"] = "vector_scalar_add_chain4"
+    return generated
+
+
 def elementwise_add():
     """Generates the 2048-element BF16 elementwise-add case."""
     indices = np.arange(2048, dtype=np.int32)
@@ -149,6 +156,7 @@ def gemv():
 
 CASE_GENERATORS = {
     "vector_scalar_add": vector_scalar_add,
+    "vector_scalar_add_chain4": vector_scalar_add_chain4,
     "elementwise_add": elementwise_add,
     "relu": relu,
     "gemv": gemv,
