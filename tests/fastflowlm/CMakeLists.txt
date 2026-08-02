@@ -13,7 +13,13 @@ add_executable(
   hrx_kernel_smoke.cpp kernel_capabilities.cpp kernel_case.cpp
   kernel_test_data.cpp)
 
-set(fastflowlm_targets fastflowlm-hrx-kernel-smoke)
+add_executable(
+  fastflowlm-hrx-readback-smoke
+  hrx_readback_smoke.cpp kernel_capabilities.cpp kernel_case.cpp
+  kernel_test_data.cpp)
+
+set(fastflowlm_targets
+  fastflowlm-hrx-kernel-smoke fastflowlm-hrx-readback-smoke)
 if(BUILD_TESTING)
   add_executable(
     fastflowlm-kernel-native-tests
@@ -58,6 +64,11 @@ target_link_libraries(
   gemm
   q4_npu_eXpress
   hrx::hrx)
+target_link_libraries(
+  fastflowlm-hrx-readback-smoke PRIVATE
+  gemm
+  q4_npu_eXpress
+  hrx::hrx)
 if(BUILD_TESTING)
   target_link_libraries(
     fastflowlm-kernel-native-tests PRIVATE q4_npu_eXpress hrx::hrx)
@@ -68,11 +79,13 @@ endif()
 
 if(NOT MSVC)
   set_target_properties(
-    fastflowlm-hrx-kernel-smoke PROPERTIES
+    fastflowlm-hrx-kernel-smoke fastflowlm-hrx-readback-smoke PROPERTIES
     INSTALL_RPATH "$ORIGIN/../lib/flm:$ORIGIN/../lib")
 endif()
 
-install(TARGETS fastflowlm-hrx-kernel-smoke RUNTIME DESTINATION bin)
+install(
+  TARGETS fastflowlm-hrx-kernel-smoke fastflowlm-hrx-readback-smoke
+  RUNTIME DESTINATION bin)
 install(
   FILES kernel_capabilities.json
   DESTINATION share/fastflowlm-kernel-smoke)

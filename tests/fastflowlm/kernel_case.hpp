@@ -36,6 +36,17 @@ struct KernelExecutable {
   ~KernelExecutable();
 };
 
+// The device every kernel test allocates its BOs from. Constructing it brings
+// up the HRX runtime, so tests that only use the buffer API still have to go
+// through here.
+hrx::device& kernel_test_device();
+
+// Loads `xclbin` with `transaction` as its single MLIR_AIE run. `label` only
+// appears in the failure message.
+KernelExecutable create_kernel_executable(
+    const std::vector<uint8_t>& xclbin,
+    const std::vector<uint8_t>& transaction, const std::string& label);
+
 class KernelCase {
  public:
   KernelCase(

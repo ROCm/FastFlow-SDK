@@ -271,8 +271,8 @@ jobs:
       - name: Probe NPU driver, firmware, and packaged libHRX
         run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py probe
 
-      - name: Run FastFlowLM production-xclbin HRX smoke
-        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm-kernels --wheel-package --dir .kernel-artifact --iterations 20
+      - name: Run FastFlowLM production-xclbin and host-readback HRX smoke
+        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm-kernels --wheel-package --dir .kernel-artifact --iterations 20 --readback-iterations 32
 
       - name: Run packaged FastFlowLM HRX soak
         run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm --wheel-package --inference-iterations 5

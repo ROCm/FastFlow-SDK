@@ -149,36 +149,51 @@ class TestFastFlowLMKernels:
             == "future-mm-v1"
         )
 
+    def _stage(self, root):
+        executables = {}
+        (root / "bin").mkdir()
+        for role in kernels.TARGETS:
+            executable = root / "bin" / kernels.executable_name(role)
+            executable.write_bytes(f"portable {role} helper".encode())
+            executables[role] = executable
+        capabilities = root / kernels.CAPABILITIES_RELATIVE
+        capabilities.parent.mkdir(parents=True)
+        capabilities.write_bytes(kernels.CAPABILITIES_SOURCE.read_bytes())
+        kernels._write_manifest(root)
+        return executables, capabilities
+
     def test_manifest_verification_detects_tampering(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            executable = root / "bin" / kernels.executable_name()
-            executable.parent.mkdir()
-            executable.write_bytes(b"portable helper")
-            capabilities = root / kernels.CAPABILITIES_RELATIVE
-            capabilities.parent.mkdir(parents=True)
-            capabilities.write_bytes(kernels.CAPABILITIES_SOURCE.read_bytes())
-            kernels._write_manifest(root)
-            assert kernels.verify_tree(root) == executable
-            executable.write_bytes(b"tampered")
+            executables, capabilities = self._stage(root)
+            assert kernels.verify_tree(root) == executables
+            for role, executable in executables.items():
+                original = executable.read_bytes()
+                executable.write_bytes(b"tampered")
+                with pytest.raises(RuntimeError, match=role):
+                    kernels.verify_tree(root)
+                executable.write_bytes(original)
+            capabilities.write_bytes(b"{}")
             with pytest.raises(RuntimeError):
                 kernels.verify_tree(root)
-            executable.write_bytes(b"portable helper")
-            capabilities.write_bytes(b"{}")
+
+    def test_manifest_covers_every_helper(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._stage(root)
+            manifest_path = root / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            assert set(manifest["executables"]) == set(kernels.TARGETS)
+            manifest["executables"].pop("readback-smoke")
+            manifest_path.write_text(json.dumps(manifest))
             with pytest.raises(RuntimeError):
                 kernels.verify_tree(root)
 
     def test_manifest_has_stable_product_and_platform_identity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            executable = root / "bin" / kernels.executable_name()
-            executable.parent.mkdir()
-            executable.write_bytes(b"portable helper")
-            capabilities = root / kernels.CAPABILITIES_RELATIVE
-            capabilities.parent.mkdir(parents=True)
-            capabilities.write_bytes(kernels.CAPABILITIES_SOURCE.read_bytes())
-            kernels._write_manifest(root)
+            self._stage(root)
             manifest = json.loads((root / "manifest.json").read_text())
-            assert manifest["schema_version"] == 1
+            assert manifest["schema_version"] == 2
             assert manifest["product"] == kernels.PRODUCT
             assert manifest["source_revision"] == kernels.source_revision()
