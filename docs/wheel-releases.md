@@ -87,6 +87,11 @@ uploads a temporary Actions artifact. With
 `publish_target=github-prerelease`, the final job publishes one GitHub
 prerelease after both builds, metadata checks, dependency resolution, and all
 NPU validations succeed.
+The same payload includes the tested Linux `.tar.zst` and Windows `.zip`
+standalone FastFlowLM + HRX runtime archives, checksum sidecars, and detached
+bundle provenance manifests. Release assembly rejects archives whose embedded
+version, source revision, platform, or archive digest does not match the
+resolved release.
 
 Pull-request CI builds one stable-ABI bindings wheel per platform and validates
 that same wheel on Python 3.12, 3.13, and 3.14.
@@ -142,5 +147,6 @@ aiecc --help
 ```
 
 The release workflow creates GitHub build-provenance attestations for published
-wheels in each native platform build job, before artifact upload. Publication
-still waits for every NPU validation to succeed.
+wheels and standalone runtime archives in each native platform build job,
+before artifact upload. Publication still waits for the Linux and Windows NPU
+jobs to validate the wheel-installed runtime and CLI on hardware.

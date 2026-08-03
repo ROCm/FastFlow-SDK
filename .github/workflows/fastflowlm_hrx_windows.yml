@@ -164,6 +164,13 @@ jobs:
       - name: Build HRX
         run: .venv/Scripts/python.exe dev.py build hrx --fresh
 
+      - name: Build and test native rocm-npu CLI
+        shell: powershell
+        run: |
+          .venv/Scripts/python.exe dev.py build rocm-npu-cli --fresh
+          .venv/Scripts/ctest.exe --test-dir build/rocm-npu-cli `
+            --output-on-failure
+
       - name: Build FastFlowLM
         run: .venv/Scripts/python.exe dev.py build fastflowlm --fresh
 
@@ -182,11 +189,13 @@ jobs:
       - name: Install-test rocm-npu runtime wheels
         run: .venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py verify
 
-      - name: Attest Windows wheels
+      - name: Attest Windows release artifacts
         if: ${{ inputs.attest_wheels }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: build/artifacts/rocm_npu_*.whl
+          subject-path: |
+            build/artifacts/rocm_npu_*.whl
+            build/artifacts/fastflowlm-hrx-windows-x86_64.zip
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -257,6 +266,14 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
+      - name: Download standalone runtime archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflowlm-hrx-windows-x86_64
+          path: .native-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
       - name: Download FastFlowLM production-xclbin smoke helper
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -273,6 +290,57 @@ jobs:
 
       - name: Run FastFlowLM production-xclbin and host-readback HRX smoke
         run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm-kernels --wheel-package --dir .kernel-artifact --iterations 20 --readback-iterations 32
+
+      - name: Run native runtime diagnostics and self-test
+        run: >-
+          python build_tools/validate_rocm_npu_cli.py
+          --cli build/rocm-npu-windows-wheel-venv/Scripts/rocm-npu.exe
+          --output-dir .native-reports
+          --prefix wheel-
+          --require-hardware
+
+      - name: Test standalone runtime archive without Python
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Get-ChildItem .native-artifact -Recurse -File -Filter fastflowlm-hrx-windows-x86_64.zip |
+            Select-Object -First 1
+          if (-not $archive) { throw 'standalone runtime archive was not downloaded' }
+          $checksum = (Get-Content "$($archive.FullName).sha256" -Raw).Trim().Split()[0]
+          $actual = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $checksum) { throw 'standalone runtime archive checksum mismatch' }
+          Expand-Archive $archive.FullName .native-runtime
+          $cli = Get-ChildItem .native-runtime -Recurse -File -Filter rocm-npu.exe |
+            Where-Object { $_.Directory.Name -eq 'bin' } |
+            Select-Object -First 1
+          if (-not $cli) { throw 'standalone rocm-npu.exe was not found' }
+          New-Item .native-reports -ItemType Directory -Force | Out-Null
+          function Invoke-NativeReport {
+            param([string[]]$CommandArguments, [string]$Output, [switch]$ReturnReport)
+            $lines = & $cli.FullName @CommandArguments --json
+            if ($LASTEXITCODE -ne 0) {
+              throw "standalone rocm-npu $CommandArguments failed with $LASTEXITCODE"
+            }
+            $text = ($lines -join "`n") + "`n"
+            [IO.File]::WriteAllText(
+              $Output, $text, [Text.UTF8Encoding]::new($false))
+            if ($ReturnReport) { return $text | ConvertFrom-Json }
+          }
+          Invoke-NativeReport -CommandArguments @('version') -Output .native-reports/archive-version.json
+          $probe = Invoke-NativeReport -CommandArguments @('probe') -Output .native-reports/archive-probe.json -ReturnReport
+          Invoke-NativeReport -CommandArguments @('doctor') -Output .native-reports/archive-doctor.json
+          if ($probe.data.target_family -eq 'npu2') {
+            Invoke-NativeReport -CommandArguments @('self-test') -Output .native-reports/archive-self-test.json
+          }
+
+      - name: Upload native CLI hardware reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-native-reports-${{ matrix.runner_label }}
+          path: .native-reports/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Run packaged FastFlowLM HRX soak
         run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe dev.py test-fastflowlm --wheel-package --inference-iterations 5

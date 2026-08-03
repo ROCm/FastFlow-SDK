@@ -28,6 +28,7 @@ from build_tools.fastflowlm_artifact import (
     git_source_state,
     sha256_file,
     validate_source_policy,
+    verify_cli_fresh_install,
     verify_fastflowlm_fresh_installs,
     verify_bundle,
 )
@@ -37,6 +38,32 @@ pytestmark = [
     pytest.mark.fastflowlm,
     pytest.mark.presubmit,
 ]
+
+
+def _init_git_repository(root: Path, files: dict[str, str]) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Artifact Test"],
+        cwd=root,
+        check=True,
+    )
+    for relative, content in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "--quiet", "-m", "initial"],
+        cwd=root,
+        check=True,
+    )
+    return root
 
 
 class TestFastFlowLMArtifact:
@@ -76,17 +103,10 @@ class TestFastFlowLMArtifact:
             verify_bundle(bundle)
 
     def test_git_source_state_records_modified_and_untracked_files(self, tmp_path):
-        repository = tmp_path
-        subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
-        subprocess.run(["git", "config", "user.email", "test@example.com"],
-                       cwd=repository, check=True)
-        subprocess.run(["git", "config", "user.name", "Artifact Test"],
-                       cwd=repository, check=True)
+        repository = _init_git_repository(
+            tmp_path, {"tracked.txt": "original\n"}
+        )
         tracked = repository / "tracked.txt"
-        tracked.write_text("original\n", encoding="utf-8")
-        subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
-        subprocess.run(["git", "commit", "--quiet", "-m", "initial"],
-                       cwd=repository, check=True)
         assert not git_source_state(repository)["dirty"]
 
         tracked.write_text("modified\n", encoding="utf-8")
@@ -99,26 +119,10 @@ class TestFastFlowLMArtifact:
         ]
 
     def test_git_source_state_records_staged_only_changes_as_dirty(self, tmp_path):
-        repository = tmp_path
-        subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=repository,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Artifact Test"],
-            cwd=repository,
-            check=True,
+        repository = _init_git_repository(
+            tmp_path, {"tracked.txt": "original\n"}
         )
         tracked = repository / "tracked.txt"
-        tracked.write_text("original\n", encoding="utf-8")
-        subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
-        subprocess.run(
-            ["git", "commit", "--quiet", "-m", "initial"],
-            cwd=repository,
-            check=True,
-        )
         tracked.write_text("staged\n", encoding="utf-8")
         subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
         state = git_source_state(repository)
@@ -130,32 +134,12 @@ class TestFastFlowLMArtifact:
     def test_fresh_install_verification_checks_sources_installs_and_dependency(self, tmp_path):
         root = tmp_path
         marker_name = ".fresh.json"
-
-        def make_source(name):
-            repository = root / name
-            repository.mkdir()
-            subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
-            subprocess.run(
-                ["git", "config", "user.email", "test@example.com"],
-                cwd=repository,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Artifact Test"],
-                cwd=repository,
-                check=True,
-            )
-            (repository / "source.txt").write_text("source\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=repository, check=True)
-            subprocess.run(
-                ["git", "commit", "--quiet", "-m", "initial"],
-                cwd=repository,
-                check=True,
-            )
-            return repository
-
-        hrx_source = make_source("hrx-source")
-        fastflowlm_source = make_source("fastflowlm-source")
+        hrx_source = _init_git_repository(
+            root / "hrx-source", {"source.txt": "source\n"}
+        )
+        fastflowlm_source = _init_git_repository(
+            root / "fastflowlm-source", {"source.txt": "source\n"}
+        )
         hrx_install = root / "hrx-install"
         fastflowlm_install = root / "fastflowlm-install"
         flm_name = "flm.exe" if os.name == "nt" else "flm"
@@ -201,6 +185,82 @@ class TestFastFlowLMArtifact:
                 fastflowlm_source=fastflowlm_source,
                 marker_name=marker_name,
             )
+
+    def test_cli_fresh_install_checks_source_version_and_install(self, tmp_path):
+        root = _init_git_repository(
+            tmp_path / "source", {"source.txt": "source\n"}
+        )
+        hrx_source = _init_git_repository(
+            tmp_path / "hrx-source", {"header.h": "header\n"}
+        )
+        hrx_file = hrx_source / "header.h"
+        hrx_install = tmp_path / "hrx-install"
+        hrx_install.mkdir()
+        hrx_binary = hrx_install / "hrx.dll"
+        hrx_binary.write_bytes(b"hrx")
+        install = tmp_path / "install"
+        cli_name = "rocm-npu.exe" if os.name == "nt" else "rocm-npu"
+        (install / "bin").mkdir(parents=True)
+        (install / "bin" / cli_name).write_bytes(b"cli")
+        marker_name = ".fresh.json"
+        marker = {
+            "source": git_source_state(root),
+            "hrx_headers": git_source_state(hrx_source),
+            "version": "1.2.3",
+            "install": directory_state(install, exclude_names=(marker_name,)),
+        }
+        (install / marker_name).write_text(json.dumps(marker), encoding="utf-8")
+        (hrx_install / marker_name).write_text(
+            json.dumps(
+                {
+                    "source": git_source_state(hrx_source),
+                    "install": directory_state(
+                        hrx_install, exclude_names=(marker_name,)
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch(
+            "build_tools.fastflowlm_artifact.default_package_version",
+            return_value="1.2.3",
+        ):
+            assert verify_cli_fresh_install(
+                root=root,
+                cli_install=install,
+                hrx_install=hrx_install,
+                hrx_source=hrx_source,
+                marker_name=marker_name,
+            ) == marker
+            hrx_file.write_text("changed\n", encoding="utf-8")
+            with pytest.raises(RuntimeError, match="different HRX headers"):
+                verify_cli_fresh_install(
+                    root=root,
+                    cli_install=install,
+                    hrx_install=hrx_install,
+                    hrx_source=hrx_source,
+                    marker_name=marker_name,
+                )
+            hrx_file.write_text("header\n", encoding="utf-8")
+            hrx_binary.write_bytes(b"stale")
+            with pytest.raises(RuntimeError, match="HRX install changed"):
+                verify_cli_fresh_install(
+                    root=root,
+                    cli_install=install,
+                    hrx_install=hrx_install,
+                    hrx_source=hrx_source,
+                    marker_name=marker_name,
+                )
+            hrx_binary.write_bytes(b"hrx")
+            (install / "bin" / cli_name).write_bytes(b"stale")
+            with pytest.raises(RuntimeError, match="install changed"):
+                verify_cli_fresh_install(
+                    root=root,
+                    cli_install=install,
+                    hrx_install=hrx_install,
+                    hrx_source=hrx_source,
+                    marker_name=marker_name,
+                )
 
     def test_linux_system_runtime_classification(self):
         for name in ("libc.so.6", "libm.so.6", "libpthread.so.0",
@@ -385,6 +445,11 @@ class TestFastFlowLMArtifact:
         bundle = self.make_bundle(root / "stage")
         archive = create_archive(bundle, root / "artifacts")
         assert archive.with_name(archive.name + ".sha256").is_file()
+        provenance = archive.with_name(archive.name + ".manifest.json")
+        provenance_data = json.loads(provenance.read_text(encoding="utf-8"))
+        assert provenance_data["archive"] == archive.name
+        assert provenance_data["archive_sha256"] == sha256_file(archive)
+        assert provenance_data["bundle"]["schema_version"] == 1
         extracted = extract_archive(archive, root / "extracted", allowed_root=root)
         executable = "flm.exe" if os.name == "nt" else "flm"
         assert (extracted / "bin" / executable).read_bytes() == b"runtime"

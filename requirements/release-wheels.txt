@@ -8,3 +8,4 @@
 cyclonedx-python-lib==11.11.0
 jsonschema==4.26.0
 twine==6.2.0
+zstandard==0.25.0

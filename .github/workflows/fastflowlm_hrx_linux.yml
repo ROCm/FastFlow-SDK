@@ -135,6 +135,11 @@ jobs:
       - name: Build HRX
         run: .venv/bin/python dev.py build hrx --fresh
 
+      - name: Build and test native rocm-npu CLI
+        run: |
+          .venv/bin/python dev.py build rocm-npu-cli --fresh
+          .venv/bin/ctest --test-dir build/rocm-npu-cli --output-on-failure
+
       - name: Build FastFlowLM
         run: .venv/bin/python dev.py build fastflowlm --fresh
 
@@ -156,11 +161,13 @@ jobs:
       - name: Install-test rocm-npu runtime wheels
         run: .venv/bin/python dev.py verify-fastflowlm-wheels
 
-      - name: Attest Linux wheels
+      - name: Attest Linux release artifacts
         if: ${{ inputs.attest_wheels }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: build/artifacts/rocm_npu_*.whl
+          subject-path: |
+            build/artifacts/rocm_npu_*.whl
+            build/artifacts/fastflowlm-hrx-linux-x86_64.tar.zst
 
       - name: Upload runtime archive artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -226,6 +233,14 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
+      - name: Download standalone runtime archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflowlm-hrx-linux-x86_64
+          path: .native-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
       - name: Download FastFlowLM production-xclbin smoke helper
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -242,6 +257,47 @@ jobs:
 
       - name: Run FastFlowLM production-xclbin and host-readback HRX smoke
         run: build/rocm-npu-wheel-venv/bin/python dev.py test-fastflowlm-kernels --wheel-package --dir .kernel-artifact --iterations 20 --readback-iterations 32
+
+      - name: Run native runtime diagnostics and self-test
+        run: >-
+          python3 build_tools/validate_rocm_npu_cli.py
+          --cli build/rocm-npu-wheel-venv/bin/rocm-npu
+          --output-dir .native-reports
+          --prefix wheel-
+          --require-hardware
+
+      - name: Test standalone runtime archive without Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(realpath "$(find .native-artifact -name 'fastflowlm-hrx-linux-x86_64.tar.zst' -type f -print -quit)")"
+          test -n "${archive}"
+          (
+            cd "$(dirname "${archive}")"
+            sha256sum -c "$(basename "${archive}").sha256"
+          )
+          mkdir -p .native-runtime .native-reports
+          (
+            cd .native-runtime
+            cmake -E tar xvf "${archive}"
+          )
+          cli="$(find .native-runtime -path '*/bin/rocm-npu' -type f -print -quit)"
+          test -x "${cli}"
+          "${cli}" version --json > .native-reports/archive-version.json
+          "${cli}" probe --json > .native-reports/archive-probe.json
+          "${cli}" doctor --json > .native-reports/archive-doctor.json
+          if grep -q '"target_family":"npu2"' .native-reports/archive-probe.json; then
+            "${cli}" self-test --json > .native-reports/archive-self-test.json
+          fi
+
+      - name: Upload native CLI hardware reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-native-reports-${{ matrix.runner_label }}
+          path: .native-reports/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Run packaged FastFlowLM HRX soak
         run: build/rocm-npu-wheel-venv/bin/python dev.py test-fastflowlm --wheel-package --inference-iterations 5

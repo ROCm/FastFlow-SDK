@@ -97,6 +97,9 @@ def cmd_build_hrx_cts(args):
 def cmd_build_fastflowlm(args):
     return dev_build.cmd_build_fastflowlm(args)
 
+def cmd_build_rocm_npu_cli(args):
+    return dev_build.cmd_build_rocm_npu_cli(args)
+
 def cmd_build_all(args):
     return dev_build.cmd_build_all(args)
 
@@ -215,6 +218,7 @@ _BUILD_HANDLERS = {
     "hrx": cmd_build_hrx,
     "hrx-cts": cmd_build_hrx_cts,
     "fastflowlm": cmd_build_fastflowlm,
+    "rocm-npu-cli": cmd_build_rocm_npu_cli,
     "all": cmd_build_all,
 }
 

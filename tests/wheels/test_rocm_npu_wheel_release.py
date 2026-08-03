@@ -1,11 +1,16 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
+import hashlib
+import io
 import json
+import tarfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import zstandard
 
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
@@ -23,6 +28,7 @@ from build_tools.rocm_npu_wheel_common import (
     build_wheel,
 )
 from build_tools.rocm_npu_wheel_release import (
+    _copy_release_archives,
     prepare_rocm_npu_release_payload,
     resolve_release_inputs,
 )
@@ -34,8 +40,109 @@ pytestmark = [
     pytest.mark.presubmit,
 ]
 
+def _write_release_archive(
+    directory, name, *, system, artifact, version, source_sha
+):
+    bundle = {
+        "schema_version": 1,
+        "version": version,
+        "artifact": artifact,
+        "platform": {"system": system},
+        "sources": {
+            "rocm-npu-staging": {
+                "revision": source_sha,
+                "dirty": False,
+            }
+        },
+        "files": [{"path": "bin/rocm-npu"}],
+    }
+    payload = (json.dumps(bundle) + "\n").encode()
+    archive = directory / name
+    manifest_name = f"{artifact}/manifest.json"
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr(manifest_name, payload)
+    else:
+        uncompressed = io.BytesIO()
+        with tarfile.open(fileobj=uncompressed, mode="w") as tar:
+            info = tarfile.TarInfo(manifest_name)
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        archive.write_bytes(
+            zstandard.ZstdCompressor().compress(uncompressed.getvalue())
+        )
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.with_name(name + ".sha256").write_text(
+        f"{digest}  {name}\n", encoding="ascii"
+    )
+    archive.with_name(name + ".manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "archive": name,
+                "archive_sha256": digest,
+                "bundle": bundle,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return archive
+
 
 class TestRocmNpuWheelRelease:
+    def test_copy_release_archives_requires_and_records_both_platforms(
+        self, tmp_path
+    ):
+        archives = tmp_path / "archives"
+        output = tmp_path / "release"
+        archives.mkdir()
+        output.mkdir()
+        archive_metadata = {
+            "fastflowlm-hrx-linux-x86_64.tar.zst":
+                ("Linux", "fastflowlm-hrx-linux-x86_64"),
+            "fastflowlm-hrx-windows-x86_64.zip":
+                ("Windows", "fastflowlm-hrx-windows-x86_64"),
+        }
+        for name, (system, artifact) in archive_metadata.items():
+            _write_release_archive(
+                archives,
+                name,
+                system=system,
+                artifact=artifact,
+                version="1.2.3",
+                source_sha="abc123",
+            )
+        records = _copy_release_archives(
+            archives,
+            output,
+            expected_version="1.2.3",
+            expected_source_sha="abc123",
+        )
+        assert {record["platform"] for record in records} == {
+            "linux-x86_64",
+            "windows-x86_64",
+        }
+        assert (output / "fastflowlm-hrx-windows-x86_64.zip").is_file()
+        stale_archive = _write_release_archive(
+            archives,
+            "fastflowlm-hrx-windows-x86_64.zip",
+            system="Windows",
+            artifact="fastflowlm-hrx-windows-x86_64",
+            version="1.2.2",
+            source_sha="abc123",
+        )
+        stale = stale_archive.with_name(stale_archive.name + ".manifest.json")
+        stale_data = json.loads(stale.read_text(encoding="utf-8"))
+        stale_data["bundle"]["version"] = "1.2.3"
+        stale.write_text(json.dumps(stale_data), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="manifest is invalid|does not match"):
+            _copy_release_archives(
+                archives,
+                output,
+                expected_version="1.2.3",
+                expected_source_sha="abc123",
+            )
+
     def test_resolve_release_inputs_uses_explicit_version(self, tmp_path):
         policy = self._write_policy(tmp_path, "1.2.3")
         release = resolve_release_inputs(
@@ -130,6 +237,28 @@ class TestRocmNpuWheelRelease:
             output_directory=root / "dist" / "linux",
             include_meta=False,
         )
+        archives = root / "archives"
+        archives.mkdir()
+        for name, system, artifact in (
+            (
+                "fastflowlm-hrx-linux-x86_64.tar.zst",
+                "Linux",
+                "fastflowlm-hrx-linux-x86_64",
+            ),
+            (
+                "fastflowlm-hrx-windows-x86_64.zip",
+                "Windows",
+                "fastflowlm-hrx-windows-x86_64",
+            ),
+        ):
+            _write_release_archive(
+                archives,
+                name,
+                system=system,
+                artifact=artifact,
+                version=version,
+                source_sha="abc123",
+            )
 
         release = prepare_rocm_npu_release_payload(
             root / "dist",
@@ -139,6 +268,7 @@ class TestRocmNpuWheelRelease:
             tag_name=f"rocm-npu-v{version}",
             source_ref="main",
             source_sha="abc123",
+            archive_directory=archives,
             expected_wheel_tags=self._expected_tags(),
             github_run_id="42",
             github_run_attempt="1",
@@ -151,8 +281,25 @@ class TestRocmNpuWheelRelease:
         assert manifest["version"] == version
         assert manifest["source_ref"] == "main"
         assert manifest["source_sha"] == "abc123"
+        wheel_artifacts = [
+            artifact
+            for artifact in manifest["artifacts"]
+            if "distribution" in artifact
+        ]
+        archive_artifacts = [
+            artifact
+            for artifact in manifest["artifacts"]
+            if artifact.get("kind") == "standalone-runtime"
+        ]
+        assert {artifact["platform"] for artifact in archive_artifacts} == {
+            "linux-x86_64",
+            "windows-x86_64",
+        }
+        for artifact in archive_artifacts:
+            assert (release / artifact["filename"]).is_file()
+            assert (release / artifact["provenance"]).is_file()
         distribution_counts = {}
-        for artifact in manifest["artifacts"]:
+        for artifact in wheel_artifacts:
             distribution_counts[artifact["distribution"]] = (
                 distribution_counts.get(artifact["distribution"], 0) + 1
             )
@@ -164,7 +311,7 @@ class TestRocmNpuWheelRelease:
             COMPILER_BINDINGS_DISTRIBUTION: 2,
         }
         artifact_tags = set()
-        for artifact in manifest["artifacts"]:
+        for artifact in wheel_artifacts:
             filename = artifact["filename"]
             assert "staging" not in filename
             artifact_tags.update(artifact["wheel_tags"])

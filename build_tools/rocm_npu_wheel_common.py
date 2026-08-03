@@ -443,6 +443,40 @@ def _required_distribution_components(
     return components
 
 
+def _manifest_components(
+    manifest: dict[str, object],
+) -> list[dict[str, object]]:
+    records = manifest.get("components")
+    if records is None:
+        return []
+    if not isinstance(records, list):
+        raise RuntimeError("wheel manifest components must be a list")
+    components = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise RuntimeError("wheel manifest component is not an object")
+        name = record.get("name")
+        version = record.get("version")
+        upstream = record.get("upstream")
+        license_expression = record.get("license")
+        if not all(isinstance(value, str) and value
+                   for value in (name, version, upstream, license_expression)):
+            raise RuntimeError(f"invalid wheel manifest component: {record}")
+        components.append({
+            "type": "library",
+            "bom-ref": f"generic:{name}@{version}",
+            "name": name,
+            "version": version,
+            "purl": _component_purl("generic", name, version),
+            "licenses": [{"expression": license_expression}],
+            "externalReferences": [{
+                "type": "distribution",
+                "url": upstream,
+            }],
+        })
+    return components
+
+
 def _file_components(manifest: dict[str, object]) -> list[dict[str, object]]:
     files = manifest.get("files")
     if not isinstance(files, list):
@@ -564,6 +598,7 @@ def _cyclonedx_sbom(
 ) -> bytes:
     dependency_components = [
         *_required_distribution_components(manifest),
+        *_manifest_components(manifest),
         *_dependency_components(manifest),
     ]
     file_components = _file_components(manifest)

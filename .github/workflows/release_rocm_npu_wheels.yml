@@ -287,6 +287,18 @@ jobs:
           name: rocm-npu-compiler-wheels-windows-x86_64
           path: wheelhouse/windows
 
+      - name: Download tested Linux standalone archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflowlm-hrx-linux-x86_64
+          path: archives/linux
+
+      - name: Download tested Windows standalone archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflowlm-hrx-windows-x86_64
+          path: archives/windows
+
       - name: Install release validation tools
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements/release-wheels.lock
 
@@ -305,6 +317,7 @@ jobs:
           set -euo pipefail
           python build_tools/rocm_npu_wheel_release_cli.py prepare \
             --dir wheelhouse \
+            --archive-dir archives \
             --output-dir release \
             --version "${ROCM_NPU_PACKAGE_VERSION}" \
             --release-name "${ROCM_NPU_RELEASE_NAME}" \
@@ -461,6 +474,8 @@ jobs:
             Linux and Windows prerelease wheels for the ROCm NPU compiler,
             runtime, and FastFlowLM. Compiler bindings support CPython
             3.12, 3.13, and 3.14.
+            Tested standalone Linux `.tar.zst` and Windows `.zip` runtime
+            archives are attached to this release.
 
             Source ref: ${{ needs.prepare.outputs.ref }}
             Source commit: ${{ needs.prepare.outputs.source_sha }}
@@ -477,7 +492,7 @@ jobs:
             ```console
             python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" rocm-npu-compiler==${{ needs.prepare.outputs.package_version }}
             ```
-          artifacts: "release/*.whl,release/*.sha256,release/SHA256SUMS,release/rocm-npu-release-manifest.json,release/index.html"
+          artifacts: "release/*.whl,release/*.zip,release/*.tar.zst,release/*.sha256,release/*.zip.manifest.json,release/*.tar.zst.manifest.json,release/SHA256SUMS,release/rocm-npu-release-manifest.json,release/index.html"
           artifactErrorsFailBuild: true
           immutableCreate: true
           prerelease: true

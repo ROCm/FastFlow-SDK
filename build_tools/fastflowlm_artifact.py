@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from build_tools.fastflowlm_deps import dependency_paths
+from build_tools.rocm_npu_wheel_common import default_package_version
 
 
 SCHEMA_VERSION = 1
@@ -150,6 +151,57 @@ def verify_fastflowlm_fresh_installs(
             "FastFlowLM was built against a different HRX install; rebuild with --fresh"
         )
     return markers
+
+
+def verify_cli_fresh_install(
+    *,
+    root: Path,
+    cli_install: Path,
+    hrx_install: Path,
+    hrx_source: Path,
+    marker_name: str,
+) -> dict[str, object]:
+    """Verifies that the installed native CLI matches this source checkout."""
+    cli_name = "rocm-npu.exe" if os.name == "nt" else "rocm-npu"
+    if not (cli_install / "bin" / cli_name).is_file():
+        raise RuntimeError(
+            "rocm-npu CLI is not installed; run: "
+            "python dev.py build rocm-npu-cli --fresh"
+        )
+    marker = cli_install / marker_name
+    if not marker.is_file():
+        raise RuntimeError("rocm-npu CLI was not built with --fresh")
+    recorded = json.loads(marker.read_text(encoding="utf-8"))
+    if recorded.get("source") != git_source_state(root):
+        raise RuntimeError(
+            "rocm-npu CLI sources changed after the fresh build; "
+            "rebuild with --fresh"
+        )
+    hrx_marker_path = hrx_install / marker_name
+    if not hrx_marker_path.is_file():
+        raise RuntimeError("HRX was not built with --fresh")
+    hrx_marker = json.loads(hrx_marker_path.read_text(encoding="utf-8"))
+    hrx_headers = git_source_state(hrx_source)
+    if (recorded.get("hrx_headers") != hrx_headers or
+            hrx_marker.get("source") != hrx_headers):
+        raise RuntimeError(
+            "rocm-npu CLI was built against different HRX headers; "
+            "rebuild HRX and the CLI with --fresh"
+        )
+    if hrx_marker.get("install") != directory_state(
+        hrx_install, exclude_names=(marker_name,)
+    ):
+        raise RuntimeError("HRX install changed since its fresh build")
+    if recorded.get("version") != default_package_version(root):
+        raise RuntimeError("rocm-npu CLI version does not match the package version")
+    if recorded.get("install") != directory_state(
+        cli_install, exclude_names=(marker_name,)
+    ):
+        raise RuntimeError(
+            "rocm-npu CLI install changed after the fresh build; "
+            "rebuild with --fresh"
+        )
+    return recorded
 
 
 def validate_source_policy(manifest: dict[str, object], root: Path) -> None:
@@ -818,6 +870,14 @@ def _cmake_configuration(cache: Path, root: Path) -> dict[str, str]:
 def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
                          destination: Path) -> Path:
     """Creates the bundle root and writes its complete hash manifest."""
+    cli_install = root / "build" / "rocm-npu-cli-install"
+    cli_marker = verify_cli_fresh_install(
+        root=root,
+        cli_install=cli_install,
+        hrx_install=hrx_install,
+        hrx_source=root / "projects" / "hrx",
+        marker_name=".rns-fresh-build.json",
+    )
     bundle = destination / artifact_name()
     reset_directory(destination, root / "build")
     shutil.copytree(flm_install, bundle)
@@ -828,14 +888,29 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
     binary_dependencies = None
     if os.name == "nt":
         _copy_checked(hrx_install / "bin" / "hrx.dll", bundle / "bin" / "hrx.dll")
-        _copy_windows_redistributable_closure(bundle)
-        binary_dependencies = _windows_pe_dependency_graph(bundle)
+        cli_name = "rocm-npu.exe"
     else:
+        cli_name = "rocm-npu"
         hrx_libraries = sorted((hrx_install / "lib").glob("libhrx.so*"))
         if not hrx_libraries:
             raise RuntimeError(f"installed HRX runtime not found under {hrx_install / 'lib'}")
         for library in hrx_libraries:
             _copy_checked(library, bundle / "lib" / library.name)
+
+    _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
+    fixture_source = cli_install / "share" / "rocm-npu" / "self-test"
+    if not fixture_source.is_dir():
+        raise RuntimeError(f"installed rocm-npu self-test data not found: {fixture_source}")
+    shutil.copytree(
+        fixture_source,
+        bundle / "share" / "rocm-npu" / "self-test",
+        dirs_exist_ok=True,
+    )
+    if os.name == "nt":
+        # Include imports introduced uniquely by the native CLI.
+        _copy_windows_redistributable_closure(bundle)
+        binary_dependencies = _windows_pe_dependency_graph(bundle)
+    else:
         binary_dependencies = _normalize_and_verify_linux_elf(bundle)
 
     license_sources = [
@@ -843,6 +918,10 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
         (root / "projects" / "hrx" / "LICENSE", "hrx-LICENSE"),
         (root / "projects" / "FastFlowLM" / "LICENSE_RUNTIME.txt", "FastFlowLM-LICENSE_RUNTIME.txt"),
         (root / "projects" / "FastFlowLM" / "TERMS.md", "FastFlowLM-TERMS.md"),
+        (root / "third_party" / "nlohmann_json" / "LICENSE.MIT",
+         "nlohmann-json-LICENSE.MIT"),
+        (root / "docs" / "third-party-notices.md",
+         "THIRD_PARTY_NOTICES.md"),
     ]
     for source, name in license_sources:
         if not source.is_file():
@@ -877,6 +956,7 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "version": default_package_version(root),
         "product": "FastFlowLM + HRX amdxdna runtime",
         "artifact": artifact_name(),
         "platform": {"system": platform.system(), "machine": platform.machine()},
@@ -885,8 +965,15 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
             "hrx": git_source_state(root / "projects" / "hrx"),
             "FastFlowLM": git_source_state(root / "projects" / "FastFlowLM"),
         },
+        "cli_build": cli_marker,
         "patches": _patch_manifest(root),
         "dependencies": dependencies,
+        "components": [{
+            "name": "nlohmann/json",
+            "version": "3.12.0",
+            "upstream": "https://github.com/nlohmann/json",
+            "license": "MIT",
+        }],
         "binary_dependencies": binary_dependencies,
         "toolchain": {
             "python": platform.python_version(),
@@ -1027,8 +1114,25 @@ def create_archive(bundle: Path, output_directory: Path) -> Path:
     else:
         archive = output_directory / f"{bundle.name}.tar.zst"
         _tar_zst_bundle(bundle, archive)
+    archive_digest = sha256_file(archive)
     archive.with_name(archive.name + ".sha256").write_text(
-        f"{sha256_file(archive)}  {archive.name}\n", encoding="ascii")
+        f"{archive_digest}  {archive.name}\n", encoding="ascii")
+    archive.with_name(archive.name + ".manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "archive": archive.name,
+                "archive_sha256": archive_digest,
+                "bundle": json.loads(
+                    (bundle / "manifest.json").read_text(encoding="utf-8")
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return archive
 
 

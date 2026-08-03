@@ -14,6 +14,7 @@ from build_tools.fastflowlm_deps import (
     dependency_errors,
     dependency_paths,
 )
+from build_tools.rocm_npu_wheel_common import default_package_version
 
 LLVM_BUILD = Path(
     os.environ.get("RNS_LLVM_BUILD_DIR") or (paths.BUILD / "llvm")
@@ -26,6 +27,8 @@ HRX_PACKAGE_SMOKE_BUILD = paths.BUILD / "hrx-package-smoke"
 FASTFLOWLM_BUILD = paths.BUILD / "FastFlowLM"
 FASTFLOWLM_INSTALL = paths.BUILD / "FastFlowLM-install"
 FASTFLOWLM_MODEL_CACHE = paths.BUILD / "FastFlowLM-models"
+ROCM_NPU_CLI_BUILD = paths.BUILD / "rocm-npu-cli"
+ROCM_NPU_CLI_INSTALL = paths.BUILD / "rocm-npu-cli-install"
 TOOLS_BIN = paths.ROOT / "tools-bin"
 
 NPROC = str(os.cpu_count() or 8)
@@ -104,6 +107,7 @@ def _prepare_fresh_cmake_tree(path):
     allowed = {
         HRX_CMAKE_BUILD.resolve(),
         FASTFLOWLM_BUILD.resolve(),
+        ROCM_NPU_CLI_BUILD.resolve(),
     }
     if path.resolve() not in allowed:
         raise RuntimeError(
@@ -587,7 +591,77 @@ def cmd_build_fastflowlm(args):
     print("build fastflowlm: ok ->", installed)
 
 
+def cmd_build_rocm_npu_cli(args):
+    """Builds the standalone C++ runtime CLI without linking HRX."""
+    env = environment.cmake_env()
+    fresh = getattr(args, "fresh", False)
+    if fresh:
+        _prepare_fresh_cmake_tree(ROCM_NPU_CLI_BUILD)
+    version = default_package_version(paths.ROOT)
+    source_revision = git_source_state(paths.ROOT)["revision"]
+    cc, cxx = environment.compilers()
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            *(["--fresh"] if fresh else []),
+            "-G",
+            "Ninja",
+            "-S",
+            environment.cmake_path(paths.ROOT / "tools" / "rocm-npu"),
+            "-B",
+            environment.cmake_path(ROCM_NPU_CLI_BUILD),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DROCM_NPU_VERSION={version}",
+            f"-DROCM_NPU_SOURCE_REVISION={source_revision}",
+            f"-DCMAKE_INSTALL_PREFIX={environment.cmake_path(ROCM_NPU_CLI_INSTALL)}",
+            *_cc_flags(cc, cxx),
+        ],
+        env=env,
+    )
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(ROCM_NPU_CLI_BUILD),
+            *(["--clean-first"] if fresh else []),
+            "-j",
+            BUILD_JOBS,
+        ],
+        env=env,
+    )
+    shutil.rmtree(ROCM_NPU_CLI_INSTALL, ignore_errors=True)
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--install",
+            environment.cmake_path(ROCM_NPU_CLI_BUILD),
+        ],
+        env=env,
+    )
+    installed = (
+        ROCM_NPU_CLI_INSTALL / "bin" / paths.executable_name("rocm-npu")
+    )
+    if not installed.exists():
+        sys.exit(f"rocm-npu CLI install did not produce {installed}")
+    if fresh:
+        marker = {
+            "source": git_source_state(paths.ROOT),
+            "hrx_headers": git_source_state(paths.PROJ / "hrx"),
+            "version": version,
+            "compilers": {"c": str(cc), "cxx": str(cxx)},
+            "install": directory_state(
+                ROCM_NPU_CLI_INSTALL,
+                exclude_names=(FRESH_BUILD_MARKER,),
+            ),
+        }
+        (ROCM_NPU_CLI_INSTALL / FRESH_BUILD_MARKER).write_text(
+            json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    print("build rocm-npu-cli: ok ->", installed)
+
+
 def cmd_build_all(args):
+    cmd_build_rocm_npu_cli(args)
     cmd_build_hrx_xclbinutil(args)
     cmd_build_llvm(args)
     cmd_build_iron_tools(args)
