@@ -35,6 +35,11 @@ class TestRocmNpuWheelNative:
         self._write_pe(source / "bin" / "hrx.dll")
         self._write_pe(source / "bin" / "Runtime.DLL")
         self._write_pe(source / "bin" / "flm.exe")
+        self._write_pe(source / "bin" / "rocm-npu.exe")
+        fixture = source / "share" / "rocm-npu" / "self-test" / "case"
+        fixture.mkdir(parents=True)
+        (fixture / "manifest.json").write_text("{}", encoding="utf-8")
+        (fixture / "kernel.xadx").write_bytes(b"xadx")
         (source / "share" / "flm" / "xclbins").mkdir(parents=True)
         (source / "share" / "flm" / "model_list.json").write_text(
             "{}", encoding="utf-8"
@@ -47,6 +52,8 @@ class TestRocmNpuWheelNative:
             "licenses/hrx-LICENSE/LICENSE": "hrx",
             "licenses/FastFlowLM-LICENSE_RUNTIME.txt": "fastflowlm",
             "licenses/FastFlowLM-TERMS.md": "terms",
+            "licenses/nlohmann-json-LICENSE.MIT": "nlohmann",
+            "licenses/THIRD_PARTY_NOTICES.md": "notices",
             "licenses/vcpkg/runtime-package/copyright": "dependency",
         }
         for relative, contents in licenses.items():
@@ -56,6 +63,14 @@ class TestRocmNpuWheelNative:
         manifest = {
             "schema_version": 1,
             "sources": {"FastFlowLM": {"revision": "abc123"}},
+            "components": [
+                {
+                    "name": "nlohmann/json",
+                    "version": "3.12.0",
+                    "upstream": "https://github.com/nlohmann/json",
+                    "license": "MIT",
+                }
+            ],
             "toolchain": {"cmake": "cmake version 4.0"},
             "dependencies": {
                 "provider": "vcpkg",
@@ -79,6 +94,7 @@ class TestRocmNpuWheelNative:
             "hrx.dll": ["runtime.dll"],
             "runtime.dll": ["kernel32.dll"],
             "flm.exe": ["runtime.dll"],
+            "rocm-npu.exe": ["kernel32.dll"],
         }
         with mock.patch(
             "build_tools.rocm_npu_windows_wheels.pe_imports",
@@ -92,6 +108,18 @@ class TestRocmNpuWheelNative:
         runtime = products[RUNTIME_DISTRIBUTION] / RUNTIME_PACKAGE
         fastflowlm = products[FASTFLOWLM_DISTRIBUTION] / FASTFLOWLM_PACKAGE
         assert (runtime / "bin" / "Runtime.DLL").is_file()
+        assert (runtime / "bin" / "rocm-npu.exe").is_file()
+        assert (
+            runtime
+            / "share"
+            / "rocm-npu"
+            / "self-test"
+            / "case"
+            / "kernel.xadx"
+        ).is_file()
+        assert (
+            runtime / "licenses" / "nlohmann-json-LICENSE.MIT"
+        ).is_file()
         assert not (fastflowlm / "bin" / "Runtime.DLL").exists()
         assert (
             runtime
@@ -109,6 +137,11 @@ class TestRocmNpuWheelNative:
         )
         assert runtime_manifest["dependencies"] == manifest["dependencies"]
         assert runtime_manifest["toolchain"] == manifest["toolchain"]
+        assert runtime_manifest["components"] == manifest["components"]
+        fastflowlm_manifest = json.loads(
+            (fastflowlm / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert fastflowlm_manifest["components"] == []
 
     def test_microsoft_runtime_notice_follows_shipped_runtime(self, tmp_path):
         source = tmp_path / "bundle"

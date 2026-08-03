@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from build_tools.rocm_npu_wheel_release import (
+from build_tools.rocm_npu_wheel_release import (  # noqa: E402
     prepare_rocm_npu_release_payload,
     resolve_release_inputs,
 )
@@ -57,6 +57,7 @@ def _prepare(args: argparse.Namespace) -> int:
         expected_wheel_tags=tuple(args.expected_wheel_tag),
         github_run_id=args.github_run_id,
         github_run_attempt=args.github_run_attempt,
+        archive_directory=args.archive_dir,
     )
     print(f"prepare ROCm NPU wheel release: ok -> {release_directory}")
     return 0
@@ -89,6 +90,7 @@ def main() -> int:
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--dir", type=Path, required=True)
     prepare.add_argument("--output-dir", type=Path, required=True)
+    prepare.add_argument("--archive-dir", type=Path)
     prepare.add_argument("--version", required=True)
     prepare.add_argument("--release-name", required=True)
     prepare.add_argument("--tag-name", required=True)

@@ -60,6 +60,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 _dll_directory_handle = None
@@ -72,6 +74,13 @@ def package_root() -> Path:
 
 def binary_dir() -> Path:
     return package_root() / "bin"
+
+
+def rocm_npu_path() -> Path:
+    path = binary_dir() / "rocm-npu.exe"
+    if not path.is_file():
+        raise FileNotFoundError(f"rocm-npu executable was not found: {path}")
+    return path
 
 
 def libhrx_path() -> Path:
@@ -95,27 +104,24 @@ def self_test(*, load: bool = False) -> Path:
     if load:
         initialize_process()
     return path
+
+
+def main() -> int:
+    environment = os.environ.copy()
+    scripts = str(Path(sys.executable).resolve().parent)
+    existing = environment.get("ROCM_NPU_PLUGIN_PATH")
+    environment["ROCM_NPU_PLUGIN_PATH"] = (
+        scripts if not existing else scripts + os.pathsep + existing
+    )
+    return subprocess.run(
+        [str(rocm_npu_path()), *sys.argv[1:]],
+        env=environment,
+        check=False,
+    ).returncode
 ''')
-    _write_file(package_root / "__main__.py", '''from __future__ import annotations
+    _write_file(package_root / "__main__.py", '''from . import main
 
-import argparse
-
-from . import libhrx_path, self_test
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--libhrx-path", action="store_true")
-    parser.add_argument("--load", action="store_true")
-    args = parser.parse_args()
-    if args.libhrx_path:
-        print(libhrx_path())
-        return
-    print(f"rocm-npu-runtime: ok -> {self_test(load=args.load)}")
-
-
-if __name__ == "__main__":
-    main()
+raise SystemExit(main())
 ''')
 
 
@@ -312,6 +318,8 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     _write_runtime_module(runtime_root)
     _write_fastflowlm_module(fastflowlm_root)
     _copy_relative_file(source_bundle, "bin/hrx.dll", runtime_root)
+    _copy_relative_file(source_bundle, "bin/rocm-npu.exe", runtime_root)
+    _copy_relative_tree(source_bundle, "share/rocm-npu/self-test", runtime_root)
     _copy_windows_runtime_closure(source_bundle, runtime_root)
     _copy_windows_fastflowlm_payload(
         source_bundle, fastflowlm_root, runtime_root)
@@ -320,6 +328,10 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     _copy_license_as(source_bundle, "licenses/rocm-npu-staging-LICENSE",
                      runtime_root, "licenses/rocm-npu-LICENSE")
     _copy_license(source_bundle, "licenses/hrx-LICENSE", runtime_root)
+    _copy_license(source_bundle, "licenses/nlohmann-json-LICENSE.MIT",
+                  runtime_root)
+    _copy_license(source_bundle, "licenses/THIRD_PARTY_NOTICES.md",
+                  runtime_root)
     _copy_license_as(source_bundle, "licenses/rocm-npu-staging-LICENSE",
                      fastflowlm_root, "licenses/rocm-npu-LICENSE")
     _copy_license(source_bundle, "licenses/FastFlowLM-LICENSE_RUNTIME.txt", fastflowlm_root)
@@ -352,6 +364,7 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         **common_manifest,
         "product": RUNTIME_DISTRIBUTION,
         "artifact": runtime_artifact_name(),
+        "components": source_manifest.get("components", []),
         "binary_dependencies": {
             name: needed for name, needed in binary_dependencies.items()
             if name.startswith(f"{RUNTIME_PACKAGE}/")
@@ -361,6 +374,7 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         **common_manifest,
         "product": FASTFLOWLM_DISTRIBUTION,
         "artifact": fastflowlm_artifact_name(),
+        "components": [],
         "requires": [f"{RUNTIME_DISTRIBUTION} =={version}"],
         "binary_dependencies": {
             name: needed for name, needed in binary_dependencies.items()
@@ -402,6 +416,7 @@ def build_runtime_fastflowlm_wheels(source_bundle: Path, stage_directory: Path,
         version,
         output_directory,
         summary="ROCm NPU HRX amdxdna runtime",
+        console_scripts={"rocm-npu": f"{RUNTIME_PACKAGE}:main"},
     )
     fastflowlm_wheel = build_wheel(
         products[FASTFLOWLM_DISTRIBUTION],

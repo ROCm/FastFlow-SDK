@@ -9,10 +9,13 @@ import html
 import json
 import re
 import shutil
-import tomllib
+import tarfile
 import zipfile
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
+
+import zstandard
 
 from build_tools.fastflowlm_artifact import reset_directory
 from build_tools.rocm_npu_compiler_wheels import (
@@ -204,6 +207,131 @@ def _copy_release_wheel(wheel: Path, output_directory: Path) -> dict[str, object
     }
 
 
+def _copy_release_archives(
+    archive_directory: Path,
+    output_directory: Path,
+    *,
+    expected_version: str,
+    expected_source_sha: str,
+) -> list[dict[str, object]]:
+    expected = {
+        "fastflowlm-hrx-linux-x86_64.tar.zst":
+            ("linux-x86_64", "Linux", "fastflowlm-hrx-linux-x86_64"),
+        "fastflowlm-hrx-windows-x86_64.zip":
+            ("windows-x86_64", "Windows", "fastflowlm-hrx-windows-x86_64"),
+    }
+    archives = {
+        path.name: path
+        for path in Path(archive_directory).rglob("*")
+        if path.is_file() and path.name in expected
+    }
+    if set(archives) != set(expected):
+        missing = sorted(set(expected) - set(archives))
+        raise RuntimeError(
+            "release standalone archive set is incomplete; missing "
+            + ", ".join(missing)
+        )
+    result = []
+    for name, (platform_name, system_name, artifact_name) in expected.items():
+        archive = archives[name]
+        checksum = archive.with_name(archive.name + ".sha256")
+        provenance = archive.with_name(archive.name + ".manifest.json")
+        digest = sha256_file(archive)
+        fields = checksum.read_text(encoding="ascii").strip().split()
+        if len(fields) != 2 or fields[0] != digest or fields[1] != archive.name:
+            raise RuntimeError(f"malformed standalone archive checksum: {checksum}")
+        try:
+            provenance_data = json.loads(provenance.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"standalone archive provenance is invalid: {provenance}"
+            ) from error
+        bundle = provenance_data.get("bundle")
+        archive_manifest_name = f"{artifact_name}/manifest.json"
+        embedded_bundles: list[dict[str, object]] = []
+        if archive.suffix == ".zip":
+            try:
+                with zipfile.ZipFile(archive) as zipped:
+                    matching = [
+                        item
+                        for item in zipped.infolist()
+                        if item.filename == archive_manifest_name
+                    ]
+                    if len(matching) == 1 and matching[0].file_size <= 10_000_000:
+                        embedded_bundles.append(
+                            json.loads(zipped.read(matching[0]).decode("utf-8"))
+                        )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError,
+                    zipfile.BadZipFile) as error:
+                raise RuntimeError(
+                    f"standalone archive manifest is invalid: {archive}"
+                ) from error
+        else:
+            try:
+                with archive.open("rb") as compressed:
+                    with zstandard.ZstdDecompressor().stream_reader(
+                        compressed
+                    ) as stream:
+                        with tarfile.open(fileobj=stream, mode="r|") as tar:
+                            for member in tar:
+                                if member.name != archive_manifest_name:
+                                    continue
+                                if not member.isfile() or member.size > 10_000_000:
+                                    break
+                                extracted = tar.extractfile(member)
+                                if extracted is not None:
+                                    embedded_bundles.append(
+                                        json.loads(extracted.read().decode("utf-8"))
+                                    )
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                tarfile.TarError,
+                zstandard.ZstdError,
+            ) as error:
+                raise RuntimeError(
+                    f"standalone archive manifest is invalid: {archive}"
+                ) from error
+        staging_source = (
+            bundle.get("sources", {}).get("rocm-npu-staging", {})
+            if isinstance(bundle, dict)
+            else {}
+        )
+        if (
+            provenance_data.get("schema_version") != 1
+            or provenance_data.get("archive") != name
+            or provenance_data.get("archive_sha256") != digest
+            or not isinstance(bundle, dict)
+            or embedded_bundles != [bundle]
+            or bundle.get("schema_version") != 1
+            or bundle.get("version") != expected_version
+            or bundle.get("artifact") != artifact_name
+            or bundle.get("platform", {}).get("system") != system_name
+            or staging_source.get("revision") != expected_source_sha
+            or staging_source.get("dirty") is not False
+            or not isinstance(bundle.get("files"), list)
+            or not bundle["files"]
+        ):
+            raise RuntimeError(
+                f"standalone archive provenance does not match release: {archive}"
+            )
+        shutil.copy2(archive, output_directory / archive.name)
+        shutil.copy2(checksum, output_directory / checksum.name)
+        shutil.copy2(provenance, output_directory / provenance.name)
+        result.append(
+            {
+                "kind": "standalone-runtime",
+                "platform": platform_name,
+                "filename": archive.name,
+                "sha256": digest,
+                "size": archive.stat().st_size,
+                "provenance": provenance.name,
+            }
+        )
+    return result
+
+
 def _find_release_wheels(
     wheel_directory: Path, expected_wheel_tags: tuple[str, ...]
 ) -> list[Path]:
@@ -375,6 +503,7 @@ def prepare_rocm_npu_release_payload(
     expected_wheel_tags: tuple[str, ...] = (),
     github_run_id: str = "",
     github_run_attempt: str = "",
+    archive_directory: Path | None = None,
 ) -> Path:
     """Validates tested wheels and stages the complete release payload."""
     version = validate_release_version(version)
@@ -384,7 +513,7 @@ def prepare_rocm_npu_release_payload(
     verify_wheel_checksums({wheel.name: wheel for wheel in wheels})
     reset_directory(release_directory, release_directory.parent)
 
-    artifacts = []
+    wheel_artifacts = []
     for wheel in wheels:
         metadata = _wheel_metadata(wheel)
         distribution = metadata["Name"]
@@ -433,8 +562,18 @@ def prepare_rocm_npu_release_payload(
                     f"{stable_abi}-abi3 stable ABI tag: "
                     f"{tags}"
                 )
-        artifacts.append(_copy_release_wheel(wheel, release_directory))
+        wheel_artifacts.append(_copy_release_wheel(wheel, release_directory))
 
+    artifacts = list(wheel_artifacts)
+    if archive_directory is not None:
+        artifacts.extend(
+            _copy_release_archives(
+                Path(archive_directory),
+                release_directory,
+                expected_version=version,
+                expected_source_sha=source_sha,
+            )
+        )
     artifacts.sort(key=lambda item: str(item["filename"]))
     manifest = {
         "schema_version": 1,
@@ -452,7 +591,7 @@ def prepare_rocm_npu_release_payload(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    _write_simple_index(release_directory, artifacts)
+    _write_simple_index(release_directory, wheel_artifacts)
     _write_release_checksums(release_directory)
     return release_directory
 

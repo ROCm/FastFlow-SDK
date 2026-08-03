@@ -1,1 +1,2 @@
 *.patch text eol=lf whitespace=-blank-at-eol
+third_party/nlohmann_json/** text eol=lf

@@ -66,6 +66,12 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert '--publish-target "${INPUT_PUBLISH_TARGET}"' in workflow
         assert "rocm-npu-runtime-fastflowlm-linux-x86_64" in workflow
         assert "rocm-npu-runtime-fastflowlm-windows-x86_64" in workflow
+        assert "fastflowlm-hrx-linux-x86_64" in workflow
+        assert "fastflowlm-hrx-windows-x86_64" in workflow
+        assert "--archive-dir archives" in workflow
+        assert "release/*.zip,release/*.tar.zst" in workflow
+        assert "release/*.zip.manifest.json" in workflow
+        assert "release/*.tar.zst.manifest.json" in workflow
         assert "rocm-npu-compiler-wheels-linux-x86_64" in workflow
         assert "rocm-npu-compiler-wheels-windows-x86_64" in workflow
         assert "python -m twine check --strict wheelhouse/*/*.whl" in workflow
@@ -219,6 +225,11 @@ class TestRocmNpuReleaseWheelWorkflow:
         )
         transitive_install = workflow.index(transitive_command)
         attestation = workflow.index("actions/attest-build-provenance@")
+        archive_suffix = ".zip" if platform == "windows" else ".tar.zst"
+        assert (
+            f"build/artifacts/fastflowlm-hrx-{platform}-x86_64{archive_suffix}"
+            in workflow
+        )
         artifact_upload = workflow.index("name: Upload runtime")
         npu_job = workflow.index("\n  npu:")
         assert metadata_check < transitive_install

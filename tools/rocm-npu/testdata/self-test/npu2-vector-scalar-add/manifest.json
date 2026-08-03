@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "name": "vector_scalar_add",
+  "target": "npu2",
+  "export": "MLIR_AIE",
+  "producer": {
+    "source_revision": "14273685bebf296798cc86facd3459b5a017cda7",
+    "source": "projects/iron-tools/programming_examples/basic/vector_scalar_add/vector_scalar_add.py",
+    "compiler_product": "rocm-npu-compiler-windows-x86_64",
+    "compiler_product_source_revision": "388e4ad7ea7dabcbe2f7bacd2946a244cbfd9591",
+    "compiler_versions": {
+      "llvm-project": "46fcb339fb61119b337f973c7ca9e710a319fdd0",
+      "llvm-aie": "21.0.0.2026061501+acc2a72c",
+      "hrx-xadx-serializer": "eb0b39f4c5af4c2b1a9a5df392dd837d5e4def0f"
+    },
+    "artifacts": {
+      "xclbin_sha256": "99cc01201c42860c487452ef53011ea43698f9bdc70cd1668e6c83f7d77f17f4",
+      "transaction_sha256": "aaeb5b68cc298a450f01fb88d83426dcd702a01dfc2e79684b5f631db5885fd6",
+      "xadx_sha256": "417a54d9ea7eafad748aeeaf787bfd70d99b3a22c3d91cd167dfdc31c826e5bb",
+      "input_sha256": "6b8b6bd30ff821daf5db90cc071525f5696e366efd1aeb30d0bf60f785a3c26d",
+      "expected_sha256": "8c77027977bad3ebb220c0201ee0f17b3b4d43051eb04ec337751f1502fffdae"
+    }
+  },
+  "xadx_version": 1,
+  "dispatch": {
+    "workgroup_count": [1, 1, 1],
+    "workgroup_size": [1, 1, 1],
+    "subgroup_size": 0,
+    "constant_byte_length": 0,
+    "export_binding_count": null
+  },
+  "buffers": [
+    {
+      "name": "input",
+      "direction": "input",
+      "dtype": "int32",
+      "shape": [
+        1024
+      ],
+      "byte_length": 4096,
+      "generator": {
+        "kind": "iota_i32",
+        "start": 1
+      }
+    },
+    {
+      "name": "output",
+      "direction": "output",
+      "dtype": "int32",
+      "shape": [
+        1024
+      ],
+      "byte_length": 4096,
+      "generator": {
+        "kind": "add_i32_scalar",
+        "source": "input",
+        "scalar": 1
+      }
+    }
+  ]
+}

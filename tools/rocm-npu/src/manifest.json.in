@@ -1,0 +1,7 @@
+{
+  "build_platform": "@ROCM_NPU_BUILD_PLATFORM@",
+  "product": "rocm-npu native runtime CLI",
+  "schema_version": 1,
+  "source_revision": "@ROCM_NPU_SOURCE_REVISION@",
+  "version": "@ROCM_NPU_VERSION@"
+}
