@@ -29,11 +29,6 @@ std::vector<uint8_t> read_file(const std::filesystem::path& path) {
           std::istreambuf_iterator<char>()};
 }
 
-hrx::device& device() {
-  static hrx::device value(0);
-  return value;
-}
-
 std::string content_id(const std::vector<uint8_t>& data) {
   uint64_t hash = 14695981039346656037ull;
   for (uint8_t byte : data) {
@@ -48,6 +43,43 @@ std::string content_id(const std::vector<uint8_t>& data) {
 }
 
 }  // namespace
+
+hrx::device& kernel_test_device() {
+  static hrx::device value(0);
+  return value;
+}
+
+KernelExecutable create_kernel_executable(
+    const std::vector<uint8_t>& xclbin,
+    const std::vector<uint8_t>& transaction, const std::string& label) {
+  const hrx_const_byte_span_t xclbin_span = {xclbin.data(), xclbin.size()};
+  hrx_amdxdna_executable_run_t run = hrx_amdxdna_executable_run_default();
+  run.transaction = {transaction.data(), transaction.size()};
+  hrx_amdxdna_executable_entry_point_t entry =
+      hrx_amdxdna_executable_entry_point_default();
+  entry.name = {"MLIR_AIE", 8};
+  entry.runs = &run;
+  entry.run_count = 1;
+  hrx_amdxdna_executable_create_params_t params =
+      hrx_amdxdna_executable_create_params_default();
+  params.xclbins = &xclbin_span;
+  params.xclbin_count = 1;
+  params.entry_points = &entry;
+  params.entry_point_count = 1;
+
+  KernelExecutable executable;
+  if (hrx::hrx_report(
+          hrx_amdxdna_executable_create(
+              hrx::rt().dev, &params, &executable.handle),
+          "hrx_amdxdna_executable_create") ||
+      hrx::hrx_report(
+          hrx_executable_lookup_export_by_name(
+              executable.handle, "MLIR_AIE", &executable.ordinal),
+          "hrx_executable_lookup_export_by_name")) {
+    throw std::runtime_error("failed to create executable for " + label);
+  }
+  return executable;
+}
 
 KernelExecutable::KernelExecutable(KernelExecutable&& other) noexcept
     : handle(std::exchange(other.handle, nullptr)), ordinal(other.ordinal) {}
@@ -85,10 +117,10 @@ struct KernelCase::Impl {
         comparison(comparison),
         absolute_tolerance(absolute_tolerance),
         relative_tolerance(relative_tolerance),
-        output(device(), this->expected.size() * sizeof(bf16) +
+        output(kernel_test_device(), this->expected.size() * sizeof(bf16) +
                              2 * kGuardBytes),
-        argument1(device(), argument1_data.size() + 2 * kGuardBytes),
-        argument2(device(), argument2_data.size() + 2 * kGuardBytes) {
+        argument1(kernel_test_device(), argument1_data.size() + 2 * kGuardBytes),
+        argument2(kernel_test_device(), argument2_data.size() + 2 * kGuardBytes) {
     if (xclbin.empty() || this->transaction.empty() || this->expected.empty() ||
         argument1_data.empty() || argument2_data.empty()) {
       throw std::runtime_error(
@@ -212,34 +244,8 @@ float KernelCase::relative_tolerance() const {
 double KernelCase::device_seconds() const { return impl_->device_seconds; }
 
 KernelExecutable KernelCase::create_executable() const {
-  const hrx_const_byte_span_t xclbin_span = {
-      impl_->xclbin.data(), impl_->xclbin.size()};
-  hrx_amdxdna_executable_run_t run = hrx_amdxdna_executable_run_default();
-  run.transaction = {impl_->transaction.data(), impl_->transaction.size()};
-  hrx_amdxdna_executable_entry_point_t entry =
-      hrx_amdxdna_executable_entry_point_default();
-  entry.name = {"MLIR_AIE", 8};
-  entry.runs = &run;
-  entry.run_count = 1;
-  hrx_amdxdna_executable_create_params_t params =
-      hrx_amdxdna_executable_create_params_default();
-  params.xclbins = &xclbin_span;
-  params.xclbin_count = 1;
-  params.entry_points = &entry;
-  params.entry_point_count = 1;
-
-  KernelExecutable executable;
-  if (hrx::hrx_report(
-          hrx_amdxdna_executable_create(
-              hrx::rt().dev, &params, &executable.handle),
-          "hrx_amdxdna_executable_create") ||
-      hrx::hrx_report(
-          hrx_executable_lookup_export_by_name(
-              executable.handle, "MLIR_AIE", &executable.ordinal),
-          "hrx_executable_lookup_export_by_name")) {
-    throw std::runtime_error("failed to create executable for " + name());
-  }
-  return executable;
+  return create_kernel_executable(
+      impl_->xclbin, impl_->transaction, name());
 }
 
 std::vector<bf16> KernelCase::dispatch(

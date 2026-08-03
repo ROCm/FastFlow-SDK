@@ -26,6 +26,13 @@ ARCHIVE_NAME = "fastflowlm-kernel-smoke.tar.gz"
 PRODUCT = "rocm-npu-fastflowlm-kernel-smoke"
 CAPABILITIES_RELATIVE = Path("share/fastflowlm-kernel-smoke/kernel_capabilities.json")
 CAPABILITIES_SOURCE = paths.ROOT / "tests" / "fastflowlm" / "kernel_capabilities.json"
+# Role -> CMake target. "kernel-smoke" validates the production xclbins
+# numerically; "readback-smoke" validates that the runtime keeps a host mapping
+# coherent across back-to-back device writes.
+TARGETS = {
+    "kernel-smoke": "fastflowlm-hrx-kernel-smoke",
+    "readback-smoke": "fastflowlm-hrx-readback-smoke",
+}
 
 
 def load_capabilities(path=CAPABILITIES_SOURCE):
@@ -264,14 +271,18 @@ EXPECTED_CASES, EXPECTED_IMPLEMENTATION_GROUPS, EXPECTED_PREFLIGHT_DISPATCHES = 
 )
 
 
-def executable_name():
-    return paths.executable_name("fastflowlm-hrx-kernel-smoke")
+def executable_name(role="kernel-smoke"):
+    return paths.executable_name(TARGETS[role])
 
 
 def source_revision():
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=paths.ROOT, text=True
     ).strip()
+
+
+def _installed_executables():
+    return {role: INSTALL / "bin" / executable_name(role) for role in TARGETS}
 
 
 def build_helper(fresh=False):
@@ -309,7 +320,7 @@ def build_helper(fresh=False):
             "--build",
             environment.cmake_path(BUILD),
             "--target",
-            "fastflowlm-hrx-kernel-smoke",
+            *sorted(TARGETS.values()),
             "-j",
             os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4"),
         ],
@@ -324,10 +335,11 @@ def build_helper(fresh=False):
         ],
         env=environment.cmake_env(),
     )
-    executable = INSTALL / "bin" / executable_name()
-    if not executable.is_file():
-        raise RuntimeError(f"kernel smoke build did not produce {executable}")
-    return executable
+    executables = _installed_executables()
+    for executable in executables.values():
+        if not executable.is_file():
+            raise RuntimeError(f"kernel smoke build did not produce {executable}")
+    return executables
 
 
 def test_native_helper():
@@ -365,27 +377,29 @@ def test_native_helper():
     )
 
 
+def _identity(root, path):
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "size": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
 def _write_manifest(root):
-    executable = root / "bin" / executable_name()
     capabilities = root / CAPABILITIES_RELATIVE
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "product": PRODUCT,
         "source_revision": source_revision(),
         "platform": {
             "system": platform.system().lower(),
             "machine": platform.machine().lower(),
         },
-        "executable": {
-            "path": executable.relative_to(root).as_posix(),
-            "size": executable.stat().st_size,
-            "sha256": sha256_file(executable),
+        "executables": {
+            role: _identity(root, root / "bin" / executable_name(role))
+            for role in sorted(TARGETS)
         },
-        "capabilities": {
-            "path": capabilities.relative_to(root).as_posix(),
-            "size": capabilities.stat().st_size,
-            "sha256": sha256_file(capabilities),
-        },
+        "capabilities": _identity(root, capabilities),
     }
     (root / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -399,20 +413,25 @@ def verify_tree(root, *, require_checkout=True):
     if not manifest_path.is_file():
         raise RuntimeError(f"missing helper manifest: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema_version") != 1 or manifest.get("product") != PRODUCT:
+    if manifest.get("schema_version") != 2 or manifest.get("product") != PRODUCT:
         raise RuntimeError("invalid FastFlowLM kernel helper manifest")
     if manifest.get("platform", {}).get("system") != platform.system().lower():
         raise RuntimeError("kernel helper platform does not match this runner")
     if require_checkout and manifest.get("source_revision") != source_revision():
         raise RuntimeError("kernel helper source revision does not match this checkout")
-    record = manifest.get("executable", {})
-    executable = root / record.get("path", "")
-    if (
-        not executable.is_file()
-        or executable.stat().st_size != record.get("size")
-        or sha256_file(executable) != record.get("sha256")
-    ):
-        raise RuntimeError("kernel helper executable identity mismatch")
+    records = manifest.get("executables", {})
+    if set(records) != set(TARGETS):
+        raise RuntimeError("kernel helper manifest does not cover every helper")
+    executables = {}
+    for role, record in records.items():
+        executable = root / record.get("path", "")
+        if (
+            not executable.is_file()
+            or executable.stat().st_size != record.get("size")
+            or sha256_file(executable) != record.get("sha256")
+        ):
+            raise RuntimeError(f"kernel helper {role} executable identity mismatch")
+        executables[role] = executable
     capability_record = manifest.get("capabilities", {})
     capability_path = root / capability_record.get("path", "")
     if (
@@ -425,22 +444,26 @@ def verify_tree(root, *, require_checkout=True):
     actual_files = {
         path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
     }
-    if actual_files != {"manifest.json", record["path"], capability_record["path"]}:
+    expected_files = {"manifest.json", capability_record["path"]}
+    expected_files.update(record["path"] for record in records.values())
+    if actual_files != expected_files:
         raise RuntimeError(
             f"kernel helper contains unexpected files: {sorted(actual_files)}"
         )
     root_bytes = str(paths.ROOT).encode()
-    if root_bytes in executable.read_bytes():
-        raise RuntimeError("kernel helper embeds its build checkout path")
-    return executable
+    for role, executable in executables.items():
+        if root_bytes in executable.read_bytes():
+            raise RuntimeError(f"kernel helper {role} embeds its build checkout path")
+    return executables
 
 
 def package_helper(args):
-    executable = build_helper(getattr(args, "fresh", False))
+    executables = build_helper(getattr(args, "fresh", False))
     test_native_helper()
     shutil.rmtree(STAGE, ignore_errors=True)
     (STAGE / "bin").mkdir(parents=True)
-    shutil.copy2(executable, STAGE / "bin" / executable.name)
+    for executable in executables.values():
+        shutil.copy2(executable, STAGE / "bin" / executable.name)
     capabilities = STAGE / CAPABILITIES_RELATIVE
     capabilities.parent.mkdir(parents=True)
     shutil.copy2(INSTALL / CAPABILITIES_RELATIVE, capabilities)
@@ -588,12 +611,12 @@ def validate_report(report, capabilities=CAPABILITIES):
 def run_helper(args):
     if args.dir:
         root = extract_archive(args.dir)
-        executable = verify_tree(root)
+        executables = verify_tree(root)
         capability_path = root / CAPABILITIES_RELATIVE
     else:
-        executable = INSTALL / "bin" / executable_name()
-        if not executable.is_file():
-            executable = build_helper(False)
+        executables = _installed_executables()
+        if not all(executable.is_file() for executable in executables.values()):
+            executables = build_helper(False)
         capability_path = INSTALL / CAPABILITIES_RELATIVE
     capabilities = load_capabilities(capability_path)
     if args.wheel_package:
@@ -613,24 +636,27 @@ def run_helper(args):
     if env.get(search_key):
         entries.append(env[search_key])
     env[search_key] = os.pathsep.join(entries)
-    command = [
-        str(executable),
-        "--xclbin-root",
-        str(runtime["xclbin_root"]),
-        "--capabilities",
-        str(capability_path),
-        "--iterations",
-        str(args.iterations),
-        "--json",
-    ]
-    completed = subprocess.run(
-        command,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=True,
-    )
-    print(completed.stdout, end="")
-    report = json.loads(completed.stdout.splitlines()[-1])
-    return validate_report(report, capabilities)
+
+    def run(role, *extra):
+        completed = subprocess.run(
+            [
+                str(executables[role]),
+                "--xclbin-root",
+                str(runtime["xclbin_root"]),
+                "--capabilities",
+                str(capability_path),
+                *extra,
+            ],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+        print(completed.stdout, end="")
+        return completed.stdout
+
+    output = run("kernel-smoke", "--iterations", str(args.iterations), "--json")
+    report = validate_report(json.loads(output.splitlines()[-1]), capabilities)
+    run("readback-smoke", "--iterations", str(args.readback_iterations))
+    return report

@@ -57,7 +57,7 @@ class TestNpuWorkflowParity:
         expected = {
             (
                 "test-fastflowlm-kernels --wheel-package "
-                "--dir .kernel-artifact --iterations 20"
+                "--dir .kernel-artifact --iterations 20 --readback-iterations 32"
             ),
             "test-fastflowlm --wheel-package --inference-iterations 5",
         }

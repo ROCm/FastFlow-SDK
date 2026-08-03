@@ -298,6 +298,9 @@ def create_parser():
                      help="use installed rocm-npu-runtime/fastflowlm wheels")
     tfk.add_argument("--iterations", type=argparse_positive_int, default=20,
                      help="resident round-robin iterations (default: 20)")
+    tfk.add_argument("--readback-iterations", type=argparse_positive_int,
+                     default=32,
+                     help="host-mapping coherence rounds (default: 32)")
     to = _add_command(sub, "test-iron-ops", cmd_test_iron_ops)
     to.add_argument("operator", nargs="?",
         help="operator to build (default: every one in tests/iron-ops/suite.py)")
