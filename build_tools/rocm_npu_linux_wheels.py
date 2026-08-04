@@ -234,7 +234,7 @@ def self_test(*, load: bool = False) -> Path:
 
 def main() -> int:
     environment = os.environ.copy()
-    scripts = str(Path(sys.executable).resolve().parent)
+    scripts = str(Path(sys.executable).parent)
     existing = environment.get("ROCM_NPU_PLUGIN_PATH")
     environment["ROCM_NPU_PLUGIN_PATH"] = (
         scripts if not existing else scripts + os.pathsep + existing

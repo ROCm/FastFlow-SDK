@@ -17,6 +17,15 @@ on:
       attest_wheels:
         type: boolean
         default: false
+      qualification_artifact:
+        type: string
+        default: ""
+      build_artifacts:
+        type: boolean
+        default: true
+      run_npu_e2e:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       name:
@@ -31,12 +40,21 @@ on:
         description: Explicit PEP 440 wheel version
         required: false
         default: ""
+      build_artifacts:
+        description: Build and upload native wheel artifacts
+        type: boolean
+        default: true
+      run_npu_e2e:
+        description: Run NPU validation from uploaded artifacts
+        type: boolean
+        default: true
 
 # Reusable calls inherit the caller's permission ceiling. CI callers grant
 # read-only access; the release caller additionally grants attestation writes.
 
 jobs:
   build:
+    if: ${{ inputs.build_artifacts }}
     name: Build FLM + HRX artifact (Linux)
     runs-on: aws-linux-scale-rocm-prod
     timeout-minutes: 120
@@ -78,7 +96,9 @@ jobs:
         id: vcpkg-abi
         shell: bash
         run: |
-          identity="${RNS_BUILD_IMAGE}|$(gcc -dumpmachine)|$(gcc -dumpfullversion -dumpversion)|$(ldd --version | head -n 1)"
+          ldd_version="$(ldd --version 2>&1)"
+          ldd_version="${ldd_version%%$'\n'*}"
+          identity="${RNS_BUILD_IMAGE}|$(gcc -dumpmachine)|$(gcc -dumpfullversion -dumpversion)|${ldd_version}"
           echo "identity=${identity}"
           echo "key=$(printf '%s' "${identity}" | sha256sum | cut -d' ' -f1)" >> "${GITHUB_OUTPUT}"
 
@@ -146,6 +166,13 @@ jobs:
       - name: Package FastFlowLM production-xclbin smoke helper
         run: .venv/bin/python dev.py package-fastflowlm-kernels --fresh
 
+      - name: Build local qualification wheel with generated XADX assets
+        run: >-
+          .venv/bin/python dev.py package-qualification-wheel
+          --version "${{ inputs.package_version }}"
+          --xadx-assets build/fastflowlm-xadx-assets
+          --dir build/qualification-artifacts
+
       - name: Package runtime
         run: .venv/bin/python dev.py package-fastflowlm
 
@@ -168,6 +195,7 @@ jobs:
           subject-path: |
             build/artifacts/rocm_npu_*.whl
             build/artifacts/fastflowlm-hrx-linux-x86_64.tar.zst
+            build/qualification-artifacts/rocm_npu_qualification-*.whl
 
       - name: Upload runtime archive artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -198,7 +226,22 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+      - name: Upload local qualification wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.qualification_artifact || 'rocm-npu-qualification-wheel' }}
+          path: build/qualification-artifacts/rocm_npu_qualification-*.whl*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   npu:
+    if: >-
+      ${{
+        always() &&
+        inputs.run_npu_e2e &&
+        (!inputs.build_artifacts || needs.build.result == 'success')
+      }}
     name: ${{ inputs.name }} (${{ matrix.runner_label }})
     needs: build
     strategy:
@@ -249,8 +292,24 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
+      - name: Download qualification plugin wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.qualification_artifact || 'rocm-npu-qualification-wheel' }}
+          path: .qualification-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
       - name: Install and verify rocm-npu runtime wheels
         run: python3 dev.py verify-fastflowlm-wheels --dir .artifact
+
+      - name: Install qualification plugin wheel
+        run: |
+          build/rocm-npu-wheel-venv/bin/python -m pip install \
+            --no-index --no-deps .qualification-artifact/rocm_npu_qualification-*.whl
+          build/rocm-npu-wheel-venv/bin/python -m pip check
+          build/rocm-npu-wheel-venv/bin/rocm-npu plugin list --json
+          build/rocm-npu-wheel-venv/bin/rocm-npu qualify --list-profiles --json
 
       - name: Probe NPU driver, firmware, and packaged libHRX
         run: build/rocm-npu-wheel-venv/bin/python dev.py npu-probe --runtime-package
@@ -290,6 +349,32 @@ jobs:
             "${cli}" self-test --json > .native-reports/archive-self-test.json
           fi
 
+      - name: Run bounded model qualification through native dispatch
+        run: >-
+          build/rocm-npu-wheel-venv/bin/rocm-npu qualify run
+          --fast
+          --model-cache build/FastFlowLM-models
+          --output-dir .qualification-evidence
+          --bundle-output .qualification-run.evidence.zip
+          --json
+
+      - name: Verify qualification evidence archive
+        run: |
+          build/rocm-npu-wheel-venv/bin/rocm-npu qualify verify \
+            --input .qualification-run.evidence.zip --json
+
+      - name: Upload qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocm-npu-qualification-evidence-${{ matrix.runner_label }}
+          path: |
+            .qualification-run.evidence.zip
+            .qualification-evidence
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Upload native CLI hardware reports
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -297,7 +382,5 @@ jobs:
           name: rocm-npu-native-reports-${{ matrix.runner_label }}
           path: .native-reports/*.json
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
-
-      - name: Run packaged FastFlowLM HRX soak
-        run: build/rocm-npu-wheel-venv/bin/python dev.py test-fastflowlm --wheel-package --inference-iterations 5

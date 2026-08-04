@@ -18,7 +18,74 @@ pytestmark = [
 ]
 
 
+def _job(workflow: str, name: str) -> str:
+    match = re.search(
+        rf"(?ms)^  {re.escape(name)}:\n.*?(?=^  [A-Za-z0-9_]+:\n|\Z)",
+        workflow,
+    )
+    assert match is not None, f"workflow job is missing: {name}"
+    return match.group(0)
+
+
 class TestRocmNpuReleaseWheelWorkflow:
+    def test_linux_vcpkg_identity_does_not_trigger_pipefail_sigpipe(self):
+        workflow = (WORKFLOWS / "fastflowlm_hrx_linux.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "ldd --version | head" not in workflow
+        assert 'ldd_version="$(ldd --version 2>&1)"' in workflow
+        assert 'ldd_version="${ldd_version%%$\'\\n\'*}"' in workflow
+
+    def test_platform_builds_generate_matching_qualification_wheels(self):
+        assert not (WORKFLOWS / "build_qualification_wheel.yml").exists()
+        linux = (WORKFLOWS / "fastflowlm_hrx_linux.yml").read_text()
+        windows = (WORKFLOWS / "fastflowlm_hrx_windows.yml").read_text()
+        for workflow in (linux, windows):
+            generate = workflow.index("package-fastflowlm-kernels --fresh")
+            package = workflow.index("package-qualification-wheel")
+            assert generate < package
+            assert "--xadx-assets build/fastflowlm-xadx-assets" in workflow
+            assert "if: ${{ inputs.qualification_artifact == '' }}" not in workflow
+        assert "rocm-npu-qualification-wheel'" in linux
+        assert (
+            "build/qualification-artifacts/rocm_npu_qualification-*.whl"
+            in linux
+        )
+        assert "rocm-npu-qualification-wheel-windows-local" in windows
+        assert "verify_qualification_wheel_parity.py" in windows
+
+    def test_hidden_qualification_evidence_is_uploaded(self):
+        for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):
+            workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
+            assert workflow.count("include-hidden-files: true") == 2
+
+    def test_release_platform_jobs_validate_their_own_qualification_wheels(self):
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        assert ci.count(
+            "qualification_artifact: rocm-npu-qualification-wheel"
+        ) == 1
+
+        release = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
+            encoding="utf-8"
+        )
+        assert release.count(
+            "qualification_artifact: rocm-npu-qualification-wheel"
+        ) == 2
+        for job in ("windows_wheels", "windows_publish_wheels"):
+            match = re.search(
+                rf"(?ms)^  {job}:\n.*?(?=^  [A-Za-z0-9_]+:\n|\Z)",
+                release,
+            )
+            assert match is not None
+            section = match.group(0)
+            assert "qualification_artifact:" not in section
+            assert "build_artifacts: true" in section
+            assert "run_npu_e2e: true" in section
+        assert "windows_wheels_npu:" not in release
+        assert "windows_publish_wheels_npu:" not in release
+        assert "rocm-npu-qualification-wheel-windows-local" in release
+        assert "verify_qualification_wheel_parity.py" in release
+
     def test_ci_runs_presubmit_before_expensive_jobs(self):
         workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 
@@ -26,7 +93,18 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16" in workflow
         assert "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in workflow
         assert "ruff check --select F821 dev.py build_tools tests" in workflow
-        assert workflow.count("needs: presubmit") == 4
+        for name in ("linux", "windows", "linux_flm", "windows_flm"):
+            assert "needs: presubmit" in _job(workflow, name)
+        assert "linux_flm_npu:" not in workflow
+        assert "windows_flm_npu:" not in workflow
+        assert (
+            "uses: ./.github/workflows/fastflowlm_hrx_linux.yml"
+            in _job(workflow, "linux_flm")
+        )
+        assert (
+            "uses: ./.github/workflows/fastflowlm_hrx_windows.yml"
+            in _job(workflow, "windows_flm")
+        )
 
     def test_release_is_dispatch_only_and_reuses_both_npu_validations(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
@@ -39,24 +117,26 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "schedule:" not in workflow
         assert "uses: ./.github/workflows/fastflowlm_hrx_linux.yml" in workflow
         assert "uses: ./.github/workflows/fastflowlm_hrx_windows.yml" in workflow
-        assert workflow.count("uses: ./.github/workflows/fastflowlm_hrx_linux.yml") == 2
-        assert (
-            workflow.count("uses: ./.github/workflows/fastflowlm_hrx_windows.yml") == 2
-        )
-        assert (
-            workflow.count("uses: ./.github/workflows/build_rocm_npu_staging_linux.yml")
-            == 2
-        )
-        assert (
-            workflow.count(
-                "uses: ./.github/workflows/build_rocm_npu_staging_windows.yml"
-            )
-            == 2
-        )
+        reusable_jobs = {
+            "linux_wheels": "fastflowlm_hrx_linux.yml",
+            "windows_wheels": "fastflowlm_hrx_windows.yml",
+            "linux_publish_wheels": "fastflowlm_hrx_linux.yml",
+            "windows_publish_wheels": "fastflowlm_hrx_windows.yml",
+            "linux_compiler_wheels": "build_rocm_npu_staging_linux.yml",
+            "windows_compiler_wheels": "build_rocm_npu_staging_windows.yml",
+            "linux_publish_compiler_wheels": "build_rocm_npu_staging_linux.yml",
+            "windows_publish_compiler_wheels": "build_rocm_npu_staging_windows.yml",
+        }
+        for job, reusable in reusable_jobs.items():
+            section = _job(workflow, job)
+            assert f"uses: ./.github/workflows/{reusable}" in section
+            assert "ref: ${{ needs.prepare.outputs.source_sha }}" in section
         assert (
             "package_version: ${{ needs.prepare.outputs.package_version }}" in workflow
         )
-        assert workflow.count("ref: ${{ needs.prepare.outputs.source_sha }}") == 9
+        assert "ref: ${{ needs.prepare.outputs.source_sha }}" in _job(
+            workflow, "collect"
+        )
         assert "source_sha: ${{ steps.source.outputs.sha }}" in workflow
         assert "git merge-base --is-ancestor" in workflow
         assert '"${GITHUB_REF}" != refs/heads/main' in workflow
@@ -74,6 +154,11 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "release/*.tar.zst.manifest.json" in workflow
         assert "rocm-npu-compiler-wheels-linux-x86_64" in workflow
         assert "rocm-npu-compiler-wheels-windows-x86_64" in workflow
+        assert "rocm-npu-qualification-wheel" in workflow
+        assert "build_qualification_wheel.yml" not in workflow
+        assert "path: wheelhouse/qualification" in workflow
+        assert '"${SOURCE_SHA}" != "${GITHUB_SHA}"' in workflow
+        assert '"rocm-npu-qualification==${ROCM_NPU_PACKAGE_VERSION}"' in workflow
         assert "python -m twine check --strict wheelhouse/*/*.whl" in workflow
         assert "python build_tools/rocm_npu_wheel_release_cli.py" in workflow
         assert "--expected-wheel-tag py3-none-manylinux_2_28_x86_64" in workflow
@@ -87,7 +172,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "-cp314-" not in workflow
         assert "--platform linux_x86_64" in workflow
         assert "--platform manylinux_2_28_x86_64" in workflow
-        assert '"rocm-npu-fastflowlm==${ROCM_NPU_PACKAGE_VERSION}"' in workflow
+        assert '"rocm-npu-fastflowlm": version' in workflow
         assert '"rocm-npu-runtime": version' in workflow
         assert '"rocm-npu-compiler-bindings": version' in workflow
         compiler_resolution = workflow.split(
@@ -103,10 +188,26 @@ class TestRocmNpuReleaseWheelWorkflow:
         )
         assert "commit: ${{ needs.prepare.outputs.source_sha }}" in workflow
         assert "needs.collect.outputs.source_sha" not in workflow
-        assert workflow.count("attest_wheels: false") == 4
-        assert workflow.count("attest_wheels: true") == 4
-        assert workflow.count("id-token: write") == 4
-        assert workflow.count("attestations: write") == 4
+        for name in (
+            "linux_wheels",
+            "windows_wheels",
+            "linux_compiler_wheels",
+            "windows_compiler_wheels",
+        ):
+            section = _job(workflow, name)
+            assert "attest_wheels: false" in section
+            assert "id-token: write" not in section
+            assert "attestations: write" not in section
+        for name in (
+            "linux_publish_wheels",
+            "windows_publish_wheels",
+            "linux_publish_compiler_wheels",
+            "windows_publish_compiler_wheels",
+        ):
+            section = _job(workflow, name)
+            assert "attest_wheels: true" in section
+            assert "id-token: write" in section
+            assert "attestations: write" in section
         assert "always() &&" in workflow
         assert "actions/attest-build-provenance@" not in workflow
 
@@ -121,9 +222,26 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "id-token: write" not in validation
             assert "attestations: write" not in validation
         publish = workflow.split("\n  publish_github_prerelease:", 1)[1]
-        assert "always() &&" in publish
-        assert "needs.prepare.result == 'success'" in publish
-        assert "needs.collect.result == 'success'" in publish
+        assert "vars.ROCM_NPU_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
+        assert "Create draft GitHub prerelease (disabled)" in publish
+
+    def test_qualification_candidate_is_release_wide(self):
+        for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):
+            workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
+            assert "qualify candidate" not in workflow
+            assert "qualify verify" in workflow
+            assert "qualify intake" not in workflow
+        release = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "Create release-wide qualification candidate" in release
+        assert "--wheel-dir release" in release
+        assert "--output release/candidate-manifest.json" in release
+        assert "release/candidate-manifest.json" in release
+        assert "draft: true" in release
+        assert "immutableCreate: true" not in release
+        publish = release.split("\n  publish_github_prerelease:", 1)[1]
+        assert "vars.ROCM_NPU_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
 
     def test_release_uses_neutral_public_names_and_shared_release_lock(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
@@ -147,9 +265,9 @@ class TestRocmNpuReleaseWheelWorkflow:
 
     @pytest.mark.parametrize("platform", ("linux", "windows"))
     def test_compiler_workflows_inherit_caller_permissions(self, platform):
-        workflow = (
-            WORKFLOWS / f"build_rocm_npu_staging_{platform}.yml"
-        ).read_text(encoding="utf-8")
+        workflow = (WORKFLOWS / f"build_rocm_npu_staging_{platform}.yml").read_text(
+            encoding="utf-8"
+        )
         workflow_header = workflow.split("\njobs:", 1)[0]
         assert "\npermissions:" not in workflow_header, (
             "reusable workflow permissions would cap the caller's "
@@ -196,8 +314,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "build/caches/pip" in windows_workflow
         assert "vcpkg-downloads" not in windows_workflow
         assert (
-            "subject-path: build/artifacts/rocm_npu_compiler_*.whl"
-            in windows_workflow
+            "subject-path: build/artifacts/rocm_npu_compiler_*.whl" in windows_workflow
         )
         assert "{core,bindings}" not in windows_workflow
 

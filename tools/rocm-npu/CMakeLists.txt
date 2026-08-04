@@ -47,8 +47,10 @@ set(ROCM_NPU_SOURCES
 
 if(WIN32)
   list(APPEND ROCM_NPU_SOURCES src/platform/windows.cc)
+  set(ROCM_NPU_MAIN_SOURCE src/main_windows.cc)
 else()
   list(APPEND ROCM_NPU_SOURCES src/platform/linux.cc)
+  set(ROCM_NPU_MAIN_SOURCE src/main_posix.cc)
 endif()
 
 add_library(rocm_npu_core STATIC ${ROCM_NPU_SOURCES})
@@ -78,7 +80,7 @@ else()
   target_compile_options(rocm_npu_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-add_executable(rocm-npu src/main.cc)
+add_executable(rocm-npu src/main.cc "${ROCM_NPU_MAIN_SOURCE}")
 target_link_libraries(rocm-npu PRIVATE rocm_npu_core)
 
 install(TARGETS rocm-npu RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")

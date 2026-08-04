@@ -1,15 +1,15 @@
 #include <algorithm>
 #include <exception>
-#include <filesystem>
 #include <iostream>
 #include <string>
-#include <utility>
 #include <vector>
 
+#include "main.h"
 #include "rocm_npu/command.h"
 #include "rocm_npu/report.h"
 
-namespace {
+namespace rocm_npu {
+
 int RunMain(std::vector<std::string> arguments) {
   const bool json_requested =
       std::find(arguments.begin(), arguments.end(), "--json") !=
@@ -34,6 +34,23 @@ int RunMain(std::vector<std::string> arguments) {
   }
 
   try {
+    if (!rocm_npu::IsBuiltinCommand(parsed.invocation->command)) {
+      const rocm_npu::ExternalCommandResult result =
+          rocm_npu::RunExternalCommand(*parsed.invocation);
+      if (!result.error.empty()) {
+        if (parsed.invocation->json) {
+          rocm_npu::Report report =
+              rocm_npu::MakeReport(parsed.invocation->command);
+          rocm_npu::AddCheck(
+              report,
+              {"plugin.dispatch", rocm_npu::Status::kError, result.error, {}});
+          rocm_npu::RenderJson(report, std::cout);
+        } else {
+          std::cerr << "rocm-npu: " << result.error << '\n';
+        }
+      }
+      return result.exit_code;
+    }
     const rocm_npu::Report report = rocm_npu::RunCommand(*parsed.invocation);
     if (parsed.invocation->json) {
       rocm_npu::RenderJson(report, std::cout);
@@ -54,25 +71,5 @@ int RunMain(std::vector<std::string> arguments) {
     return 2;
   }
 }
-}  // namespace
 
-#ifdef _WIN32
-int wmain(int argc, wchar_t** argv) {
-  std::vector<std::string> arguments;
-  arguments.reserve(static_cast<std::size_t>(argc > 0 ? argc - 1 : 0));
-  for (int index = 1; index < argc; ++index) {
-    arguments.push_back(
-        std::filesystem::path(std::wstring(argv[index])).u8string());
-  }
-  return RunMain(std::move(arguments));
-}
-#else
-int main(int argc, char** argv) {
-  std::vector<std::string> arguments;
-  arguments.reserve(static_cast<std::size_t>(argc > 0 ? argc - 1 : 0));
-  for (int index = 1; index < argc; ++index) {
-    arguments.emplace_back(argv[index]);
-  }
-  return RunMain(std::move(arguments));
-}
-#endif
+}  // namespace rocm_npu

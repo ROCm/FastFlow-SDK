@@ -1,5 +1,5 @@
 execute_process(
-  COMMAND "${CLI}" unknown --json
+  COMMAND "${CLI}" Unknown --json
   RESULT_VARIABLE result
   OUTPUT_VARIABLE output
   ERROR_VARIABLE error

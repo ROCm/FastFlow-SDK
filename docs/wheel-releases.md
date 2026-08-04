@@ -40,10 +40,11 @@ An explicit `package_version` supplied to a manual workflow dispatch overrides
 automatic development-version generation. Use that override for release
 candidates and stable-release validation. Explicit versions must be the
 configured base version, `<base>rcN`, or `<base>.devN`; versions from another
-train and alpha, beta, post, or local versions are rejected. At this stage,
-GitHub publication is prerelease-only: development and RC versions may use
-`publish_target=github-prerelease`, while the stable base version is accepted
-only with `publish_target=none`.
+train and alpha, beta, post, or local versions are rejected. Automated GitHub
+publication is currently disabled. Development and RC versions may use
+`publish_target=github-prerelease` to build the attested release payload, while
+the stable base version is accepted only with `publish_target=none`; neither
+mode creates a tag or release.
 
 Local non-release wheel builds use a commit-derived development version. That
 fallback identifies an individual checkout and is intentionally separate from
@@ -55,6 +56,26 @@ Windows and Linux wheels participating in one coordinated release use the same
 version. FastFlowLM requires the runtime wheel at exactly that version. Never
 replace or reuse a published version; produce a new development or release
 candidate version instead.
+
+`rocm-npu-qualification` is `py3-none-any` and requires
+`rocm-npu-fastflowlm` at exactly the same version. Linux and Windows generate
+it independently from the same source pins. Linux publishes the canonical
+wheel. Windows NPU jobs currently install the Windows-local wheel to avoid
+depending on Linux artifact scheduling; those runs remain platform validation,
+not canonical candidate evidence. When the canonical artifact is supplied,
+Windows must match its qualification contract and XADX provenance before using
+it. The platform-native builds therefore remain parallel. The qualification
+wheel is an optional GitHub Release asset;
+installing the runtime or FastFlowLM products does not install qualification.
+
+The qualification wheel owns compiler-free XADX executables. FastFlowLM wheels
+continue to own the raw XCLBINs used for inference and do not carry a second
+XADX representation. A release consequently contains the raw XCLBIN and its
+embedded XADX copy because the two consumers require different formats; moving
+XADX into the FastFlowLM wheel would not remove that duplication. XADX
+generation needs initialized FastFlowLM headers, engine libraries, and
+production XCLBINs plus an installed HRX serializer, but not a built `flm`
+executable.
 
 The Linux runtime wheel is tagged `manylinux_2_28_x86_64` because its complete
 native closure satisfies that policy. The FastFlowLM wheel is conservatively
@@ -76,17 +97,16 @@ duplicating it in every CPython bindings wheel. Importing `aie` activates the
 core wheel's native-library directory before loading its extension modules.
 
 The unified workflow builds and validates Linux and Windows wheels from one
-source commit. Publication under `rocm-npu-v<version>` occurs only after both
-platforms succeed.
+source commit. An operator may publish the validated payload manually under
+`rocm-npu-v<version>` after evidence intake succeeds.
 
 ## Manual workflow
 
 The `Release ROCm NPU Wheels` workflow defaults to validation only. With
 `publish_target=none`, it builds and validates both platform wheel sets and
-uploads a temporary Actions artifact. With
-`publish_target=github-prerelease`, the final job publishes one GitHub
-prerelease after both builds, metadata checks, dependency resolution, and all
-NPU validations succeed.
+uploads a temporary Actions artifact. `publish_target=github-prerelease` also
+builds and attests the release payload, but its GitHub publication job is
+disabled; it does not create or push a tag.
 The same payload includes the tested Linux `.tar.zst` and Windows `.zip`
 standalone FastFlowLM + HRX runtime archives, checksum sidecars, and detached
 bundle provenance manifests. Release assembly rejects archives whose embedded
@@ -104,9 +124,35 @@ permissions; they do not request an OIDC token or create attestations.
 Publication runs must be dispatched from `main`, and the resolved source commit
 must be an ancestor of `origin/main`. Only those publication builds receive
 attestation permissions.
-`SHA256SUMS` covers only the flat, top-level files uploaded as GitHub Release
-assets. The nested PEP 503 `simple/` index remains available in the complete
-Actions artifact, and its wheel links carry their own SHA-256 fragments.
+
+Qualification candidate and evidence publication is deliberately manual.
+Release collection emits one self-contained candidate containing every Linux
+and Windows runtime/FastFlowLM wheel, the shared qualification wheel,
+`candidate-manifest.json`, and `SHA256SUMS`. Every operator machine runs against
+that same manifest. The operator collects deterministic `.evidence.zip`
+bundles, transfers them to an intake machine, runs `rocm-npu qualify verify`
+and `rocm-npu qualify intake --policy release --require-status pass`, and
+reviews the recorded policy satisfaction in `qualification-index.json`.
+
+The GitHub prerelease publication job is currently disabled. Download the
+complete collected Actions artifact, create the draft release and tag manually,
+then upload the complete prepared release payload (including runtime,
+FastFlowLM, qualification, and compiler wheels, native archives, metadata, and
+indexes), `candidate-manifest.json`, `SHA256SUMS`,
+`candidate-SHA256SUMS`, the aggregate evidence ZIP, its external
+`.zip.sha256`, and `qualification-index.json`. Before publishing, recheck that
+every staged wheel still has the hash recorded in the candidate manifest. Any
+rebuilt or replaced wheel invalidates the evidence and requires a new candidate
+plus new runs.
+Verify the aggregate ZIP with `rocm-npu qualify verify` before manually
+publishing. No workflow creates or publishes the release, transfers manual
+evidence, or signs evidence.
+
+`SHA256SUMS` covers the prepared top-level product assets.
+`candidate-SHA256SUMS` separately covers `candidate-manifest.json` and its
+qualification wheels without replacing the release checksum. The nested PEP
+503 `simple/` index remains available in the complete Actions artifact, and its
+wheel links carry their own SHA-256 fragments.
 
 Each wheel uses Core Metadata 2.4 with an SPDX license expression and copies
 all applicable license and notice files under `.dist-info/licenses/`. It also

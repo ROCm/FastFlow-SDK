@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "release",
+  "requirements": [
+    {
+      "platform_os": "linux",
+      "profile": "fast",
+      "target_family": "npu2",
+      "minimum_runs": 1
+    },
+    {
+      "platform_os": "windows",
+      "profile": "fast",
+      "target_family": "npu2",
+      "minimum_runs": 1
+    }
+  ]
+}

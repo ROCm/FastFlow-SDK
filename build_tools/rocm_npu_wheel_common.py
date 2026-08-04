@@ -26,17 +26,21 @@ FIXED_ZIP_DATE = (2000, 1, 1, 0, 0, 0)
 PACKAGE_VERSION_ENV = "ROCM_NPU_PACKAGE_VERSION"
 RUNTIME_DISTRIBUTION = "rocm-npu-runtime"
 FASTFLOWLM_DISTRIBUTION = "rocm-npu-fastflowlm"
+QUALIFICATION_DISTRIBUTION = "rocm-npu-qualification"
 COMPILER_DISTRIBUTION = "rocm-npu-compiler"
 COMPILER_CORE_DISTRIBUTION = "rocm-npu-compiler-core"
 COMPILER_BINDINGS_DISTRIBUTION = "rocm-npu-compiler-bindings"
 COMPILER_STABLE_ABI_MINOR = "3.12"
 RUNTIME_PACKAGE = "rocm_npu_runtime"
 FASTFLOWLM_PACKAGE = "rocm_npu_fastflowlm"
+QUALIFICATION_PACKAGE = "rocm_npu_qualification"
 COMPILER_PACKAGE = "rocm_npu_compiler"
 COMPILER_BINDINGS_PACKAGE = "rocm_npu_compiler_bindings"
 LICENSE_EXPRESSIONS = {
     RUNTIME_DISTRIBUTION: "MIT AND Apache-2.0",
     FASTFLOWLM_DISTRIBUTION:
+        "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
+    QUALIFICATION_DISTRIBUTION:
         "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
     COMPILER_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
     COMPILER_CORE_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
@@ -172,7 +176,7 @@ def _copy_dependency_licenses(source_bundle: Path, manifest: dict[str, object],
 
 def _write_file(path: Path, text: str, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     path.chmod(mode)
 
 
@@ -192,8 +196,9 @@ def _file_records(package_root: Path) -> list[dict[str, object]]:
 
 def _write_package_manifest(package_root: Path, manifest: dict[str, object]) -> dict[str, object]:
     manifest = dict(manifest, files=_file_records(package_root))
-    (package_root / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (package_root / "manifest.json").write_bytes(
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    )
     return manifest
 
 
@@ -255,10 +260,12 @@ def _write_wheel_entry(
     records.append((name, _wheel_hash(data), str(len(data))))
 
 
-def _wheel_file_mode(relative: str, source_mode: int) -> int:
+def _wheel_file_mode(
+    relative: str, source_mode: int, *, root_is_purelib: bool
+) -> int:
     parts = PurePosixPath(relative).parts
     is_package_bin_payload = len(parts) >= 3 and parts[1] == "bin"
-    if source_mode & 0o111 or is_package_bin_payload:
+    if is_package_bin_payload or (not root_is_purelib and source_mode & 0o111):
         return 0o100755
     return 0o100644
 
@@ -725,7 +732,9 @@ def build_wheel(
                 records,
                 relative,
                 path.read_bytes(),
-                _wheel_file_mode(relative, mode),
+                _wheel_file_mode(
+                    relative, mode, root_is_purelib=root_is_purelib
+                ),
                 compression_level,
             )
         for name, data in license_entries:

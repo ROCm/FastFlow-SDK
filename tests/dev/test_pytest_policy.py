@@ -15,35 +15,43 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_suite_does_not_use_unittest_testcase_apis():
     violations = []
-    for path in sorted((ROOT / "tests").rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        relative_path = path.relative_to(ROOT)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "unittest":
-                        violations.append(
-                            f"{relative_path}:{node.lineno}: import unittest"
-                        )
-            if not isinstance(node, ast.Attribute):
-                continue
-            if (
-                isinstance(node.value, ast.Name)
-                and node.value.id == "self"
-                and (
-                    node.attr.startswith("assert")
-                    or node.attr in {"skipTest", "subTest"}
-                )
-            ):
-                violations.append(f"{relative_path}:{node.lineno}: self.{node.attr}")
-            if (
-                isinstance(node.value, ast.Name)
-                and node.value.id == "unittest"
-                and node.attr in {"TestCase", "main", "skip", "skipIf", "skipUnless"}
-            ):
-                violations.append(
-                    f"{relative_path}:{node.lineno}: unittest.{node.attr}"
-                )
+    test_roots = (
+        ROOT / "tests",
+        ROOT / "tools/rocm-npu-qualification/tests",
+    )
+    for test_root in test_roots:
+        for path in sorted(test_root.rglob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            relative_path = path.relative_to(ROOT)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "unittest":
+                            violations.append(
+                                f"{relative_path}:{node.lineno}: import unittest"
+                            )
+                if not isinstance(node, ast.Attribute):
+                    continue
+                if (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id == "self"
+                    and (
+                        node.attr.startswith("assert")
+                        or node.attr in {"skipTest", "subTest"}
+                    )
+                ):
+                    violations.append(
+                        f"{relative_path}:{node.lineno}: self.{node.attr}"
+                    )
+                if (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id == "unittest"
+                    and node.attr
+                    in {"TestCase", "main", "skip", "skipIf", "skipUnless"}
+                ):
+                    violations.append(
+                        f"{relative_path}:{node.lineno}: unittest.{node.attr}"
+                    )
 
     assert not violations, "legacy unittest APIs remain:\n  " + "\n  ".join(violations)
 
@@ -51,6 +59,8 @@ def test_suite_does_not_use_unittest_testcase_apis():
 def test_presubmit_workflow_uses_marker_selection():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "python -m pytest -m presubmit" in workflow
+    pytest_config = (ROOT / "pytest.ini").read_text(encoding="utf-8")
+    assert "tools/rocm-npu-qualification/tests" in pytest_config
 
 
 def test_test_profile_covers_presubmit_runtime_dependencies():
@@ -60,7 +70,12 @@ def test_test_profile_covers_presubmit_runtime_dependencies():
         for line in source.splitlines()
         if line.partition("#")[0].strip()
     }
-    assert entries == {"numpy==1.26.4", "pytest==8.4.2", "zstandard==0.25.0"}
+    assert entries == {
+        "jsonschema==4.26.0",
+        "numpy==1.26.4",
+        "pytest==8.4.2",
+        "zstandard==0.25.0",
+    }
 
 
 @pytest.mark.parametrize(

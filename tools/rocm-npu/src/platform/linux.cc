@@ -7,11 +7,13 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/wait.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -23,8 +25,20 @@
 #include <system_error>
 #include <vector>
 
+extern char** environ;
+
 namespace rocm_npu {
 namespace {
+
+volatile sig_atomic_t g_plugin_child = -1;
+
+void ForwardPluginSignal(int signal_number) {
+  if (g_plugin_child > 0) {
+    if (kill(-g_plugin_child, signal_number) != 0) {
+      (void)kill(g_plugin_child, signal_number);
+    }
+  }
+}
 
 struct DrmVersion {
   int version_major;
@@ -227,8 +241,6 @@ std::filesystem::path::value_type PluginPathListSeparator() { return ':'; }
 
 std::filesystem::path::value_type PluginPathListQuote() { return '"'; }
 
-bool PluginEmptyPathEntryMeansCurrentDirectory() { return true; }
-
 std::string PluginDirectoryKey(std::string value) { return value; }
 
 std::optional<std::string> PluginExecutableName(
@@ -253,6 +265,128 @@ std::optional<std::string> PluginExecutableName(
 bool PluginEntryLess(const std::filesystem::path& left,
                      const std::filesystem::path& right) {
   return left.filename() < right.filename();
+}
+
+int ExecutePluginProcess(
+    const std::filesystem::path& executable,
+    const std::vector<std::string>& arguments,
+    const std::map<std::string, std::string>& environment_overrides,
+    std::string& error) {
+  std::vector<std::string> argument_storage;
+  argument_storage.reserve(arguments.size() + 1);
+  argument_storage.push_back(PathToUtf8(executable));
+  argument_storage.insert(argument_storage.end(), arguments.begin(),
+                          arguments.end());
+  std::vector<char*> native_arguments;
+  native_arguments.reserve(argument_storage.size() + 1);
+  for (std::string& argument : argument_storage) {
+    native_arguments.push_back(argument.data());
+  }
+  native_arguments.push_back(nullptr);
+
+  std::vector<std::string> environment_storage;
+  for (char** entry = ::environ; entry != nullptr && *entry != nullptr;
+       ++entry) {
+    const std::string value(*entry);
+    const std::size_t separator = value.find('=');
+    const std::string name = value.substr(0, separator);
+    if (environment_overrides.count(name) == 0) {
+      environment_storage.push_back(value);
+    }
+  }
+  for (const auto& [name, value] : environment_overrides) {
+    if (!value.empty()) {
+      environment_storage.push_back(name + "=" + value);
+    }
+  }
+  std::vector<char*> native_environment;
+  native_environment.reserve(environment_storage.size() + 1);
+  for (std::string& value : environment_storage) {
+    native_environment.push_back(value.data());
+  }
+  native_environment.push_back(nullptr);
+
+  int error_pipe[2] = {-1, -1};
+  if (pipe2(error_pipe, O_CLOEXEC) != 0) {
+    error = std::strerror(errno);
+    return 2;
+  }
+  sigset_t launch_signals = {};
+  sigset_t previous_mask = {};
+  sigemptyset(&launch_signals);
+  sigaddset(&launch_signals, SIGINT);
+  sigaddset(&launch_signals, SIGTERM);
+  if (sigprocmask(SIG_BLOCK, &launch_signals, &previous_mask) != 0) {
+    error = std::strerror(errno);
+    close(error_pipe[0]);
+    close(error_pipe[1]);
+    return 2;
+  }
+  const pid_t child = fork();
+  if (child < 0) {
+    error = std::strerror(errno);
+    close(error_pipe[0]);
+    close(error_pipe[1]);
+    sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
+    return 2;
+  }
+  if (child == 0) {
+    close(error_pipe[0]);
+    if (setpgid(0, 0) != 0) {
+      const int process_group_error = errno;
+      (void)write(error_pipe[1], &process_group_error,
+                  sizeof(process_group_error));
+      _exit(127);
+    }
+    sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
+    execve(executable.c_str(), native_arguments.data(),
+           native_environment.data());
+    const int execute_error = errno;
+    (void)write(error_pipe[1], &execute_error, sizeof(execute_error));
+    _exit(127);
+  }
+
+  close(error_pipe[1]);
+  (void)setpgid(child, child);
+  g_plugin_child = child;
+  struct sigaction forward = {};
+  forward.sa_handler = ForwardPluginSignal;
+  sigemptyset(&forward.sa_mask);
+  struct sigaction previous_interrupt = {};
+  struct sigaction previous_terminate = {};
+  sigaction(SIGINT, &forward, &previous_interrupt);
+  sigaction(SIGTERM, &forward, &previous_terminate);
+  sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
+
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) {
+      error = std::strerror(errno);
+      status = -1;
+      break;
+    }
+  }
+  sigprocmask(SIG_BLOCK, &launch_signals, nullptr);
+  g_plugin_child = -1;
+  sigaction(SIGINT, &previous_interrupt, nullptr);
+  sigaction(SIGTERM, &previous_terminate, nullptr);
+  sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
+
+  int execute_error = 0;
+  const ssize_t error_size =
+      read(error_pipe[0], &execute_error, sizeof(execute_error));
+  close(error_pipe[0]);
+  if (error_size == sizeof(execute_error)) {
+    error = std::strerror(execute_error);
+    return 2;
+  }
+  if (status < 0) {
+    return 2;
+  }
+  if (WIFEXITED(status)) {
+    return WEXITSTATUS(status);
+  }
+  return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : 2;
 }
 
 const char* HrxLibraryFilename() { return "libhrx.so.0"; }

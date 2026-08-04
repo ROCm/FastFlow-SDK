@@ -103,6 +103,9 @@ jobs:
       actions: read
     with:
       name: NPU e2e
+      qualification_artifact: rocm-npu-qualification-wheel
+      build_artifacts: true
+      run_npu_e2e: true
 
   windows_flm:
     name: Windows FLM
@@ -114,3 +117,5 @@ jobs:
       actions: read
     with:
       name: NPU e2e
+      build_artifacts: true
+      run_npu_e2e: true

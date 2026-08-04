@@ -53,16 +53,27 @@ class TestNpuWorkflowParity:
         assert _logical_test_commands("build_rocm_npu_staging_linux.yml") == expected
         assert _logical_test_commands("build_rocm_npu_staging_windows.yml") == expected
 
-    def test_fastflowlm_npu_matrices_use_identical_kernel_and_soak_commands(self):
+    def test_fastflowlm_npu_matrices_use_kernel_and_fast_qualification(self):
         expected = {
             (
                 "test-fastflowlm-kernels --wheel-package "
                 "--dir .kernel-artifact --iterations 20 --readback-iterations 32"
             ),
-            "test-fastflowlm --wheel-package --inference-iterations 5",
         }
-        assert _logical_test_commands("fastflowlm_hrx_linux.yml") == expected
-        assert _logical_test_commands("fastflowlm_hrx_windows.yml") == expected
+        for filename in (
+            "fastflowlm_hrx_linux.yml",
+            "fastflowlm_hrx_windows.yml",
+        ):
+            text = (WORKFLOWS / filename).read_text(encoding="utf-8")
+            assert _logical_test_commands(filename) == expected
+            assert re.search(r"rocm-npu(?:\.exe)? qualify", text)
+            assert "--fast" in text
+            assert "--candidate-manifest" not in text
+            assert re.search(r"rocm-npu(?:\.exe)? qualify verify", text)
+            assert "qualify candidate" not in text
+            assert "qualify intake" not in text
+            assert "--bundle-output .qualification-run.evidence.zip" in text
+            assert "test-fastflowlm --wheel-package" not in text
 
     def test_all_declared_runner_labels_are_covered_by_shared_matrix_jobs(self):
         compiler_labels = _runner_labels(

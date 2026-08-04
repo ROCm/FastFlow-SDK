@@ -1,7 +1,3 @@
-#ifdef _WIN32
-#define TEST_EXPORT __declspec(dllexport)
-#else
-#define TEST_EXPORT __attribute__((visibility("default")))
-#endif
+#include "fake_hrx_missing_export.h"
 
-extern "C" TEST_EXPORT int hrx_status_code(void*) { return 0; }
+extern "C" FAKE_HRX_MISSING_EXPORT int hrx_status_code(void*) { return 0; }
