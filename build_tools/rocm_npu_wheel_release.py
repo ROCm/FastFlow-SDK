@@ -226,7 +226,9 @@ def _copy_release_wheel(
     )
     if embedded_revision != expected_source_sha:
         raise RuntimeError(
-            f"wheel source revision does not match release source: {wheel}"
+            "wheel source revision does not match release source: "
+            f"{wheel}: embedded={embedded_revision!r}, "
+            f"expected={expected_source_sha!r}"
         )
     return {
         "distribution": _wheel_metadata(wheel)["Name"],

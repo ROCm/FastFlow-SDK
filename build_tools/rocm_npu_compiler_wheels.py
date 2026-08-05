@@ -529,7 +529,7 @@ def stage_compiler_meta(
     version: str,
 ) -> Path:
     source_product = Path(source_product)
-    _load_product_manifest(source_product)
+    source_manifest = _load_product_manifest(source_product)
     tree = Path(destination)
     reset_directory(tree, tree.parent)
     package_root = tree / "rocm_npu_compiler_meta"
@@ -542,14 +542,14 @@ def stage_compiler_meta(
     )
     _write_package_manifest(
         package_root,
-        {
-            "schema_version": 1,
-            "product": COMPILER_DISTRIBUTION,
-            "artifact": "rocm-npu-compiler-meta",
-            "version": version,
-            "wheel_tag": "py3-none-any",
-            "requires": list(requires),
-        },
+        _common_manifest(
+            source_manifest,
+            product=COMPILER_DISTRIBUTION,
+            artifact="rocm-npu-compiler-meta",
+            wheel_tag="py3-none-any",
+            version=version,
+            requires=requires,
+        ),
     )
     return tree
 

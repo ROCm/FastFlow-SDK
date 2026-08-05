@@ -11,6 +11,8 @@ from unittest import mock
 
 import pytest
 
+from build_tools.compiler_wheels import verify_compiler_wheel_source_revision
+from build_tools.rocm_npu_wheel_release import _copy_release_wheel
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
@@ -138,6 +140,16 @@ class TestRocmNpuCompilerWheels:
                 archive.read(name).decode("utf-8")
             )
             return tuple(metadata.get_all("Tag") or ())
+
+    def package_manifest(self, wheel: Path) -> dict[str, object]:
+        with zipfile.ZipFile(wheel) as archive:
+            names = [
+                name
+                for name in archive.namelist()
+                if name.count("/") == 1 and name.endswith("/manifest.json")
+            ]
+            assert len(names) == 1
+            return json.loads(archive.read(names[0]))
 
     def test_release_policy_declares_supported_python_minors(self):
         assert compiler_python_versions() == ("3.12", "3.13", "3.14")
@@ -300,6 +312,27 @@ class TestRocmNpuCompilerWheels:
         )
 
         assert len(wheels) == 3
+        verify_compiler_wheel_source_revision(wheels.values(), "abc")
+        with pytest.raises(
+            RuntimeError,
+            match="embedded='abc', expected='wrong'",
+        ):
+            verify_compiler_wheel_source_revision(wheels.values(), "wrong")
+        for wheel in wheels.values():
+            assert self.package_manifest(wheel)["sources"] == {
+                "rocm-npu-staging": {
+                    "revision": "abc",
+                    "dirty": False,
+                }
+            }
+        release = root / "release"
+        release.mkdir()
+        for wheel in wheels.values():
+            _copy_release_wheel(
+                wheel,
+                release,
+                expected_source_sha="abc",
+            )
         meta = wheels[COMPILER_DISTRIBUTION]
         core = wheels[COMPILER_CORE_DISTRIBUTION]
         assert self.wheel_tags(meta) == ("py3-none-any",)
