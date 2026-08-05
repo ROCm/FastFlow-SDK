@@ -13,10 +13,9 @@ host = "linux-x86_64; build + artifact handoff only — on-device run needs an N
 note = "projects/ are pinned by commit (below); canonical remote URLs are in .gitmodules."
 
 [llvm]                          # projects/llvm-project — ROCm amd-llvm, LLVM 23
-repo       = "github.com/jtuyls/llvm-project"            # origin (fork, pushable)
-upstream   = "github.com/ROCm/llvm-project"              # remote 'amd' (fetch-only; push disabled)
-commit     = "46fcb339fb61119b337f973c7ca9e710a319fdd0"  # ROCm amd-llvm weekly snapshot
-branch     = "amd-compiler-ww-2026-17"                   # weekly snapshot the pin sits on (NOT the moving amd-staging)
+repo       = "github.com/ROCm/llvm-project"              # canonical ROCm remote (no fork in the chain)
+commit     = "46fcb339fb61119b337f973c7ca9e710a319fdd0"  # == tag therock-7.14
+branch     = "release/therock-7.14"                      # release branch the pin sits on (NOT the moving amd-staging)
 llvm_major = 23
 patches    = ["patches/llvm-project/0001-link-python-support-to-stable-abi.patch"]
 abi3_note  = "0001 makes MLIR's private Python support DLL use Python3::SABIModule when MLIR_ENABLE_PYTHON_STABLE_ABI is enabled; upstream otherwise links Python3_LIBRARY_RELEASE unconditionally on Windows."

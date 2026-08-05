@@ -107,10 +107,27 @@ class TestSourceDomain:
         )
         with mock.patch.object(sources.environment, "sh") as run:
             sources.cmd_submodules(args)
-        assert run.call_count == 2
-        assert "--recursive" not in run.call_args_list[0].args[0]
-        assert "--recursive" in run.call_args_list[1].args[0]
+        commands = [call.args[0] for call in run.call_args_list]
+        assert commands == [
+            ["git", "submodule", "sync", "projects/llvm-project"],
+            ["git", "submodule", "update", "--init", "--force",
+             "--depth", "1", "--jobs", "4", "projects/llvm-project"],
+            ["git", "submodule", "sync", "--recursive", "projects/iron-tools"],
+            ["git", "submodule", "update", "--init", "--force", "--recursive",
+             "--depth", "1", "--jobs", "4", "projects/iron-tools"],
+        ]
         assert all(call.kwargs["cwd"] == paths.ROOT for call in run.call_args_list)
+
+    def test_submodules_syncs_repointed_remotes_before_fetching(self):
+        """A repointed .gitmodules URL must reach an already-initialized clone."""
+        args = SimpleNamespace(
+            names=["llvm-project"], reset=False, shallow=False, clean=[]
+        )
+        with mock.patch.object(sources.environment, "sh") as run:
+            sources.cmd_submodules(args)
+        commands = [call.args[0] for call in run.call_args_list]
+        assert commands[0][:3] == ["git", "submodule", "sync"]
+        assert commands[1][:3] == ["git", "submodule", "update"]
 
 
 class TestTestingDomain:
