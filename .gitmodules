@@ -7,8 +7,7 @@
 	ignore = dirty
 [submodule "projects/hrx"]
 	path = projects/hrx
-	url = https://github.com/jtuyls/hrx.git
-	branch = amdxdna-hal-native-rel
+	url = https://github.com/ROCm/hrx-system.git
 	ignore = dirty
 [submodule "projects/iron-ops"]
 	path = projects/iron-ops
