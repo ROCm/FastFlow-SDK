@@ -1,6 +1,6 @@
 [submodule "projects/llvm-project"]
 	path = projects/llvm-project
-	url = https://github.com/jtuyls/llvm-project.git
+	url = https://github.com/ROCm/llvm-project.git
 [submodule "projects/iron-tools"]
 	path = projects/iron-tools
 	url = https://github.com/Xilinx/mlir-aie.git
