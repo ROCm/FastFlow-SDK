@@ -7,11 +7,12 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 from build_tools import compiler_product
 from build_tools.dev import build, environment, paths
-from build_tools.fastflowlm_artifact import validate_directory_target
+from build_tools.fastflowlm_artifact import git_source_state, validate_directory_target
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION, COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION, COMPILER_DISTRIBUTION, build_compiler_wheel_family,
@@ -74,6 +75,31 @@ def _compiler_wheel_files(directory):
             f"expected one compiler bindings wheel in {directory}: {counts}"
         )
     return wheels
+
+
+def verify_compiler_wheel_source_revision(wheels, expected_revision):
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            manifests = [
+                name
+                for name in archive.namelist()
+                if name.count("/") == 1 and name.endswith("/manifest.json")
+            ]
+            if len(manifests) != 1:
+                raise RuntimeError(
+                    f"compiler wheel must contain one package manifest: {wheel}"
+                )
+            manifest = json.loads(archive.read(manifests[0]))
+        revision = (
+            manifest.get("sources", {})
+            .get("rocm-npu-staging", {})
+            .get("revision")
+        )
+        if revision != expected_revision:
+            raise RuntimeError(
+                "compiler wheel source revision does not match checkout: "
+                f"{wheel}: embedded={revision!r}, expected={expected_revision!r}"
+            )
 
 
 def cmd_package_compiler_wheels(args):
@@ -316,6 +342,9 @@ def cmd_verify_compiler_wheels(args):
     verify_wheel_checksums({
         f"compiler-{index}": wheel for index, wheel in enumerate(wheels)
     })
+    verify_compiler_wheel_source_revision(
+        wheels, git_source_state(ROOT)["revision"]
+    )
     verify_compiler_wheel_path_references(wheels, (ROOT, BUILD))
     if IS_WINDOWS:
         graph = verify_windows_compiler_wheels(wheels)
