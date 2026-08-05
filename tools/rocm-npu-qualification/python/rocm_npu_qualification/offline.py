@@ -352,6 +352,8 @@ def _validate_complete_execution(
             for record in observed_model.get("files", [])
             if isinstance(record, dict)
         ]
+        expected_files.sort(key=lambda record: (record["path"], record["sha256"]))
+        observed_files.sort(key=lambda record: (record["path"], record["sha256"]))
         if (
             observed_identity != expected_identity
             or observed_files != expected_files

@@ -145,11 +145,15 @@ def _evidence(
     marker="one",
     status="pass",
     platform_os="Windows 11",
+    profile_files=None,
 ) -> Path:
     writer = EvidenceWriter(root)
     candidate = _candidate() if candidate is None else candidate
-    writer.write_candidate_manifest(candidate)
     profile = _profile()
+    if profile_files is not None:
+        profile["models"][0]["files"] = profile_files
+        candidate["qualification_contract"]["profiles"]["fast"] = profile
+    writer.write_candidate_manifest(candidate)
     model = {
         "tag": "qwen3:0.6b",
         "identity_policy": "revision-sha256",
@@ -159,7 +163,12 @@ def _evidence(
         "cache_directory": "model",
         "registry_sha256": "d" * 64,
         "pulled": False,
-        "files": [{"path": "model", "size": 1, "sha256": "e" * 64}],
+        "files": [
+            {**record, "size": 1}
+            for record in sorted(
+                profile["models"][0]["files"], key=lambda record: record["path"]
+            )
+        ],
     }
     log = writer.path(f"logs/tests/{marker}.log")
     log.write_text("passed\n")
@@ -314,6 +323,17 @@ def test_deterministic_pack_and_offline_verify(tmp_path):
     summary = verify_evidence(first)
     assert summary["status"] == "pass"
     assert summary["evidence_status"] == "pass"
+
+
+def test_verify_accepts_model_files_in_different_order(tmp_path):
+    source = _evidence(
+        tmp_path / "evidence",
+        profile_files=[
+            {"path": "z-model", "sha256": "e" * 64},
+            {"path": "a-template", "sha256": "f" * 64},
+        ],
+    )
+    assert verify_evidence(source)["status"] == "pass"
 
 
 def test_verify_rejects_checksum_tampering_and_unlisted_files(tmp_path):
