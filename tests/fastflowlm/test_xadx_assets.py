@@ -3,6 +3,7 @@
 
 """Validate packaged XADX assets and their compiler-free execution helpers."""
 
+import gzip
 import hashlib
 import json
 import struct
@@ -406,6 +407,10 @@ def test_generation_records_source_transaction_and_serializer_identity(
     assert all(record["source_xclbin_sha256"] for record in manifest["executables"])
     assert all(record["transaction_sha256"] for record in manifest["executables"])
     assert {path.suffix for path in (destination / "data").iterdir()} == {".gz"}
+    for name in ("mm-expected-a.bin.gz", "mm-expected-b.bin.gz"):
+        compressed = (destination / "data" / name).read_bytes()
+        assert compressed[9] == 255
+        assert gzip.decompress(compressed) == b"\0\0"
     assert all(
         isinstance(buffer.get("input", buffer.get("expected")), dict)
         for case in manifest["cases"]
