@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <cassert>
-#include <cstdlib>
 #include <filesystem>
 #include <string>
 
+#include "platform.h"
 #include "rocm_npu/hrx_loader.h"
 
 int main(int argc, char** argv) {
@@ -11,11 +11,7 @@ int main(int argc, char** argv) {
   const std::filesystem::path missing = argv[1];
   const std::filesystem::path incompatible = argv[2];
   const std::filesystem::path complete = argv[3];
-#ifdef _WIN32
-  _wputenv_s(L"HRX_LIBHRX", L"");
-#else
-  unsetenv("HRX_LIBHRX");
-#endif
+  rocm_npu::test::ClearEnvironment("HRX_LIBHRX");
   rocm_npu::HrxLoadResult load = rocm_npu::HrxLibrary::Load(missing);
   assert(!load.library);
   assert(!load.errors.empty());
@@ -37,19 +33,14 @@ int main(int argc, char** argv) {
   assert(abi.errors.front().find("incompatible HRX ABI") !=
          std::string::npos);
 
-#ifdef _WIN32
   const std::filesystem::path unicode_directory =
-      std::filesystem::temp_directory_path() / L"rocm-npu-hrx-\u00e9";
+      rocm_npu::test::TestRoot("hrx");
   std::filesystem::remove_all(unicode_directory);
   std::filesystem::create_directories(unicode_directory);
   const std::filesystem::path environment_library =
       unicode_directory / complete.filename();
   std::filesystem::copy_file(complete, environment_library);
-  _wputenv_s(L"HRX_LIBHRX", environment_library.c_str());
-#else
-  setenv("HRX_LIBHRX", complete.string().c_str(), 1);
-  const std::filesystem::path environment_library = complete;
-#endif
+  rocm_npu::test::SetEnvironmentPath("HRX_LIBHRX", environment_library);
   rocm_npu::HrxLoadResult fallback = rocm_npu::HrxLibrary::Load(std::nullopt);
   assert(fallback.library);
   assert(fallback.library->path() == environment_library);
@@ -57,9 +48,7 @@ int main(int argc, char** argv) {
   assert(fallback.errors.empty());
   assert(fallback.library->runtime_version_major() == HRX_VERSION_MAJOR);
   assert(fallback.library->runtime_version_minor() == HRX_VERSION_MINOR);
-#ifdef _WIN32
   fallback.library.reset();
   std::filesystem::remove_all(unicode_directory);
-#endif
   return 0;
 }

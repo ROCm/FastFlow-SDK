@@ -4,6 +4,8 @@
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tarfile
 import zipfile
 from datetime import datetime, timezone
@@ -23,8 +25,11 @@ from build_tools.rocm_npu_wheel_common import (
     COMPILER_PACKAGE,
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
+    QUALIFICATION_DISTRIBUTION,
+    QUALIFICATION_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
+    _write_package_manifest,
     build_wheel,
 )
 from build_tools.rocm_npu_wheel_release import (
@@ -90,6 +95,32 @@ def _write_release_archive(
 
 
 class TestRocmNpuWheelRelease:
+    def test_resolve_cli_does_not_require_release_validation_packages(
+        self, tmp_path
+    ):
+        output = tmp_path / "github-output"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "build_tools/rocm_npu_wheel_release_cli.py",
+                "resolve",
+                "--ref",
+                "release-branch",
+                "--package-version",
+                "0.1.0.dev1",
+                "--run-number",
+                "1",
+                "--github-output",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "package_version=0.1.0.dev1" in output.read_text(encoding="utf-8")
+
     def test_copy_release_archives_requires_and_records_both_platforms(
         self, tmp_path
     ):
@@ -307,6 +338,7 @@ class TestRocmNpuWheelRelease:
             FASTFLOWLM_DISTRIBUTION: 2,
             RUNTIME_DISTRIBUTION: 2,
             COMPILER_DISTRIBUTION: 1,
+            QUALIFICATION_DISTRIBUTION: 1,
             COMPILER_CORE_DISTRIBUTION: 2,
             COMPILER_BINDINGS_DISTRIBUTION: 2,
         }
@@ -314,6 +346,7 @@ class TestRocmNpuWheelRelease:
         for artifact in wheel_artifacts:
             filename = artifact["filename"]
             assert "staging" not in filename
+            assert len(artifact["package_manifest_sha256"]) == 64
             artifact_tags.update(artifact["wheel_tags"])
             assert (release / filename).is_file()
             assert (release / f"{filename}.sha256").is_file()
@@ -333,6 +366,7 @@ class TestRocmNpuWheelRelease:
             RUNTIME_DISTRIBUTION,
             FASTFLOWLM_DISTRIBUTION,
             COMPILER_DISTRIBUTION,
+            QUALIFICATION_DISTRIBUTION,
             COMPILER_CORE_DISTRIBUTION,
             COMPILER_BINDINGS_DISTRIBUTION,
         ):
@@ -341,7 +375,10 @@ class TestRocmNpuWheelRelease:
                 assert "manylinux_2_28_x86_64" in index
             elif distribution == FASTFLOWLM_DISTRIBUTION:
                 assert "py3-none-linux_x86_64" in index
-            if distribution != COMPILER_DISTRIBUTION:
+            if distribution not in (
+                COMPILER_DISTRIBUTION,
+                QUALIFICATION_DISTRIBUTION,
+            ):
                 assert "win_amd64" in index
         checksum_names = {
             line.split("  ", 1)[1]
@@ -467,6 +504,39 @@ class TestRocmNpuWheelRelease:
                 source_sha="abc123",
             )
 
+    def test_prepare_release_payload_rejects_extra_allowed_variant(self, tmp_path):
+        root = tmp_path
+        version = "0.1.0.dev1"
+        self._build_release_wheels(root, version, output_directory=root / "dist/windows")
+        self._build_release_wheels(
+            root,
+            version,
+            wheel_tag="py3-none-manylinux_2_28_x86_64",
+            fastflowlm_wheel_tag="py3-none-linux_x86_64",
+            output_directory=root / "dist/linux",
+            include_meta=False,
+        )
+        build_wheel(
+            self._package_tree(root, "qualification_windows_variant"),
+            QUALIFICATION_DISTRIBUTION,
+            version,
+            root / "dist/extra",
+            summary="unexpected qualification variant",
+            tag="py3-none-win_amd64",
+            requires=(f"{FASTFLOWLM_DISTRIBUTION} =={version}",),
+        )
+
+        with pytest.raises(RuntimeError, match="unexpected variants"):
+            prepare_rocm_npu_release_payload(
+                root / "dist",
+                root / "release",
+                version=version,
+                release_name=f"rocm-npu {version}",
+                tag_name=f"rocm-npu-v{version}",
+                source_ref="main",
+                source_sha="abc123",
+            )
+
     def test_prepare_release_payload_rejects_wrong_platform_tag(self, tmp_path):
         root = tmp_path
         version = "0.1.0.dev1"
@@ -550,6 +620,19 @@ class TestRocmNpuWheelRelease:
                 ),
                 root_is_purelib=True,
             )
+            build_wheel(
+                self._package_tree(root, QUALIFICATION_PACKAGE),
+                QUALIFICATION_DISTRIBUTION,
+                version,
+                output_directory,
+                summary="qualification",
+                tag="py3-none-any",
+                requires=(f"{FASTFLOWLM_DISTRIBUTION} =={version}",),
+                console_scripts={
+                    "rocm-npu-qualify": f"{QUALIFICATION_PACKAGE}.cli:main"
+                },
+                root_is_purelib=True,
+            )
         build_wheel(
             self._package_tree(root, COMPILER_PACKAGE),
             COMPILER_CORE_DISTRIBUTION,
@@ -580,6 +663,16 @@ class TestRocmNpuWheelRelease:
         package = tree / package_name
         package.mkdir(parents=True, exist_ok=True)
         (package / "__init__.py").write_text("", encoding="utf-8")
+        _write_package_manifest(
+            package,
+            {
+                "schema_version": 1,
+                "product": package_name,
+                "sources": {
+                    "rocm-npu-staging": {"revision": "abc123"},
+                },
+            },
+        )
         return tree
 
     def _write_policy(self, root: Path, base_version: str) -> Path:

@@ -18,6 +18,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(
+    0, str(ROOT / "tools" / "rocm-npu-qualification" / "python")
+)
+
+from rocm_npu_qualification.fastflowlm import (  # noqa: E402
+    extract_raw_outputs,
+    smoke_phrase_matches,
+)
+
 IS_WINDOWS = os.name == "nt"
 FASTFLOWLM_XCLBIN_RELEASE = "v0.9.45"
 FASTFLOWLM_QWEN3_06B_XCLBINS = {
@@ -207,43 +216,9 @@ def fail_if_runtime_errors(text, label, path):
         raise SmokeFailure(f"{label} hit the generation length limit: {path}")
 
 
-def extract_raw_outputs(text):
-    outputs = []
-    lines = None
-    for line in text.splitlines():
-        if "Model RAW Output:" in line:
-            if lines is not None:
-                outputs.append("\n".join(lines).strip())
-            lines = []
-            continue
-        if lines is not None and (line.startswith(">>>") or line.startswith("[FLM]")):
-            outputs.append("\n".join(lines).strip())
-            lines = None
-            continue
-        if lines is not None:
-            lines.append(line)
-    if lines is not None:
-        outputs.append("\n".join(lines).strip())
-    return outputs
-
-
 def extract_raw_output(text):
     outputs = extract_raw_outputs(text)
     return outputs[0] if outputs else ""
-
-
-def normalize_smoke_phrase(text):
-    text = text.strip()
-    previous = None
-    while text != previous:
-        previous = text
-        text = re.sub(r"`([^`\n]+)`", r"\1", text)
-        text = re.sub(r"(\*\*|__|\*|_)([^*_`\n]+?)\1", r"\2", text)
-    return text
-
-
-def smoke_phrase_matches(raw_text, expected):
-    return normalize_smoke_phrase(raw_text) == expected.strip()
 
 
 def smoke_setup_commands():
@@ -341,7 +316,18 @@ def main():
     xclbin_prefix = (package_paths["xclbin_prefix"] if installed_package else
                      bundle / "share" / "flm" if bundle else
                      Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src))
-    bench_config = Path(os.environ.get("FLM_BENCH_CONFIG") or (ROOT / "tests" / "fastflowlm" / "bench_1k_smoke.json"))
+    bench_config = Path(
+        os.environ.get("FLM_BENCH_CONFIG")
+        or (
+            ROOT
+            / "tools"
+            / "rocm-npu-qualification"
+            / "python"
+            / "rocm_npu_qualification"
+            / "bench"
+            / "bench_1k_smoke.json"
+        )
+    )
     work_dir = Path(os.environ.get("FLM_SMOKE_WORK_DIR") or (ROOT / "build" / "FastFlowLM-smoke"))
     smoke_turns = [
         (

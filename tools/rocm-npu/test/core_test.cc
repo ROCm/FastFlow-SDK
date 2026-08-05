@@ -34,7 +34,20 @@ int main() {
   assert(after.invocation->runtime_path->string() == "runtime");
 
   assert(!ParseInvocation({"--runtime"}).invocation);
-  assert(!ParseInvocation({"unknown"}).invocation);
+  const auto external_before =
+      ParseInvocation({"--json", "qualify", "--profile", "models"});
+  const auto external_after =
+      ParseInvocation({"qualify", "--profile", "models", "--json"});
+  assert(external_before.invocation && external_after.invocation);
+  assert(external_before.invocation->json && external_after.invocation->json);
+  assert(external_before.invocation->arguments ==
+         external_after.invocation->arguments);
+  assert(external_before.invocation->arguments ==
+         std::vector<std::string>({"--profile", "models"}));
+  assert(ParseInvocation({"qualify", "--help"}).invocation->arguments ==
+         std::vector<std::string>({"--help"}));
+  assert(!ParseInvocation({"Uppercase"}).invocation);
+  assert(!ParseInvocation({"../qualify"}).invocation);
   assert(!ParseInvocation({"probe", "unexpected"}).invocation);
   assert(ParseInvocation({"plugin", "list"}).invocation);
   assert(!ParseInvocation({"plugin"}).invocation);

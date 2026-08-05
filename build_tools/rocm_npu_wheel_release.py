@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import email.parser
+import hashlib
 import html
 import json
 import re
@@ -15,9 +16,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-import zstandard
-
-from build_tools.fastflowlm_artifact import reset_directory
+from build_tools.fastflowlm_artifact import _zstandard_module, reset_directory
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
 )
@@ -27,6 +26,7 @@ from build_tools.rocm_npu_wheel_common import (
     COMPILER_DISTRIBUTION,
     COMPILER_STABLE_ABI_MINOR,
     FASTFLOWLM_DISTRIBUTION,
+    QUALIFICATION_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
     sha256_file,
     validate_version,
@@ -39,6 +39,7 @@ RELEASE_POLICY_PATH = ROOT / "release.toml"
 RELEASE_DISTRIBUTIONS = (
     RUNTIME_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
+    QUALIFICATION_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_BINDINGS_DISTRIBUTION,
@@ -190,7 +191,9 @@ def _wheel_tags(wheel: Path) -> tuple[str, ...]:
     return tuple(metadata.get_all("Tag") or ())
 
 
-def _copy_release_wheel(wheel: Path, output_directory: Path) -> dict[str, object]:
+def _copy_release_wheel(
+    wheel: Path, output_directory: Path, *, expected_source_sha: str
+) -> dict[str, object]:
     checksum = wheel.with_name(wheel.name + ".sha256")
     digest = sha256_file(wheel)
     fields = checksum.read_text(encoding="ascii").strip().split()
@@ -198,10 +201,38 @@ def _copy_release_wheel(wheel: Path, output_directory: Path) -> dict[str, object
         raise RuntimeError(f"malformed wheel checksum: {checksum}")
     shutil.copy2(wheel, output_directory / wheel.name)
     shutil.copy2(checksum, output_directory / checksum.name)
+    with zipfile.ZipFile(wheel) as archive:
+        manifests = [
+            name
+            for name in archive.namelist()
+            if name.count("/") == 1 and name.endswith("/manifest.json")
+        ]
+        if len(manifests) != 1:
+            raise RuntimeError(
+                f"release wheel must contain one package manifest: {wheel}"
+            )
+        package_manifest_bytes = archive.read(manifests[0])
+        package_manifest_sha256 = hashlib.sha256(
+            package_manifest_bytes
+        ).hexdigest()
+    try:
+        package_manifest = json.loads(package_manifest_bytes)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"invalid wheel package manifest: {wheel}") from error
+    embedded_revision = (
+        package_manifest.get("sources", {})
+        .get("rocm-npu-staging", {})
+        .get("revision")
+    )
+    if embedded_revision != expected_source_sha:
+        raise RuntimeError(
+            f"wheel source revision does not match release source: {wheel}"
+        )
     return {
         "distribution": _wheel_metadata(wheel)["Name"],
         "filename": wheel.name,
         "sha256": digest,
+        "package_manifest_sha256": package_manifest_sha256,
         "size": wheel.stat().st_size,
         "wheel_tags": list(_wheel_tags(wheel)),
     }
@@ -214,6 +245,7 @@ def _copy_release_archives(
     expected_version: str,
     expected_source_sha: str,
 ) -> list[dict[str, object]]:
+    zstandard = _zstandard_module()
     expected = {
         "fastflowlm-hrx-linux-x86_64.tar.zst":
             ("linux-x86_64", "Linux", "fastflowlm-hrx-linux-x86_64"),
@@ -404,6 +436,7 @@ def _find_release_wheels(
         (FASTFLOWLM_DISTRIBUTION, linux),
         (FASTFLOWLM_DISTRIBUTION, windows),
         (COMPILER_DISTRIBUTION, "py3-none-any"),
+        (QUALIFICATION_DISTRIBUTION, "py3-none-any"),
         (COMPILER_CORE_DISTRIBUTION, manylinux),
         (COMPILER_CORE_DISTRIBUTION, windows),
     }
@@ -421,6 +454,13 @@ def _find_release_wheels(
             for distribution, tag in missing
         )
         raise RuntimeError(f"release wheel set is incomplete; missing {details}")
+    extra = sorted(set(wheels).difference(expected_keys))
+    if extra:
+        details = ", ".join(
+            f"{distribution}[{tag or 'unspecified'}]"
+            for distribution, tag in extra
+        )
+        raise RuntimeError(f"release wheel set contains unexpected variants: {details}")
     return [wheels[key] for key in sorted(expected_keys)]
 
 
@@ -533,6 +573,9 @@ def prepare_rocm_npu_release_payload(
             FASTFLOWLM_DISTRIBUTION: {
                 f"{RUNTIME_DISTRIBUTION} =={version}",
             },
+            QUALIFICATION_DISTRIBUTION: {
+                f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+            },
             COMPILER_DISTRIBUTION: {
                 f"{COMPILER_CORE_DISTRIBUTION} =={version}",
                 f"{COMPILER_BINDINGS_DISTRIBUTION} =={version}",
@@ -562,7 +605,13 @@ def prepare_rocm_npu_release_payload(
                     f"{stable_abi}-abi3 stable ABI tag: "
                     f"{tags}"
                 )
-        wheel_artifacts.append(_copy_release_wheel(wheel, release_directory))
+        wheel_artifacts.append(
+            _copy_release_wheel(
+                wheel,
+                release_directory,
+                expected_source_sha=source_sha,
+            )
+        )
 
     artifacts = list(wheel_artifacts)
     if archive_directory is not None:

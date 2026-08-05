@@ -23,7 +23,14 @@ struct ParseResult {
   std::string error;
 };
 
+struct ExternalCommandResult {
+  int exit_code = 2;
+  std::string error;
+};
+
 ParseResult ParseInvocation(const std::vector<std::string>& arguments);
+bool IsBuiltinCommand(const std::string& command);
+bool IsValidExternalCommandName(const std::string& command);
 std::string HelpText();
 Report RunVersion(const Invocation& invocation);
 Report RunProbe(const Invocation& invocation);
@@ -31,6 +38,7 @@ Report RunDoctor(const Invocation& invocation);
 bool HasValidSelfTestFixtureTypes(const nlohmann::json& fixture);
 Report RunSelfTest(const Invocation& invocation);
 Report RunPluginList(const Invocation& invocation);
+ExternalCommandResult RunExternalCommand(const Invocation& invocation);
 Report RunCommand(const Invocation& invocation);
 
 }  // namespace rocm_npu

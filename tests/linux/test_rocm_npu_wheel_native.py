@@ -27,6 +27,7 @@ from build_tools.rocm_npu_linux_wheels import (
     _copy_hrx_soname,
     _copy_runtime_native_closure,
     _patch_and_verify_linux_products,
+    _write_runtime_module,
     auditwheel_policy,
     build_wheel,
     find_rocm_npu_wheels,
@@ -61,11 +62,10 @@ class TestRocmNpuLinuxWheelNative:
             f"run: {expected_python} dev.py npu-probe --runtime-package"
             in workflow
         )
-        assert (
-            f"run: {expected_python} dev.py test-fastflowlm --wheel-package "
-            "--inference-iterations 5"
-            in workflow
-        )
+        assert f"{venv}/bin/rocm-npu qualify run" in workflow
+        assert "--fast" in workflow
+        assert "--model-cache build/FastFlowLM-models" in workflow
+        assert "test-fastflowlm --wheel-package" not in workflow
         assert (
             "image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:"
             in workflow
@@ -76,6 +76,14 @@ class TestRocmNpuLinuxWheelNative:
         assert "python3-venv" not in workflow
         assert "python3-pip" not in workflow
         assert "rocm-npu-fastflowlm-wheel-venv" not in workflow
+
+    def test_runtime_launcher_preserves_venv_scripts_directory(self, tmp_path):
+        package = tmp_path / "rocm_npu_runtime"
+        _write_runtime_module(package)
+
+        source = (package / "__init__.py").read_text(encoding="utf-8")
+        assert "scripts = str(Path(sys.executable).parent)" in source
+        assert "Path(sys.executable).resolve()" not in source
 
     def test_build_wheel_writes_metadata_record_and_checksum(self):
         with tempfile.TemporaryDirectory() as temporary:

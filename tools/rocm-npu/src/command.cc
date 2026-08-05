@@ -16,6 +16,23 @@ const std::unordered_set<std::string> kBuiltins = {
 
 }  // namespace
 
+bool IsBuiltinCommand(const std::string& command) {
+  return kBuiltins.count(command) != 0;
+}
+
+bool IsValidExternalCommandName(const std::string& command) {
+  if (command.empty()) {
+    return false;
+  }
+  for (const unsigned char character : command) {
+    if ((character < 'a' || character > 'z') &&
+        (character < '0' || character > '9') && character != '-') {
+      return false;
+    }
+  }
+  return true;
+}
+
 ParseResult ParseInvocation(const std::vector<std::string>& arguments) {
   Invocation invocation;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
@@ -25,7 +42,12 @@ ParseResult ParseInvocation(const std::vector<std::string>& arguments) {
     } else if (argument == "--verbose") {
       invocation.verbose = true;
     } else if (argument == "--help" || argument == "-h") {
-      invocation.help = true;
+      if (!invocation.command.empty() &&
+          !IsBuiltinCommand(invocation.command)) {
+        invocation.arguments.push_back(argument);
+      } else {
+        invocation.help = true;
+      }
     } else if (argument == "--runtime") {
       if (++index == arguments.size()) {
         return {std::nullopt, "--runtime requires a path"};
@@ -36,7 +58,8 @@ ParseResult ParseInvocation(const std::vector<std::string>& arguments) {
         return {std::nullopt, "--runtime requires a non-empty path"};
       }
       invocation.runtime_path = argument.substr(10);
-    } else if (argument.rfind("-", 0) == 0) {
+    } else if (argument.rfind("-", 0) == 0 &&
+               invocation.command.empty()) {
       return {std::nullopt, "unknown option: " + argument};
     } else if (invocation.command.empty()) {
       invocation.command = argument;
@@ -51,8 +74,12 @@ ParseResult ParseInvocation(const std::vector<std::string>& arguments) {
     }
     return {std::nullopt, "a command is required"};
   }
-  if (kBuiltins.count(invocation.command) == 0) {
-    return {std::nullopt, "unknown command: " + invocation.command};
+  if (!IsBuiltinCommand(invocation.command)) {
+    if (!IsValidExternalCommandName(invocation.command)) {
+      return {std::nullopt,
+              "invalid external command name: " + invocation.command};
+    }
+    return {std::move(invocation), {}};
   }
   if (invocation.command == "plugin") {
     if (invocation.arguments != std::vector<std::string>{"list"}) {
@@ -77,6 +104,7 @@ Commands:
   self-test  Dispatch the packaged bounded deterministic XADX test
   plugin list
              Discover external rocm-npu-* plugin executables without running them
+  <name>     Execute the external rocm-npu-<name> plugin
 
 Global options:
   --json             Emit exactly one JSON report to stdout

@@ -1,0 +1,175 @@
+# ROCm NPU model qualification
+
+Install the optional qualification product from the same release assets:
+
+```bash
+python -m pip install --find-links <release-assets> \
+  "rocm-npu-qualification==<version>"
+```
+
+The package depends on the exact same-version `rocm-npu-fastflowlm`, which in
+turn depends on `rocm-npu-runtime`. Only the runtime wheel owns the `rocm-npu`
+entry point. The qualification wheel installs `rocm-npu-qualify`, discovered
+through the external plugin protocol.
+
+List and run profiles through the native core:
+
+```bash
+rocm-npu plugin list --json
+rocm-npu qualify --list-profiles --json
+rocm-npu qualify --output qualification-evidence
+```
+
+Profiles are package JSON data conforming to `profile-v1.schema.json`.
+With no profile option, qualification runs the comprehensive `default` suite:
+Qwen3 0.6B, content-pinned Qwen3.5 0.8B, and LFM2 1.2B multi-turn,
+bounded-soak, and 1k/4k benchmark cases. Its measured warm-cache NPU2 runtime
+is kept below 15 minutes. `--fast` runs the CI gate: five fresh
+Qwen3 processes with two deterministic turns each, the production XCLBIN
+inventory, the 1k benchmark/CSV checkpoint, native self-test, and the embedded
+FastFlowLM XADX stress set. `--profile extended` is an opt-in default-suite
+superset adding revision-pinned Llama 3.1 8B multi-turn, soak, and 1k/4k
+coverage. CI selects only `--fast`; default and extended are explicit
+qualification profiles for broader local or release validation.
+
+Qualification first validates plugin protocol and exact package versions, then
+runs native `version`, `probe`, `doctor`, and `self-test` through the absolute executable
+provided by the core. It inspects the configured model cache and runs
+`flm pull <tag>` when a model is missing. Pull and test output is captured in
+the evidence logs. `--no-pull` fails instead of downloading. `--offline` never
+invokes the network-backed `flm check` or `flm pull`. It resolves the
+model-specific directory and required files from the installed registry,
+applies offline and proxy-denial controls to inference, and fails if that local
+contract is incomplete.
+
+The output directory is a complete report bundle. `evidence.json` records the
+overall result, package and candidate identity, source revision, observed
+driver/firmware/platform provenance, content-pinned model inventories, and every
+native, XADX, run, soak, and benchmark result. Successful native checks are
+recorded as tests, not merely omitted. `junit.xml` mirrors test outcomes;
+`core-version.json`, `probe.json`, `doctor.json`, `self-test.json`, benchmark
+CSVs, per-command logs, and `SHA256SUMS` retain the underlying details.
+
+Useful options include:
+
+- `--model-cache <path>`
+- `--candidate-manifest <path>`
+- `--keep-going`
+- `--json`
+
+Profiles support ad-hoc diagnostics and candidate-bound release runs. Packaged
+profiles pin a canonical-JSON model registry digest and model file digests;
+the qualification wheel also
+contains five generated NPU2 XADX lifecycle, dispatch, and readback cases.
+Those XADX executables embed the production XCLBIN and serialized control
+transactions. Their zero and structured inputs are generated deterministically
+at runtime from a checked-in case contract; only dense MM reference outputs are
+stored, using deterministic compression.
+See the [qualification evidence v1 contract](contracts/qualification-evidence-v1.md)
+for the exact identity, archive, and verification rules.
+
+## Detached evidence collection and intake
+
+Linux publishes the canonical `py3-none-any` qualification wheel. Windows
+independently generates the same wheel. While Linux artifact scheduling is
+constrained, Windows NPU jobs install that Windows-local wheel; those runs
+validate the platform build but do not replace canonical candidate evidence.
+When a canonical artifact is explicitly supplied, the Windows workflow first
+matches normalized case, source-XCLBIN, transaction, serializer, and XADX
+hashes. Release assembly creates one candidate from all Linux and Windows
+runtime/FastFlowLM wheels and the canonical wheel:
+
+```bash
+rocm-npu qualify candidate \
+  --wheel-dir candidate/wheels \
+  --output candidate/candidate-manifest.json \
+  --expected-source-revision <full-commit> --json
+```
+
+The command infers the source revision from every wheel and rejects disagreement.
+It writes `candidate-manifest.json` plus `candidate-SHA256SUMS`; the
+manifest and wheels must share one artifact root. Transfer that complete
+release-wide candidate artifact to every manual hardware machine without
+rebuilding or selecting only one platform's identities.
+Treat `candidate-SHA256SUMS` as the publication commit marker: consumers must
+require it and verify every listed path before using `candidate-manifest.json`.
+
+Collect and seal one run in a single command:
+
+```bash
+rocm-npu qualify run \
+  --candidate-manifest candidate/candidate-manifest.json \
+  --model-cache <cache> \
+  --output-dir machine-run \
+  --bundle-output machine-run.evidence.zip --json
+```
+
+The directory remains available for diagnosis. Finalized pass, fail, and
+interrupted directories can also be sealed later with:
+
+```bash
+rocm-npu qualify pack \
+  --input machine-run --output machine-run.evidence.zip --json
+```
+
+ZIP output is deterministic and contains the finalized evidence files exactly
+as covered by the internal `SHA256SUMS`. Verify transferred evidence without
+NPU hardware, the core plugin environment, network access, or repository build
+tools:
+
+```bash
+rocm-npu qualify verify \
+  --input machine-run.evidence.zip \
+  --candidate-manifest candidate/candidate-manifest.json --json
+```
+
+Verification applies the archive, candidate, profile, model, platform-probe,
+execution-inventory, and checksum rules defined by the evidence contract.
+
+After transferring independently collected machine bundles into one directory,
+assemble release intake with:
+
+```bash
+rocm-npu qualify intake \
+  --input-dir incoming \
+  --candidate-manifest candidate/candidate-manifest.json \
+  --output-dir assembled \
+  --bundle-output qualification-evidence-<version>.zip \
+  --policy release --require-status pass --json
+```
+
+Intake re-verifies every original bundle, preserves it unchanged under its
+SHA256 name, rejects duplicates and mixed/ad-hoc candidates, writes the
+versioned `qualification-index.json` and aggregate `SHA256SUMS`, then emits a
+deterministic aggregate ZIP and an external
+`qualification-evidence-<version>.zip.sha256`. The checked-in `release` policy
+requires passing NPU2 `fast` evidence from both Windows and Linux and records
+the matched run digests in the index. Verify the final asset itself with:
+
+```bash
+rocm-npu qualify verify \
+  --input qualification-evidence-<version>.zip \
+  --candidate-manifest candidate/candidate-manifest.json --json
+```
+
+Artifact transfer and publication remain manual. See
+[wheel releases](wheel-releases.md) for the operator flow; rebuilding any
+candidate wheel invalidates all collected evidence.
+
+For a shared cache across worktrees:
+
+```powershell
+$cache = 'C:\path\to\rocm-npu-staging\.cache\FastFlowLM-models'
+rocm-npu qualify --model-cache $cache --output qualification-evidence
+rocm-npu qualify --profile extended --model-cache $cache --output extended-evidence
+rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
+```
+
+On Linux, use the equivalent absolute path. `FLM_MODEL_PATH` may be set instead
+of passing `--model-cache`.
+
+Diagnostics answer whether the package and bounded native dispatch work.
+Qualification executes profile-defined installed-product model cases and
+produces structured evidence. Release acceptance is a later policy and signing
+decision; a passing evidence bundle does not publish or accept a release by
+itself.

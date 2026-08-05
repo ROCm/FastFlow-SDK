@@ -52,6 +52,25 @@ class TestRocmNpuWheelCommon:
             {"path": "bin/runtime.bin", "size": 7, "sha256": sha256_file(payload)}
         ]
         assert (package / "manifest.json").is_file()
+        assert b"\r\n" not in (package / "manifest.json").read_bytes()
+
+    def test_purelib_wheel_modes_ignore_host_executable_bits(self):
+        assert (
+            rocm_npu_wheel_common._wheel_file_mode(
+                "example_package/module.py",
+                0o755,
+                root_is_purelib=True,
+            )
+            == 0o100644
+        )
+        assert (
+            rocm_npu_wheel_common._wheel_file_mode(
+                "example_package/module.py",
+                0o755,
+                root_is_purelib=False,
+            )
+            == 0o100755
+        )
 
     def test_build_and_find_wheel_for_explicit_platform_tag(self, tmp_path):
         root = tmp_path

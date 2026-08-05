@@ -83,3 +83,7 @@ metadata against the manifest.
 Legacy XADX files that do not carry a reliable export binding count record that
 field as `null`; the CLI still validates buffer count, order, dtype, shape, and
 byte length from the fixture descriptors.
+External commands are resolved through the versioned executable plugin
+contract in `docs/contracts/plugin-api-v1.md`. The optional
+`rocm-npu-qualification` wheel provides `rocm-npu qualify`; see
+`docs/qualification.md`.

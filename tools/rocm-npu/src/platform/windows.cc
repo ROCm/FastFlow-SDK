@@ -55,6 +55,48 @@ std::string WideToUtf8(const std::wstring& value) {
   return result;
 }
 
+std::wstring Utf8ToWide(const std::string& value) {
+  if (value.empty()) {
+    return {};
+  }
+  const int length =
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                          static_cast<int>(value.size()), nullptr, 0);
+  if (length <= 0) {
+    return {};
+  }
+  std::wstring result(static_cast<std::size_t>(length), L'\0');
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                      static_cast<int>(value.size()), result.data(), length);
+  return result;
+}
+
+std::wstring QuoteWindowsArgument(const std::wstring& argument) {
+  if (!argument.empty() &&
+      argument.find_first_of(L" \t\n\v\"") == std::wstring::npos) {
+    return argument;
+  }
+  std::wstring result = L"\"";
+  std::size_t backslashes = 0;
+  for (const wchar_t character : argument) {
+    if (character == L'\\') {
+      ++backslashes;
+      continue;
+    }
+    if (character == L'"') {
+      result.append(backslashes * 2 + 1, L'\\');
+      result.push_back(L'"');
+    } else {
+      result.append(backslashes, L'\\');
+      result.push_back(character);
+    }
+    backslashes = 0;
+  }
+  result.append(backslashes * 2, L'\\');
+  result.push_back(L'"');
+  return result;
+}
+
 std::optional<std::wstring> DeviceStringProperty(
     HDEVINFO devices, SP_DEVINFO_DATA& device, const DEVPROPKEY& key) {
   DEVPROPTYPE type = 0;
@@ -308,8 +350,6 @@ std::filesystem::path::value_type PluginPathListSeparator() { return L';'; }
 
 std::filesystem::path::value_type PluginPathListQuote() { return L'"'; }
 
-bool PluginEmptyPathEntryMeansCurrentDirectory() { return false; }
-
 std::string PluginDirectoryKey(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char character) {
@@ -331,14 +371,13 @@ std::optional<std::string> PluginExecutableName(
   }
   const std::string extension =
       PluginDirectoryKey(PathToUtf8(path.extension()));
-  if (extension != ".exe" && extension != ".cmd" && extension != ".bat") {
+  if (!extension.empty() && extension != ".exe") {
     return std::nullopt;
   }
   std::string name = filename.substr(
       std::char_traits<char>::length(prefix),
       filename.size() - std::char_traits<char>::length(prefix) -
           extension.size());
-  name = PluginDirectoryKey(std::move(name));
   if (name.empty()) {
     return std::nullopt;
   }
@@ -350,8 +389,7 @@ bool PluginEntryLess(const std::filesystem::path& left,
   const auto sort_key = [](const std::filesystem::path& path) {
     const std::string extension =
         PluginDirectoryKey(PathToUtf8(path.extension()));
-    const int rank =
-        extension == ".exe" ? 0 : (extension == ".cmd" ? 1 : 2);
+    const int rank = extension == ".exe" ? 0 : 1;
     return std::make_pair(PluginDirectoryKey(PathToUtf8(path.stem())),
                           rank);
   };
@@ -360,6 +398,137 @@ bool PluginEntryLess(const std::filesystem::path& left,
   return left_key != right_key
              ? left_key < right_key
              : PathToUtf8(left.filename()) < PathToUtf8(right.filename());
+}
+
+int ExecutePluginProcess(
+    const std::filesystem::path& executable,
+    const std::vector<std::string>& arguments,
+    const std::map<std::string, std::string>& environment_overrides,
+    std::string& error) {
+  struct SavedEnvironment {
+    std::wstring name;
+    std::optional<std::wstring> value;
+  };
+  std::vector<SavedEnvironment> saved_environment;
+  for (const auto& [name, value] : environment_overrides) {
+    (void)value;
+    const std::wstring wide_name = Utf8ToWide(name);
+    saved_environment.push_back(
+        {wide_name, NativeEnvironmentVariable(name.c_str())});
+  }
+  const auto restore_environment = [&]() {
+    for (const SavedEnvironment& saved : saved_environment) {
+      SetEnvironmentVariableW(
+          saved.name.c_str(),
+          saved.value ? saved.value->c_str() : nullptr);
+    }
+  };
+  for (const auto& [name, value] : environment_overrides) {
+    const std::wstring wide_name = Utf8ToWide(name);
+    const std::wstring wide_value = Utf8ToWide(value);
+    if (!SetEnvironmentVariableW(
+            wide_name.c_str(),
+            value.empty() ? nullptr : wide_value.c_str())) {
+      error =
+          std::system_category().message(static_cast<int>(GetLastError()));
+      restore_environment();
+      return 2;
+    }
+  }
+
+  std::wstring command_line = QuoteWindowsArgument(executable.native());
+  for (const std::string& argument : arguments) {
+    command_line.push_back(L' ');
+    command_line += QuoteWindowsArgument(Utf8ToWide(argument));
+  }
+  std::vector<wchar_t> mutable_command(command_line.begin(),
+                                       command_line.end());
+  mutable_command.push_back(L'\0');
+  const DWORD standard_handle_ids[] = {
+      STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+  HANDLE inherited_handles[3] = {};
+  for (std::size_t index = 0; index < 3; ++index) {
+    const HANDLE source = GetStdHandle(standard_handle_ids[index]);
+    if (source == nullptr || source == INVALID_HANDLE_VALUE ||
+        !DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                         &inherited_handles[index], 0, TRUE,
+                         DUPLICATE_SAME_ACCESS)) {
+      error =
+          std::system_category().message(static_cast<int>(GetLastError()));
+      for (HANDLE handle : inherited_handles) {
+        if (handle != nullptr) {
+          CloseHandle(handle);
+        }
+      }
+      restore_environment();
+      return 2;
+    }
+  }
+  SIZE_T attribute_size = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_size);
+  if (attribute_size == 0) {
+    error =
+        std::system_category().message(static_cast<int>(GetLastError()));
+    for (HANDLE handle : inherited_handles) {
+      CloseHandle(handle);
+    }
+    restore_environment();
+    return 2;
+  }
+  std::vector<unsigned char> attribute_storage(attribute_size);
+  auto* attributes = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(
+      attribute_storage.data());
+  const bool attributes_initialized =
+      InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_size);
+  if (!attributes_initialized ||
+      !UpdateProcThreadAttribute(
+          attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+          inherited_handles, sizeof(inherited_handles), nullptr, nullptr)) {
+    error =
+        std::system_category().message(static_cast<int>(GetLastError()));
+    if (attributes_initialized) {
+      DeleteProcThreadAttributeList(attributes);
+    }
+    for (HANDLE handle : inherited_handles) {
+      CloseHandle(handle);
+    }
+    restore_environment();
+    return 2;
+  }
+
+  STARTUPINFOEXW startup = {};
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = inherited_handles[0];
+  startup.StartupInfo.hStdOutput = inherited_handles[1];
+  startup.StartupInfo.hStdError = inherited_handles[2];
+  startup.lpAttributeList = attributes;
+  PROCESS_INFORMATION process = {};
+  const BOOL created = CreateProcessW(
+      executable.c_str(), mutable_command.data(), nullptr, nullptr, TRUE,
+      EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo,
+      &process);
+  const DWORD create_error = created ? ERROR_SUCCESS : GetLastError();
+  DeleteProcThreadAttributeList(attributes);
+  for (HANDLE handle : inherited_handles) {
+    CloseHandle(handle);
+  }
+  restore_environment();
+  if (!created) {
+    error = std::system_category().message(static_cast<int>(create_error));
+    return 2;
+  }
+  CloseHandle(process.hThread);
+  const DWORD wait_result = WaitForSingleObject(process.hProcess, INFINITE);
+  DWORD exit_code = 2;
+  if (wait_result != WAIT_OBJECT_0 ||
+      !GetExitCodeProcess(process.hProcess, &exit_code)) {
+    error =
+        std::system_category().message(static_cast<int>(GetLastError()));
+    exit_code = 2;
+  }
+  CloseHandle(process.hProcess);
+  return static_cast<int>(exit_code);
 }
 
 const char* HrxLibraryFilename() { return "hrx.dll"; }

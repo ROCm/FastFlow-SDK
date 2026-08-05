@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "name": "extended",
+  "description": "Opt-in default-suite superset with revision-pinned Llama 3.1 8B multi-turn, soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
+  "extends": "default",
+  "models": [
+    {
+      "tag": "llama3.1:8b",
+      "source": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
+      "revision": "v0.9.21-merge-lm-head",
+      "identity_policy": "revision-sha256",
+      "registry_sha256": "2615438e0f8a16b0528849120d5db3ca58f373d99ecb6f7960fbba4a3b320e9f",
+      "files": [
+        {"path": "config.json", "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"},
+        {"path": "model.q4nx", "sha256": "0c03021f1cd21e43376234817b34ad32ccf07dca94785ede7640833d15169d8a"},
+        {"path": "tokenizer.json", "sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4"},
+        {"path": "tokenizer_config.json", "sha256": "01b0d6dd3c391ffc2facc01592ac07f25e8c4212d3450b8103042e8a5fcbafa8"}
+      ],
+      "xclbins": [],
+      "tests": [
+        {
+          "name": "multi-turn",
+          "kind": "run",
+          "turns": [
+            {"prompt": "Reply with the word alpha.", "expected_regex": "alpha"},
+            {"prompt": "Reply with the word beta.", "expected_regex": "beta"},
+            {"prompt": "Reply with the word gamma.", "expected_regex": "gamma"}
+          ],
+          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "process_iterations": 2,
+          "timeout_seconds": 600,
+          "ctx_len": 4096
+        },
+        {
+          "name": "bounded-soak",
+          "kind": "run",
+          "turns": [
+            {"prompt": "Reply with the word robust.", "expected_regex": "robust"},
+            {"prompt": "Reply with the word complete.", "expected_regex": "complete"}
+          ],
+          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "process_iterations": 3,
+          "timeout_seconds": 600,
+          "ctx_len": 4096
+        },
+        {
+          "name": "context-4k-retrieval",
+          "kind": "run",
+          "turns": [
+            {
+              "prompt_generator": {
+                "schema_version": 1,
+                "kind": "context-tail-marker-v1",
+                "filler_word_count": 3200,
+                "marker_word_offset": 3120,
+                "marker": "HRX-NPU-CONTEXT-4K-PASS"
+              },
+              "expected_regex": "HRX[- ]NPU[- ]CONTEXT[- ]4K[- ]PASS"
+            }
+          ],
+          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "process_iterations": 1,
+          "timeout_seconds": 900,
+          "ctx_len": 4096
+        },
+        {
+          "name": "context-1k",
+          "kind": "bench",
+          "config": "bench/bench_1k_smoke.json",
+          "timeout_seconds": 600,
+          "checkpoint_min": 950,
+          "checkpoint_max": 1024,
+          "expected_regex": ""
+        },
+        {
+          "name": "context-4k",
+          "kind": "bench",
+          "config": "bench/bench_4k_smoke.json",
+          "timeout_seconds": 900,
+          "checkpoint_min": 3800,
+          "checkpoint_max": 4096,
+          "expected_regex": ""
+        }
+      ]
+    }
+  ]
+}

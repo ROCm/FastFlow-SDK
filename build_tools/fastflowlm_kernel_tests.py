@@ -3,6 +3,8 @@
 """Build, package, verify, and run the FastFlowLM production-xclbin smoke."""
 
 import json
+import gzip
+import importlib.util
 import math
 import os
 import platform
@@ -22,10 +24,21 @@ INSTALL = paths.BUILD / "fastflowlm-kernel-smoke-install"
 STAGE = paths.BUILD / "fastflowlm-kernel-smoke-stage"
 EXTRACTED = paths.BUILD / "fastflowlm-kernel-smoke-extracted"
 ARTIFACTS = paths.BUILD / "artifacts" / "fastflowlm-kernel-smoke"
+XADX_STAGE = paths.BUILD / "fastflowlm-xadx-assets"
+XADX_PRODUCT = "rocm-npu-fastflowlm-xadx"
+XADX_GENERATOR_TARGET = "fastflowlm-xadx-asset-generator"
 ARCHIVE_NAME = "fastflowlm-kernel-smoke.tar.gz"
 PRODUCT = "rocm-npu-fastflowlm-kernel-smoke"
 CAPABILITIES_RELATIVE = Path("share/fastflowlm-kernel-smoke/kernel_capabilities.json")
 CAPABILITIES_SOURCE = paths.ROOT / "tests" / "fastflowlm" / "kernel_capabilities.json"
+XADX_CASES_SOURCE = (
+    paths.ROOT
+    / "tools"
+    / "rocm-npu-qualification"
+    / "python"
+    / "rocm_npu_qualification"
+    / "xadx_cases.json"
+)
 # Role -> CMake target. "kernel-smoke" validates the production xclbins
 # numerically; "readback-smoke" validates that the runtime keeps a host mapping
 # coherent across back-to-back device writes.
@@ -285,15 +298,22 @@ def _installed_executables():
     return {role: INSTALL / "bin" / executable_name(role) for role in TARGETS}
 
 
-def build_helper(fresh=False):
+def _configure_helper(*, fresh=False, build_testing=True):
     source = paths.ROOT / "tests" / "fastflowlm"
     fastflowlm_source = paths.PROJ / "FastFlowLM" / "src"
     hrx_config = HRX_INSTALL / "lib" / "cmake" / "hrx" / "hrx-config.cmake"
     if not hrx_config.is_file():
         raise RuntimeError(f"missing installed HRX package: {hrx_config}")
-    if not (fastflowlm_source / "lib").is_dir():
+    required_fastflowlm = (
+        fastflowlm_source / "include",
+        fastflowlm_source / "lib",
+        fastflowlm_source / "xclbins",
+    )
+    missing = [str(path) for path in required_fastflowlm if not path.is_dir()]
+    if missing:
         raise RuntimeError(
-            "missing FastFlowLM engine libraries; run `dev.py build fastflowlm`"
+            "FastFlowLM source is not initialized or is incomplete; missing "
+            + ", ".join(missing)
         )
     if fresh:
         shutil.rmtree(BUILD, ignore_errors=True)
@@ -308,12 +328,39 @@ def build_helper(fresh=False):
             "-B",
             environment.cmake_path(BUILD),
             "-DCMAKE_BUILD_TYPE=Release",
+            f"-DBUILD_TESTING={'ON' if build_testing else 'OFF'}",
             f"-DCMAKE_PREFIX_PATH={environment.cmake_path(HRX_INSTALL)}",
             f"-DFASTFLOWLM_SOURCE_DIR={environment.cmake_path(fastflowlm_source)}",
             f"-DCMAKE_INSTALL_PREFIX={environment.cmake_path(INSTALL)}",
         ],
         env=environment.cmake_env(),
     )
+    return fastflowlm_source
+
+
+def build_xadx_generator(fresh=False):
+    """Builds only the host-side serializer; the FastFlowLM app is not required."""
+    _configure_helper(fresh=fresh, build_testing=False)
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(BUILD),
+            "--target",
+            XADX_GENERATOR_TARGET,
+            "-j",
+            os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4"),
+        ],
+        env=environment.cmake_env(),
+    )
+    generator = BUILD / paths.executable_name(XADX_GENERATOR_TARGET)
+    if not generator.is_file():
+        raise RuntimeError(f"XADX build did not produce {generator}")
+    return generator
+
+
+def build_helper(fresh=False):
+    _configure_helper(fresh=fresh, build_testing=True)
     environment.sh(
         [
             environment.cmake_bin(),
@@ -321,6 +368,7 @@ def build_helper(fresh=False):
             environment.cmake_path(BUILD),
             "--target",
             *sorted(TARGETS.values()),
+            XADX_GENERATOR_TARGET,
             "-j",
             os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4"),
         ],
@@ -340,6 +388,355 @@ def build_helper(fresh=False):
         if not executable.is_file():
             raise RuntimeError(f"kernel smoke build did not produce {executable}")
     return executables
+
+
+def _file_record(root, path):
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "size": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _assert_runtime_generator_parity(destination, specifications):
+    generator_path = XADX_CASES_SOURCE.with_name("xadx_generators.py")
+    module_spec = importlib.util.spec_from_file_location(
+        "rocm_npu_qualification_xadx_generator_parity", generator_path
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError("cannot load qualification XADX runtime generators")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    for relative, specification in specifications.items():
+        generated = (Path(destination) / relative).read_bytes()
+        materialized, _ = module.materialize(specification, Path(destination))
+        if materialized != generated:
+            raise RuntimeError(
+                f"qualification XADX runtime generator disagrees with C++: {relative}"
+            )
+
+
+def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
+    """Generates deterministic NPU2 XADX qualification assets without an NPU."""
+    destination = Path(destination)
+    generator = BUILD / paths.executable_name(XADX_GENERATOR_TARGET)
+    if not generator.is_file():
+        build_xadx_generator(False)
+    if not generator.is_file():
+        raise RuntimeError(f"missing FastFlowLM XADX asset generator: {generator}")
+    xclbin_root = Path(xclbin_root)
+    env = environment.cmake_env()
+    search_key = "PATH" if paths.is_windows() else "LD_LIBRARY_PATH"
+    search_dirs = [
+        paths.PROJ / "FastFlowLM" / "src" / "lib",
+        HRX_INSTALL / ("bin" if paths.is_windows() else "lib"),
+    ]
+    entries = [str(path) for path in search_dirs if path.is_dir()]
+    if env.get(search_key):
+        entries.append(env[search_key])
+    env[search_key] = os.pathsep.join(entries)
+    environment.sh(
+        [
+            str(generator),
+            str(xclbin_root),
+            str(CAPABILITIES_SOURCE),
+            str(destination),
+        ],
+        env=env,
+    )
+    draft_path = destination / ".generation.json"
+    if not draft_path.is_file():
+        raise RuntimeError("FastFlowLM XADX generator produced no metadata")
+    draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    if (
+        draft.get("serializer_api") != "hrx_amdxdna_xadx_serialize"
+        or draft.get("serializer_revision") != "hrx-amdxdna-v0"
+    ):
+        raise RuntimeError("FastFlowLM XADX generator used an unknown serializer")
+    transactions = {}
+    for kernel, relative in draft["transactions"].items():
+        path = destination / relative
+        transactions[kernel] = {
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+    capabilities = destination / "capability-manifest.json"
+    shutil.copy2(CAPABILITIES_SOURCE, capabilities)
+    cases = []
+    executables = []
+    coherence_executable = None
+    shape = draft["shape"]
+
+    def zero(size):
+        return {
+            "kind": "generator",
+            "id": "zero",
+            "parameters": {"size": size},
+        }
+
+    mm_weight = {
+        "kind": "generator",
+        "id": "mm-weight-bf16",
+        "parameters": {
+            "m": shape["m"],
+            "k": shape["k"],
+            "salt": 41,
+            "padding": 4096,
+        },
+    }
+
+    def mm_activation(salt):
+        return {
+            "kind": "generator",
+            "id": "mm-activation-bf16",
+            "parameters": {"k": shape["k"], "n": shape["n"], "salt": salt},
+        }
+
+    _assert_runtime_generator_parity(
+        destination,
+        {
+            "data/mm-weight.bin": mm_weight,
+            "data/mm-activation-a.bin": mm_activation(41),
+            "data/mm-activation-b.bin": mm_activation(54),
+        },
+    )
+
+    for record in draft["executables"]:
+        source = xclbin_root / record["source_xclbin"]
+        xadx = destination / record["xadx"]
+        if not source.is_file() or not xadx.is_file():
+            raise RuntimeError(f"missing XADX source or output for {record['id']}")
+        executable = {
+            **record,
+            "source_xclbin_size": source.stat().st_size,
+            "source_xclbin_sha256": sha256_file(source),
+            "transaction_size": transactions[record["kernel"]]["size"],
+            "transaction_sha256": transactions[record["kernel"]]["sha256"],
+            "xadx_size": xadx.stat().st_size,
+            "xadx_sha256": sha256_file(xadx),
+        }
+        executables.append(executable)
+        if record["kernel"] == "dequant":
+            cases.append(
+                {
+                    "name": f"{record['family']}/dequant/zero-baseline",
+                    "xadx": record["xadx"],
+                    "export": "MLIR_AIE",
+                    "buffers": [
+                        {
+                            "name": "output",
+                            "direction": "output",
+                            "size": 2 * shape["m"] * shape["k"],
+                            "expected": zero(2 * shape["m"] * shape["k"]),
+                            "comparison": "exact",
+                        },
+                        {
+                            "name": "weight",
+                            "direction": "input",
+                            "size": (destination / "data/dequant-weight-zero.bin")
+                            .stat()
+                            .st_size,
+                            "input": zero(
+                                (destination / "data/dequant-weight-zero.bin")
+                                .stat()
+                                .st_size
+                            ),
+                        },
+                        {
+                            "name": "parameters",
+                            "direction": "input",
+                            "size": 4096,
+                            "input": zero(4096),
+                        },
+                    ],
+                }
+            )
+        else:
+            cases.append(
+                {
+                    "name": f"{record['family']}/mm/structured",
+                    "xadx": record["xadx"],
+                    "export": "MLIR_AIE",
+                    "buffers": [
+                        {
+                            "name": "output",
+                            "direction": "output",
+                            "size": 2 * shape["m"] * shape["n"],
+                            "expected": {
+                                "kind": "gzip",
+                                "path": "data/mm-expected-a.bin.gz",
+                            },
+                            "comparison": "bf16-tolerance",
+                            "atol": draft["tolerances"]["atol"],
+                            "rtol": draft["tolerances"]["rtol"],
+                        },
+                        {
+                            "name": "weight",
+                            "direction": "input",
+                            "size": (destination / "data/mm-weight.bin").stat().st_size,
+                            "input": mm_weight,
+                        },
+                        {
+                            "name": "activation",
+                            "direction": "input",
+                            "size": (destination / "data/mm-activation-a.bin")
+                            .stat()
+                            .st_size,
+                            "input": mm_activation(41),
+                        },
+                    ],
+                }
+            )
+            if coherence_executable is None:
+                coherence_executable = record
+    if coherence_executable is None:
+        raise RuntimeError("FastFlowLM XADX generation has no MM coherence kernel")
+    cases.append(
+        {
+            "name": "host-readback/coherence",
+            "xadx": coherence_executable["xadx"],
+            "export": "MLIR_AIE",
+            "buffers": [
+                {
+                    "name": "output",
+                    "direction": "output",
+                    "size": 2 * shape["m"] * shape["n"],
+                    "expected": {
+                        "kind": "gzip",
+                        "path": "data/mm-expected-a.bin.gz",
+                    },
+                    "comparison": "bf16-tolerance",
+                    "atol": draft["tolerances"]["atol"],
+                    "rtol": draft["tolerances"]["rtol"],
+                },
+                {
+                    "name": "weight",
+                    "direction": "input",
+                    "size": (destination / "data/mm-weight.bin").stat().st_size,
+                    "input": mm_weight,
+                },
+                {
+                    "name": "activation",
+                    "direction": "input",
+                    "size": (destination / "data/mm-activation-a.bin").stat().st_size,
+                    "input": mm_activation(41),
+                },
+            ],
+            "readback_variants": [
+                {
+                    "buffer": "activation",
+                    "input": mm_activation(41),
+                    "expected": {
+                        "kind": "gzip",
+                        "path": "data/mm-expected-a.bin.gz",
+                    },
+                },
+                {
+                    "buffer": "activation",
+                    "input": mm_activation(54),
+                    "expected": {
+                        "kind": "gzip",
+                        "path": "data/mm-expected-b.bin.gz",
+                    },
+                },
+            ],
+        }
+    )
+    case_contract = json.loads(XADX_CASES_SOURCE.read_text(encoding="utf-8"))
+    expected_case_names = [
+        f"{family}/{suffix}"
+        for family in case_contract["families"]
+        for suffix in case_contract["case_suffixes"]
+    ] + case_contract["global_cases"]
+    if (
+        case_contract.get("schema_version") != 1
+        or case_contract.get("shape") != shape
+        or [case["name"] for case in cases] != expected_case_names
+    ):
+        raise RuntimeError("generated XADX cases disagree with qualification contract")
+    for name in ("mm-expected-a.bin", "mm-expected-b.bin"):
+        source = destination / "data" / name
+        source.with_suffix(source.suffix + ".gz").write_bytes(
+            gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
+        )
+    for path in (destination / "data").glob("*.bin"):
+        path.unlink()
+    shutil.rmtree(destination / ".transactions")
+    draft_path.unlink()
+    files = [
+        _file_record(destination, path)
+        for path in sorted(destination.rglob("*"))
+        if path.is_file() and path.name != "manifest.json"
+    ]
+    manifest = {
+        "schema_version": 1,
+        "product": XADX_PRODUCT,
+        "target": "npu2",
+        "serializer": {
+            "api": draft["serializer_api"],
+            "revision": draft["serializer_revision"],
+        },
+        "case_contract_sha256": sha256_file(XADX_CASES_SOURCE),
+        "capabilities": _file_record(destination, capabilities),
+        "shape": shape,
+        "executables": executables,
+        "cases": cases,
+        "files": files,
+    }
+    (destination / "manifest.json").write_bytes(
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    )
+    verify_xadx_assets(destination)
+    return destination
+
+
+def cmd_generate_xadx_assets(args):
+    build_xadx_generator(args.fresh)
+    return generate_xadx_assets(
+        paths.PROJ / "FastFlowLM" / "src" / "xclbins",
+        destination=args.dir,
+    )
+
+
+def verify_xadx_assets(root):
+    """Rejects missing, extra, corrupted, or provenance-incomplete XADX assets."""
+    root = Path(root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("product") != XADX_PRODUCT
+        or manifest.get("target") != "npu2"
+        or manifest.get("serializer")
+        != {"api": "hrx_amdxdna_xadx_serialize", "revision": "hrx-amdxdna-v0"}
+        or not re.fullmatch(r"[0-9a-f]{64}", manifest.get("case_contract_sha256", ""))
+    ):
+        raise RuntimeError("invalid FastFlowLM XADX package manifest")
+    expected = {record["path"]: record for record in manifest.get("files", [])}
+    actual = {
+        path.relative_to(root).as_posix(): path
+        for path in root.rglob("*")
+        if path.is_file() and path != manifest_path
+    }
+    if set(expected) != set(actual):
+        raise RuntimeError("FastFlowLM XADX package inventory mismatch")
+    for relative, path in actual.items():
+        record = expected[relative]
+        if (
+            path.stat().st_size != record["size"]
+            or sha256_file(path) != record["sha256"]
+        ):
+            raise RuntimeError(f"FastFlowLM XADX package corruption: {relative}")
+    for executable in manifest.get("executables", []):
+        xadx = root / executable["xadx"]
+        if (
+            not executable.get("source_xclbin_sha256")
+            or not executable.get("transaction_sha256")
+            or xadx.stat().st_size != executable.get("xadx_size")
+            or sha256_file(xadx) != executable.get("xadx_sha256")
+        ):
+            raise RuntimeError(f"incomplete XADX provenance: {executable.get('id')}")
+    return manifest
 
 
 def test_native_helper():
@@ -460,6 +857,7 @@ def verify_tree(root, *, require_checkout=True):
 def package_helper(args):
     executables = build_helper(getattr(args, "fresh", False))
     test_native_helper()
+    generate_xadx_assets(paths.PROJ / "FastFlowLM" / "src" / "xclbins")
     shutil.rmtree(STAGE, ignore_errors=True)
     (STAGE / "bin").mkdir(parents=True)
     for executable in executables.values():
