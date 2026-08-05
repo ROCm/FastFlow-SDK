@@ -473,13 +473,55 @@ def _wheel_members(wheel: Path) -> dict[str, tuple[bytes, int]]:
         raise CandidateError(f"qualification wheel is invalid: {wheel}") from error
 
 
+def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
+    if type(left) is not type(right):
+        return (
+            f"{path} has different types: "
+            f"canonical={type(left).__name__}, candidate={type(right).__name__}"
+        )
+    if isinstance(left, dict):
+        left_keys = set(left)
+        right_keys = set(right)
+        if left_keys != right_keys:
+            return (
+                f"{path} has different keys: "
+                f"missing={sorted(left_keys - right_keys)}, "
+                f"unexpected={sorted(right_keys - left_keys)}"
+            )
+        for key in sorted(left):
+            difference = _first_difference(left[key], right[key], f"{path}.{key}")
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(left, list):
+        if len(left) != len(right):
+            return (
+                f"{path} has different lengths: "
+                f"canonical={len(left)}, candidate={len(right)}"
+            )
+        for index, (left_item, right_item) in enumerate(zip(left, right)):
+            difference = _first_difference(
+                left_item, right_item, f"{path}[{index}]"
+            )
+            if difference is not None:
+                return difference
+        return None
+    if left != right:
+        return f"{path} differs: canonical={left!r}, candidate={right!r}"
+    return None
+
+
 def verify_qualification_wheel_parity(
     canonical_wheel: Path, candidate_wheel: Path
 ) -> None:
     canonical = qualification_wheel_contract(canonical_wheel)
     candidate = qualification_wheel_contract(candidate_wheel)
     if canonical != candidate:
-        raise CandidateError("qualification wheel contracts or XADX provenance differ")
+        difference = _first_difference(canonical, candidate)
+        raise CandidateError(
+            "qualification wheel contracts or XADX provenance differ: "
+            f"{difference or 'unknown difference'}"
+        )
     canonical_members = _wheel_members(canonical_wheel)
     candidate_members = _wheel_members(candidate_wheel)
     if set(canonical_members) != set(candidate_members):

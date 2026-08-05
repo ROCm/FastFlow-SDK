@@ -198,7 +198,10 @@ def test_qualification_wheel_parity_binds_xadx_hashes(tmp_path):
         "rocm_npu_qualification",
         xadx_sha="4" * 64,
     )
-    with pytest.raises(candidate.CandidateError, match="XADX provenance"):
+    with pytest.raises(
+        candidate.CandidateError,
+        match=r"\$\.xadx_provenance\.executables\[0\]\.xadx_sha256",
+    ):
         candidate.verify_qualification_wheel_parity(canonical, different)
     different_oracle = _write_wheel(
         tmp_path / "different-oracle",
@@ -206,7 +209,10 @@ def test_qualification_wheel_parity_binds_xadx_hashes(tmp_path):
         "rocm_npu_qualification",
         oracle_sha="6" * 64,
     )
-    with pytest.raises(candidate.CandidateError, match="XADX provenance"):
+    with pytest.raises(
+        candidate.CandidateError,
+        match=r"\$\.xadx_provenance\.manifest_sha256",
+    ):
         candidate.verify_qualification_wheel_parity(canonical, different_oracle)
 
 

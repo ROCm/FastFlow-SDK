@@ -29,6 +29,7 @@ jobs:
     name: Presubmit
     runs-on: ubuntu-24.04
     outputs:
+      package_version: ${{ steps.release-identity.outputs.package_version }}
       run_full_ci: ${{ steps.changes.outputs.run_full_ci }}
     steps:
       - name: Checkout repository
@@ -48,6 +49,15 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python .github/scripts/classify_changes.py
+
+      - name: Resolve CI package identity
+        id: release-identity
+        run: |
+          python build_tools/rocm_npu_wheel_release_cli.py resolve \
+            --ref "${GITHUB_REF}" \
+            --publish-target none \
+            --run-number "${GITHUB_RUN_NUMBER}" \
+            --github-output "${GITHUB_OUTPUT}"
 
       - name: Validate Python symbol resolution
         run: |
@@ -79,6 +89,7 @@ jobs:
       actions: read
     with:
       name: Build + smoke
+      package_version: ${{ needs.presubmit.outputs.package_version }}
       run_npu_e2e: true
 
   windows:
@@ -91,6 +102,7 @@ jobs:
       actions: read
     with:
       name: Build + smoke (Windows)
+      package_version: ${{ needs.presubmit.outputs.package_version }}
       run_npu_e2e: true
 
   linux_flm:
@@ -103,6 +115,7 @@ jobs:
       actions: read
     with:
       name: NPU e2e
+      package_version: ${{ needs.presubmit.outputs.package_version }}
       qualification_artifact: rocm-npu-qualification-wheel
       build_artifacts: true
       run_npu_e2e: true
@@ -117,5 +130,29 @@ jobs:
       actions: read
     with:
       name: NPU e2e
+      package_version: ${{ needs.presubmit.outputs.package_version }}
       build_artifacts: true
       run_npu_e2e: true
+
+  collect_releases:
+    name: Collect and validate releases
+    needs:
+      - presubmit
+      - linux
+      - windows
+      - linux_flm
+      - windows_flm
+    if: >-
+      ${{
+        always() &&
+        needs.presubmit.outputs.run_full_ci == 'true' &&
+        !cancelled()
+      }}
+    uses: ./.github/workflows/collect_rocm_npu_ci_release.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      package_version: ${{ needs.presubmit.outputs.package_version }}
+      source_ref: ${{ github.ref }}
+      source_sha: ${{ github.sha }}

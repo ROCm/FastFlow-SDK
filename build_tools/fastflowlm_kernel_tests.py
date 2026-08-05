@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Build, package, verify, and run the FastFlowLM production-xclbin smoke."""
 
-import json
 import gzip
 import importlib.util
+import io
+import json
 import math
 import os
 import platform
@@ -416,6 +417,19 @@ def _assert_runtime_generator_parity(destination, specifications):
             )
 
 
+def _deterministic_gzip(data):
+    stream = io.BytesIO()
+    with gzip.GzipFile(
+        filename="",
+        mode="wb",
+        compresslevel=9,
+        fileobj=stream,
+        mtime=0,
+    ) as archive:
+        archive.write(data)
+    return stream.getvalue()
+
+
 def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
     """Generates deterministic NPU2 XADX qualification assets without an NPU."""
     destination = Path(destination)
@@ -657,7 +671,7 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
     for name in ("mm-expected-a.bin", "mm-expected-b.bin"):
         source = destination / "data" / name
         source.with_suffix(source.suffix + ".gz").write_bytes(
-            gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
+            _deterministic_gzip(source.read_bytes())
         )
     for path in (destination / "data").glob("*.bin"):
         path.unlink()

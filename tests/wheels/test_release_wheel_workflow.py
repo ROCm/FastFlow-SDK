@@ -93,8 +93,14 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16" in workflow
         assert "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in workflow
         assert "ruff check --select F821 dev.py build_tools tests" in workflow
+        assert "rocm_npu_wheel_release_cli.py resolve" in workflow
+        assert '--publish-target none' in workflow
+        assert "default_package_version" not in workflow
         for name in ("linux", "windows", "linux_flm", "windows_flm"):
             assert "needs: presubmit" in _job(workflow, name)
+            assert "run_npu_e2e: true" in _job(workflow, name)
+        assert "linux_npu:" not in workflow
+        assert "windows_npu:" not in workflow
         assert "linux_flm_npu:" not in workflow
         assert "windows_flm_npu:" not in workflow
         assert (
@@ -105,6 +111,29 @@ class TestRocmNpuReleaseWheelWorkflow:
             "uses: ./.github/workflows/fastflowlm_hrx_windows.yml"
             in _job(workflow, "windows_flm")
         )
+
+    def test_pr_ci_compares_independently_generated_qualification_wheels(self):
+        workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        collect = _job(workflow, "collect_releases")
+        collector = (WORKFLOWS / "collect_rocm_npu_ci_release.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "needs:" in collect
+        for producer in ("linux", "windows", "linux_flm", "windows_flm"):
+            assert f"- {producer}" in collect
+        assert "always() &&" in collect
+        assert "!cancelled()" in collect
+        assert (
+            "uses: ./.github/workflows/collect_rocm_npu_ci_release.yml" in collect
+        )
+        assert (
+            "package_version: ${{ needs.presubmit.outputs.package_version }}" in collect
+        )
+        assert "name: rocm-npu-qualification-wheel" in collector
+        assert "name: rocm-npu-qualification-wheel-windows-local" in collector
+        assert "verify_qualification_wheel_parity.py" in collector
+        assert "rocm_npu_wheel_release_cli.py prepare" in collector
+        assert "Create release-wide qualification candidate" in collector
 
     def test_release_is_dispatch_only_and_reuses_both_npu_validations(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
@@ -278,7 +307,9 @@ class TestRocmNpuReleaseWheelWorkflow:
         ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
         for platform in ("linux", "windows"):
             workflow_name = f"build_rocm_npu_staging_{platform}.yml"
-            assert f"uses: ./.github/workflows/{workflow_name}" in ci
+            assert ci.count(f"uses: ./.github/workflows/{workflow_name}") == 1
+            build_job = _job(ci, platform)
+            assert "run_npu_e2e: true" in build_job
             workflow = (WORKFLOWS / workflow_name).read_text(encoding="utf-8")
             assert workflow.count("--binding build/iron-tools-install/python") == 1
             assert "build-compiler-bindings" not in workflow
