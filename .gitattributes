@@ -1,2 +1,10 @@
-*.patch text eol=lf whitespace=-blank-at-eol
-third_party/nlohmann_json/** text eol=lf
+# Normalize text files to LF in the working tree so shell scripts, formatters,
+# and Linux CI see identical bytes whatever the developer's core.autocrlf is.
+* text=auto eol=lf
+
+# Patches must apply byte-for-byte, so never convert them. Their trailing
+# whitespace is payload, not a style error.
+*.patch -text -eol whitespace=-blank-at-eol
+
+# Binary fixtures must never be line-ending converted.
+*.xadx binary -eol
