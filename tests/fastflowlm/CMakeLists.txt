@@ -1,3 +1,5 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.25)
 project(rocm_npu_fastflowlm_kernel_smoke LANGUAGES CXX)
 include(CTest)

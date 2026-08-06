@@ -1,3 +1,5 @@
+// Copyright Advanced Micro Devices, Inc.
+// SPDX-License-Identifier: MIT
 #include "rocm_npu/command.h"
 
 #include "rocm_npu/hrx_loader.h"

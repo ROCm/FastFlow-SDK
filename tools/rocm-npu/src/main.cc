@@ -1,3 +1,5 @@
+// Copyright Advanced Micro Devices, Inc.
+// SPDX-License-Identifier: MIT
 #include <algorithm>
 #include <exception>
 #include <iostream>

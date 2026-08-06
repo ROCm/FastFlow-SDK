@@ -1,3 +1,5 @@
+// Copyright Advanced Micro Devices, Inc.
+// SPDX-License-Identifier: MIT
 #define HRX_BUILDING_SHARED
 #include <hrx_runtime.h>
 

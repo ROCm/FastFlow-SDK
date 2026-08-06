@@ -1,3 +1,5 @@
+// Copyright Advanced Micro Devices, Inc.
+// SPDX-License-Identifier: MIT
 #include "rocm_npu/sha256.h"
 
 #include <array>
