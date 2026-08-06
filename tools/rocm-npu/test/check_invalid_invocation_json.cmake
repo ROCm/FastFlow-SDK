@@ -1,3 +1,5 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
 execute_process(
   COMMAND "${CLI}" Unknown --json
   RESULT_VARIABLE result

@@ -1,3 +1,5 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
 if(WIN32)
   set(_rocm_npu_test_platform_source platform_windows.cc)
   set(_rocm_npu_fake_plugin_main_source fake_plugin_main_windows.cc)
