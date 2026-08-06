@@ -57,11 +57,12 @@ class Sha256 {
     const std::uint64_t bit_size = total_size_ * 8;
     block_[block_size_++] = 0x80;
     if (block_size_ > 56) {
-      std::fill(block_.begin() + block_size_, block_.end(), 0);
+      std::fill(block_.begin() + block_size_, block_.end(), std::uint8_t{0});
       Transform(block_.data());
       block_size_ = 0;
     }
-    std::fill(block_.begin() + block_size_, block_.begin() + 56, 0);
+    std::fill(block_.begin() + block_size_, block_.begin() + 56,
+              std::uint8_t{0});
     for (unsigned index = 0; index < 8; ++index) {
       block_[63 - index] =
           static_cast<std::uint8_t>(bit_size >> (index * 8));
