@@ -88,13 +88,17 @@ def require_1k_checkpoint(
             )
         ]
     matching = [value for value in values if minimum <= value <= maximum]
-    if len(matching) != expected_count:
+    # Require AT LEAST one checkpoint per scheduled iteration in the target
+    # window. Gemma-family (sliding-window/local attention) models legitimately
+    # emit >1 checkpoint per iteration in the window; per-iteration integrity is
+    # already enforced by require_benchmark_schedule + raw-output count.
+    if len(matching) < expected_count:
         raise ValueError(
-            f"benchmark must report exactly {expected_count} checkpoint(s) in "
+            f"benchmark must report at least {expected_count} checkpoint(s) in "
             f"{minimum}..{maximum}; "
             f"got {values or 'none'}"
         )
-    return matching[0]
+    return max(matching)
 
 
 def require_benchmark_schedule(text: str, *, iterations: int) -> int:

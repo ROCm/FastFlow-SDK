@@ -201,6 +201,7 @@
             "model-resolution",
             "run",
             "bench",
+            "serve",
             "xclbin",
             "xadx",
             "qualification"

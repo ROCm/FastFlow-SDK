@@ -376,6 +376,9 @@ def _validate_complete_execution(
                 ("xclbin", model["tag"], "production-xclbin-inventory")
             ] = {"files_verified": len(model["xclbins"])}
         for test in model["tests"]:
+            if test["kind"] == "serve":
+                expected[("serve", model["tag"], test["name"])] = {}
+                continue
             if test["kind"] == "bench":
                 expected[("bench", model["tag"], test["name"])] = {
                     "turn_count": test.get("iterations", 1),

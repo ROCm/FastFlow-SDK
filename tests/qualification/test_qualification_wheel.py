@@ -274,6 +274,7 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "rocm_npu_qualification/schemas/xadx-report-v1.schema.json" in names
     assert "rocm_npu_qualification/bench/bench_1k_smoke.json" in names
     assert "rocm_npu_qualification/bench/bench_4k_smoke.json" in names
+    assert "rocm_npu_qualification/bench/bench_8k_smoke.json" in names
     assert "rocm_npu_qualification/licenses/FastFlowLM-LICENSE_RUNTIME.txt" in names
     assert "rocm_npu_qualification/licenses/FastFlowLM-TERMS.md" in names
     provenance = package_manifest["embedded_binaries"]["fastflowlm_xadx"]
@@ -403,6 +404,7 @@ class Runtime:
 package = resources.files("rocm_npu_qualification")
 assert package.joinpath("bench", "bench_1k_smoke.json").is_file()
 assert package.joinpath("bench", "bench_4k_smoke.json").is_file()
+assert package.joinpath("bench", "bench_8k_smoke.json").is_file()
 with resources.as_file(package.joinpath("xadx_assets")) as root:
     recipe = json.loads((root / "recipe.json").read_text())
     report = xadx.run_recipe(

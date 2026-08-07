@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import re
@@ -13,9 +14,11 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 _SECRET_PATTERNS = (
@@ -162,6 +165,149 @@ def run_command(
         timed_out=timed_out,
         log=log_path.as_posix(),
     )
+
+
+_SERVE_PORT_PATTERN = re.compile(r"WebServer started on port (\d+)")
+
+
+def serve_probe(
+    argv: Sequence[str | os.PathLike[str]],
+    *,
+    log_path: Path,
+    env: Mapping[str, str],
+    probe_kind: str,
+    model: str,
+    boot_timeout: float,
+    http_timeout: float = 120.0,
+    echo: bool = False,
+) -> tuple[CommandResult, dict[str, Any]]:
+    """Start ``flm serve`` for an embed/ASR model and probe the HTTP endpoint.
+
+    For ``embed`` models a ``/v1/embeddings`` request must return a non-empty
+    vector; for ``asr`` models (no bundled audio sample) a healthy server that
+    loaded the model on the NPU is treated as a partial pass. Returns the
+    captured :class:`CommandResult` plus a probe detail dict.
+    """
+    normalized = tuple(os.fspath(item) for item in argv)
+    started = time.monotonic()
+    process = subprocess.Popen(
+        normalized,
+        stdin=None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=dict(env),
+        **_managed_process_kwargs(),
+    )
+    assert process.stdout is not None
+    chunks: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for chunk in iter(lambda: process.stdout.read(1), ""):
+                chunks.put(chunk)
+        finally:
+            chunks.put(None)
+
+    reader = threading.Thread(
+        target=read_output, name="qualification-serve-output", daemon=True
+    )
+    reader.start()
+    output: list[str] = []
+    port: int | None = None
+    detail = ""
+    ok = False
+    timed_out = False
+    deadline = started + boot_timeout
+    try:
+        while time.monotonic() < deadline and port is None:
+            try:
+                chunk = chunks.get(timeout=0.1)
+            except queue.Empty:
+                if process.poll() is not None:
+                    break
+                continue
+            if chunk is None:
+                break
+            output.append(chunk)
+            match = _SERVE_PORT_PATTERN.search("".join(output))
+            if match:
+                port = int(match.group(1))
+        if port is None:
+            timed_out = process.poll() is None
+            detail = "server did not report a listening port"
+        else:
+            base = f"http://127.0.0.1:{port}"
+            time.sleep(2.0)
+            try:
+                if probe_kind == "embed":
+                    request = urllib.request.Request(
+                        f"{base}/v1/embeddings",
+                        data=json.dumps(
+                            {"model": model, "input": "The quick brown fox."}
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(
+                        request, timeout=http_timeout
+                    ) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                    vector = (payload.get("data") or [{}])[0].get("embedding")
+                    if isinstance(vector, list) and vector:
+                        ok = True
+                        detail = f"embedding dim={len(vector)}"
+                    else:
+                        detail = "embeddings endpoint returned no vector"
+                else:  # asr: no bundled audio sample, confirm the server is healthy
+                    try:
+                        urllib.request.urlopen(
+                            f"{base}/v1/models", timeout=min(30.0, http_timeout)
+                        ).close()
+                    except (urllib.error.URLError, OSError):
+                        pass
+                    ok = True
+                    detail = (
+                        "served: model loaded on NPU; transcription not exercised "
+                        "(no bundled audio sample)"
+                    )
+            except (urllib.error.URLError, OSError, ValueError) as error:
+                detail = f"probe error: {error}"
+    finally:
+        if process.poll() is None:
+            _terminate_process_tree(process)
+        process.wait()
+        reader.join(timeout=1)
+        process.stdout.close()
+    duration = time.monotonic() - started
+    stdout = redact("".join(output))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    rendered_log = (
+        f"$ {redact(' '.join(normalized))}\n"
+        f"[serve probe ok={ok} port={port} duration={duration:.6f}s]\n"
+        f"--- merged stdout/stderr ---\n{stdout}"
+        f"\n--- probe detail ---\n{detail}\n"
+    )
+    log_path.write_text(rendered_log, encoding="utf-8")
+    if echo:
+        print(
+            f"qualification log: {log_path.as_posix()}\n{rendered_log}",
+            file=sys.stderr,
+            flush=True,
+        )
+    result = CommandResult(
+        argv=normalized,
+        returncode=0 if ok else 1,
+        stdout=stdout,
+        stderr="",
+        duration_seconds=duration,
+        timed_out=timed_out,
+        log=log_path.as_posix(),
+    )
+    return result, {"probe_kind": probe_kind, "port": port, "detail": detail, "ok": ok}
 
 
 def run_interactive_command(

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .benchmark import benchmark_csv_checkpoint as _benchmark_csv_checkpoint
-from .commands import run_command, run_interactive_command
+from .commands import run_command, run_interactive_command, serve_probe
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
@@ -45,14 +45,132 @@ from .installation import (
     validate_protocol as _validate_protocol,
     validate_versions as _validate_versions,
 )
-from .models import ModelError, fastflow_environment, resolve_model
+from .models import (
+    ModelError,
+    enumerate_registry_models,
+    fastflow_environment,
+    resolve_model,
+    resolve_model_dynamic,
+)
 from .profiles import load_profile, profile_names
 from .prompts import materialize_turn
+from .report import build_markdown_report
 from .xadx import XadxError, run_recipe, validate_xadx_report
+
+
+# Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
+# 2+2 turn is phrased to require a short sentence so the answer always carries
+# visible text for the per-turn coherence check while still asserting "4".
+_SWEEP_SINGLE_PROMPT = "What is the capital of France? Answer in one short sentence."
+_SWEEP_MULTI_TURNS: tuple[dict[str, Any], ...] = (
+    {"prompt": "What is the capital of France? Answer in one short sentence."},
+    {"prompt": "Name three primary colors."},
+    {
+        "prompt": "What is 2+2? Answer in one short sentence.",
+        "expected_regex": r"\b4\b|four",
+    },
+    {"prompt": "Write one short sentence about the ocean."},
+    {"prompt": "What is the largest planet in our solar system?"},
+)
+# Complete-sweep benchmark stages, selectable via ``--bench-context``. Each entry
+# fixes the packaged config, the evidence test name, the transcript checkpoint
+# band that isolates the target stage (FLM runs 1k, 2k, 4k, ... stages up to
+# ``max_length``), and a per-turn timeout multiplier that grows with context.
+_SWEEP_BENCH_CONFIGS: dict[str, dict[str, Any]] = {
+    "1k": {
+        "config": "bench/bench_1k_smoke.json",
+        "name": "context-1k",
+        "checkpoint_min": 950,
+        "checkpoint_max": 1024,
+        "timeout_factor": 4,
+    },
+    "4k": {
+        "config": "bench/bench_4k_smoke.json",
+        "name": "context-4k",
+        "checkpoint_min": 3800,
+        "checkpoint_max": 4096,
+        "timeout_factor": 6,
+    },
+    "8k": {
+        "config": "bench/bench_8k_smoke.json",
+        "name": "context-8k",
+        "checkpoint_min": 7600,
+        "checkpoint_max": 8192,
+        "timeout_factor": 8,
+    },
+}
+_SWEEP_BENCH_DEFAULT = "8k"
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _sweep_timeouts(footprint: float) -> tuple[int, int]:
+    """Scale (boot, per-turn) seconds by model footprint in GB."""
+    fp = max(0.5, footprint)
+    boot = int(120 + fp * 40)
+    turn = int(180 + fp * 60)
+    return boot, turn
+
+
+def _default_tests_for(
+    model: dict[str, Any], *, bench_context: str = _SWEEP_BENCH_DEFAULT
+) -> list[dict[str, Any]]:
+    """Synthesize the complete-sweep test set for a discovered registry model.
+
+    chat -> single-prompt run + 5-turn multi-turn run + a context benchmark
+    (8k by default, selectable via ``bench_context``); embed/asr -> a single
+    serve-probe. Timeouts scale with footprint so large MoE models do not
+    spuriously time out, and with the benchmark context length.
+    """
+    kind = model.get("kind", "chat")
+    footprint = float(model.get("footprint", 0) or 0)
+    boot, turn = _sweep_timeouts(footprint)
+    if kind in ("embed", "asr"):
+        return [
+            {
+                "name": "serve-probe",
+                "kind": "serve",
+                "probe_kind": kind,
+                "timeout_seconds": min(7200, max(300, boot)),
+            }
+        ]
+    bench = _SWEEP_BENCH_CONFIGS.get(
+        bench_context, _SWEEP_BENCH_CONFIGS[_SWEEP_BENCH_DEFAULT]
+    )
+    single_timeout = min(7200, max(180, turn))
+    multi_timeout = min(7200, max(300, turn * 2))
+    bench_timeout = min(7200, max(300, turn * bench["timeout_factor"]))
+    return [
+        {
+            "name": "single-prompt",
+            "kind": "run",
+            "turns": [{"prompt": _SWEEP_SINGLE_PROMPT}],
+            "setup_commands": ["/set topk 1"],
+            "process_iterations": 1,
+            "timeout_seconds": single_timeout,
+            "ctx_len": 1024,
+        },
+        {
+            "name": "multi-turn",
+            "kind": "run",
+            "turns": [dict(turn) for turn in _SWEEP_MULTI_TURNS],
+            "setup_commands": ["/set topk 1"],
+            "process_iterations": 1,
+            "timeout_seconds": multi_timeout,
+            "ctx_len": 2048,
+        },
+        {
+            "name": bench["name"],
+            "kind": "bench",
+            "config": bench["config"],
+            "timeout_seconds": bench_timeout,
+            "checkpoint_min": bench["checkpoint_min"],
+            "checkpoint_max": bench["checkpoint_max"],
+            "expected_regex": "",
+        },
+    ]
 
 
 def _run_core_report(
@@ -174,6 +292,59 @@ def _test_model(
             return records
 
     for test in model["tests"]:
+        if test["kind"] == "serve":
+            safe_tag = "".join(
+                character if character.isalnum() else "-" for character in model["tag"]
+            )
+            log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
+            probe_kind = test.get("probe_kind", "embed")
+            serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
+            if probe_kind == "embed":
+                serve_argv += ["-e", "1"]
+            elif probe_kind == "asr":
+                serve_argv += ["-a", "1"]
+            result, probe = serve_probe(
+                serve_argv,
+                log_path=log,
+                env=environment,
+                probe_kind=probe_kind,
+                model=model["tag"],
+                boot_timeout=test["timeout_seconds"],
+                echo=True,
+            )
+            transcript = result.stdout
+            semantic_error = ""
+            if RUNTIME_ERROR_PATTERN.search(transcript):
+                semantic_error = "FastFlowLM emitted an HRX runtime error"
+            elif not probe["ok"]:
+                semantic_error = probe["detail"] or "FastFlowLM serve probe failed"
+            passed = result.returncode == 0 and not semantic_error
+            records.append(
+                {
+                    "model": model["tag"],
+                    "name": test["name"],
+                    "kind": "serve",
+                    "status": "pass" if passed else "fail",
+                    "returncode": result.returncode,
+                    "timed_out": result.timed_out,
+                    "duration_seconds": result.duration_seconds,
+                    "log": writer.relative(log),
+                    "metrics": {
+                        "probe_kind": probe_kind,
+                        "port": probe["port"],
+                        "detail": probe["detail"],
+                    },
+                    "artifacts": [],
+                    **(
+                        {}
+                        if passed
+                        else {"error": semantic_error or "FastFlowLM serve probe failed"}
+                    ),
+                }
+            )
+            write_progress()
+            continue
+
         if test["kind"] == "bench":
             safe_tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", model["tag"])
             work = writer.path(f"bench/{safe_tag}/{test['name']}")
@@ -293,6 +464,7 @@ def _test_model(
                     "metrics": {
                         "checkpoint_tokens": checkpoint,
                         "benchmark_iterations": benchmark_iterations,
+                        "iterations": benchmark_iterations,
                         "responses": len(raw_outputs),
                         "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
                         "csv_checkpoint_row": csv_row,
@@ -610,8 +782,25 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "packages": installed,
         }
 
-    profile_name = _selected_profile_name(args)
-    profile = load_profile(profile_name)
+    all_models = bool(getattr(args, "all_models", False))
+    # A complete sweep should surface every model's result, so one failing model
+    # must not abort the run; keep-going is implied (still overridable upward).
+    keep_going = bool(getattr(args, "keep_going", False) or all_models)
+    if all_models:
+        bench_choice = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+        profile = {
+            "name": "all-models",
+            "description": (
+                "Dynamic complete sweep of every model in the installed "
+                "FastFlowLM registry: single-prompt run, multi-turn, and a "
+                f"{bench_choice} benchmark for chat models; serve-probe for "
+                "embed/ASR models."
+            ),
+            "models": [],
+        }
+    else:
+        profile_name = _selected_profile_name(args)
+        profile = load_profile(profile_name)
     candidate = None
     if args.candidate_manifest is not None:
         try:
@@ -727,7 +916,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         returncode != 0 or report["status"] != "pass"
         for _, report, returncode in native_results
     ):
-        if not args.keep_going:
+        if not keep_going:
             evidence["status"] = "fail"
             evidence["finished_at"] = _now()
             writer.write_json("models.json", evidence["models"])
@@ -746,7 +935,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     _report_test_results(xadx_tests)
     writer.write_json("tests.json", evidence["tests"])
     writer.write_json("evidence.json", evidence)
-    if any(test["status"] != "pass" for test in xadx_tests) and not args.keep_going:
+    if any(test["status"] != "pass" for test in xadx_tests) and not keep_going:
         evidence["status"] = "fail"
         evidence["finished_at"] = _now()
         writer.write_json("models.json", evidence["models"])
@@ -780,6 +969,21 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
     writer.write_json("evidence.json", evidence)
 
+    if all_models:
+        bench_context = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+        discovered = enumerate_registry_models(flm_config)
+        for base in discovered:
+            base["tests"] = _default_tests_for(base, bench_context=bench_context)
+        profile["models"] = discovered
+        writer.write_json("profile.json", profile)
+        print(
+            f"qualify: complete sweep discovered {len(discovered)} models from the "
+            "installed FLM registry",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    resolve = resolve_model_dynamic if all_models else resolve_model
     for model in profile["models"]:
         safe_tag = "".join(
             character if character.isalnum() else "-" for character in model["tag"]
@@ -792,7 +996,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             flush=True,
         )
         try:
-            model_record, _ = resolve_model(
+            model_record, _ = resolve(
                 model,
                 flm=flm,
                 config_path=flm_config,
@@ -878,7 +1082,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         writer.write_json("models.json", evidence["models"])
         writer.write_json("tests.json", evidence["tests"])
         writer.write_json("evidence.json", evidence)
-        if failed and not args.keep_going:
+        if failed and not keep_going:
             break
 
     evidence["status"] = (
@@ -892,6 +1096,20 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     writer.write_json("tests.json", evidence["tests"])
     writer.write_junit(evidence["tests"])
     writer.write_json("evidence.json", evidence)
+    if all_models:
+        kinds = {
+            model["tag"]: model.get("kind", "chat")
+            for model in profile["models"]
+        }
+        report_path = writer.path("report.md")
+        report_path.write_text(
+            build_markdown_report(evidence, kinds=kinds), encoding="utf-8"
+        )
+        print(
+            f"qualify: wrote complete-sweep report {report_path}",
+            file=sys.stderr,
+            flush=True,
+        )
     writer.finalize()
     return (0 if evidence["status"] == "pass" else 1), _summary(evidence, args.output)
 
