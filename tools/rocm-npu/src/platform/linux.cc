@@ -336,15 +336,19 @@ int ExecutePluginProcess(
     close(error_pipe[0]);
     if (setpgid(0, 0) != 0) {
       const int process_group_error = errno;
-      (void)write(error_pipe[1], &process_group_error,
-                  sizeof(process_group_error));
+      // glibc marks write() warn_unused_result under _FORTIFY_SOURCE and GCC
+      // does not accept a (void) cast as acknowledgement. The child has no
+      // recovery available before _exit, so bind the result and drop it.
+      [[maybe_unused]] const ssize_t group_error_written = write(
+          error_pipe[1], &process_group_error, sizeof(process_group_error));
       _exit(127);
     }
     sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
     execve(executable.c_str(), native_arguments.data(),
            native_environment.data());
     const int execute_error = errno;
-    (void)write(error_pipe[1], &execute_error, sizeof(execute_error));
+    [[maybe_unused]] const ssize_t execute_error_written =
+        write(error_pipe[1], &execute_error, sizeof(execute_error));
     _exit(127);
   }
 

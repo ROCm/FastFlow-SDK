@@ -1,0 +1,154 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# CodeQL static analysis. Python needs no build; C/C++ is built manually
+# because the repository root has no build file for autobuild to discover --
+# the CLI lives in tools/rocm-npu and is the only C++ target that builds
+# without the full compiler stack.
+#
+# C/C++ runs on both platforms deliberately: src/platform/windows.cc and
+# src/platform/linux.cc are mutually exclusive, so a single-platform scan
+# leaves one of them permanently unanalyzed.
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python
+    runs-on: ubuntu-24.04
+    permissions:
+      # actions: read lets the CodeQL action read workflow run metadata, which
+      # it needs on private repositories; security-events: write uploads SARIF.
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9e3211c9a3b9311dfe05da2ed48eea3386f042dd # v4.37.6
+        with:
+          languages: python
+          build-mode: none
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@9e3211c9a3b9311dfe05da2ed48eea3386f042dd # v4.37.6
+        with:
+          category: "/language:python"
+
+  cpp:
+    name: C++ (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Hosted runners: this build is 39 small targets, so it does not need
+          # the build fleet's capacity, and keeping it off those scale sets
+          # stops every pull request's scan competing with the real builds.
+          - name: Linux
+            runner: ubuntu-24.04
+            generator: Ninja
+          # The Visual Studio generator locates MSVC itself, so this job needs
+          # no action to enter a developer command prompt. CodeQL traces the
+          # cl.exe invocations either way.
+          - name: Windows
+            runner: windows-2022
+            generator: Visual Studio 17 2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Only hrx is needed, for libhrx/include/hrx_runtime.h. A recursive
+      # checkout would also pull llvm-project.
+      - name: Check out hrx headers
+        run: git submodule update --init --depth 1 projects/hrx
+
+      # cmake and ninja are pip-provided in this repository rather than taken
+      # from the runner image, because the system cmake is often older than the
+      # build needs. requirements/fastflowlm.lock pins exactly those two.
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install cmake and ninja
+        run: >-
+          python -m pip install --quiet --disable-pip-version-check
+          --require-hashes -r requirements/fastflowlm.lock
+
+      # BannedFunctions.ql is mandatory for C/C++ per the SIT scanning standard,
+      # but it ships in a private GHCR pack rather than the CodeQL bundle. Fall
+      # back to security-extended alone when the token is missing so the scan
+      # still runs on forks and before the secret is provisioned.
+      - name: Check for AMD query pack access
+        id: amd_pack
+        shell: bash
+        env:
+          CODEQL_PACKAGES_TOKEN: ${{ secrets.CODEQL_PACKAGES_TOKEN }}
+        run: |
+          if [ -n "${CODEQL_PACKAGES_TOKEN:-}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CODEQL_PACKAGES_TOKEN is not set; scanning with security-extended only, without the AMD BannedFunctions query."
+          fi
+
+      - name: Initialize CodeQL with AMD query pack
+        if: steps.amd_pack.outputs.available == 'true'
+        uses: github/codeql-action/init@9e3211c9a3b9311dfe05da2ed48eea3386f042dd # v4.37.6
+        with:
+          languages: c-cpp
+          build-mode: manual
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+          packs: amd-sit-sast-scv/cpp-queries:src/driver/BannedFunctions.ql
+          registries: |
+            - url: https://ghcr.io/v2/
+              packages:
+                - amd-sit-sast-scv/cpp-queries
+              token: ${{ secrets.CODEQL_PACKAGES_TOKEN }}
+
+      - name: Initialize CodeQL
+        if: steps.amd_pack.outputs.available != 'true'
+        uses: github/codeql-action/init@9e3211c9a3b9311dfe05da2ed48eea3386f042dd # v4.37.6
+        with:
+          languages: c-cpp
+          build-mode: manual
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # Mirrors dev.py build rocm-npu-cli: Release, pip-provided cmake. Build
+      # type and config are both passed because the generators differ per
+      # platform, and each generator ignores the flag meant for the other.
+      - name: Build rocm-npu CLI
+        run: |
+          cmake -G "${{ matrix.generator }}" -S tools/rocm-npu -B build/cli -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/cli --config Release
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@9e3211c9a3b9311dfe05da2ed48eea3386f042dd # v4.37.6
+        with:
+          category: "/language:c-cpp/platform:${{ matrix.name }}"
