@@ -7,9 +7,9 @@
     {
       "tag": "llama3.1:8b",
       "source": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
-      "revision": "v0.9.21-merge-lm-head",
-      "identity_policy": "revision-sha256",
-      "registry_sha256": "2615438e0f8a16b0528849120d5db3ca58f373d99ecb6f7960fbba4a3b320e9f",
+      "revision": null,
+      "identity_policy": "content-sha256",
+      "registry_sha256": "b650a430f3e7d3878073b990843ce99acd74e4132dcc14f8f49f6b2678694db8",
       "files": [
         {"path": "config.json", "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"},
         {"path": "model.q4nx", "sha256": "0c03021f1cd21e43376234817b34ad32ccf07dca94785ede7640833d15169d8a"},
