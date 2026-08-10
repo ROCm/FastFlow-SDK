@@ -15,6 +15,6 @@
 	ignore = dirty
 [submodule "projects/FastFlowLM"]
 	path = projects/FastFlowLM
-	url = https://github.com/Abhishek-Varma/FastFlowLM_JT.git
+	url = https://github.com/ROCm/FastFlowLM.git
 	branch = hrx_native_pr
 	ignore = dirty
