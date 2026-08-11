@@ -292,11 +292,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner_label:
-          - linux-gfx1150-gpu-rocm-npu
-          - linux-gfx1151-gpu-rocm
-          - linux-gfx1152-gpu-rocm
-          - linux-gfx1153-gpu-rocm
+        runner_label: ${{ fromJSON(vars.ROCM_NPU_LINUX_RUNNER_LABELS || '["linux-gfx1150-gpu-rocm-npu","linux-gfx1151-gpu-rocm","linux-gfx1152-gpu-rocm","linux-gfx1153-gpu-rocm"]') }}
     runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 60
     container:

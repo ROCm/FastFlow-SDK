@@ -40,9 +40,8 @@ def _runner_labels(filename):
     text = (WORKFLOWS / filename).read_text(encoding="utf-8")
     return set(
         re.findall(
-            r"^\s+- ((?:linux|windows)-gfx\d+-gpu-rocm(?:-npu)?)\s*$",
+            r"(?:linux|windows)-gfx\d+-gpu-rocm(?:-npu)?",
             text,
-            re.MULTILINE,
         )
     )
 
@@ -87,3 +86,29 @@ class TestNpuWorkflowParity:
             "windows-gfx1151-gpu-rocm",
             "windows-gfx1152-gpu-rocm",
         }
+
+    @pytest.mark.parametrize(
+        ("platform", "workflow_names"),
+        (
+            (
+                "linux",
+                ("build_rocm_npu_staging_linux.yml", "fastflowlm_hrx_linux.yml"),
+            ),
+            (
+                "windows",
+                (
+                    "build_rocm_npu_staging_windows.yml",
+                    "fastflowlm_hrx_windows.yml",
+                ),
+            ),
+        ),
+    )
+    def test_npu_matrices_support_platform_runner_variables(
+        self, platform, workflow_names
+    ):
+        variable = f"vars.ROCM_NPU_{platform.upper()}_RUNNER_LABELS"
+        expected_labels = _runner_labels(workflow_names[0])
+        for workflow_name in workflow_names:
+            workflow = (WORKFLOWS / workflow_name).read_text(encoding="utf-8")
+            assert f"fromJSON({variable} ||" in workflow
+            assert _runner_labels(workflow_name) == expected_labels
