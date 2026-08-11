@@ -50,10 +50,10 @@ note  = "LLVM 21 (lags ROCm's 23). Folding the AIE backend onto ROCm LLVM is fut
 
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/ROCm/hrx-system"                # canonical ROCm remote (no fork in the chain)
-branch     = "users/jtuyls/amdxdna-hal-native-rel"       # == amdxdna-hal-native + relocatable FLM runtime hooks
-commit     = "52c635933ddf1df965692332c72f95e26964192b"
+branch     = "users/jtuyls/amdxdna-hal-native-rel"
+commit     = "929f24b02e8cde78d60296ca3615dc12f660a499"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
-note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, BD address patching that overwrites baked descriptor addresses instead of double-counting offsets, per-submit restaging of shared Windows command-aperture contents, negotiated legacy/compact Windows MCDM contracts (including Krackan compact/legacy v4), legacy protocol revision 3 support, ABI-hardened HRX-owned amdxdna XADX executable creation, DDI-owned Windows CPU-write publication, KMT residency failure diagnostics, preempt-ELF ERT ABI vocabulary, and minimal/relocatable runtime component gating."
+note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, BD address patching that overwrites baked descriptor addresses instead of double-counting offsets, per-submit restaging of shared Windows command-aperture contents, negotiated legacy/compact Windows MCDM contracts (including Krackan compact/legacy v4), legacy protocol revision 3 support, ABI-hardened HRX-owned amdxdna XADX executable creation, DDI-owned Windows CPU-write publication, KMT residency failure diagnostics, preempt-ELF ERT ABI vocabulary, minimal/relocatable runtime component gating, and legacy Windows MCDM driver ABI selection for the 32.0.203.240/.280 stacks while preserving the 32.0.203.314/.329 and newer layouts."
 
 [fastflowlm]                    # projects/FastFlowLM — HRX-native FastFlowLM PR #602
 repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
