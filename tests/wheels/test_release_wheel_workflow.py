@@ -41,10 +41,17 @@ class TestRocmNpuReleaseWheelWorkflow:
         linux = (WORKFLOWS / "fastflowlm_hrx_linux.yml").read_text()
         windows = (WORKFLOWS / "fastflowlm_hrx_windows.yml").read_text()
         for workflow in (linux, windows):
-            generate = workflow.index("package-fastflowlm-kernels --fresh")
+            generate = workflow.index("generate-fastflowlm-xadx --fresh")
             package = workflow.index("package-qualification-wheel")
             assert generate < package
             assert "--xadx-assets build/fastflowlm-xadx-assets" in workflow
+            install = workflow.split(
+                "- name: Install qualification plugin wheel and numeric runtime", 1
+            )[1].split("- name: Probe NPU driver", 1)[0]
+            assert "--no-deps" not in install
+            assert "--no-index" not in install
+            assert "test-fastflowlm-kernels --wheel-package" not in workflow
+            assert "fastflowlm-kernel-smoke-" not in workflow
             assert "if: ${{ inputs.qualification_artifact == '' }}" not in workflow
         assert "rocm-npu-qualification-wheel'" in linux
         assert (
@@ -58,6 +65,25 @@ class TestRocmNpuReleaseWheelWorkflow:
         for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):
             workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
             assert workflow.count("include-hidden-files: true") == 2
+            assert (
+                "Run bounded kernel and model qualification through native dispatch"
+                in workflow
+            )
+
+    def test_release_dependency_closure_uses_tested_helper(self):
+        workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
+            encoding="utf-8"
+        )
+        section = workflow[
+            workflow.index("Resolve qualification dependencies") :
+            workflow.index("Resolve compiler core")
+        ]
+        assert "build_tools/verify_qualification_dependencies.py" in section
+        assert "--no-index" in section
+        assert "--no-deps" in section
+        assert '"${numeric_requirements[@]}"' in section
+        assert "numeric-runtime.json" in section
+        assert "ROCM_NPU_INSTALL_TARGET" not in section
 
     def test_release_platform_jobs_validate_their_own_qualification_wheels(self):
         ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
@@ -134,6 +160,14 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "verify_qualification_wheel_parity.py" in collector
         assert "rocm_npu_wheel_release_cli.py prepare" in collector
         assert "Create release-wide qualification candidate" in collector
+        assert "download_qualification_numeric_wheels.py" not in collector
+        assert (
+            "Resolve qualification dependencies for every supported target"
+            in collector
+        )
+        assert "--no-index" in collector
+        assert '"${numeric_requirements[@]}"' in collector
+        assert "numeric-runtime-cp312.lock" not in collector
 
     def test_release_is_dispatch_only_and_reuses_both_npu_validations(self):
         workflow = (WORKFLOWS / "release_rocm_npu_wheels.yml").read_text(
@@ -187,7 +221,10 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "build_qualification_wheel.yml" not in workflow
         assert "path: wheelhouse/qualification" in workflow
         assert '"${SOURCE_SHA}" != "${GITHUB_SHA}"' in workflow
-        assert '"rocm-npu-qualification==${ROCM_NPU_PACKAGE_VERSION}"' in workflow
+        assert '"${qualification_wheel}"' in workflow
+        assert "for python_minor in 3.11 3.12 3.13 3.14" in workflow
+        assert "download_qualification_numeric_wheels.py" not in workflow
+        assert "numeric-runtime-cp312.lock" not in workflow
         assert "python -m twine check --strict wheelhouse/*/*.whl" in workflow
         assert "python build_tools/rocm_npu_wheel_release_cli.py" in workflow
         assert "--expected-wheel-tag py3-none-manylinux_2_28_x86_64" in workflow
@@ -201,8 +238,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "-cp314-" not in workflow
         assert "--platform linux_x86_64" in workflow
         assert "--platform manylinux_2_28_x86_64" in workflow
-        assert '"rocm-npu-fastflowlm": version' in workflow
-        assert '"rocm-npu-runtime": version' in workflow
+        assert "verify_qualification_dependencies.py" in workflow
         assert '"rocm-npu-compiler-bindings": version' in workflow
         compiler_resolution = workflow.split(
             "- name: Resolve compiler core and bindings", 1

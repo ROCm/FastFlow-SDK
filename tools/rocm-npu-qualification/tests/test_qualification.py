@@ -526,7 +526,7 @@ def _patch_qualification(monkeypatch, tmp_path, *, doctor_exit):
         lambda: {name: "1.2.3" for name in installation.PACKAGE_DISTRIBUTIONS},
     )
     monkeypatch.setattr(
-        runner, "_test_xadx", lambda writer, *, target_family: []
+        runner, "_test_xadx", lambda writer, *, target_family, profile_name: []
     )
 
     def core_report(core, command, **kwargs):
@@ -838,6 +838,29 @@ def test_command_log_can_be_mirrored_to_stderr(tmp_path, capsys):
     assert "qualification-output" in mirrored
 
 
+def test_xadx_plan_is_visible_before_execution(tmp_path, capsys):
+    recipe = tmp_path / "recipe.json"
+    recipe.write_text(
+        json.dumps({"cases": [{"name": "dequant/zero"}, {"name": "mm/full"}]}),
+        encoding="utf-8",
+    )
+
+    runner._report_xadx_plan(
+        recipe,
+        {
+            "lifecycle_rounds": 5,
+            "resident_rounds": 20,
+            "readback_rounds": 32,
+        },
+    )
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "XADX recipe scheduled 2 cases" in output.err
+    assert "fastflowlm-production-kernels/dequant/zero: scheduled" in output.err
+    assert "fastflowlm-production-kernels/mm/full: scheduled" in output.err
+
+
 def test_installed_tree_rejects_file_absent_from_record(tmp_path):
     package_root = tmp_path / "site-packages" / "example"
     metadata_root = tmp_path / "site-packages" / "example.dist-info"
@@ -1057,6 +1080,18 @@ def test_evidence_schema_rejects_fabricated_empty_pass():
                 distribution: "1.2.3"
                 for distribution in installation.PACKAGE_DISTRIBUTIONS
             },
+            "numeric_runtime": {
+                distribution: {
+                    "version": version,
+                    "compatibility_tags": ["cp312-cp312-win_amd64"],
+                    "record_sha256": "d" * 64,
+                    "payload_sha256": "e" * 64,
+                }
+                for distribution, version in {
+                    "numpy": "2.4.6",
+                    "ml-dtypes": "0.5.4",
+                }.items()
+            },
             "flm": {
                 "package_version": "1.2.3",
                 "command": "flm",
@@ -1099,6 +1134,18 @@ def test_evidence_schema_accepts_portable_ad_hoc_pass():
             "packages": {
                 distribution: "1.2.3"
                 for distribution in installation.PACKAGE_DISTRIBUTIONS
+            },
+            "numeric_runtime": {
+                distribution: {
+                    "version": version,
+                    "compatibility_tags": ["cp312-cp312-win_amd64"],
+                    "record_sha256": "d" * 64,
+                    "payload_sha256": "e" * 64,
+                }
+                for distribution, version in {
+                    "numpy": "2.4.6",
+                    "ml-dtypes": "0.5.4",
+                }.items()
             },
             "flm": {
                 "package_version": "1.2.3",
@@ -1161,3 +1208,111 @@ def test_evidence_schema_accepts_portable_ad_hoc_pass():
         "finished_at": "2026-08-03T00:01:00Z",
     }
     Draft202012Validator(schema).validate(evidence)
+
+
+def test_shipped_runner_loads_and_executes_the_packaged_recipe(monkeypatch, tmp_path):
+    assets = tmp_path / "xadx_assets"
+    assets.mkdir()
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    schemas.joinpath("xadx-report-v1.schema.json").write_text(
+        (
+            ROOT
+            / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+            / "schemas/xadx-report-v1.schema.json"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    recipe = {"schema_version": 1, "sentinel": "packaged-recipe"}
+    (assets / "recipe.json").write_text(json.dumps(recipe), encoding="utf-8")
+    observed = {}
+
+    def execute(body, root, **kwargs):
+        observed.update({"recipe": body, "root": root, "kwargs": kwargs})
+        return {
+            "schema_version": 1,
+            "report_kind": "execution",
+            "status": "pass",
+            "recipe_sha256": "a" * 64,
+            "generator_version": "kernel-recipe-generator-v1",
+            "executables": [
+                {
+                    "id": "dequant-" + "a" * 16,
+                    "xclbin_path": "xclbins/test.xclbin",
+                    "xclbin_sha256": "a" * 64,
+                    "transaction": "transactions/test.bin",
+                    "transaction_sha256": "b" * 64,
+                    "xadx": "xadx/test.xadx",
+                    "xadx_sha256": "c" * 64,
+                }
+            ],
+            "architecture": "amdxdna",
+            "case_names": ["recipe-case"],
+            "failures": [],
+            "lifecycle_rounds": 5,
+            "resident_rounds": 20,
+            "readback_rounds": 32,
+            "readback_by_case": {"recipe-case": 32},
+            "numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.5.4"},
+            "cases": 1,
+            "materialized_buffers": [],
+            "case_results": [
+                {
+                    "name": "recipe-case",
+                    "status": "pass",
+                    "dispatches": 57,
+                    "readbacks": 32,
+                    "validated_bytes": 114,
+                    "duration_seconds": 1.25,
+                    "mismatch_count": 0,
+                    "first_mismatch": None,
+                    "failures": [],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(runner.resources, "files", lambda _: tmp_path)
+    monkeypatch.setattr(runner, "run_recipe", execute)
+    records = runner._test_xadx(
+        EvidenceWriter(tmp_path / "evidence"),
+        target_family="npu2",
+        profile_name="fast",
+    )
+    assert observed["recipe"] == assets / "recipe.json"
+    assert observed["root"] == assets
+    assert observed["kwargs"] == {
+        "target_family": "npu2",
+        "lifecycle_rounds": 5,
+        "resident_rounds": 20,
+        "readback_rounds": 32,
+    }
+    assert records[0]["rounds"] == 57
+    assert records[0]["metrics"]["validated_bytes"] == 114
+    assert records[0]["metrics"]["mismatch_count"] == 0
+
+
+def test_runner_writes_schema_valid_package_validation_report(
+    monkeypatch, tmp_path
+):
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    schemas.joinpath("xadx-report-v1.schema.json").write_text(
+        (
+            ROOT
+            / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+            / "schemas/xadx-report-v1.schema.json"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner.resources, "files", lambda _: tmp_path)
+    writer = EvidenceWriter(tmp_path / "evidence")
+    records = runner._test_xadx(
+        writer, target_family="npu2", profile_name="fast"
+    )
+    report = json.loads((writer.root / "xadx-report.json").read_text())
+    assert report["report_kind"] == "package-validation"
+    assert report["status"] == "fail"
+    assert report["case_results"][0]["failures"][0]["phase"] == (
+        "package-validation"
+    )
+    assert records[0]["status"] == "fail"

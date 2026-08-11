@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import importlib.util
+import email.parser
 import json
 import os
 import subprocess
@@ -17,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
 from build_tools.rocm_npu_qualification_wheel import build_qualification_wheel
 
 
@@ -33,107 +36,173 @@ def _load_test_module(name: str, path: Path):
     return module
 
 
+def _repack_installed_wheel(distribution: str, output: Path) -> Path:
+    """Create an offline wheel from the test environment's recorded install."""
+    installed = importlib.metadata.distribution(distribution)
+    wheel_metadata = installed.read_text("WHEEL")
+    assert wheel_metadata is not None
+    tag = email.parser.Parser().parsestr(wheel_metadata)["Tag"]
+    normalized = distribution.replace("-", "_")
+    wheel = output / f"{normalized}-{installed.version}-{tag}.whl"
+    with zipfile.ZipFile(
+        wheel, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1
+    ) as archive:
+        for relative in installed.files or ():
+            if ".." in Path(relative).parts:
+                continue
+            source = Path(installed.locate_file(relative))
+            if source.is_file():
+                archive.write(source, Path(relative).as_posix())
+    return wheel
+
+
 def _fake_xadx_assets(root: Path) -> Path:
     root.mkdir()
-    (root / "executables").mkdir()
-    records = []
+    (root / "xadx").mkdir()
+    (root / "transactions").mkdir()
+    transaction = root / "transactions/kernel.bin"
+    transaction.write_bytes(b"transaction")
+    transaction_sha256 = hashlib.sha256(transaction.read_bytes()).hexdigest()
     executables = []
-    for family in ("Qwen3-0.6B-NPU2", "LFM2-1.2B-NPU2"):
-        for kernel in ("dequant", "mm"):
-            relative = f"executables/{family}-{kernel}.xadx"
-            path = root / relative
-            path.write_bytes(b"\0\0\0\0XADX" + relative.encode())
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            records.append(
-                {"path": relative, "size": path.stat().st_size, "sha256": digest}
-            )
-            executables.append(
+    for index in range(8):
+        kernel = "dequant" if index < 5 else "mm"
+        source_digest = f"{index + 1:016x}" + "0" * 48
+        id = f"{kernel}-{source_digest[:16]}"
+        relative = f"xadx/{id}.xadx"
+        path = root / relative
+        path.write_bytes(b"\0\0\0\0XADX" + relative.encode())
+        executables.append(
+            {
+                "id": id,
+                "kernel": kernel,
+                "builder": "q4_1" if kernel == "dequant" else "gemm",
+                "shape": {"m": 1, "k": 1, "n": 1},
+                "xclbin_sha256": source_digest,
+                "xclbin_path": f"Family-{index}/{kernel}.xclbin",
+                "transaction": "transactions/kernel.bin",
+                "transaction_sha256": transaction_sha256,
+                "xadx": relative,
+                "xadx_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "export": "MLIR_AIE",
+                "families": [f"Family-{index}"],
+            }
+        )
+    zero = {
+        "id": "zero",
+        "parameters": {"size": 2},
+        "sha256": hashlib.sha256(bytes(2)).hexdigest(),
+    }
+    cases = [
+        {
+            "name": f"case-{index:02d}",
+            "stages": [
                 {
-                    "id": f"{family}-{kernel}",
-                    "family": family,
-                    "kernel": kernel,
-                    "source_xclbin": f"{family}/{kernel}.xclbin",
-                    "xadx": relative,
-                    "source_xclbin_size": 1,
-                    "source_xclbin_sha256": "1" * 64,
-                    "transaction_size": 1,
-                    "transaction_sha256": "2" * 64,
-                    "xadx_size": path.stat().st_size,
-                    "xadx_sha256": digest,
+                    "name": "kernel",
+                    "implementation": executables[index % len(executables)]["id"],
+                    "buffers": [
+                        {
+                            "name": "output",
+                            "direction": "output",
+                            "size": 2,
+                            "expected": dict(zero),
+                            "comparison": {"kind": "exact"},
+                        },
+                        {
+                            "name": "input",
+                            "direction": "input",
+                            "size": 2,
+                            "source": dict(zero),
+                        },
+                    ],
                 }
-            )
+            ],
+        }
+        for index in range(len(executables))
+    ]
+    recipe = {
+        "schema_version": 1,
+        "product": "rocm-npu-fastflowlm-kernel-recipe",
+        "target": "npu2",
+        "generator_version": "kernel-recipe-generator-v1",
+        "implementations": executables,
+        "coverage_limits": [
+            {
+                "id": f"mm-{index + 20:016x}",
+                "scope": "dispatch",
+                "kernel": "mm",
+                "representative": f"Limited-{index}",
+                "xclbin_sha256": f"{index + 20:016x}" + "0" * 48,
+                "families": [f"Limited-{index}"],
+                "reason": "no supported builder",
+            }
+            for index in range(4)
+        ],
+        "cases": cases,
+    }
+    recipe_path = root / "recipe.json"
+    recipe_path.write_text(json.dumps(recipe), encoding="utf-8")
+    capability = root / "capability-manifest.json"
+    capability.write_text(
+        json.dumps(
+            {
+                "implementations": {
+                    "entries": {
+                        entry["id"]: {} for entry in executables
+                    },
+                    "unreached": {
+                        entry["id"]: {}
+                        for entry in recipe["coverage_limits"]
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def record(path):
+        return {
+            "path": path.relative_to(root).as_posix(),
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+
+    records = [
+        record(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    ]
     manifest = {
         "schema_version": 1,
         "product": "rocm-npu-fastflowlm-xadx",
         "target": "npu2",
-        "case_contract_sha256": "0" * 64,
         "serializer": {
             "api": "hrx_amdxdna_xadx_serialize",
             "revision": "hrx-amdxdna-v0",
         },
-        "executables": executables,
-        "cases": [
-            {
-                "name": name,
-                "xadx": executables[index % len(executables)]["xadx"],
-                "export": "MLIR_AIE",
-                "buffers": [
-                    {
-                        "name": "output",
-                        "direction": "output",
-                        "size": 2,
-                        "expected": {
-                            "kind": "generator",
-                            "id": "zero",
-                            "parameters": {"size": 2},
-                        },
-                        "comparison": "exact",
-                    },
-                    {
-                        "name": "input",
-                        "direction": "input",
-                        "size": 2,
-                        "input": {
-                            "kind": "generator",
-                            "id": "zero",
-                            "parameters": {"size": 2},
-                        },
-                    },
-                ],
-                "readback_variants": (
-                    [
-                        {
-                            "buffer": "input",
-                            "input": {
-                                "kind": "generator",
-                                "id": "zero",
-                                "parameters": {"size": 2},
-                            },
-                            "expected": {
-                                "kind": "generator",
-                                "id": "zero",
-                                "parameters": {"size": 2},
-                            },
-                        }
-                    ]
-                    if name == "host-readback/coherence"
-                    else []
-                ),
-            }
-            for index, name in enumerate(
-                (
-                    "Qwen3-0.6B-NPU2/dequant/zero-baseline",
-                    "Qwen3-0.6B-NPU2/mm/structured",
-                    "LFM2-1.2B-NPU2/dequant/zero-baseline",
-                    "LFM2-1.2B-NPU2/mm/structured",
-                    "host-readback/coherence",
-                )
-            )
-        ],
+        "recipe": record(recipe_path),
+        "capabilities": record(capability),
         "files": records,
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return root
+
+
+def test_asset_verification_cross_checks_recipe_transaction_identity(tmp_path):
+    assets = _fake_xadx_assets(tmp_path / "xadx")
+    transaction = assets / "transactions/kernel.bin"
+    transaction.write_bytes(b"different transaction")
+    manifest_path = assets / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    record = next(
+        record
+        for record in manifest["files"]
+        if record["path"] == "transactions/kernel.bin"
+    )
+    record["size"] = transaction.stat().st_size
+    record["sha256"] = hashlib.sha256(transaction.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="recipe transaction digest differs"):
+        verify_kernel_recipe_assets(assets)
 
 
 def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
@@ -176,12 +245,15 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "rocm-npu-qualify = rocm_npu_qualification.cli:main" in entry_points
     assert "\nrocm-npu =" not in entry_points
     assert "Requires-Dist: rocm-npu-fastflowlm ==1.2.3" in metadata_text
+    assert "Requires-Dist: numpy ==2.4.6" in metadata_text
+    assert "Requires-Dist: ml-dtypes ==0.5.4" in metadata_text
+    assert "Requires-Python: >=3.11,<3.15" in metadata_text
     assert (
         "License-Expression: MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms"
     ) in metadata_text
     assert "rocm_npu_qualification/xadx_assets/manifest.json" in names
-    assert "rocm_npu_qualification/xadx_cases.json" in names
-    assert "rocm_npu_qualification/xadx_generators.py" in names
+    assert "rocm_npu_qualification/xadx_assets/recipe.json" in names
+    assert "rocm_npu_qualification/recipe_generators.py" in names
     assert not any(name.endswith(".xclbin") for name in names)
     assert not any(
         "/xadx_assets/data/" in name and name.endswith(".bin") for name in names
@@ -189,14 +261,27 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "rocm_npu_qualification/candidate.py" in names
     assert "rocm_npu_qualification/offline.py" in names
     assert "rocm_npu_qualification/schemas/qualification-index-v1.schema.json" in names
+    assert "rocm_npu_qualification/schemas/candidate-v1.schema.json" in names
+    assert (
+        "rocm_npu_qualification/schemas/qualification-contract-v1.schema.json"
+        in names
+    )
+    assert "rocm_npu_qualification/schemas/kernel-recipe-v1.schema.json" in names
+    assert "rocm_npu_qualification/schemas/xadx-report-v1.schema.json" in names
     assert "rocm_npu_qualification/bench/bench_1k_smoke.json" in names
     assert "rocm_npu_qualification/bench/bench_4k_smoke.json" in names
     assert "rocm_npu_qualification/licenses/FastFlowLM-LICENSE_RUNTIME.txt" in names
     assert "rocm_npu_qualification/licenses/FastFlowLM-TERMS.md" in names
     provenance = package_manifest["embedded_binaries"]["fastflowlm_xadx"]
     assert provenance["target"] == "npu2"
-    assert provenance["case_contract_sha256"] == "0" * 64
-    assert len(provenance["executables"]) == 4
+    assert provenance["recipe_sha256"] == hashlib.sha256(
+        (assets / "recipe.json").read_bytes()
+    ).hexdigest()
+    assert len(provenance["executables"]) == len(
+        json.loads((assets / "recipe.json").read_text(encoding="utf-8"))[
+            "implementations"
+        ]
+    )
     assert sbom["metadata"]["component"]["licenses"] == [
         {"expression": ("MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms")}
     ]
@@ -241,21 +326,59 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
         xadx_assets=assets,
         version="1.2.3",
     )
+    candidate_tests = _load_test_module(
+        "installed_candidate_fixtures",
+        ROOT
+        / "tools"
+        / "rocm-npu-qualification"
+        / "tests"
+        / "test_candidate_identity.py",
+    )
+    staged_products = tmp_path / "staged-products"
+    product_wheels = [
+        candidate_tests._write_wheel(
+            staged_products,
+            candidate_tests.RUNTIME_DISTRIBUTION,
+            "rocm_npu_runtime",
+        ),
+        candidate_tests._write_wheel(
+            staged_products,
+            candidate_tests.FASTFLOWLM_DISTRIBUTION,
+            "rocm_npu_fastflowlm",
+        ),
+    ]
     environment_root = tmp_path / "venv"
     venv.EnvBuilder(
-        with_pip=True, clear=True, system_site_packages=True
+        with_pip=True, clear=True, system_site_packages=False
     ).create(environment_root)
     python = environment_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    subprocess.run(
-        [python, "-m", "pip", "install", "--no-deps", wheel],
-        check=True,
+    numeric_wheels = [
+        _repack_installed_wheel(distribution, tmp_path)
+        for distribution in ("numpy", "ml-dtypes")
+    ]
+    installation = subprocess.run(
+        [
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--find-links",
+            tmp_path,
+            "--no-deps",
+            wheel,
+            *product_wheels,
+            *numeric_wheels,
+        ],
         capture_output=True,
         text=True,
     )
+    assert installation.returncode == 0, installation.stderr
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
 
     resource_script = r"""
+import json
 from importlib import resources
 from rocm_npu_qualification import xadx
 
@@ -285,8 +408,9 @@ package = resources.files("rocm_npu_qualification")
 assert package.joinpath("bench", "bench_1k_smoke.json").is_file()
 assert package.joinpath("bench", "bench_4k_smoke.json").is_file()
 with resources.as_file(package.joinpath("xadx_assets")) as root:
-    report = xadx.run_package(
-        root, runtime_factory=Runtime,
+    recipe = json.loads((root / "recipe.json").read_text())
+    report = xadx.run_recipe(
+        recipe, root, runtime_factory=Runtime,
         lifecycle_rounds=1, resident_rounds=1, readback_rounds=1,
     )
 assert report["status"] == "pass", report
@@ -300,14 +424,6 @@ assert report["status"] == "pass", report
         text=True,
     )
 
-    candidate_tests = _load_test_module(
-        "installed_candidate_fixtures",
-        ROOT
-        / "tools"
-        / "rocm-npu-qualification"
-        / "tests"
-        / "test_candidate_identity.py",
-    )
     wheels = tmp_path / "candidate-wheels"
     candidate_tests._write_wheel(
         wheels, candidate_tests.RUNTIME_DISTRIBUTION, "rocm_npu_runtime"
@@ -364,7 +480,9 @@ assert report["status"] == "pass", report
     bundle = incoming / "run.evidence.zip"
     run_cli("pack", "--input", evidence, "--output", bundle)
     run_cli("verify", "--input", bundle)
-    canonical_candidate = tmp_path / "candidate.json"
+    canonical_root = tmp_path / "canonical"
+    canonical_root.mkdir()
+    canonical_candidate = canonical_root / "candidate.json"
     canonical_candidate.write_bytes(
         offline_tests.canonical_candidate_bytes(offline_tests._candidate())
     )

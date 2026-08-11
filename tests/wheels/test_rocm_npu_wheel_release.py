@@ -33,6 +33,8 @@ from build_tools.rocm_npu_wheel_common import (
     build_wheel,
 )
 from build_tools.rocm_npu_wheel_release import (
+    NUMERIC_PYTHON_ABIS,
+    NUMERIC_RUNTIME,
     _copy_release_archives,
     prepare_rocm_npu_release_payload,
     resolve_release_inputs,
@@ -44,6 +46,7 @@ pytestmark = [
     pytest.mark.fastflowlm,
     pytest.mark.presubmit,
 ]
+
 
 def _write_release_archive(
     directory, name, *, system, artifact, version, source_sha
@@ -346,6 +349,7 @@ class TestRocmNpuWheelRelease:
         for artifact in wheel_artifacts:
             filename = artifact["filename"]
             assert "staging" not in filename
+            assert artifact.get("kind") != "qualification-numeric-runtime"
             assert len(artifact["package_manifest_sha256"]) == 64
             artifact_tags.update(artifact["wheel_tags"])
             assert (release / filename).is_file()
@@ -358,6 +362,8 @@ class TestRocmNpuWheelRelease:
             "cp312-abi3-manylinux_2_28_x86_64",
             "cp312-abi3-win_amd64",
         }
+        assert not list(release.glob("numpy-*.whl"))
+        assert not list(release.glob("ml_dtypes-*.whl"))
 
         simple = release / "simple"
         assert (simple / RUNTIME_DISTRIBUTION / "index.html").is_file()
@@ -627,7 +633,13 @@ class TestRocmNpuWheelRelease:
                 output_directory,
                 summary="qualification",
                 tag="py3-none-any",
-                requires=(f"{FASTFLOWLM_DISTRIBUTION} =={version}",),
+                requires=(
+                    f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+                    *(
+                        f"{distribution} =={numeric_version}"
+                        for distribution, numeric_version in NUMERIC_RUNTIME.items()
+                    ),
+                ),
                 console_scripts={
                     "rocm-npu-qualify": f"{QUALIFICATION_PACKAGE}.cli:main"
                 },
@@ -657,6 +669,22 @@ class TestRocmNpuWheelRelease:
             ),
             requires_python=">=3.12,<3.15",
         )
+        numeric_platform = wheel_tag.split("-", 2)[2]
+        for abi in NUMERIC_PYTHON_ABIS:
+            for distribution, numeric_version in NUMERIC_RUNTIME.items():
+                build_wheel(
+                    self._package_tree(
+                        root,
+                        f"{distribution.replace('-', '_')}_{abi}_{numeric_platform}",
+                    ),
+                    distribution,
+                    numeric_version,
+                    output_directory.parent / "numeric",
+                    summary="qualification numeric runtime fixture",
+                    tag=f"{abi}-{abi}-{numeric_platform}",
+                    license_expression="BSD-3-Clause",
+                    root_is_purelib=False,
+                )
 
     def _package_tree(self, root: Path, package_name: str) -> Path:
         tree = root / f"tree-{package_name}"

@@ -7,7 +7,8 @@ A qualification run writes a portable directory containing:
   release candidate, or an explicit ad-hoc placeholder
 - `core-version.json`, `probe.json`, `doctor.json`, and `self-test.json`:
   native CLI reports
-- `xadx-report.json`: raw XADX architecture, case, round, and result report
+- `xadx-report.json`: schema-v2 XADX identity, per-case metrics, and structured
+  phase/round failures
 - `profile.json`: the exact versioned profile
 - `models.json`: model source, revision, pull state, and content hashes
 - `junit.xml`: CI-compatible passed and failed test cases
@@ -27,9 +28,12 @@ revision, and the candidate manifest hash. Model identities always include a
 source, revision label, approved registry digest, and SHA-256 inventory of
 observed model-cache files. Candidate-backed runs verify installed package
 manifests and their complete declared file inventories before device work.
-The candidate qualification contract also binds the declarative XADX case
-contract, serializer revision, transaction hashes, source-XCLBIN hashes, and
-serialized XADX hashes, plus lifecycle, resident, and readback round counts.
+The candidate-v1 qualification contract binds the kernel-recipe-v1 digest,
+generator and serializer revisions, transaction hashes, source-XCLBIN hashes,
+serialized XADX hashes, and lifecycle, resident, and readback round counts.
+Candidate v1 also binds the required NumPy/ml-dtypes versions. Each run records
+the installed wheel tags, RECORD SHA-256, and verified payload SHA-256 in its
+evidence subject.
 Linux supplies the canonical qualification wheel;
 Windows-local generation may be exercised for platform validation, but it must
 match the canonical wheel's member names, uncompressed bytes, and normalized
@@ -62,9 +66,11 @@ native check, XCLBIN inventory, and packaged XADX case.
 Passing evidence must contain every raw native and XADX report; report status,
 identity, case order, metrics, and round counts must agree with `tests.json`
 and the candidate qualification contract.
-The XADX report records each runtime-generated buffer contract, size, and
-digest so deterministic materialization remains auditable without packaging
-the generated input files.
+The XADX report records exact recipe and executable provenance and one result
+per case: dispatch/readback counts, validated bytes, duration, mismatch count,
+first mismatch, and structured failures. Runtime-generated buffer contracts,
+sizes, and digests keep deterministic materialization auditable without
+packaging the generated input files.
 Verification does not execute device code.
 
 ## Intake index

@@ -377,14 +377,22 @@ jobs:
             --output release/candidate-manifest.json \
             --json
 
-      - name: Resolve qualification dependencies for both platforms
+      - name: Resolve qualification dependencies for every supported target
         shell: bash
         env:
           ROCM_NPU_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
+          qualification_wheels=(
+            release/rocm_npu_qualification-"${ROCM_NPU_PACKAGE_VERSION}"-*.whl
+          )
+          [[ "${#qualification_wheels[@]}" -eq 1 ]]
+          qualification_wheel="${qualification_wheels[0]}"
+          test -f "${qualification_wheel}"
+          mapfile -t numeric_requirements < <(
+            python -c 'import json; from pathlib import Path; contract = json.loads(Path("tools/rocm-npu-qualification/python/rocm_npu_qualification/numeric-runtime.json").read_text()); print(*(f"{name}=={version}" for name, version in sorted(contract["packages"].items())), sep="\n")'
+          )
           for platform in linux windows; do
-            target="release-install-${platform}"
             if [[ "${platform}" == linux ]]; then
               platform_args=(
                 --platform linux_x86_64
@@ -393,30 +401,40 @@ jobs:
             else
               platform_args=(--platform win_amd64)
             fi
-            python -m pip install \
-              --disable-pip-version-check \
-              --no-index \
-              --find-links release \
-              --only-binary=:all: \
-              "${platform_args[@]}" \
-              --target "${target}" \
-              "rocm-npu-qualification==${ROCM_NPU_PACKAGE_VERSION}"
-            ROCM_NPU_INSTALL_TARGET="${target}" python - <<'PY'
-          import importlib.metadata as metadata
-          import os
-
-          version = os.environ["ROCM_NPU_PACKAGE_VERSION"]
-          target = os.environ["ROCM_NPU_INSTALL_TARGET"]
-          installed = {
-              distribution.metadata["Name"]: distribution.version
-              for distribution in metadata.distributions(path=[target])
-          }
-          assert installed == {
-              "rocm-npu-qualification": version,
-              "rocm-npu-fastflowlm": version,
-              "rocm-npu-runtime": version,
-          }, installed
-          PY
+            for python_minor in 3.11 3.12 3.13 3.14; do
+              python_tag="cp${python_minor/./}"
+              target="qualification-release-install-${platform}-${python_tag}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-index \
+                --find-links release \
+                --only-binary=:all: \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                "${platform_args[@]}" \
+                --target "${target}" \
+                "rocm-npu-runtime==${ROCM_NPU_PACKAGE_VERSION}" \
+                "rocm-npu-fastflowlm==${ROCM_NPU_PACKAGE_VERSION}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-index \
+                --no-deps \
+                --target "${target}" \
+                "${qualification_wheel}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --only-binary=:all: \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                "${platform_args[@]}" \
+                --target "${target}" \
+                "${numeric_requirements[@]}"
+              python build_tools/verify_qualification_dependencies.py \
+                --target "${target}" \
+                --version "${ROCM_NPU_PACKAGE_VERSION}"
+            done
           done
 
       - name: Resolve compiler core and bindings for every supported Python

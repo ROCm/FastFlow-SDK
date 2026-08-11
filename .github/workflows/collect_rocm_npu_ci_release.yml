@@ -125,6 +125,65 @@ jobs:
             --output release/candidate-manifest.json \
             --json
 
+      - name: Resolve qualification dependencies for every supported target
+        env:
+          ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          set -euo pipefail
+          qualification_wheels=(
+            release/rocm_npu_qualification-"${ROCM_NPU_PACKAGE_VERSION}"-*.whl
+          )
+          [[ "${#qualification_wheels[@]}" -eq 1 ]]
+          qualification_wheel="${qualification_wheels[0]}"
+          test -f "${qualification_wheel}"
+          mapfile -t numeric_requirements < <(
+            python -c 'import json; from pathlib import Path; contract = json.loads(Path("tools/rocm-npu-qualification/python/rocm_npu_qualification/numeric-runtime.json").read_text()); print(*(f"{name}=={version}" for name, version in sorted(contract["packages"].items())), sep="\n")'
+          )
+          for platform in linux windows; do
+            if [[ "${platform}" == linux ]]; then
+              platform_args=(
+                --platform linux_x86_64
+                --platform manylinux_2_28_x86_64
+              )
+            else
+              platform_args=(--platform win_amd64)
+            fi
+            for python_minor in 3.11 3.12 3.13 3.14; do
+              python_tag="cp${python_minor/./}"
+              target="qualification-release-install-${platform}-${python_tag}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-index \
+                --find-links release \
+                --only-binary=:all: \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                "${platform_args[@]}" \
+                --target "${target}" \
+                "rocm-npu-runtime==${ROCM_NPU_PACKAGE_VERSION}" \
+                "rocm-npu-fastflowlm==${ROCM_NPU_PACKAGE_VERSION}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-index \
+                --no-deps \
+                --target "${target}" \
+                "${qualification_wheel}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --only-binary=:all: \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                "${platform_args[@]}" \
+                --target "${target}" \
+                "${numeric_requirements[@]}"
+              python build_tools/verify_qualification_dependencies.py \
+                --target "${target}" \
+                --version "${ROCM_NPU_PACKAGE_VERSION}"
+            done
+          done
+
       - name: Upload validated CI release payload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

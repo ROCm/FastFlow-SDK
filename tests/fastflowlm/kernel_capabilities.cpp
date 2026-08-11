@@ -76,7 +76,7 @@ KernelCapabilities load_kernel_capabilities(
   input >> document;
   if (document.at("schema_version").get<int>() != 1 ||
       document.at("kind").get<std::string>() !=
-          "rocm-npu-staging-fastflowlm-kernel-test-capabilities" ||
+          "rocm-npu-fastflowlm-kernel-qualification-capabilities" ||
       document.at("provenance")
           .at("public_fastflowlm_abi")
           .get<bool>()) {

@@ -8,9 +8,15 @@ python -m pip install --find-links <release-assets> \
 ```
 
 The package depends on the exact same-version `rocm-npu-fastflowlm`, which in
-turn depends on `rocm-npu-runtime`. Only the runtime wheel owns the `rocm-npu`
-entry point. The qualification wheel installs `rocm-npu-qualify`, discovered
-through the external plugin protocol.
+turn depends on `rocm-npu-runtime`, and pins NumPy 2.4.6 and ml-dtypes 0.5.4.
+Pip resolves those binary dependencies from the package index. The candidate
+manifest binds their required versions, while each evidence bundle records the
+installed wheel tags, RECORD digest, and verified payload digest. Only the
+runtime wheel owns the `rocm-npu` entry point. The qualification wheel installs
+`rocm-npu-qualify`, discovered through the external plugin protocol.
+CI resolves Linux and Windows dependencies for every supported CPython ABI from
+the single numeric-runtime contract. Release assembly validates that complete
+dependency matrix without publishing the third-party wheels.
 
 List and run profiles through the native core:
 
@@ -59,12 +65,15 @@ Useful options include:
 
 Profiles support ad-hoc diagnostics and candidate-bound release runs. Packaged
 profiles pin a canonical-JSON model registry digest and model file digests;
-the qualification wheel also
-contains five generated NPU2 XADX lifecycle, dispatch, and readback cases.
+the qualification wheel also contains a 53-case NPU2 kernel recipe covering
+seven distinct production implementations plus explicit execution variants.
 Those XADX executables embed the production XCLBIN and serialized control
-transactions. Their zero and structured inputs are generated deterministically
-at runtime from a checked-in case contract; only dense MM reference outputs are
-stored, using deterministic compression.
+transactions. Inputs and expected outputs are generated deterministically at
+runtime from the qualification-owned capability contract.
+Reports bind the exact per-case dispatch/readback schedule, validated byte
+count, and deduplicated materialization inventory. Default 32x256 Q4NX parity
+is converter-backed; 32x128 and 16x128 are measured-fact C++/Python interpreter
+agreement, with the 53-case device run serving as the independent authority.
 See the [qualification evidence v1 contract](contracts/qualification-evidence-v1.md)
 for the exact identity, archive, and verification rules.
 
@@ -87,8 +96,9 @@ rocm-npu qualify candidate \
 ```
 
 The command infers the source revision from every wheel and rejects disagreement.
-It writes `candidate-manifest.json` plus `candidate-SHA256SUMS`; the
-manifest and wheels must share one artifact root. Transfer that complete
+It writes the strict candidate v1 `candidate-manifest.json` plus
+`candidate-SHA256SUMS`; the manifest and all ROCm NPU wheels must share one
+artifact root. Transfer that complete
 release-wide candidate artifact to every manual hardware machine without
 rebuilding or selecting only one platform's identities.
 Treat `candidate-SHA256SUMS` as the publication commit marker: consumers must

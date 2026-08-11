@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import configparser
 import csv
+import email.parser
 import hashlib
 import importlib
 import io
@@ -21,6 +22,7 @@ from typing import Any
 from .candidate import CandidateError, normalize_candidate_manifest
 from .errors import QualificationError
 from .hashing import sha256_file
+from .numeric_runtime import NUMERIC_DISTRIBUTIONS, NUMERIC_RUNTIME
 
 
 PLUGIN_API = "1"
@@ -33,6 +35,8 @@ PACKAGE_MODULES = {
     "rocm-npu-runtime": "rocm_npu_runtime",
     "rocm-npu-fastflowlm": "rocm_npu_fastflowlm",
     "rocm-npu-qualification": "rocm_npu_qualification",
+    "numpy": "numpy",
+    "ml-dtypes": "ml_dtypes",
 }
 
 
@@ -75,7 +79,8 @@ def verify_installed_packages(
     candidate: dict[str, Any], installed: dict[str, str]
 ) -> dict[str, dict[str, str]]:
     selected: dict[str, dict[str, str]] = {}
-    for distribution, module_name in PACKAGE_MODULES.items():
+    for distribution in PACKAGE_DISTRIBUTIONS:
+        module_name = PACKAGE_MODULES[distribution]
         package_root = Path(importlib.import_module(module_name).__file__).parent
         manifest_path = package_root / "manifest.json"
         if not manifest_path.is_file():
@@ -159,13 +164,15 @@ def verify_candidate_wheels(
 
 def verify_recorded_install_tree(
     distribution: str,
-    package_root: Path,
+    package_roots: set[Path] | Path,
     metadata_root: Path,
     recorded_paths: set[Path],
 ) -> None:
     recorded = {path.resolve() for path in recorded_paths}
+    if isinstance(package_roots, Path):
+        package_roots = {package_roots}
     installer_files = {"INSTALLER", "REQUESTED", "direct_url.json"}
-    for root in (package_root, metadata_root):
+    for root in (*sorted(package_roots), metadata_root):
         if not root.is_dir():
             raise QualificationError(
                 f"installed package directory is missing: {distribution}/{root.name}"
@@ -198,8 +205,54 @@ def verify_recorded_install_tree(
                 )
 
 
-def verify_installed_wheel_metadata(wheels: dict[str, Path]) -> None:
-    for distribution, wheel in wheels.items():
+def _installed_record_name(member_name: str) -> str:
+    """Map wheel .data payloads to their installed site-packages RECORD path."""
+    parts = member_name.replace("\\", "/").split("/")
+    if len(parts) >= 3 and parts[0].endswith(".data") and parts[1] in {
+        "purelib",
+        "platlib",
+    }:
+        return "/".join(parts[2:])
+    return member_name
+
+
+def _verify_recorded_payload(
+    distribution: str, member_name: str, values: list[str], path: Path
+) -> None:
+    if not path.is_file() or path.is_symlink():
+        raise QualificationError(
+            f"installed wheel payload is missing or unsafe: "
+            f"{distribution}/{member_name}"
+        )
+    if len(values) != 2 or not values[0] or not values[1]:
+        raise QualificationError(
+            f"candidate wheel payload is not hash-bound: {distribution}/{member_name}"
+        )
+    try:
+        algorithm, encoded = values[0].split("=", 1)
+        expected_size = int(values[1])
+        digest = hashlib.new(algorithm, path.read_bytes()).digest()
+    except (ValueError, OSError) as error:
+        raise QualificationError(
+            f"candidate wheel payload record is invalid: {distribution}/{member_name}"
+        ) from error
+    actual = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    if path.stat().st_size != expected_size or actual != encoded:
+        raise QualificationError(
+            f"installed wheel payload hash does not match candidate: "
+            f"{distribution}/{member_name}"
+        )
+
+
+def verify_installed_wheel_metadata(
+    wheels: dict[str, Path | tuple[Path, str]]
+) -> None:
+    for distribution, wheel_value in wheels.items():
+        wheel, expected_record_sha256 = (
+            wheel_value
+            if isinstance(wheel_value, tuple)
+            else (wheel_value, None)
+        )
         installed_distribution = metadata.distribution(distribution)
         with zipfile.ZipFile(wheel) as archive:
             record_members = [
@@ -210,6 +263,14 @@ def verify_installed_wheel_metadata(wheels: dict[str, Path]) -> None:
             if len(record_members) != 1:
                 raise QualificationError(
                     f"candidate wheel RECORD is missing: {distribution}"
+                )
+            if (
+                expected_record_sha256 is not None
+                and hashlib.sha256(archive.read(record_members[0])).hexdigest()
+                != expected_record_sha256
+            ):
+                raise QualificationError(
+                    f"candidate wheel RECORD digest does not match: {distribution}"
                 )
             for member in archive.infolist():
                 if (
@@ -232,7 +293,7 @@ def verify_installed_wheel_metadata(wheels: dict[str, Path]) -> None:
                     )
             record_member = record_members[0]
             candidate_rows = {
-                row[0]: row[1:]
+                _installed_record_name(row[0]): row[1:]
                 for row in csv.reader(
                     io.StringIO(archive.read(record_member).decode("utf-8"))
                 )
@@ -267,14 +328,21 @@ def verify_installed_wheel_metadata(wheels: dict[str, Path]) -> None:
             )
             if row
         }
+        installed_record_name = _installed_record_name(record_member.filename)
         for member_name, values in candidate_rows.items():
-            if member_name == record_member.filename:
+            if member_name == installed_record_name:
                 continue
             if installed_rows.get(member_name) != values:
                 raise QualificationError(
                     "installed wheel RECORD does not match candidate: "
                     f"{distribution}/{member_name}"
                 )
+            _verify_recorded_payload(
+                distribution,
+                member_name,
+                values,
+                Path(installed_distribution.locate_file(member_name)),
+            )
         installer_files = {"INSTALLER", "REQUESTED", "direct_url.json"}
         for member_name in installed_rows.keys() - candidate_rows.keys():
             values = installed_rows[member_name]
@@ -325,19 +393,132 @@ def verify_installed_wheel_metadata(wheels: dict[str, Path]) -> None:
                         "installed wheel RECORD hash is invalid: "
                         f"{distribution}/{member_name}"
                     )
-        package_root = Path(
-            installed_distribution.locate_file(PACKAGE_MODULES[distribution])
-        )
         recorded_paths = {
             Path(installed_distribution.locate_file(member_name))
             for member_name in installed_rows
         }
+        package_roots = {
+            Path(installed_distribution.locate_file(normalized.split("/", 1)[0]))
+            for member_name in candidate_rows
+            for normalized in [member_name.replace("\\", "/")]
+            if "/" in normalized
+            and not normalized.startswith("../")
+            and ".dist-info/" not in normalized
+        }
+        package_roots.add(
+            Path(installed_distribution.locate_file(PACKAGE_MODULES[distribution]))
+        )
         verify_recorded_install_tree(
             distribution,
-            package_root,
+            package_roots,
             installed_record.parent,
             recorded_paths,
         )
+
+
+def numeric_runtime_identities() -> dict[str, dict[str, Any]]:
+    """Validate and describe the installed numeric wheel payloads."""
+    identities = {}
+    for distribution in NUMERIC_DISTRIBUTIONS:
+        try:
+            installed_distribution = metadata.distribution(distribution)
+        except metadata.PackageNotFoundError as error:
+            raise QualificationError(
+                f"required package is not installed: {distribution}"
+            ) from error
+        installed_version = installed_distribution.version
+        if installed_version != NUMERIC_RUNTIME[distribution]:
+            raise QualificationError(
+                f"installed numeric runtime version is invalid: {distribution}"
+            )
+        wheel_text = installed_distribution.read_text("WHEEL")
+        if wheel_text is None:
+            raise QualificationError(
+                f"installed wheel metadata is missing: {distribution}"
+            )
+        wheel_metadata = email.parser.Parser().parsestr(wheel_text)
+        installed_tags = sorted(set(wheel_metadata.get_all("Tag") or ()))
+        if not installed_tags:
+            raise QualificationError(
+                f"installed numeric runtime has no compatibility tags: {distribution}"
+            )
+        files = list(installed_distribution.files or ())
+        records = [
+            item for item in files
+            if item.as_posix().endswith(".dist-info/RECORD")
+        ]
+        if len(records) != 1:
+            raise QualificationError(
+                f"installed numeric runtime RECORD is missing: {distribution}"
+            )
+        record_path = Path(installed_distribution.locate_file(records[0]))
+        try:
+            record_bytes = record_path.read_bytes()
+        except OSError as error:
+            raise QualificationError(
+                f"installed numeric runtime RECORD cannot be read: {distribution}"
+            ) from error
+        payload = []
+        recorded_paths = {
+            Path(installed_distribution.locate_file(item)) for item in files
+        }
+        for item in sorted(files, key=lambda value: value.as_posix()):
+            name = item.as_posix()
+            if item == records[0]:
+                continue
+            if item.hash is None or item.size is None:
+                if name.endswith(".pyc"):
+                    continue
+                raise QualificationError(
+                    f"installed numeric runtime has an unbound file: "
+                    f"{distribution}/{name}"
+                )
+            path = Path(installed_distribution.locate_file(item))
+            if not path.is_file() or path.is_symlink():
+                raise QualificationError(
+                    f"installed numeric runtime payload is missing or unsafe: "
+                    f"{distribution}/{name}"
+                )
+            digest = hashlib.new(item.hash.mode, path.read_bytes()).digest()
+            encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+            if encoded != item.hash.value or path.stat().st_size != item.size:
+                raise QualificationError(
+                    f"installed numeric runtime payload hash is invalid: "
+                    f"{distribution}/{name}"
+                )
+            payload.append((name, f"{item.hash.mode}={item.hash.value}", item.size))
+        package_roots = {
+            Path(installed_distribution.locate_file(name.split("/", 1)[0]))
+            for item in files
+            for name in [item.as_posix()]
+            if "/" in name
+            and not name.startswith("../")
+            and ".dist-info/" not in name
+        }
+        verify_recorded_install_tree(
+            distribution,
+            package_roots,
+            record_path.parent,
+            recorded_paths,
+        )
+        payload_bytes = json.dumps(
+            payload, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+        identities[distribution] = {
+            "version": installed_version,
+            "compatibility_tags": installed_tags,
+            "record_sha256": hashlib.sha256(record_bytes).hexdigest(),
+            "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+        }
+    return identities
+
+
+def verify_numeric_runtime(candidate_manifest: dict[str, Any]) -> None:
+    if candidate_manifest["numeric_runtime"] != NUMERIC_RUNTIME:
+        raise QualificationError(
+            "candidate numeric runtime versions do not match the qualification contract"
+        )
+    numeric_runtime_identities()
 
 
 def validate_versions(
@@ -369,3 +550,4 @@ def validate_versions(
     selected = verify_installed_packages(candidate_manifest, installed)
     wheels = verify_candidate_wheels(selected, candidate_path)
     verify_installed_wheel_metadata(wheels)
+    verify_numeric_runtime(candidate_manifest)

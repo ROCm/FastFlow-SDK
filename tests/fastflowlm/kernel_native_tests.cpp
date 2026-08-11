@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     }
     const auto capabilities = load_kernel_capabilities(argv[1]);
     if (capabilities.families.size() < 2 ||
-        capabilities.contract_id != "fastflowlm-hrx-kernel-test-v1") {
+        capabilities.contract_id != "fastflowlm-kernel-qualification-v1") {
       throw std::runtime_error(
           "kernel capability manifest lacks implementation coverage");
     }

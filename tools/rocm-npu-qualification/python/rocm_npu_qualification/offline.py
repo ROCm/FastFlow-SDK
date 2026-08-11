@@ -28,9 +28,11 @@ from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
     POLICY_SCHEMA_VERSION,
+    XADX_REPORT_SCHEMA_VERSION,
 )
 from .evidence import junit_bytes
 from .hashing import sha256_file, write_sha256sums
+from .numeric_runtime import NUMERIC_RUNTIME
 from .policy import PolicyValidationError, normalize_policy
 from .schema import (
     SchemaValidationError,
@@ -367,18 +369,7 @@ def _validate_complete_execution(
     for name in contract["native_checks"]:
         expected[("native", "native-core", name)] = {}
     for name in contract["xadx_cases"]:
-        execution = contract["xadx_execution"]
-        expected[("xadx", "fastflowlm-production-kernels", name)] = {
-            "rounds": (
-                execution["lifecycle_rounds"]
-                + execution["resident_rounds"]
-                + (
-                    execution["readback_rounds"]
-                    if name == "host-readback/coherence"
-                    else 0
-                )
-            )
-        }
+        expected[("xadx", "fastflowlm-production-kernels", name)] = {}
     for model in profile["models"]:
         if model["xclbins"]:
             expected[
@@ -429,6 +420,25 @@ def _validate_complete_execution(
                     f"passing evidence has invalid {field} for {key}"
                 )
 
+    # Every coherence-capable case receives the declared readback depth. The
+    # projected rows carry that attribution, so the total cannot be inferred
+    # from one global readback count.
+    execution = _xadx_execution(contract, profile["name"])
+    resident = execution["lifecycle_rounds"] + execution["resident_rounds"]
+    budget = len(contract["xadx_cases"]) * resident + sum(
+        observed[key].get("metrics", {}).get("readback_rounds", 0)
+        for key in observed
+        if key[0] == "xadx"
+    )
+    performed = sum(
+        observed[key].get("rounds", 0) for key in observed if key[0] == "xadx"
+    )
+    if performed != budget:
+        raise EvidenceError(
+            "passing evidence does not account for the XADX execution budget: "
+            f"performed={performed}, required={budget}"
+        )
+
 
 def _reconcile_native_reports(
     reports: dict[str, dict[str, Any]],
@@ -471,17 +481,64 @@ def _reconcile_native_reports(
             raise EvidenceError(f"{name} does not match its native test record")
 
 
+def _xadx_execution(contract: dict[str, Any], profile_name: str) -> dict[str, int]:
+    """The round policy the contract holds for the profile that ran."""
+    execution = contract["xadx_execution"].get(profile_name)
+    if execution is None:
+        raise EvidenceError(
+            "the qualification contract states no XADX round policy for profile "
+            f"{profile_name!r}"
+        )
+    return execution
+
+
 def _reconcile_xadx_report(
     report: dict[str, Any],
     evidence: dict[str, Any],
     contract: dict[str, Any] | None,
 ) -> None:
+    try:
+        validate_schema(report, load_packaged_schema("xadx-report-v1.schema.json"))
+    except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
+        raise EvidenceError(
+            f"xadx-report.json does not satisfy the v1 schema: {error}"
+        ) from error
+    if report.get("schema_version") != XADX_REPORT_SCHEMA_VERSION:
+        raise EvidenceError("xadx-report.json schema version is invalid")
     tests = [
         test
         for test in evidence["tests"]
         if test.get("kind") == "xadx"
         and test.get("model") == "fastflowlm-production-kernels"
     ]
+    if report["report_kind"] == "package-validation":
+        row = report["case_results"][0]
+        expected_metrics = {
+            "architecture": report["architecture"],
+            "lifecycle_rounds": 0,
+            "resident_rounds": 0,
+            "readback_rounds": 0,
+            "validated_bytes": row["validated_bytes"],
+            "mismatch_count": row["mismatch_count"],
+            "first_mismatch": row["first_mismatch"],
+        }
+        expected_failure = [{"case": row["name"], **failure} for failure in row["failures"]]
+        if (
+            len(tests) != 1
+            or row["name"] != "package-validation"
+            or report["failures"] != expected_failure
+            or tests[0].get("name") != row["name"]
+            or tests[0].get("status") != "fail"
+            or tests[0].get("rounds") != 0
+            or tests[0].get("duration_seconds") != row["duration_seconds"]
+            or tests[0].get("metrics") != expected_metrics
+            or tests[0].get("log") != "xadx-report.json"
+            or tests[0].get("artifacts") != ["xadx-report.json"]
+        ):
+            raise EvidenceError(
+                "xadx-report.json package-validation result does not match tests.json"
+            )
+        return
     expected_names = (
         contract["xadx_cases"] if contract is not None else [test.get("name") for test in tests]
     )
@@ -490,33 +547,195 @@ def _reconcile_xadx_report(
     status = report.get("status")
     if status not in {"pass", "fail", "unsupported"}:
         raise EvidenceError("xadx-report.json status is invalid")
+    if (
+        status != "unsupported"
+        and report.get("numeric_runtime") != NUMERIC_RUNTIME
+    ):
+        raise EvidenceError(
+            "xadx-report.json numeric runtime does not match the qualification "
+            "contract"
+        )
     rounds = {
         key: report.get(key)
         for key in ("lifecycle_rounds", "resident_rounds", "readback_rounds")
     }
+    if status == "unsupported":
+        rounds = {key: 0 for key in rounds}
     if any(not isinstance(value, int) or value < 0 for value in rounds.values()):
         raise EvidenceError("xadx-report.json round counts are invalid")
-    if contract is not None and rounds != contract["xadx_execution"]:
+    if status != "unsupported" and contract is not None and rounds != _xadx_execution(
+        contract, evidence["profile"]["name"]
+    ):
         raise EvidenceError(
             "xadx-report.json round counts do not match the qualification contract"
         )
     if len(tests) != len(expected_names):
         raise EvidenceError("xadx-report.json does not match the XADX test inventory")
-    for test, name in zip(tests, expected_names):
-        readback = (
-            rounds["readback_rounds"] if name == "host-readback/coherence" else 0
+    case_results = report.get("case_results")
+    if (
+        not isinstance(case_results, list)
+        or [row.get("name") for row in case_results] != expected_names
+    ):
+        raise EvidenceError("xadx-report.json per-case results are invalid")
+    result_by_name = {row["name"]: row for row in case_results}
+    attribution = (
+        {row["name"]: row["readbacks"] for row in report["case_results"]}
+        if status == "unsupported"
+        else report.get("readback_by_case")
+    )
+    if not isinstance(attribution, dict) or any(
+        not isinstance(value, int) or value < 0 for value in attribution.values()
+    ):
+        raise EvidenceError("xadx-report.json readback attribution is invalid")
+    if any(value > rounds["readback_rounds"] for value in attribution.values()):
+        raise EvidenceError("xadx-report.json overstates per-case readback rounds")
+    if set(attribution) - set(expected_names):
+        raise EvidenceError(
+            "xadx-report.json attributes readback rounds to unknown cases"
         )
+    case_contracts = (
+        contract.get("xadx_case_contracts") if contract is not None else None
+    )
+    if status != "unsupported" and case_contracts is not None:
+        expected_attribution = {
+            name: rounds["readback_rounds"]
+            for name in expected_names
+            if case_contracts[name]["readback_capable"]
+        }
+        if (
+            status == "pass"
+            and attribution != expected_attribution
+        ) or (
+            status == "fail"
+            and (
+                set(attribution) - set(expected_attribution)
+                or any(
+                    value > expected_attribution[name]
+                    for name, value in attribution.items()
+                )
+                or any(
+                    result_by_name[name].get("status") == "pass"
+                    and attribution.get(name) != expected
+                    for name, expected in expected_attribution.items()
+                )
+            )
+        ):
+            raise EvidenceError(
+                "xadx-report.json readback attribution does not match the "
+                "candidate case contracts"
+            )
+        if report.get("materialized_buffers") != contract["xadx_materializations"]:
+            raise EvidenceError(
+                "xadx-report.json materialization inventory does not match the "
+                "candidate"
+            )
+    row_statuses = [row.get("status") for row in case_results]
+    if (
+        (status == "pass" and any(value != "pass" for value in row_statuses))
+        or (status == "fail" and "fail" not in row_statuses)
+    ):
+        raise EvidenceError("xadx-report.json aggregate and case statuses disagree")
+    if contract is not None:
+        provenance = contract["xadx_provenance"]
+        if (
+            report.get("recipe_sha256") != provenance["recipe_sha256"]
+            or report.get("generator_version") != provenance["generator_version"]
+            or report.get("executables") != provenance["executables"]
+        ):
+            raise EvidenceError(
+                "xadx-report.json execution provenance does not match the candidate"
+            )
+    if status == "unsupported":
+        if (
+            report["failures"]
+            or any(
+                row["status"] != "unsupported"
+                or row["dispatches"] != 0
+                or row["readbacks"] != 0
+                or row["validated_bytes"] != 0
+                or row["duration_seconds"] != 0
+                or row["mismatch_count"] != 0
+                or row["first_mismatch"] is not None
+                or row["failures"]
+                for row in case_results
+            )
+        ):
+            raise EvidenceError("xadx-report.json unsupported results are invalid")
+    for test, name, measured in zip(tests, expected_names, case_results):
+        readback = attribution.get(name, 0)
+        expected_dispatches = None
+        expected_validated_bytes = None
+        if (
+            case_contracts is not None
+            and isinstance(measured, dict)
+            and measured.get("status") == "pass"
+        ):
+            expected_dispatches = (
+                rounds["lifecycle_rounds"]
+                + rounds["resident_rounds"]
+                + readback
+            )
+            expected_validated_bytes = (
+                expected_dispatches
+                * case_contracts[name]["validated_bytes_per_dispatch"]
+            )
+        if (
+            not isinstance(measured, dict)
+            or set(measured) != {
+                "name", "status", "dispatches", "readbacks", "validated_bytes",
+                "duration_seconds", "mismatch_count", "first_mismatch", "failures",
+            }
+            or measured["status"] not in {"pass", "fail", "unsupported"}
+            or not isinstance(measured.get("dispatches"), int)
+            or measured["dispatches"] < 0
+            or measured.get("readbacks") != readback
+            or (
+                expected_dispatches is not None
+                and measured["dispatches"] != expected_dispatches
+            )
+            or not isinstance(measured.get("validated_bytes"), int)
+            or measured["validated_bytes"] < 0
+            or (
+                expected_validated_bytes is not None
+                and measured["validated_bytes"] != expected_validated_bytes
+            )
+            or not isinstance(measured.get("duration_seconds"), (int, float))
+            or measured["duration_seconds"] < 0
+            or not isinstance(measured.get("mismatch_count"), int)
+            or measured["mismatch_count"] < 0
+            or (measured["status"] == "pass" and measured["failures"])
+            or (measured["status"] == "fail" and not measured["failures"])
+            or (
+                measured["status"] == "pass"
+                and measured["dispatches"] > 0
+                and (
+                    measured["validated_bytes"] <= 0
+                    or measured["duration_seconds"] <= 0
+                )
+            )
+            or (
+                measured["status"] == "unsupported"
+                and measured["failures"]
+            )
+        ):
+            raise EvidenceError(
+                f"xadx-report.json has invalid per-case metrics: {name}"
+            )
         expected_metrics = {
             "architecture": report.get("architecture", "unknown"),
             "lifecycle_rounds": rounds["lifecycle_rounds"],
             "resident_rounds": rounds["resident_rounds"],
             "readback_rounds": readback,
+            "validated_bytes": measured["validated_bytes"],
+            "mismatch_count": measured["mismatch_count"],
+            "first_mismatch": measured["first_mismatch"],
         }
         if (
             test.get("name") != name
-            or test.get("status") != status
+            or test.get("status") != measured["status"]
             or test.get("rounds")
-            != rounds["lifecycle_rounds"] + rounds["resident_rounds"] + readback
+            != measured["dispatches"]
+            or test.get("duration_seconds") != measured["duration_seconds"]
             or test.get("metrics") != expected_metrics
             or test.get("log") != "xadx-report.json"
             or test.get("artifacts") != ["xadx-report.json"]
@@ -524,6 +743,24 @@ def _reconcile_xadx_report(
             raise EvidenceError(
                 f"xadx-report.json does not match its test record: {name}"
             )
+    flattened_failures = [
+        {"case": row["name"], **failure}
+        for row in case_results
+        for failure in row["failures"]
+    ]
+    def canonical_failure(failure):
+        return (
+            failure["case"],
+            failure["phase"],
+            -1 if failure["round"] is None else failure["round"],
+            failure["message"],
+        )
+    if sorted(report["failures"], key=canonical_failure) != sorted(
+        flattened_failures, key=canonical_failure
+    ):
+        raise EvidenceError(
+            "xadx-report.json top-level and per-case failures disagree"
+        )
 
 
 def _reconcile_reports(
@@ -534,6 +771,11 @@ def _reconcile_reports(
 ) -> None:
     if members["junit.xml"] != junit_bytes(evidence["tests"]):
         raise EvidenceError("junit.xml does not match tests.json")
+    report = reports.get("xadx-report.json")
+    if report is not None:
+        _reconcile_xadx_report(report, evidence, contract)
+    elif evidence["status"] == "pass":
+        raise EvidenceError("passing evidence is missing xadx-report.json")
     if evidence["status"] != "pass":
         return
     native_checks = (
@@ -542,10 +784,6 @@ def _reconcile_reports(
         else ["version", "probe", "doctor", "self-test"]
     )
     _reconcile_native_reports(reports, evidence, native_checks)
-    report = reports.get("xadx-report.json")
-    if report is None:
-        raise EvidenceError("passing evidence is missing xadx-report.json")
-    _reconcile_xadx_report(report, evidence, contract)
 
 
 def _validate_semantics(
@@ -631,6 +869,15 @@ def _validate_semantics(
     binding = evidence["subject"].get("candidate_binding", {})
     if bool(binding.get("present")) != candidate_bound:
         raise EvidenceError("candidate binding fields disagree")
+    observed_numeric = evidence["subject"].get("numeric_runtime", {})
+    if {
+        distribution: identity.get("version")
+        for distribution, identity in observed_numeric.items()
+        if isinstance(identity, dict)
+    } != NUMERIC_RUNTIME:
+        raise EvidenceError(
+            "evidence numeric runtime does not match the qualification contract"
+        )
     if candidate_bound:
         try:
             normalized_embedded = normalize_candidate_manifest(embedded)
@@ -678,6 +925,11 @@ def _validate_semantics(
             or subject.get("source_revision")
             != normalized_embedded["source_revision"]
             or subject.get("packages") != versions
+            or {
+                distribution: identity["version"]
+                for distribution, identity in subject["numeric_runtime"].items()
+            }
+            != normalized_embedded["numeric_runtime"]
         ):
             raise CandidateMismatchError(
                 "evidence subject does not match its candidate identity"

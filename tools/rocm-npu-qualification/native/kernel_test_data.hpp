@@ -32,6 +32,16 @@ Q4Weight make_q4_weight(
     size_t rows, size_t columns, int salt,
     Q4Profile profile = Q4Profile::kSharedSubset);
 
+// Runs FastFlowLM's own converter over caller-supplied quantization inputs and
+// returns the packed Q4NX bytes. Exposed so a generated packing can be proven
+// byte-exact against the shipping contract, including with coordinate-coded
+// probes that make the packing order directly observable.
+std::vector<uint8_t> pack_q4nx(
+    size_t rows, size_t columns,
+    const std::vector<uint32_t>& quantized,
+    const std::vector<float>& scales,
+    const std::vector<int32_t>& zero_points);
+
 std::vector<bf16> make_activation(
     size_t rows, size_t columns, int salt);
 
