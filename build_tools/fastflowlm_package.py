@@ -2,26 +2,41 @@
 # SPDX-License-Identifier: MIT
 """FastFlowLM bundle and wheel packaging orchestration."""
 
-import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from build_tools import environment, paths
+from build_tools.artifact import (
+    sha256_file,
+    validate_directory_target,
+    verify_sha256_sidecar,
+)
 from build_tools.fastflowlm_artifact import (
-    create_archive, extract_archive, sha256_file, stage_runtime_bundle,
-    validate_directory_target, validate_source_policy,
-    verify_fastflowlm_fresh_installs, verify_bundle,
+    create_archive,
+    extract_archive,
+    stage_runtime_bundle,
+    validate_source_policy,
+    verify_bundle,
+    verify_fastflowlm_fresh_installs,
 )
 from build_tools.fastflowlm_deps import require_fastflowlm_linux_packaging_tools
 from build_tools.rocm_npu_linux_wheels import (
-    FASTFLOWLM_LINUX_WHEEL_TAG, FASTFLOWLM_DISTRIBUTION, LINUX_WHEEL_TAG,
-    RUNTIME_DISTRIBUTION, auditwheel_policy, build_runtime_fastflowlm_wheels,
-    find_rocm_npu_wheels, validate_auditwheel_policy,
+    FASTFLOWLM_DISTRIBUTION,
+    FASTFLOWLM_LINUX_WHEEL_TAG,
+    LINUX_WHEEL_TAG,
+    RUNTIME_DISTRIBUTION,
+    auditwheel_policy,
+    build_runtime_fastflowlm_wheels,
+    find_rocm_npu_wheels,
+    validate_auditwheel_policy,
     verify_wheels_do_not_have_text_path_references,
 )
-from build_tools.rocm_npu_wheel_common import default_package_version, verify_wheel_checksums
+from build_tools.rocm_npu_wheel_common import (
+    default_package_version,
+    verify_wheel_checksums,
+)
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ
@@ -163,15 +178,10 @@ def _find_fastflowlm_archive(directory):
     if len(archives) != 1:
         sys.exit(f"expected exactly one FastFlowLM artifact in {directory}, found {len(archives)}")
     archive = archives[0]
-    checksum_path = archive.with_name(archive.name + ".sha256")
-    if not checksum_path.is_file():
-        sys.exit(f"artifact checksum missing: {checksum_path}")
-    fields = checksum_path.read_text(encoding="ascii").strip().split()
-    if (len(fields) != 2 or fields[1] != archive.name or
-            not re.fullmatch(r"[0-9a-f]{64}", fields[0])):
-        sys.exit(f"malformed artifact checksum: {checksum_path}")
-    if sha256_file(archive) != fields[0]:
-        sys.exit(f"artifact checksum mismatch: {archive}")
+    try:
+        verify_sha256_sidecar(archive)
+    except RuntimeError as error:
+        sys.exit(str(error))
     return archive
 
 

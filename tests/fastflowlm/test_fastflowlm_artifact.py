@@ -7,31 +7,33 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tomllib
 import warnings
 import zipfile
 from pathlib import Path
 from unittest import mock
 
 import pytest
+import tomllib
 
-from build_tools.fastflowlm_artifact import (
-    _linux_dependencies_and_licenses,
-    _linux_package_owner_candidates,
-    _is_linux_system_runtime,
-    _system_license_destination,
-    _copy_windows_redistributable_closure,
-    pe_imports,
-    create_archive,
+from build_tools.artifact import (
     directory_state,
-    extract_archive,
     git_source_state,
     sha256_file,
+)
+from build_tools.fastflowlm_artifact import (
+    _copy_windows_redistributable_closure,
+    _is_linux_system_runtime,
+    _linux_dependencies_and_licenses,
+    _linux_package_owner_candidates,
+    _system_license_destination,
+    create_archive,
+    extract_archive,
     validate_source_policy,
+    verify_bundle,
     verify_cli_fresh_install,
     verify_fastflowlm_fresh_installs,
-    verify_bundle,
 )
+from build_tools.native_dependencies import pe_imports
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -494,7 +496,7 @@ class TestFastFlowLMArtifact:
             with zipfile.ZipFile(archive, "w") as output:
                 output.writestr("bundle/file", b"first")
                 output.writestr("bundle/file", b"second")
-        with pytest.raises(RuntimeError, match="duplicate paths"):
+        with pytest.raises(RuntimeError, match="duplicate normalized path"):
             extract_archive(archive, root / "extracted", allowed_root=root)
 
     def test_zip_normalized_duplicate_paths_are_rejected(self, tmp_path):
@@ -527,5 +529,5 @@ class TestFastFlowLMArtifact:
         archive = root / "bad.tar.zst"
         subprocess.run(["zstd", "-q", "-f", str(tar_path), "-o", str(archive)],
                        check=True)
-        with pytest.raises(RuntimeError, match="special files"):
+        with pytest.raises(RuntimeError, match="links and special files"):
             extract_archive(archive, root / "extracted", allowed_root=root)

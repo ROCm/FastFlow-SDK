@@ -4,109 +4,49 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
 import re
 import shutil
-import stat
-import struct
 import subprocess
-import tarfile
-import tempfile
-import tomllib
-import zipfile
 from pathlib import Path, PurePosixPath
 
+import tomllib
+
+from build_tools.archive import (
+    create_deterministic_tar_zstd_cli,
+    create_deterministic_zip,
+    extract_archive_atomic,
+)
+from build_tools.artifact import (
+    directory_state,
+    file_inventory,
+    git_source_state,
+    reset_directory,
+    sha256_file,
+    validate_directory_target,
+    verify_file_inventory,
+    write_sha256_sidecar,
+)
+from build_tools.artifact import (
+    git_revision as _git_revision,
+)
 from build_tools.fastflowlm_deps import dependency_paths
+from build_tools.native_dependencies import (
+    elf_needed,
+    elf_soname,
+    pe_imports,
+    set_elf_rpath,
+)
 from build_tools.rocm_npu_wheel_common import default_package_version
 
-
 SCHEMA_VERSION = 1
-FIXED_MTIME = 946684800  # 2000-01-01T00:00:00Z
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _zstandard_module():
-    # dev.py imports this module before `dev.py setup` creates the venv, so keep
-    # the optional codec import at the point where an archive actually needs it.
-    try:
-        import zstandard
-    except ImportError as error:
-        raise RuntimeError(
-            "the zstandard Python package is required for .tar.zst artifacts; "
-            "run: python dev.py setup"
-        ) from error
-    return zstandard
 
 
 def _run_text(command: list[str], cwd: Path | None = None) -> str:
     result = subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True)
     return result.stdout.strip()
-
-
-def _git_revision(path: Path) -> str:
-    return _run_text(["git", "rev-parse", "HEAD"], cwd=path)
-
-
-def git_source_state(path: Path) -> dict[str, object]:
-    """Describes the exact tracked and non-ignored source state used to build."""
-    diff = subprocess.run(
-        ["git", "diff", "--binary", "--no-ext-diff", "HEAD"], cwd=path,
-        check=True, capture_output=True,
-    ).stdout
-    tracked_output = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", "-z", "HEAD"],
-        cwd=path, check=True, capture_output=True,
-    ).stdout
-    untracked_output = subprocess.run(
-        ["git", "ls-files", "-o", "--exclude-standard", "-z"],
-        cwd=path, check=True, capture_output=True,
-    ).stdout
-    changed_paths = sorted({
-        item.decode("utf-8", errors="surrogateescape")
-        for output in (tracked_output, untracked_output)
-        for item in output.split(b"\0") if item
-    })
-    changed_files = []
-    for relative in changed_paths:
-        source = path / relative
-        record: dict[str, object] = {"path": relative.replace("\\", "/")}
-        if source.is_file():
-            record.update({"size": source.stat().st_size,
-                           "sha256": sha256_file(source)})
-        else:
-            record["deleted"] = True
-        changed_files.append(record)
-    return {
-        "revision": _git_revision(path),
-        "dirty": bool(changed_files),
-        "tracked_diff_sha256": hashlib.sha256(diff).hexdigest(),
-        "changed_files": changed_files,
-    }
-
-
-def directory_state(path: Path, *, exclude_names: tuple[str, ...] = ()) -> dict[str, object]:
-    files = []
-    for source in sorted(item for item in path.rglob("*") if item.is_file()):
-        if source.name in exclude_names:
-            continue
-        files.append({"path": source.relative_to(path).as_posix(),
-                      "size": source.stat().st_size,
-                      "sha256": sha256_file(source)})
-    digest = hashlib.sha256()
-    for record in files:
-        digest.update(json.dumps(record, sort_keys=True).encode("utf-8"))
-        digest.update(b"\n")
-    return {"sha256": digest.hexdigest(), "file_count": len(files)}
 
 
 def verify_fastflowlm_fresh_installs(
@@ -234,22 +174,6 @@ def _copy_checked(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
-def validate_directory_target(path: Path, allowed_root: Path) -> None:
-    resolved = path.resolve()
-    root = allowed_root.resolve()
-    if resolved == root or root not in resolved.parents:
-        raise RuntimeError(f"refusing to remove directory outside {root}: {resolved}")
-
-
-def reset_directory(path: Path, allowed_root: Path) -> None:
-    validate_directory_target(path, allowed_root)
-    if path.is_symlink():
-        path.unlink()
-    elif path.exists():
-        shutil.rmtree(path)
-    path.mkdir(parents=True)
-
-
 def _parse_control_file(path: Path) -> list[dict[str, str]]:
     if not path.is_file():
         return []
@@ -267,79 +191,6 @@ def _parse_control_file(path: Path) -> list[dict[str, str]]:
         if record.get("status") == "install ok installed":
             records.append(record)
     return records
-
-
-def pe_imports(path: Path) -> list[str]:
-    data = path.read_bytes()
-    if len(data) < 0x40 or data[:2] != b"MZ":
-        raise RuntimeError(f"not a PE binary: {path}")
-    pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
-    if pe_offset + 24 > len(data) or data[pe_offset:pe_offset + 4] != b"PE\0\0":
-        raise RuntimeError(f"invalid PE header: {path}")
-    coff = pe_offset + 4
-    section_count = struct.unpack_from("<H", data, coff + 2)[0]
-    optional_size = struct.unpack_from("<H", data, coff + 16)[0]
-    optional = coff + 20
-    if optional + optional_size > len(data):
-        raise RuntimeError(f"truncated PE optional header: {path}")
-    magic = struct.unpack_from("<H", data, optional)[0]
-    if magic == 0x20B:
-        directory_offset = optional + 112
-        image_base = struct.unpack_from("<Q", data, optional + 24)[0]
-    elif magic == 0x10B:
-        directory_offset = optional + 96
-        image_base = struct.unpack_from("<I", data, optional + 28)[0]
-    else:
-        raise RuntimeError(f"unsupported PE optional-header magic: {path}")
-    section_offset = optional + optional_size
-    sections = []
-    for index in range(section_count):
-        entry = section_offset + index * 40
-        if entry + 40 > len(data):
-            raise RuntimeError(f"truncated PE section table: {path}")
-        virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
-            "<IIII", data, entry + 8)
-        sections.append((virtual_address, max(virtual_size, raw_size), raw_offset))
-
-    def rva_offset(rva: int) -> int:
-        for virtual_address, size, raw_offset in sections:
-            if virtual_address <= rva < virtual_address + size:
-                result = raw_offset + rva - virtual_address
-                if result >= len(data):
-                    break
-                return result
-        raise RuntimeError(f"PE RVA 0x{rva:x} is not backed by a section: {path}")
-
-    def c_string(rva: int) -> str:
-        offset = rva_offset(rva)
-        end = data.find(b"\0", offset)
-        if end < 0:
-            raise RuntimeError(f"unterminated PE import name: {path}")
-        return data[offset:end].decode("ascii", errors="strict").lower()
-
-    imports = set()
-    directories = ((1, 20, 12, False), (13, 32, 4, True))
-    for directory_index, descriptor_size, name_field, is_delay in directories:
-        entry = directory_offset + directory_index * 8
-        if entry + 8 > optional + optional_size:
-            continue
-        table_rva, table_size = struct.unpack_from("<II", data, entry)
-        if not table_rva or not table_size:
-            continue
-        offset = rva_offset(table_rva)
-        limit = min(len(data), offset + table_size)
-        while offset + descriptor_size <= limit:
-            descriptor = data[offset:offset + descriptor_size]
-            if not any(descriptor):
-                break
-            name_rva = struct.unpack_from("<I", descriptor, name_field)[0]
-            if is_delay and not (struct.unpack_from("<I", descriptor, 0)[0] & 1):
-                if name_rva < image_base:
-                    raise RuntimeError(f"invalid delay-import VA: {path}")
-                name_rva -= image_base
-            imports.add(c_string(name_rva))
-            offset += descriptor_size
-    return sorted(imports)
 
 
 def _windows_pe_dependency_graph(bundle: Path) -> dict[str, list[str]]:
@@ -628,12 +479,7 @@ def _linux_soname(path: Path) -> str | None:
     patchelf = shutil.which("patchelf")
     if not patchelf:
         return None
-    result = subprocess.run([patchelf, "--print-soname", str(path)],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        return None
-    soname = result.stdout.strip()
-    return soname or None
+    return elf_soname(path, patchelf=patchelf)
 
 
 def _linux_package_owner_candidates(path: Path) -> list[Path]:
@@ -668,16 +514,13 @@ def _normalize_and_verify_linux_elf(bundle: Path) -> dict[str, list[str]]:
             rpath = "$ORIGIN:$ORIGIN/.."
         else:
             rpath = "$ORIGIN:$ORIGIN/flm"
-        subprocess.run([patchelf, "--set-rpath", rpath, str(path)], check=True)
+        set_elf_rpath(path, rpath, patchelf=patchelf)
 
     bundled_names = {path.name for path in elf_files}
     graph = {}
     missing = []
     for path in elf_files:
-        needed = subprocess.run(
-            [patchelf, "--print-needed", str(path)], check=True,
-            capture_output=True, text=True,
-        ).stdout.splitlines()
+        needed = elf_needed(path, patchelf=patchelf)
         graph[path.relative_to(bundle).as_posix()] = sorted(needed)
         missing.extend(f"{path.name} -> {name}" for name in needed
                        if name not in bundled_names and
@@ -969,11 +812,7 @@ def stage_runtime_bundle(root: Path, flm_install: Path, hrx_install: Path,
             "system": system_dependencies,
         }
 
-    files = []
-    for path in sorted(p for p in bundle.rglob("*") if p.is_file()):
-        relative = path.relative_to(bundle).as_posix()
-        files.append({"path": relative, "size": path.stat().st_size,
-                      "sha256": sha256_file(path)})
+    files = file_inventory(bundle)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -1048,82 +887,10 @@ def verify_bundle(bundle: Path) -> dict[str, object]:
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RuntimeError(f"unsupported bundle manifest schema: {manifest.get('schema_version')}")
 
-    file_records = manifest.get("files")
-    if not isinstance(file_records, list):
-        raise RuntimeError("bundle manifest files must be a list")
-    expected = {}
-    for entry in file_records:
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            raise RuntimeError("bundle manifest contains an invalid file record")
-        relative = PurePosixPath(entry["path"])
-        if relative.is_absolute() or ".." in relative.parts or str(relative) != entry["path"]:
-            raise RuntimeError(f"bundle manifest contains an unsafe path: {entry['path']}")
-        if entry["path"] in expected:
-            raise RuntimeError(f"bundle manifest contains a duplicate path: {entry['path']}")
-        if not isinstance(entry.get("size"), int) or entry["size"] < 0 or not re.fullmatch(
-                r"[0-9a-f]{64}", str(entry.get("sha256", ""))):
-            raise RuntimeError(f"bundle manifest contains invalid metadata: {entry['path']}")
-        expected[entry["path"]] = entry
-    actual = {
-        path.relative_to(bundle).as_posix(): path
-        for path in bundle.rglob("*") if path.is_file() and path != manifest_path
-    }
-    missing = sorted(set(expected) - set(actual))
-    unexpected = sorted(set(actual) - set(expected))
-    if missing or unexpected:
-        raise RuntimeError(f"bundle inventory mismatch; missing={missing}, unexpected={unexpected}")
-    for relative, entry in expected.items():
-        path = actual[relative]
-        if path.stat().st_size != entry["size"] or sha256_file(path) != entry["sha256"]:
-            raise RuntimeError(f"bundle file verification failed: {relative}")
+    verify_file_inventory(
+        bundle, manifest.get("files"), exclude_paths=(manifest_path,)
+    )
     return manifest
-
-
-def _zip_bundle(bundle: Path, archive: Path) -> None:
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
-        for path in sorted(p for p in bundle.rglob("*") if p.is_file()):
-            relative = (PurePosixPath(bundle.name) / path.relative_to(bundle).as_posix()).as_posix()
-            info = zipfile.ZipInfo(relative, date_time=(2000, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
-            if path.name == "flm.exe":
-                info.external_attr = 0o100755 << 16
-            output.writestr(info, path.read_bytes(), compresslevel=9)
-
-
-def _tar_zst_bundle(bundle: Path, archive: Path) -> None:
-    zstd = shutil.which("zstd")
-    if not zstd:
-        raise RuntimeError("zstd is required to create the Linux .tar.zst artifact")
-    with tempfile.TemporaryDirectory(prefix="fastflowlm-tar-") as temporary:
-        tar_path = Path(temporary) / "bundle.tar"
-        with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as output:
-            for path in sorted([bundle, *bundle.rglob("*")]):
-                relative = PurePosixPath(bundle.name) / path.relative_to(bundle).as_posix()
-                info = tarfile.TarInfo(relative.as_posix())
-                info.uid = info.gid = 0
-                info.uname = info.gname = ""
-                info.mtime = FIXED_MTIME
-                if path.is_file():
-                    if path.is_symlink():
-                        resolved = path.resolve()
-                        bundle_root = bundle.resolve()
-                        if bundle_root not in resolved.parents or not resolved.is_file():
-                            raise RuntimeError(
-                                f"artifact symlink escapes bundle or is not a file: {path}")
-                    info.type = tarfile.REGTYPE
-                    info.size = path.stat().st_size
-                    mode = stat.S_IMODE(path.stat().st_mode)
-                    info.mode = 0o755 if mode & 0o111 else 0o644
-                    with path.open("rb") as stream:
-                        output.addfile(info, stream)
-                elif path.is_dir() and not path.is_symlink():
-                    info.type = tarfile.DIRTYPE
-                    info.mode = 0o755
-                    output.addfile(info)
-                else:
-                    raise RuntimeError(f"unsupported artifact filesystem entry: {path}")
-        subprocess.run([zstd, "-q", "-19", "-T0", "-f", str(tar_path), "-o", str(archive)], check=True)
 
 
 def create_archive(bundle: Path, output_directory: Path) -> Path:
@@ -1131,13 +898,20 @@ def create_archive(bundle: Path, output_directory: Path) -> Path:
     output_directory.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
         archive = output_directory / f"{bundle.name}.zip"
-        _zip_bundle(bundle, archive)
+        create_deterministic_zip(
+            bundle,
+            archive,
+            arcname=bundle.name,
+            compresslevel=9,
+            executable=lambda path: path.name == "flm.exe",
+        )
     else:
         archive = output_directory / f"{bundle.name}.tar.zst"
-        _tar_zst_bundle(bundle, archive)
+        create_deterministic_tar_zstd_cli(
+            bundle, archive, arcname=bundle.name, level=19
+        )
     archive_digest = sha256_file(archive)
-    archive.with_name(archive.name + ".sha256").write_text(
-        f"{archive_digest}  {archive.name}\n", encoding="ascii")
+    write_sha256_sidecar(archive, digest=archive_digest)
     archive.with_name(archive.name + ".manifest.json").write_text(
         json.dumps(
             {
@@ -1157,120 +931,12 @@ def create_archive(bundle: Path, output_directory: Path) -> Path:
     return archive
 
 
-def _safe_member_path(destination: Path, name: str) -> Path:
-    path = (destination / Path(PurePosixPath(name))).resolve()
-    destination = destination.resolve()
-    if path != destination and destination not in path.parents:
-        raise RuntimeError(f"archive path escapes extraction root: {name}")
-    return path
-
-
-def _extract_archive_contents(archive: Path, destination: Path) -> Path:
-    if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive) as source:
-            names = [member.filename for member in source.infolist()]
-            if len(names) != len(set(names)):
-                raise RuntimeError(f"duplicate paths are not allowed in runtime artifacts: {archive}")
-            targets = set()
-            for member in source.infolist():
-                target = _safe_member_path(destination, member.filename)
-                normalized = os.path.normcase(str(target))
-                if normalized in targets:
-                    raise RuntimeError(
-                        f"duplicate normalized path in runtime artifact: {member.filename}")
-                targets.add(normalized)
-                mode = (member.external_attr >> 16) & 0xFFFF
-                if stat.S_ISLNK(mode):
-                    raise RuntimeError(
-                        f"links are not allowed in runtime artifacts: {member.filename}")
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with source.open(member) as input_stream, target.open("wb") as output_stream:
-                        shutil.copyfileobj(input_stream, output_stream)
-    elif archive.name.endswith((".tar.gz", ".tar.zst")):
-        raw_stream = archive.open("rb")
-        decoded_stream = None
-        zstd_process = None
-        try:
-            if archive.name.endswith(".tar.zst"):
-                try:
-                    decoded_stream = _zstandard_module().ZstdDecompressor().stream_reader(
-                        raw_stream)
-                except RuntimeError as module_error:
-                    zstd = shutil.which("zstd")
-                    if not zstd:
-                        raise module_error
-                    zstd_process = subprocess.Popen(
-                        [zstd, "-q", "-d", "-c", str(archive)],
-                        stdout=subprocess.PIPE,
-                    )
-                    decoded_stream = zstd_process.stdout
-                tar_stream = decoded_stream
-                mode = "r|"
-            else:
-                tar_stream = raw_stream
-                mode = "r:gz"
-            with tarfile.open(fileobj=tar_stream, mode=mode) as source:
-                names = set()
-                targets = set()
-                for member in source:
-                    if member.name in names:
-                        raise RuntimeError(
-                            f"duplicate paths are not allowed in runtime artifacts: {archive}")
-                    names.add(member.name)
-                    target = _safe_member_path(destination, member.name)
-                    normalized = os.path.normcase(str(target))
-                    if normalized in targets:
-                        raise RuntimeError(
-                            f"duplicate normalized path in runtime artifact: {member.name}")
-                    targets.add(normalized)
-                    if not (member.isfile() or member.isdir()):
-                        raise RuntimeError(
-                            f"special files are not allowed in runtime artifacts: {member.name}")
-                    if member.isdir():
-                        target.mkdir(parents=True, exist_ok=True)
-                    else:
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        input_stream = source.extractfile(member)
-                        if input_stream is None:
-                            raise RuntimeError(f"cannot read archive member: {member.name}")
-                        with input_stream, target.open("wb") as output_stream:
-                            shutil.copyfileobj(input_stream, output_stream)
-                        target.chmod(member.mode & 0o777)
-        finally:
-            if decoded_stream is not None:
-                decoded_stream.close()
-            raw_stream.close()
-            if zstd_process is not None and zstd_process.wait() != 0:
-                raise RuntimeError(
-                    f"zstd failed to extract {archive} (exit {zstd_process.returncode})")
-    else:
-        raise RuntimeError(f"unsupported artifact format: {archive}")
-
-    roots = [path for path in destination.iterdir() if path.is_dir()]
-    if len(roots) != 1:
-        raise RuntimeError(f"artifact must contain exactly one root directory: {archive}")
-    verify_bundle(roots[0])
-    return roots[0]
-
-
 def extract_archive(archive: Path, destination: Path, *, allowed_root: Path) -> Path:
     """Verifies in a temporary sibling and promotes only a complete bundle."""
     validate_directory_target(destination, allowed_root)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(
-        prefix=f".{destination.name}-extract-", dir=destination.parent))
-    try:
-        extracted = _extract_archive_contents(archive, temporary)
-        root_name = extracted.name
-        if destination.is_symlink():
-            destination.unlink()
-        elif destination.exists():
-            shutil.rmtree(destination)
-        temporary.replace(destination)
-        return destination / root_name
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
+    return extract_archive_atomic(
+        archive,
+        destination,
+        allowed_root=allowed_root,
+        verify_root=verify_bundle,
+    )

@@ -7,10 +7,9 @@ import os
 import shutil
 import sys
 
-from build_tools import environment, paths
-from build_tools import hrx_runtime
+from build_tools import environment, hrx_runtime, paths
+from build_tools.artifact import directory_state, git_source_state
 from build_tools.dev import patches
-from build_tools.fastflowlm_artifact import directory_state, git_source_state
 from build_tools.rocm_npu_wheel_common import default_package_version
 
 BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or str(os.cpu_count() or 8)

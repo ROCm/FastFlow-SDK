@@ -8,17 +8,16 @@ from unittest import mock
 
 import pytest
 
-from build_tools.fastflowlm_artifact import sha256_file
+from build_tools.artifact import sha256_file
 from build_tools.rocm_npu_windows_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
     _copy_microsoft_runtime_notice,
-    _write_runtime_module,
     stage_wheel_products,
 )
-
+from build_tools.runtime_wheel_staging import _write_runtime_module
 
 pytestmark = [
     pytest.mark.compiler_stack,

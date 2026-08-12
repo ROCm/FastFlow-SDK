@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 from build_tools import environment, paths
-from build_tools.fastflowlm_artifact import sha256_file
 
 HRX_INSTALL = paths.HRX_INSTALL
 
@@ -183,14 +182,6 @@ def run_native_qualification_tests(*, configure=True):
         )
     finally:
         shutil.rmtree(temporary_directory, ignore_errors=True)
-
-
-def file_record(root, path):
-    return {
-        "path": path.relative_to(root).as_posix(),
-        "size": path.stat().st_size,
-        "sha256": sha256_file(path),
-    }
 
 
 def recipe_generators():

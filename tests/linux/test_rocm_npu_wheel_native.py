@@ -14,8 +14,7 @@ from unittest import mock
 
 import pytest
 
-from build_tools import fastflowlm_package
-from build_tools import paths
+from build_tools import fastflowlm_package, paths
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_LINUX_WHEEL_TAG,
@@ -27,19 +26,20 @@ from build_tools.rocm_npu_linux_wheels import (
     _copy_hrx_soname,
     _copy_runtime_native_closure,
     _patch_and_verify_linux_products,
-    _write_runtime_module,
     auditwheel_policy,
     build_wheel,
-    find_rocm_npu_wheels,
     fastflowlm_wheel_tag,
+    find_rocm_npu_wheels,
     validate_auditwheel_policy,
     verify_wheels_do_not_have_text_path_references,
     wheel_tag,
 )
-from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
-from build_tools.rocm_npu_wheel_common import COMPILER_BINDINGS_DISTRIBUTION
+from build_tools.rocm_npu_wheel_common import (
+    COMPILER_BINDINGS_DISTRIBUTION,
+    verify_wheel_checksums,
+)
+from build_tools.runtime_wheel_staging import _write_runtime_module
 from tests.support.wheels import make_package_tree
-
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -519,5 +519,5 @@ class TestRocmNpuLinuxWheelNative:
             raise AssertionError(f"unexpected command: {command!r}")
 
         with mock.patch("build_tools.rocm_npu_linux_wheels.shutil.which", fake_which), \
-             mock.patch("build_tools.rocm_npu_linux_wheels.subprocess.run", fake_run):
+             mock.patch("build_tools.native_dependencies.subprocess.run", fake_run):
             yield

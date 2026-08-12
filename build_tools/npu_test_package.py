@@ -2,19 +2,24 @@
 # SPDX-License-Identifier: MIT
 """Artifact helpers for compiler-free NPU XADX test packages."""
 
-import contextlib
 import json
 import os
 import platform
 import shutil
-import subprocess
 import sys
-import tarfile
 from pathlib import Path
 
+from build_tools import archive as archive_tools
 from build_tools import hrx_runtime, iron, npu_prereqs, npu_test_cases, paths
-from build_tools.fastflowlm_artifact import sha256_file
-
+from build_tools.archive import (
+    create_deterministic_tar_gz,
+    create_deterministic_tar_zstd_cli,
+)
+from build_tools.artifact import (
+    file_inventory,
+    git_revision,
+    verify_file_inventory,
+)
 
 ARCHIVE_STEM = "npu-test-package.tar"
 
@@ -66,22 +71,13 @@ def write_case(stage, generated, xadx, source):
 def write_manifest(stage, cases, source_revision, system, machine):
     """Inventories a staged package and writes its identity manifest."""
     stage = Path(stage)
-    files = []
-    for path in sorted(candidate for candidate in stage.rglob("*") if candidate.is_file()):
-        files.append(
-            {
-                "path": path.relative_to(stage).as_posix(),
-                "size": path.stat().st_size,
-                "sha256": sha256_file(path),
-            }
-        )
     manifest = {
         "schema_version": 1,
         "product": "rocm-npu-test-package",
         "source_revision": source_revision,
         "platform": {"system": system, "machine": machine},
         "cases": cases,
-        "files": files,
+        "files": file_inventory(stage),
     }
     (stage / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -99,40 +95,16 @@ def create_archive(stage, output_directory, codec):
         if other != archive:
             other.unlink()
     if codec == "zst":
-        process = subprocess.Popen(
-            ["zstd", "-6", "-T0", "-q", "-f", "-o", str(archive)],
-            stdin=subprocess.PIPE,
+        create_deterministic_tar_zstd_cli(
+            stage, archive, arcname=".", level=6
         )
-        with tarfile.open(fileobj=process.stdin, mode="w|") as output:
-            output.add(stage, arcname=".")
-        process.stdin.close()
-        if process.wait() != 0:
-            raise RuntimeError(f"zstd failed (exit {process.returncode})")
     elif codec == "gz":
-        with tarfile.open(archive, "w:gz", compresslevel=6) as output:
-            output.add(stage, arcname=".")
+        create_deterministic_tar_gz(
+            stage, archive, arcname=".", compresslevel=6
+        )
     else:
         raise ValueError(f"unsupported NPU test package codec: {codec}")
     return archive
-
-
-@contextlib.contextmanager
-def _open_archive(archive):
-    archive = Path(archive)
-    if archive.suffix != ".zst":
-        with tarfile.open(archive, "r:gz") as source:
-            yield source
-        return
-    process = subprocess.Popen(
-        ["zstd", "-q", "-d", "-c", str(archive)], stdout=subprocess.PIPE
-    )
-    try:
-        with tarfile.open(fileobj=process.stdout, mode="r|") as source:
-            yield source
-    finally:
-        process.stdout.close()
-        if process.wait() != 0:
-            raise RuntimeError(f"zstd failed while reading {archive}")
 
 
 def extract_archive(archive, destination):
@@ -142,16 +114,7 @@ def extract_archive(archive, destination):
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
-    with _open_archive(archive) as source:
-        links = [
-            member.name
-            for member in source.getmembers()
-            if member.issym() or member.islnk()
-        ]
-        if links:
-            raise RuntimeError("NPU test package contains links")
-    with _open_archive(archive) as source:
-        source.extractall(destination, filter="data")
+    archive_tools.extract_archive(archive, destination)
 
 
 def verify_tree(package, expected_cases, source_revision, system):
@@ -179,18 +142,16 @@ def verify_tree(package, expected_cases, source_revision, system):
             f"expected {sorted(expected_cases)}, got {sorted(case_names)}"
         )
 
-    expected_files = {record["path"]: record for record in manifest.get("files", [])}
-    actual_files = {
-        path.relative_to(package).as_posix(): path
-        for path in package.rglob("*")
-        if path.is_file() and path != manifest_path
-    }
-    if set(actual_files) != set(expected_files):
-        raise RuntimeError("NPU test package inventory does not match files on disk")
-    for relative, path in actual_files.items():
-        record = expected_files[relative]
-        if path.stat().st_size != record["size"] or sha256_file(path) != record["sha256"]:
-            raise RuntimeError(f"NPU test package file identity mismatch: {relative}")
+    try:
+        verify_file_inventory(
+            package,
+            manifest.get("files"),
+            exclude_paths=(manifest_path,),
+        )
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"NPU test package inventory verification failed: {error}"
+        ) from error
 
     for case in cases:
         data = (package / case["xadx"]).read_bytes()
@@ -323,13 +284,7 @@ def cmd_package_npu_test_package(args):
 
 
 def _source_revision():
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    return git_revision(ROOT)
 
 
 def verify_npu_test_package(package):

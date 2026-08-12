@@ -14,6 +14,10 @@ from pathlib import Path
 import pytest
 import zstandard
 
+from build_tools.release_policy import (
+    numeric_package_versions,
+    numeric_python_abis,
+)
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
 )
@@ -33,13 +37,14 @@ from build_tools.rocm_npu_wheel_common import (
     build_wheel,
 )
 from build_tools.rocm_npu_wheel_release import (
-    NUMERIC_PYTHON_ABIS,
-    NUMERIC_RUNTIME,
     _copy_release_archives,
     prepare_rocm_npu_release_payload,
     resolve_release_inputs,
 )
 from tests.support.wheels import make_package_tree
+
+NUMERIC_RUNTIME = numeric_package_versions()
+NUMERIC_PYTHON_ABIS = numeric_python_abis()
 
 
 pytestmark = [

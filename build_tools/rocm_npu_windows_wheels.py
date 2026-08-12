@@ -9,34 +9,29 @@ import platform
 import zipfile
 from pathlib import Path
 
-from build_tools.fastflowlm_artifact import (
-    pe_imports,
-    reset_directory,
-    verify_bundle,
-)
+from build_tools.fastflowlm_artifact import verify_bundle
+from build_tools.native_dependencies import is_pe, pe_imports
 from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    build_wheel as _build_wheel,
-    fastflowlm_artifact_name,
-    find_distribution_wheels,
-    find_wheel_path_references,
-    remove_distribution_wheels,
-    runtime_artifact_name,
-    validate_version,
     _copy_dependency_licenses,
     _copy_file,
     _copy_license,
-    _copy_license_as,
     _copy_relative_file,
-    _copy_relative_tree,
-    _dependency_license_packages as _dependency_license_packages,
-    _write_file,
-    _write_package_manifest,
+    find_distribution_wheels,
+    find_wheel_path_references,
+    remove_distribution_wheels,
+    validate_version,
 )
-
+from build_tools.rocm_npu_wheel_common import (
+    build_wheel as _build_wheel,
+)
+from build_tools.runtime_wheel_staging import (
+    prepare_runtime_wheel_trees,
+    write_runtime_wheel_manifests,
+)
 
 WINDOWS_WHEEL_TAG = "py3-none-win_amd64"
 
@@ -53,155 +48,9 @@ def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
     return WINDOWS_WHEEL_TAG
 
 
-def _write_runtime_module(package_root: Path) -> None:
-    _write_file(package_root / "__init__.py", '''"""Package-local HRX runtime helpers."""
-
-from __future__ import annotations
-
-import ctypes
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-_dll_directory_handle = None
-_runtime_library = None
-
-
-def package_root() -> Path:
-    return Path(__file__).resolve().parent
-
-
-def binary_dir() -> Path:
-    return package_root() / "bin"
-
-
-def rocm_npu_path() -> Path:
-    path = binary_dir() / "rocm-npu.exe"
-    if not path.is_file():
-        raise FileNotFoundError(f"rocm-npu executable was not found: {path}")
-    return path
-
-
-def libhrx_path() -> Path:
-    path = binary_dir() / "hrx.dll"
-    if not path.is_file():
-        raise FileNotFoundError(f"HRX runtime was not found: {path}")
-    return path
-
-
-def initialize_process():
-    global _dll_directory_handle, _runtime_library
-    if _dll_directory_handle is None:
-        _dll_directory_handle = os.add_dll_directory(str(binary_dir()))
-    if _runtime_library is None:
-        _runtime_library = ctypes.WinDLL(str(libhrx_path()))
-    return _runtime_library
-
-
-def self_test(*, load: bool = False) -> Path:
-    path = libhrx_path()
-    if load:
-        initialize_process()
-    return path
-
-
-def main() -> int:
-    environment = os.environ.copy()
-    scripts = str(Path(sys.executable).resolve().parent)
-    existing = environment.get("ROCM_NPU_PLUGIN_PATH")
-    environment["ROCM_NPU_PLUGIN_PATH"] = (
-        scripts if not existing else scripts + os.pathsep + existing
-    )
-    return subprocess.run(
-        [str(rocm_npu_path()), *sys.argv[1:]],
-        env=environment,
-        check=False,
-    ).returncode
-''')
-    _write_file(package_root / "__main__.py", '''from . import main
-
-raise SystemExit(main())
-''')
-
-
-def _write_fastflowlm_module(package_root: Path) -> None:
-    _write_file(package_root / "__init__.py", '''"""Package-local FastFlowLM runtime helpers."""
-
-from __future__ import annotations
-
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-
-def package_root() -> Path:
-    return Path(__file__).resolve().parent
-
-
-def flm_path() -> Path:
-    path = package_root() / "bin" / "flm.exe"
-    if not path.is_file():
-        raise FileNotFoundError(f"FastFlowLM executable was not found: {path}")
-    return path
-
-
-def config_path() -> Path:
-    path = package_root() / "share" / "flm" / "model_list.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"FastFlowLM model list was not found: {path}")
-    return path
-
-
-def xclbin_path() -> Path:
-    path = package_root() / "share" / "flm"
-    if not (path / "xclbins").is_dir():
-        raise FileNotFoundError(f"FastFlowLM xclbins were not found: {path / 'xclbins'}")
-    return path
-
-
-def model_info_path() -> Path:
-    path = package_root() / "share" / "flm" / "model_info.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"FastFlowLM model info was not found: {path}")
-    return path
-
-
-def main(argv: list[str] | None = None) -> int:
-    executable = str(flm_path())
-    args = list(sys.argv[1:] if argv is None else argv)
-    env = dict(os.environ)
-    env.setdefault("HRX_GPU_DRIVER", "amdxdna")
-    env.setdefault("FLM_CONFIG_PATH", str(config_path()))
-    env.setdefault("FLM_XCLBIN_PATH", str(xclbin_path()))
-    env.setdefault("FLM_MODELINFO_PATH", str(model_info_path()))
-    from rocm_npu_runtime import binary_dir as runtime_binary_dir
-    env["PATH"] = os.pathsep.join(
-        (str(package_root() / "bin"), str(runtime_binary_dir()), env.get("PATH", ""))
-    )
-    return subprocess.call([executable, *args], env=env)
-''')
-    _write_file(package_root / "__main__.py", '''from __future__ import annotations
-
-from . import main
-
-
-if __name__ == "__main__":
-    main()
-''')
-
-
-def _is_pe(path: Path) -> bool:
-    try:
-        return path.read_bytes()[:2] == b"MZ"
-    except OSError:
-        return False
-
-
 def _pe_files(package_root: Path) -> list[Path]:
     return sorted(path for path in package_root.rglob("*")
-                  if path.is_file() and _is_pe(path))
+                  if path.is_file() and is_pe(path))
 
 
 def _is_windows_system_runtime(name: str) -> bool:
@@ -314,37 +163,17 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         raise RuntimeError("Windows rocm-npu wheel staging requires a Windows host")
     version = validate_version(version)
     source_manifest = verify_bundle(source_bundle)
-    reset_directory(destination, destination.parent)
+    trees = prepare_runtime_wheel_trees(source_bundle, destination)
+    runtime_tree = trees.runtime_tree
+    fastflowlm_tree = trees.fastflowlm_tree
+    runtime_root = trees.runtime_root
+    fastflowlm_root = trees.fastflowlm_root
 
-    runtime_tree = destination / "runtime"
-    fastflowlm_tree = destination / "fastflowlm"
-    runtime_root = runtime_tree / RUNTIME_PACKAGE
-    fastflowlm_root = fastflowlm_tree / FASTFLOWLM_PACKAGE
-    runtime_root.mkdir(parents=True)
-    fastflowlm_root.mkdir(parents=True)
-
-    _write_runtime_module(runtime_root)
-    _write_fastflowlm_module(fastflowlm_root)
     _copy_relative_file(source_bundle, "bin/hrx.dll", runtime_root)
     _copy_relative_file(source_bundle, "bin/rocm-npu.exe", runtime_root)
-    _copy_relative_tree(source_bundle, "share/rocm-npu/self-test", runtime_root)
     _copy_windows_runtime_closure(source_bundle, runtime_root)
     _copy_windows_fastflowlm_payload(
         source_bundle, fastflowlm_root, runtime_root)
-    _copy_relative_tree(source_bundle, "share/flm", fastflowlm_root)
-
-    _copy_license_as(source_bundle, "licenses/rocm-npu-staging-LICENSE",
-                     runtime_root, "licenses/rocm-npu-LICENSE")
-    _copy_license(source_bundle, "licenses/hrx-LICENSE", runtime_root)
-    _copy_license(source_bundle, "licenses/nlohmann-json-LICENSE.MIT",
-                  runtime_root)
-    _copy_license(source_bundle, "licenses/THIRD_PARTY_NOTICES.md",
-                  runtime_root)
-    _copy_license_as(source_bundle, "licenses/rocm-npu-staging-LICENSE",
-                     fastflowlm_root, "licenses/rocm-npu-LICENSE")
-    _copy_license(source_bundle, "licenses/FastFlowLM-LICENSE_RUNTIME.txt", fastflowlm_root)
-    _copy_license(source_bundle, "licenses/FastFlowLM-TERMS.md", fastflowlm_root)
-
     runtime_names = {path.name for path in runtime_root.rglob("*") if path.is_file()}
     fastflowlm_names = {path.name for path in fastflowlm_root.rglob("*") if path.is_file()}
     _copy_dependency_licenses(source_bundle, source_manifest, runtime_root, runtime_names)
@@ -355,40 +184,15 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     binary_dependencies = _verify_windows_products(
         [runtime_root, fastflowlm_root])
 
-    common_manifest = {
-        "schema_version": 1,
-        "version": version,
-        "platform": source_manifest.get("platform", {}),
-        "sources": source_manifest.get("sources", {}),
-        "patches": source_manifest.get("patches", []),
-        "dependencies": source_manifest.get("dependencies", {}),
-        "toolchain": source_manifest.get("toolchain", {}),
-        "source_artifact": source_manifest.get("artifact"),
-        "source_product": source_manifest.get("product"),
-        "wheel_tag": wheel_tag(),
-        "strip": {"stripped": 0},
-    }
-    _write_package_manifest(runtime_root, {
-        **common_manifest,
-        "product": RUNTIME_DISTRIBUTION,
-        "artifact": runtime_artifact_name(),
-        "components": source_manifest.get("components", []),
-        "binary_dependencies": {
-            name: needed for name, needed in binary_dependencies.items()
-            if name.startswith(f"{RUNTIME_PACKAGE}/")
-        },
-    })
-    _write_package_manifest(fastflowlm_root, {
-        **common_manifest,
-        "product": FASTFLOWLM_DISTRIBUTION,
-        "artifact": fastflowlm_artifact_name(),
-        "components": [],
-        "requires": [f"{RUNTIME_DISTRIBUTION} =={version}"],
-        "binary_dependencies": {
-            name: needed for name, needed in binary_dependencies.items()
-            if name.startswith(f"{FASTFLOWLM_PACKAGE}/")
-        },
-    })
+    write_runtime_wheel_manifests(
+        trees,
+        source_manifest,
+        version=version,
+        runtime_wheel_tag=wheel_tag(),
+        fastflowlm_wheel_tag=wheel_tag(),
+        strip_report={"stripped": 0},
+        binary_dependencies=binary_dependencies,
+    )
     return {
         RUNTIME_DISTRIBUTION: runtime_tree,
         FASTFLOWLM_DISTRIBUTION: fastflowlm_tree,

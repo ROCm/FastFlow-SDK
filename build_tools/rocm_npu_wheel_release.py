@@ -10,13 +10,18 @@ import html
 import json
 import re
 import shutil
-import tarfile
 import zipfile
-import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from build_tools.fastflowlm_artifact import _zstandard_module, reset_directory
+from build_tools import release_policy
+from build_tools.archive import read_member
+from build_tools.artifact import (
+    reset_directory,
+    sha256_file,
+    sha256_sidecar_path,
+    verify_sha256_sidecar,
+)
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
 )
@@ -24,27 +29,15 @@ from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
-    COMPILER_STABLE_ABI_MINOR,
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
-    sha256_file,
     validate_version,
     verify_wheel_checksums,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_POLICY_PATH = ROOT / "release.toml"
-NUMERIC_RUNTIME_CONTRACT = json.loads(
-    (
-        ROOT
-        / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
-        / "numeric-runtime.json"
-    ).read_text(encoding="utf-8")
-)
-NUMERIC_RUNTIME = NUMERIC_RUNTIME_CONTRACT["packages"]
-NUMERIC_PYTHON_ABIS = tuple(NUMERIC_RUNTIME_CONTRACT["python_abis"])
+NUMERIC_RUNTIME = release_policy.numeric_package_versions()
 
 
 def _canonical_distribution(name: str) -> str:
@@ -59,76 +52,12 @@ RELEASE_DISTRIBUTIONS = (
 )
 
 
-def release_base_version(policy_path: Path = RELEASE_POLICY_PATH) -> str:
-    """Loads the stable version targeted by the current development train."""
-    with Path(policy_path).open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
-    if policy.get("schema_version") != 1:
-        raise RuntimeError(f"unsupported release policy schema: {policy_path}")
-    release = policy.get("wheel_release")
-    base_version = release.get("base_version") if isinstance(release, dict) else None
-    if not isinstance(base_version, str) or not re.fullmatch(
-        r"[0-9]+(?:\.[0-9]+)*", base_version
-    ):
-        raise RuntimeError(
-            "wheel_release.base_version must be a stable numeric version: "
-            f"{policy_path}"
-        )
-    return validate_version(base_version)
-
-
-def compiler_python_versions(
-    policy_path: Path = RELEASE_POLICY_PATH,
-) -> tuple[str, ...]:
-    with Path(policy_path).open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
-    release = policy.get("wheel_release")
-    versions = release.get("compiler_python_versions") if isinstance(release, dict) else None
-    if not isinstance(versions, list) or not versions:
-        raise RuntimeError(
-            "wheel_release.compiler_python_versions must be a non-empty list: "
-            f"{policy_path}"
-        )
-    result = tuple(str(version) for version in versions)
-    if (
-        len(set(result)) != len(result)
-        or any(not re.fullmatch(r"3\.[0-9]+", version) for version in result)
-    ):
-        raise RuntimeError(
-            f"wheel_release.compiler_python_versions is invalid: {policy_path}"
-        )
-    return result
-
-
-def compiler_python_stable_abi(
-    policy_path: Path = RELEASE_POLICY_PATH,
-) -> str:
-    with Path(policy_path).open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
-    release = policy.get("wheel_release")
-    stable_abi = (
-        release.get("compiler_python_stable_abi")
-        if isinstance(release, dict)
-        else None
-    )
-    if (
-        not isinstance(stable_abi, str)
-        or not re.fullmatch(r"3\.[0-9]+", stable_abi)
-        or stable_abi != COMPILER_STABLE_ABI_MINOR
-        or stable_abi not in compiler_python_versions(policy_path)
-    ):
-        raise RuntimeError(
-            "wheel_release.compiler_python_stable_abi must match the pinned "
-            f"MLIR stable ABI floor {COMPILER_STABLE_ABI_MINOR}: {policy_path}"
-        )
-    return stable_abi
-
-
 def validate_release_version(
-    package_version: str, policy_path: Path = RELEASE_POLICY_PATH
+    package_version: str,
+    policy_path: Path = release_policy.RELEASE_POLICY_PATH,
 ) -> str:
     """Requires a development, RC, or stable version in the configured train."""
-    base_version = release_base_version(policy_path)
+    base_version = release_policy.release_base_version(policy_path)
     package_version = validate_version(package_version)
     if not re.fullmatch(
         rf"{re.escape(base_version)}(?:\.dev[0-9]+|rc[0-9]+)?", package_version
@@ -147,7 +76,7 @@ def resolve_release_inputs(
     *,
     publish_target: str = "none",
     now: datetime | None = None,
-    policy_path: Path = RELEASE_POLICY_PATH,
+    policy_path: Path = release_policy.RELEASE_POLICY_PATH,
 ) -> dict[str, str]:
     """Resolves and validates the inputs shared by platform release workflows."""
     if not source_ref or any(character in source_ref for character in "\r\n"):
@@ -156,7 +85,7 @@ def resolve_release_inputs(
         raise RuntimeError("GitHub run number must be positive")
     if publish_target not in ("none", "github-prerelease"):
         raise RuntimeError(f"unsupported wheel publish target: {publish_target}")
-    base_version = release_base_version(policy_path)
+    base_version = release_policy.release_base_version(policy_path)
     if not package_version:
         timestamp = now or datetime.now(timezone.utc)
         package_version = (
@@ -207,11 +136,8 @@ def _wheel_tags(wheel: Path) -> tuple[str, ...]:
 def _copy_release_wheel(
     wheel: Path, output_directory: Path, *, expected_source_sha: str
 ) -> dict[str, object]:
-    checksum = wheel.with_name(wheel.name + ".sha256")
-    digest = sha256_file(wheel)
-    fields = checksum.read_text(encoding="ascii").strip().split()
-    if len(fields) != 2 or fields[0] != digest or fields[1] != wheel.name:
-        raise RuntimeError(f"malformed wheel checksum: {checksum}")
+    checksum = sha256_sidecar_path(wheel)
+    digest = verify_sha256_sidecar(wheel, kind="wheel")
     shutil.copy2(wheel, output_directory / wheel.name)
     shutil.copy2(checksum, output_directory / checksum.name)
     with zipfile.ZipFile(wheel) as archive:
@@ -260,7 +186,6 @@ def _copy_release_archives(
     expected_version: str,
     expected_source_sha: str,
 ) -> list[dict[str, object]]:
-    zstandard = _zstandard_module()
     expected = {
         "fastflowlm-hrx-linux-x86_64.tar.zst":
             ("linux-x86_64", "Linux", "fastflowlm-hrx-linux-x86_64"),
@@ -281,12 +206,9 @@ def _copy_release_archives(
     result = []
     for name, (platform_name, system_name, artifact_name) in expected.items():
         archive = archives[name]
-        checksum = archive.with_name(archive.name + ".sha256")
+        checksum = sha256_sidecar_path(archive)
         provenance = archive.with_name(archive.name + ".manifest.json")
-        digest = sha256_file(archive)
-        fields = checksum.read_text(encoding="ascii").strip().split()
-        if len(fields) != 2 or fields[0] != digest or fields[1] != archive.name:
-            raise RuntimeError(f"malformed standalone archive checksum: {checksum}")
+        digest = verify_sha256_sidecar(archive, kind="standalone archive")
         try:
             provenance_data = json.loads(provenance.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
@@ -295,51 +217,20 @@ def _copy_release_archives(
             ) from error
         bundle = provenance_data.get("bundle")
         archive_manifest_name = f"{artifact_name}/manifest.json"
-        embedded_bundles: list[dict[str, object]] = []
-        if archive.suffix == ".zip":
-            try:
-                with zipfile.ZipFile(archive) as zipped:
-                    matching = [
-                        item
-                        for item in zipped.infolist()
-                        if item.filename == archive_manifest_name
-                    ]
-                    if len(matching) == 1 and matching[0].file_size <= 10_000_000:
-                        embedded_bundles.append(
-                            json.loads(zipped.read(matching[0]).decode("utf-8"))
-                        )
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError,
-                    zipfile.BadZipFile) as error:
-                raise RuntimeError(
-                    f"standalone archive manifest is invalid: {archive}"
-                ) from error
-        else:
-            try:
-                with archive.open("rb") as compressed:
-                    with zstandard.ZstdDecompressor().stream_reader(
-                        compressed
-                    ) as stream:
-                        with tarfile.open(fileobj=stream, mode="r|") as tar:
-                            for member in tar:
-                                if member.name != archive_manifest_name:
-                                    continue
-                                if not member.isfile() or member.size > 10_000_000:
-                                    break
-                                extracted = tar.extractfile(member)
-                                if extracted is not None:
-                                    embedded_bundles.append(
-                                        json.loads(extracted.read().decode("utf-8"))
-                                    )
-            except (
-                OSError,
-                UnicodeDecodeError,
-                json.JSONDecodeError,
-                tarfile.TarError,
-                zstandard.ZstdError,
-            ) as error:
-                raise RuntimeError(
-                    f"standalone archive manifest is invalid: {archive}"
-                ) from error
+        try:
+            embedded_bundles = [
+                json.loads(
+                    read_member(
+                        archive,
+                        archive_manifest_name,
+                        size_limit=10_000_000,
+                    ).decode("utf-8")
+                )
+            ]
+        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"standalone archive manifest is invalid: {archive}"
+            ) from error
         staging_source = (
             bundle.get("sources", {}).get("rocm-npu-staging", {})
             if isinstance(bundle, dict)
@@ -389,7 +280,7 @@ def _find_release_wheels(
             "py3-none-linux_x86_64",
             "py3-none-win_amd64",
         }
-        abi = "cp" + compiler_python_stable_abi().replace(".", "")
+        abi = "cp" + release_policy.compiler_python_stable_abi().replace(".", "")
         tags.update(
             {
                 f"{abi}-abi3-manylinux_2_28_x86_64",
@@ -457,7 +348,7 @@ def _find_release_wheels(
         (COMPILER_CORE_DISTRIBUTION, manylinux),
         (COMPILER_CORE_DISTRIBUTION, windows),
     }
-    abi = "cp" + compiler_python_stable_abi().replace(".", "")
+    abi = "cp" + release_policy.compiler_python_stable_abi().replace(".", "")
     expected_keys.add(
         (COMPILER_BINDINGS_DISTRIBUTION, f"{abi}-abi3-{manylinux.split('-', 2)[2]}")
     )
@@ -617,7 +508,9 @@ def prepare_rocm_npu_release_payload(
             )
         if distribution == COMPILER_BINDINGS_DISTRIBUTION:
             tags = _wheel_tags(wheel)
-            stable_abi = "cp" + compiler_python_stable_abi().replace(".", "")
+            stable_abi = (
+                "cp" + release_policy.compiler_python_stable_abi().replace(".", "")
+            )
             if not any(
                 re.fullmatch(rf"{stable_abi}-abi3-.+", tag) for tag in tags
             ):

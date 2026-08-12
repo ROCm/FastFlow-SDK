@@ -13,6 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from build_tools.hrx_runtime import bind_libhrx, hrx_check
+
 
 def parse_device_query(output: str) -> list[dict]:
     """Parses the PowerShell query and preserves every amdxdna MCDM device."""
@@ -184,45 +186,6 @@ def print_driver_info() -> int:
     return 0 if all_healthy else 1
 
 
-def _bind_probe_api(library) -> None:
-    void_pointer = ctypes.c_void_p
-    pointer = ctypes.POINTER
-    signatures = {
-        "hrx_status_code": (ctypes.c_int, [void_pointer]),
-        "hrx_status_ignore": (None, [void_pointer]),
-        "hrx_status_free_message": (None, [ctypes.c_char_p]),
-        "hrx_status_to_string": (
-            void_pointer,
-            [void_pointer, pointer(ctypes.c_char_p), pointer(ctypes.c_size_t)],
-        ),
-        "hrx_gpu_initialize": (void_pointer, [ctypes.c_uint32]),
-        "hrx_gpu_shutdown": (void_pointer, []),
-        "hrx_gpu_device_count": (void_pointer, [pointer(ctypes.c_int)]),
-    }
-    for name, (result_type, argument_types) in signatures.items():
-        function = getattr(library, name)
-        function.restype = result_type
-        function.argtypes = argument_types
-
-
-def _check_status(library, status, operation: str) -> tuple[bool, str]:
-    if status is None:
-        return True, "ok"
-    message = ctypes.c_char_p()
-    length = ctypes.c_size_t()
-    library.hrx_status_ignore(
-        library.hrx_status_to_string(
-            status, ctypes.byref(message), ctypes.byref(length)
-        )
-    )
-    code = library.hrx_status_code(status)
-    text = message.value.decode("utf-8", "replace") if message.value else "?"
-    if message.value:
-        library.hrx_status_free_message(message)
-    library.hrx_status_ignore(status)
-    return False, f"{operation} failed (code {code}): {text}"
-
-
 def probe_runtime(library_path: Path) -> int:
     """Probes the Windows NPU and initializes the specified packaged HRX runtime."""
     result = print_driver_info()
@@ -241,8 +204,8 @@ def probe_runtime(library_path: Path) -> int:
         except OSError as error:
             print(f"  [MISS] loading hrx.dll failed: {error}")
             return 1
-        _bind_probe_api(library)
-        ok, message = _check_status(
+        bind_libhrx(library)
+        ok, message = hrx_check(
             library, library.hrx_gpu_initialize(0), "hrx_gpu_initialize"
         )
         if not ok:
@@ -251,7 +214,7 @@ def probe_runtime(library_path: Path) -> int:
         print("  [ok ] hrx_gpu_initialize")
 
         count = ctypes.c_int(0)
-        ok, message = _check_status(
+        ok, message = hrx_check(
             library,
             library.hrx_gpu_device_count(ctypes.byref(count)),
             "hrx_gpu_device_count",

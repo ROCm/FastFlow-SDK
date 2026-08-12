@@ -7,18 +7,17 @@ from types import SimpleNamespace
 import pytest
 
 from build_tools import download_qualification_numeric_wheels as downloader
+from build_tools import release_policy
 from build_tools import rocm_npu_qualification_wheel as qualification_wheel
-from build_tools import rocm_npu_wheel_release as release
 from build_tools import verify_qualification_dependencies as dependency_verifier
 from tests.support.modules import load_module
-
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 
 def _shipping_numeric_runtime():
     path = (
-        downloader.ROOT
+        release_policy.ROOT
         / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
         / "numeric_runtime.py"
     )
@@ -26,7 +25,7 @@ def _shipping_numeric_runtime():
 
 
 def test_numeric_runtime_contract_has_no_secondary_version_authority():
-    contract = json.loads(downloader.CONTRACT_PATH.read_text(encoding="utf-8"))
+    contract = release_policy.numeric_runtime_contract()
     shipping = _shipping_numeric_runtime()
     assert shipping.NUMERIC_RUNTIME == contract["packages"]
     assert shipping.NUMERIC_PYTHON_ABIS == tuple(contract["python_abis"])
@@ -36,8 +35,8 @@ def test_numeric_runtime_contract_has_no_secondary_version_authority():
         qualification_wheel.QUALIFICATION_REQUIRES_PYTHON
         == contract["requires_python"]
     )
-    assert release.NUMERIC_RUNTIME == contract["packages"]
-    assert release.NUMERIC_PYTHON_ABIS == tuple(contract["python_abis"])
+    assert release_policy.numeric_package_versions() == contract["packages"]
+    assert release_policy.numeric_python_abis() == tuple(contract["python_abis"])
 
 
 def test_downloader_stages_every_attested_python_and_platform(monkeypatch, tmp_path):
@@ -49,7 +48,7 @@ def test_downloader_stages_every_attested_python_and_platform(monkeypatch, tmp_p
 
     monkeypatch.setattr(downloader.subprocess, "run", capture)
     downloader.download_numeric_wheels(tmp_path)
-    contract = downloader.numeric_runtime_contract()
+    contract = release_policy.numeric_runtime_contract()
     assert len(commands) == 2 * len(contract["python_abis"])
     assert {
         (command[command.index("--abi") + 1], command[command.index("--platform") + 1])
@@ -66,6 +65,8 @@ def test_dependency_verifier_uses_numeric_packages_from_contract(
 ):
     contract = {
         "schema_version": 1,
+        "requires_python": ">=3.11,<3.15",
+        "python_abis": ["cp311", "cp312", "cp313", "cp314"],
         "packages": {"ml-dtypes": "1.2.3", "numpy": "4.5.6"},
     }
     contract_path = tmp_path / "numeric-runtime.json"

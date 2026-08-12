@@ -8,13 +8,13 @@ from unittest import mock
 
 import pytest
 
+from build_tools.hrx_runtime import bind_libhrx as shared_bind_libhrx
 from build_tools.windows_npu import (
     device_is_healthy,
     driver_firmware_packages,
     parse_device_query,
     probe_runtime,
 )
-
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -68,7 +68,13 @@ class TestWindowsDeviceQuery:
 
 
 class TestWindowsRuntimeProbe:
-    def test_probes_explicit_packaged_library(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("device_count", "expected_result", "state"),
+        ((1, 0, "ok "), (0, 1, "MISS")),
+    )
+    def test_probes_explicit_packaged_library(
+        self, tmp_path, capsys, device_count, expected_result, state
+    ):
         class Function:
             def __init__(self, implementation=lambda *args: None):
                 self.implementation = implementation
@@ -77,8 +83,7 @@ class TestWindowsRuntimeProbe:
                 return self.implementation(*args)
 
         def set_device_count(pointer):
-            pointer._obj.value = 1
-            return None
+            pointer._obj.value = device_count
 
         library = type("Library", (), {})()
         for name in (
@@ -101,6 +106,15 @@ class TestWindowsRuntimeProbe:
             return_value=contextlib.nullcontext(),
         ), mock.patch(
             "build_tools.windows_npu.ctypes.WinDLL", return_value=library
-        ) as load:
-            assert probe_runtime(path) == 0
+        ) as load, mock.patch(
+            "build_tools.windows_npu.bind_libhrx",
+            wraps=shared_bind_libhrx,
+        ) as bind:
+            assert probe_runtime(path) == expected_result
         load.assert_called_once_with(str(path.resolve()))
+        bind.assert_called_once_with(library)
+        output = capsys.readouterr().out
+        assert f"  [{state}] hrx gpu devices: {device_count}" in output
+        assert output.endswith(
+            f"npu-probe: {'ok' if expected_result == 0 else 'FAIL'}\n"
+        )

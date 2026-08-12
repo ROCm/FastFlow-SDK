@@ -11,9 +11,9 @@ from unittest import mock
 
 import pytest
 
-from build_tools import fastflowlm_xadx_assets as xadx_assets
 from build_tools import fastflowlm_qualification_common as qualification
-
+from build_tools import fastflowlm_xadx_assets as xadx_assets
+from build_tools.artifact import file_record
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
@@ -57,7 +57,7 @@ def test_file_record_is_relative_and_content_bound(tmp_path):
     payload = tmp_path / "nested" / "payload.bin"
     payload.parent.mkdir()
     payload.write_bytes(b"qualification")
-    assert qualification.file_record(tmp_path, payload) == {
+    assert file_record(tmp_path, payload) == {
         "path": "nested/payload.bin",
         "size": 13,
         "sha256": hashlib.sha256(b"qualification").hexdigest(),
