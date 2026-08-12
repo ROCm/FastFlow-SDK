@@ -112,9 +112,13 @@ def configure_qualification_tools(*, fresh=False):
 
 def qualification_runtime_env():
     env = environment.cmake_env()
+    # a432a07 relocated the prebuilt engine libs (dequant/gemm/q4_npu_eXpress)
+    # into per-backend subdirs; the HRX build links lib/hrx. The flat lib/ still
+    # carries their third-party runtime deps, so keep both on the loader path.
     runtime_directories = [
         path
         for path in (
+            paths.PROJ / "FastFlowLM" / "src" / "lib" / "hrx",
             paths.PROJ / "FastFlowLM" / "src" / "lib",
             HRX_INSTALL / ("bin" if paths.is_windows() else "lib"),
         )
