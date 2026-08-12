@@ -55,15 +55,15 @@ foreach(target IN LISTS qualification_native_targets)
   set_target_properties(
     ${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
   target_compile_features(${target} PRIVATE cxx_std_20)
-  # Newer FastFlowLM (>= hrx_native_pr merge a432a07) defaults FLM_USE_HRX OFF
-  # (XRT); these targets compile the FLM HRX runtime path and must opt in, else
-  # the headers pull the XRT backend (xrt/xrt_bo.h) and fail to build.
+  # FLM defaults FLM_USE_HRX OFF (XRT backend); these targets compile the FLM HRX
+  # runtime path and must opt in, else the headers pull the XRT backend
+  # (xrt/xrt_bo.h) and fail to build.
   target_compile_definitions(${target} PRIVATE FLM_USE_HRX)
   target_include_directories(
     ${target} PRIVATE
     "${FASTFLOWLM_SOURCE_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}")
-  # a432a07 relocated the prebuilt engine libs into per-backend subdirs; the HRX
-  # build links the lib/hrx set (dequant, gemm, q4_npu_eXpress, ...).
+  # The HRX build links the per-backend engine libs under lib/hrx
+  # (dequant, gemm, q4_npu_eXpress, ...).
   target_link_directories(
     ${target} PRIVATE "${FASTFLOWLM_SOURCE_DIR}/lib/hrx")
   if(MSVC)
