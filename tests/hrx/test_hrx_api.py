@@ -2,28 +2,18 @@
 # SPDX-License-Identifier: MIT
 
 import ctypes
-import importlib.util
 from pathlib import Path
 import pytest
 
+from build_tools import hrx_runtime as hrx
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
 
 
-ROOT = Path(__file__).resolve().parents[2]
-HELPER_PATH = ROOT / "tests" / "npu" / "hrx_api.py"
-
-
 @pytest.fixture(scope="module", autouse=True)
 def _load_hrx_helper():
-    global hrx, np
+    global np
     import numpy as np
-
-    spec = importlib.util.spec_from_file_location(
-        "test_hrx_api_helper", HELPER_PATH
-    )
-    hrx = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hrx)
 
 
 class FakeFunction:
@@ -170,6 +160,17 @@ def test_library_candidate_order_for_windows_and_linux():
     )
     assert linux[0] == str(Path("/opt/hrx/lib") / "libhrx.so")
     assert linux[-1] == "libhrx.so"
+
+
+def test_full_api_reuses_shared_probe_bindings():
+    library = FakeLibrary()
+    api = hrx.HrxApi(library)
+
+    assert api.status_code is library.hrx_status_code
+    assert api.status_to_string is library.hrx_status_to_string
+    assert api.gpu_initialize is library.hrx_gpu_initialize
+    assert api.gpu_shutdown is library.hrx_gpu_shutdown
+    assert library.hrx_status_code.argtypes == [ctypes.c_void_p]
 
 
 def test_serialize_uses_system_allocator_and_frees_result():

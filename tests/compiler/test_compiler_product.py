@@ -22,11 +22,11 @@ sys.path[:0] = [
     str(ROOT / "tests" / "compiler"),
 ]
 
-from build_tools import compiler_product, compiler_wheels, npu_prereqs, npu_test_package  # noqa: E402
+from build_tools import compiler_product, compiler_wheels, hrx_runtime, iron, npu_prereqs, npu_test_cases, npu_test_package, paths  # noqa: E402
 from build_tools.fastflowlm_artifact import extract_archive, sha256_file  # noqa: E402
 import run_e2e  # noqa: E402
 import verify_compiler_bindings  # noqa: E402
-from build_tools.dev import build, paths  # noqa: E402
+from build_tools.dev import compiler_build as build  # noqa: E402
 
 
 def write_file(path: Path, data: bytes = b"x", executable: bool = False) -> None:
@@ -119,8 +119,8 @@ def test_iron_tools_build_does_not_resolve_virtualenv_python(tmp_path):
             "compilers",
             return_value=("cc", "c++"),
         ),
-        mock.patch.object(build, "_cc_flags", return_value=[]),
-        mock.patch.object(build, "_ccache_flags", return_value=[]),
+        mock.patch.object(build.environment, "cmake_compiler_flags", return_value=[]),
+        mock.patch.object(build.environment, "cmake_ccache_flags", return_value=[]),
         mock.patch.object(build.environment, "cmake_env", return_value={}),
         mock.patch.object(build.environment, "cmake_bin", return_value="cmake"),
         mock.patch.object(build.environment, "sh") as run,
@@ -340,15 +340,15 @@ def test_npu_prerequisites_exclude_separate_compiler_product(tmp_path):
     write_file(hrx_install / "include/hrx/hrx_runtime.h")
     write_file(hrx_install / "include/hrx/hrx_amdxdna.h")
     cts_source = root / "cts"
-    for name in build.HRX_CTS_TESTS:
+    for name in hrx_runtime.HRX_CTS_TESTS:
         write_file(cts_source / f"{name}{compiler_product._EXE}", executable=True)
 
     stage = root / "stage"
     npu_prereqs._stage_npu_runtime_prereqs(stage, hrx_install, cts_source)
 
     assert (stage / "build/hrx-install/include/hrx/hrx_runtime.h").is_file()
-    cts_stage = stage.joinpath("projects", "hrx", "build", "cmake", *build.HRX_CTS_DIR)
-    for name in build.HRX_CTS_TESTS:
+    cts_stage = stage.joinpath("projects", "hrx", "build", "cmake", *hrx_runtime.HRX_CTS_DIR)
+    for name in hrx_runtime.HRX_CTS_TESTS:
         assert (cts_stage / f"{name}{compiler_product._EXE}").is_file()
     assert not (stage / "build/iron-tools").exists()
     assert not (stage / "tools-bin").exists()
@@ -356,7 +356,6 @@ def test_npu_prerequisites_exclude_separate_compiler_product(tmp_path):
 
 def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
     stage = tmp_path
-    _, test_cases = npu_test_package._npu_test_modules()
     case_records = []
     names = (
         "vector_scalar_add",
@@ -372,7 +371,7 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
         case_records.append(
             npu_test_package.write_case(
                 stage,
-                test_cases.generate_case(name),
+                npu_test_cases.generate_case(name),
                 b"\x00\x00\x00\x00XADX",
                 source,
             )
@@ -647,7 +646,7 @@ def test_relocated_toolchain_env_uses_installed_wheel_bindings(tmp_path):
     (prefix / "lib").mkdir()
 
     with mock.patch.object(
-        run_e2e,
+        iron,
         "installed_aie_python_root",
         return_value=site_packages,
     ):

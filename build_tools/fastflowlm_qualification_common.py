@@ -8,9 +8,10 @@ import os
 import shutil
 from pathlib import Path, PurePosixPath
 
-from build_tools.dev import environment, paths
-from build_tools.dev.build import HRX_INSTALL
+from build_tools import environment, paths
 from build_tools.fastflowlm_artifact import sha256_file
+
+HRX_INSTALL = paths.HRX_INSTALL
 
 
 QUALIFICATION_BUILD = paths.BUILD / "fastflowlm-qualification-tools"

@@ -14,7 +14,7 @@ import sysconfig
 import tarfile
 from pathlib import Path
 
-from build_tools.dev import build, environment, paths
+from build_tools import environment, iron, paths
 from build_tools.fastflowlm_artifact import (extract_archive, git_source_state, pe_imports, sha256_file, verify_bundle)
 from build_tools.rocm_npu_compiler_wheels import (
     is_loadable_elf,
@@ -26,7 +26,7 @@ from build_tools.rocm_npu_compiler_wheels import (
 ROOT = paths.ROOT
 PROJ = paths.PROJ
 BUILD = paths.BUILD
-IRON_TOOLS_INSTALL = build.IRON_TOOLS_INSTALL
+IRON_TOOLS_INSTALL = paths.IRON_TOOLS_INSTALL
 COMPILER_PRODUCT_STAGE = paths.BUILD / "rocm-npu-compiler-product"
 COMPILER_PRODUCT_EXTRACTED = paths.BUILD / "rocm-npu-compiler-extracted"
 COMPILER_PRODUCT_RELOCATED = paths.BUILD / "rocm-npu-compiler-relocated"
@@ -631,11 +631,9 @@ def verify_product_inventory(product):
 
 
 def _compiler_product_env(prefix):
-    sys.path.insert(0, str(ROOT / "tests" / "e2e"))
-    import run_e2e
     try:
-        return run_e2e.toolchain_env(run_e2e.require_xclbinutil(prefix), prefix)
-    except run_e2e.E2EError as e:
+        return iron.toolchain_env(iron.require_xclbinutil(prefix), prefix)
+    except iron.E2EError as e:
         raise RuntimeError(str(e)) from e
 
 

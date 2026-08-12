@@ -7,8 +7,7 @@ import os
 import shutil
 from pathlib import Path
 
-from build_tools.dev import environment, paths
-from build_tools.dev.build import HRX_INSTALL
+from build_tools import environment, paths
 from build_tools.fastflowlm_artifact import sha256_file
 from build_tools.fastflowlm_kernel_recipe import (
     attest_recipe_generators,
@@ -29,6 +28,8 @@ from build_tools.fastflowlm_qualification_common import (
     run_native_qualification_tests,
     verify_recipe_generator_parity,
 )
+
+HRX_INSTALL = paths.HRX_INSTALL
 
 def build_xadx_generator(fresh=False):
     """Builds the implementation/transaction probe used by recipe generation."""

@@ -7,12 +7,18 @@ from unittest import mock
 
 import pytest
 
-from build_tools.dev import environment
+from build_tools import environment
 
 pytestmark = pytest.mark.presubmit
 
 
 class TestEnvironment:
+    def test_environment_is_a_shared_foundation(self):
+        assert environment.__name__ == "build_tools.environment"
+        assert not (
+            environment.paths.ROOT / "build_tools" / "dev" / "environment.py"
+        ).exists()
+
     def test_venv_tools_follow_explicit_platform_conventions(self):
         assert (
             environment.venv_py(Path("test-venv"), windows=True)

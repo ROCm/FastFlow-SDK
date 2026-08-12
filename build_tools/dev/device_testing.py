@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Developer smoke, host-test, and on-device NPU commands."""
+"""On-device NPU test and probe commands."""
 
 import os
 import re
@@ -8,158 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from build_tools import (
-    fastflowlm_package,
-    hrx_runtime,
-    linux_npu,
-    npu_test_package,
-)
-from build_tools.dev import build, environment, iron, paths
+from build_tools import environment, hrx_runtime, iron, linux_npu, npu_test_package, paths
 from build_tools.windows_npu import probe_runtime as probe_windows_npu_runtime
-
-def cmd_test(args):
-    if not environment.venv_py().exists():
-        sys.exit(f"no venv at {paths.VENV} (run: python dev.py setup)")
-    command = [
-        environment.venv_py(),
-        paths.ROOT / "tests" / "e2e" / "run_e2e.py",
-    ]
-    if getattr(args, "compiler_prefix", None):
-        command += ["--compiler-prefix", args.compiler_prefix]
-    if args.design:
-        command.append(args.design)
-    if args.design_args:
-        command += ["--", *args.design_args]
-    sys.exit(environment.sh(command, check=False).returncode)
-
-
-def _require_fastflowlm_wheel_packages():
-    missing = []
-    for module in ("rocm_npu_runtime", "rocm_npu_fastflowlm"):
-        try:
-            __import__(module)
-        except ImportError:
-            missing.append(module)
-    if missing:
-        executable = (
-            paths.venv_bin(fastflowlm_package.FASTFLOWLM_WHEEL_VENV)
-            / paths.executable_name("python")
-        )
-        sys.exit(
-            "test-fastflowlm --wheel-package requires running dev.py with a "
-            "Python environment where the rocm-npu-runtime and "
-            "rocm-npu-fastflowlm wheels are installed; missing "
-            f"{', '.join(missing)}. Run `python dev.py verify-fastflowlm-wheels` "
-            f"first, then use `{executable} dev.py test-fastflowlm --wheel-package`."
-        )
-
-
-def cmd_test_fastflowlm(args):
-    script = (
-        paths.ROOT
-        / "tests"
-        / "fastflowlm"
-        / "run_fastflowlm_hrx_smoke.py"
-    )
-    env = environment.cmake_env()
-    if args.bundle:
-        env["FASTFLOWLM_BUNDLE"] = str(Path(args.bundle).resolve())
-    elif args.wheel_package:
-        _require_fastflowlm_wheel_packages()
-        env["FASTFLOWLM_INSTALLED_PACKAGE"] = "1"
-    else:
-        hrx_runtime.add_hrx_install_env(env)
-    env.setdefault("FLM_MODEL_PATH", str(build.FASTFLOWLM_MODEL_CACHE))
-    command = [
-        sys.executable,
-        script,
-        "--inference-iterations",
-        str(args.inference_iterations),
-    ]
-    sys.exit(environment.sh(command, env=env, check=False).returncode)
-
-
-def _iron_ops_env(compiler_prefix=None):
-    env = iron.iron_env(compiler_prefix)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(paths.PROJ / "iron-ops"), env["PYTHONPATH"]]
-    )
-    return env
-
-
-def cmd_test_iron_ops(args):
-    if not environment.venv_py().exists():
-        sys.exit(f"no venv at {paths.VENV} (run: python dev.py setup)")
-    command = [
-        environment.venv_py(),
-        paths.ROOT / "tests" / "iron-ops" / "build_operator.py",
-    ]
-    if getattr(args, "operator", None):
-        command += ["--operator", args.operator]
-    if getattr(args, "device", None):
-        command += ["--device", args.device]
-    sys.exit(
-        environment.sh(
-            command,
-            env=_iron_ops_env(getattr(args, "compiler_prefix", None)),
-            check=False,
-        ).returncode
-    )
-
-
-def cmd_smoke(args):
-    rc = 0
-    xclbinutil_build = (
-        paths.PROJ
-        / "iron-tools"
-        / "third_party"
-        / "hrx-xclbinutil"
-        / "bld"
-    )
-    if (xclbinutil_build / "CMakeCache.txt").exists():
-        print("== hrx-xclbinutil smoke (ctest) ==")
-        rc |= subprocess.run(
-            [
-                "ctest",
-                "--test-dir",
-                str(xclbinutil_build),
-                "--output-on-failure",
-            ],
-            env=environment.cmake_env(),
-        ).returncode
-    else:
-        print(
-            "smoke: hrx-xclbinutil not built "
-            "(run: python dev.py build hrx-xclbinutil)"
-        )
-        rc = 1
-    aie_opt = (
-        build.IRON_TOOLS_BUILD / "bin" / paths.executable_name("aie-opt")
-    )
-    if aie_opt.exists():
-        print("== iron-tools smoke (aie-opt) ==")
-        environment.sh([aie_opt, "--version"])
-        result = subprocess.run(
-            [str(aie_opt)],
-            input=b"module { aie.device(npu2) {} }\n",
-            capture_output=True,
-        )
-        ok = result.returncode == 0
-        print(
-            "  aie-opt parses aie.device(npu2): "
-            f"{'ok' if ok else 'FAIL'}"
-        )
-        if not ok:
-            print(result.stderr.decode()[:300])
-            rc = 1
-    else:
-        print(
-            "smoke: aie-opt not built "
-            "(run: python dev.py build iron-tools)"
-        )
-        rc = 1
-    print("smoke: PASS" if rc == 0 else "smoke: FAIL")
-    return rc
 
 
 def cmd_test_npu_package(args):
@@ -188,9 +38,7 @@ def cmd_test_npu_package(args):
 
 def cmd_npu_probe(args):
     if paths.is_windows():
-        library = hrx_runtime.libhrx_path(
-            args.bundle, args.runtime_package
-        )
+        library = hrx_runtime.libhrx_path(args.bundle, args.runtime_package)
         if not library:
             print("npu-probe: hrx.dll was not found")
             return 1
@@ -225,13 +73,11 @@ def _gtest_counts(output):
 
 
 def cmd_test_hrx_cts(args):
-    cts = paths.PROJ.joinpath(
-        "hrx", "build", "cmake", *build.HRX_CTS_DIR
-    )
+    cts = paths.HRX_CMAKE_BUILD.joinpath(*hrx_runtime.HRX_CTS_DIR)
     names = (
         [args.suite]
         if getattr(args, "suite", None)
-        else build.HRX_CTS_TESTS
+        else hrx_runtime.HRX_CTS_TESTS
     )
     executables = {}
     for name in names:
@@ -276,22 +122,13 @@ def cmd_test_hrx_cts(args):
 def _compiler_python_root(compiler_prefix=None):
     value = compiler_prefix or os.environ.get("ROCM_NPU_COMPILER_PREFIX")
     prefix = Path(value).resolve() if value else None
-    return (
-        prefix / "python"
-        if prefix
-        else build.IRON_TOOLS_BUILD / "python"
-    )
+    return prefix / "python" if prefix else paths.IRON_TOOLS_BUILD / "python"
 
 
 def _require_hrx_runtime(compiler_prefix=None):
     python_root = _compiler_python_root(compiler_prefix)
     discovery = (
-        python_root
-        / "aie"
-        / "utils"
-        / "hostruntime"
-        / "hrxruntime"
-        / "discovery.py"
+        python_root / "aie" / "utils" / "hostruntime" / "hrxruntime" / "discovery.py"
     )
     if not discovery.exists():
         sys.exit(
@@ -306,35 +143,25 @@ def _require_hrx_runtime(compiler_prefix=None):
 
 def cmd_test_npu(args):
     design = getattr(args, "design", None) or "vector_scalar_add"
-    design_dir = (
-        paths.PROJ
-        / "iron-tools"
-        / "programming_examples"
-        / "basic"
-        / design
-    )
+    design_dir = paths.PROJ / "iron-tools" / "programming_examples" / "basic" / design
     if not design_dir.is_dir():
-        sys.exit(
-            f"{design}: no such design under programming_examples/basic"
-        )
+        sys.exit(f"{design}: no such design under programming_examples/basic")
     _require_hrx_runtime(getattr(args, "compiler_prefix", None))
     env = iron.iron_env(getattr(args, "compiler_prefix", None))
     env["IRON_RUNTIME"] = "hrx"
     hrx_runtime.add_hrx_install_env(env)
     target = getattr(args, "device", None) or "npu2"
-    run_e2e = iron.run_e2e_module()
     try:
-        artifacts = run_e2e.build_design(
+        artifacts = iron.build_design(
             design_dir, iron.NPU_TARGETS[target]["device"], [], env
         )
-    except run_e2e.E2EError as error:
+    except iron.E2EError as error:
         sys.exit(f"test-npu design build failed: {error}")
     iron.require_txn_devgen(artifacts.insts, target)
     if getattr(args, "chain", False):
         if not (design_dir / "test_chain_hrx.py").exists():
             sys.exit(
-                f"{design}: no chained testbench "
-                "(only vector_scalar_add ships one)"
+                f"{design}: no chained testbench " "(only vector_scalar_add ships one)"
             )
         testbench = [environment.venv_py(), "test_chain_hrx.py"]
     else:
@@ -359,9 +186,8 @@ def cmd_test_npu(args):
 
 
 def cmd_test_npu_iron_ops(args):
-    suite = iron.iron_ops_suite()
     try:
-        operators = suite.select(getattr(args, "operator", None))
+        operators = iron.select(getattr(args, "operator", None))
     except KeyError as error:
         sys.exit(error.args[0])
     compiler_prefix = getattr(args, "compiler_prefix", None)
@@ -378,11 +204,10 @@ def cmd_test_npu_iron_ops(args):
         test_dir = ops_dir / "iron" / "operators" / operator.name
         if not (test_dir / "test.py").exists():
             sys.exit(
-                f"{operator.name}: no test.py under "
-                "projects/iron-ops/iron/operators"
+                f"{operator.name}: no test.py under " "projects/iron-ops/iron/operators"
             )
         test_dirs.append(str(test_dir))
-    env = _iron_ops_env(compiler_prefix)
+    env = iron.iron_ops_env(compiler_prefix)
     env["IRON_RUNTIME"] = "hrx"
     hrx_runtime.add_hrx_install_env(env)
     filters = [
@@ -391,9 +216,7 @@ def cmd_test_npu_iron_ops(args):
         if operator.hrx_pytest_filter
     ]
     pytest_filter = (
-        ["-k", " or ".join(f"({value})" for value in filters)]
-        if filters
-        else []
+        ["-k", " or ".join(f"({value})" for value in filters)] if filters else []
     )
     rc = subprocess.run(
         [
@@ -416,6 +239,5 @@ def cmd_test_npu_iron_ops(args):
     if rc != 0:
         sys.exit(f"test-npu-iron-ops: FAIL ({names})")
     print(
-        f"test-npu-iron-ops: ok ({names} ran on the NPU via hrx, "
-        "numerics verified)"
+        f"test-npu-iron-ops: ok ({names} ran on the NPU via hrx, " "numerics verified)"
     )

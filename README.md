@@ -182,6 +182,9 @@ examples document how to build your own applications.
 Use this path when you also need the source-built LLVM/IRON toolchain and the
 IRON end-to-end artifact checks.
 
+`python3 dev.py --help` is the canonical, generated inventory of developer
+commands; use `python3 dev.py COMMAND --help` for command flags.
+
 The stack, built from source against one ROCm LLVM except for the Peano wheel:
 
 ```
@@ -209,7 +212,7 @@ python3 dev.py build hrx-xclbinutil
 python3 dev.py build llvm         # LLVM+MLIR from the amd-llvm pin
 python3 dev.py build iron-tools   # aie-opt/aie-translate/bootgen against build/llvm
 python3 dev.py build hrx          # the amdxdna HAL (IREE runtime)
-python3 dev.py build all          # all of the above, in order
+python3 dev.py build all          # native CLI + compiler stack + HRX, in order
 python3 dev.py test [DESIGN]      # e2e build test, no NPU run
 python3 dev.py test-iron-ops [OP] # build the iron-ops operators, no NPU run
 python3 dev.py deps               # print requirements/compiler-stack.txt

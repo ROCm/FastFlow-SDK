@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import platform
+import shutil
+import sys
 from pathlib import Path
+
+from build_tools import environment, paths
 
 
 VCPKG_TRIPLETS = {
@@ -17,6 +21,83 @@ VCPKG_TRIPLETS = {
 }
 MIN_RUSTC = (1, 80, 0)
 POLICY_MARKER = ".rns-vcpkg-policy.json"
+
+
+def check_fastflowlm_linux_host(verbose: bool) -> tuple[bool, list[str]]:
+    """Checks host tools and interfaces needed to build FastFlowLM dependencies."""
+    missing = []
+    cc, cxx = environment.compilers(windows=False)
+    checks = [
+        ("bash", bool(shutil.which("bash")), "bash"),
+        ("git", bool(shutil.which("git")), "git"),
+        ("make", bool(shutil.which("make")), "build-essential"),
+        ("nasm", bool(shutil.which("nasm")), "nasm"),
+        ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
+        ("tar", bool(shutil.which("tar")), "tar"),
+        ("unzip", bool(shutil.which("unzip")), "unzip"),
+        (
+            "curl or wget",
+            bool(shutil.which("curl") or shutil.which("wget")),
+            "curl",
+        ),
+        (
+            "Perl IPC::Cmd",
+            environment.have_perl_module("IPC::Cmd"),
+            "libipc-cmd-perl",
+        ),
+        (
+            "<linux/types.h>",
+            environment.have_header("linux/types.h"),
+            "linux-libc-dev",
+        ),
+        (
+            "<libdrm/drm.h>",
+            environment.have_header("libdrm/drm.h"),
+            "libdrm-dev",
+        ),
+    ]
+    if verbose:
+        print(
+            f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: "
+            f"{(cc + '/' + cxx) if cc else 'need gcc/g++ (or set CC/CXX)'}"
+        )
+    if not cc:
+        missing.append("build-essential")
+    for label, ok, package in checks:
+        if verbose:
+            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
+        if not ok and package not in missing:
+            missing.append(package)
+    return not missing, missing
+
+
+def check_fastflowlm_linux_packaging_tools(
+    *, archive: bool = False, verbose: bool = False
+) -> tuple[bool, list[str]]:
+    """Checks Linux-only tools needed to package FastFlowLM artifacts."""
+    checks = [("patchelf", bool(shutil.which("patchelf")), "patchelf")]
+    if archive:
+        checks.append(("zstd", bool(shutil.which("zstd")), "zstd"))
+    missing = []
+    for label, ok, package in checks:
+        if verbose:
+            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
+        if not ok and package not in missing:
+            missing.append(package)
+    return not missing, missing
+
+
+def require_fastflowlm_linux_packaging_tools(
+    *, archive: bool = False
+) -> None:
+    if paths.is_windows():
+        return
+    ok, missing = check_fastflowlm_linux_packaging_tools(archive=archive)
+    if not ok:
+        sys.exit(
+            "FastFlowLM Linux packaging prerequisite(s) are missing; install: "
+            "sudo apt-get install -y " + " ".join(sorted(set(missing)))
+        )
 
 
 def vcpkg_commit(repo_root: Path) -> str:

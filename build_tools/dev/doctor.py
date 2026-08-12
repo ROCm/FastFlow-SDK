@@ -8,15 +8,16 @@ import shutil
 import time
 from pathlib import Path
 
-from build_tools.dev import environment
-from build_tools.dev import paths
+from build_tools import environment, paths
+from build_tools.dev import patches
+from build_tools.dev.profiles import profile
 from build_tools.fastflowlm_deps import (
     MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
+    check_fastflowlm_linux_host,
+    check_fastflowlm_linux_packaging_tools,
     dependency_errors as fastflowlm_dependency_errors,
     dependency_paths as fastflowlm_dependency_paths,
 )
-from build_tools.dev import patches
-from build_tools.dev.profiles import profile
 
 _SYS_HEADERS = [
     ("Python.h", "python3-dev"),
@@ -121,7 +122,7 @@ def check_fastflowlm_system(verbose, *, windows: bool | None = None):
                 )
         return (bool(compiler) and has_git and not native_errors, [])
 
-    host_ok, missing = environment.check_fastflowlm_linux_host(verbose)
+    host_ok, missing = check_fastflowlm_linux_host(verbose)
     if verbose:
         for error in native_errors:
             print(f"  [MISS] {error}")
@@ -150,7 +151,7 @@ def check_fastflowlm_packaging_system(
     if verbose:
         print("  packaging:")
     package_ok, package_missing = (
-        environment.check_fastflowlm_linux_packaging_tools(
+        check_fastflowlm_linux_packaging_tools(
             archive=True,
             verbose=verbose,
         )

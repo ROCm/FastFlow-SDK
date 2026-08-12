@@ -3,6 +3,7 @@
 
 import contextlib
 import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -12,23 +13,30 @@ import pytest
 from build_tools import (
     compiler_product,
     compiler_wheels,
+    environment,
     fastflowlm_package,
+    iron,
     npu_prereqs,
     npu_test_package,
+    paths,
 )
-from build_tools.dev import build, iron, paths, sources, testing
+from build_tools.dev import compiler_build, device_testing, runtime_build, sources
 
 pytestmark = pytest.mark.presubmit
 
 
 class TestPathOwnership:
-    def test_repository_paths_expose_only_repository_layout(self):
+    def test_repository_paths_are_a_shared_foundation(self):
+        assert paths.__name__ == "build_tools.paths"
+        assert not (paths.ROOT / "build_tools" / "dev" / "paths.py").exists()
+
+    def test_repository_paths_expose_shared_build_layout(self):
         path_constants = {
             name
             for name, value in vars(paths).items()
             if name.isupper() and isinstance(value, Path)
         }
-        assert path_constants == {
+        assert {
             "ROOT",
             "PROJ",
             "BUILD",
@@ -36,10 +44,22 @@ class TestPathOwnership:
             "VENV",
             "PATCHES",
             "FETCH_CACHE",
-        }
+            "LLVM_BUILD",
+            "IRON_TOOLS_BUILD",
+            "IRON_TOOLS_INSTALL",
+            "TOOLS_BIN",
+            "HRX_CMAKE_BUILD",
+            "HRX_INSTALL",
+            "HRX_PACKAGE_SMOKE_BUILD",
+            "ROCM_NPU_CLI_BUILD",
+            "ROCM_NPU_CLI_INSTALL",
+            "FASTFLOWLM_BUILD",
+            "FASTFLOWLM_INSTALL",
+            "FASTFLOWLM_MODEL_CACHE",
+        } <= path_constants
 
     def test_domain_paths_are_derived_by_their_owners(self):
-        assert build.HRX_INSTALL == paths.BUILD / "hrx-install"
+        assert paths.HRX_INSTALL == paths.BUILD / "hrx-install"
         assert fastflowlm_package.FASTFLOWLM_WHEEL_VENV == (
             paths.BUILD / "rocm-npu-wheel-venv"
         )
@@ -57,36 +77,36 @@ class TestPathOwnership:
 
 class TestBuildDomain:
     def test_compiler_flags_require_a_complete_pair(self):
-        assert build._cc_flags(None, None) == []
-        assert build._cc_flags("cc", None) == []
-        assert build._cc_flags("cc", "c++") == [
+        assert environment.cmake_compiler_flags(None, None) == []
+        assert environment.cmake_compiler_flags("cc", None) == []
+        assert environment.cmake_compiler_flags("cc", "c++") == [
             "-DCMAKE_C_COMPILER=cc",
             "-DCMAKE_CXX_COMPILER=c++",
         ]
 
     def test_fresh_tree_rejects_unknown_directory(self, tmp_path):
         with pytest.raises(RuntimeError, match="unexpected build directory"):
-            build._prepare_fresh_cmake_tree(tmp_path)
+            runtime_build._prepare_fresh_cmake_tree(tmp_path)
 
     def test_vendored_xclbinutil_build_includes_smoke_helper(self, tmp_path):
         source = tmp_path / "projects" / "iron-tools" / "third_party" / "hrx-xclbinutil"
         (source / "CMakeLists.txt").parent.mkdir(parents=True)
         (source / "CMakeLists.txt").touch()
         with (
-            mock.patch.object(build.paths, "PROJ", tmp_path / "projects"),
-            mock.patch.object(build, "TOOLS_BIN", tmp_path / "tools-bin"),
-            mock.patch.object(build.environment, "cmake_bin", return_value="cmake"),
+            mock.patch.object(compiler_build.paths, "PROJ", tmp_path / "projects"),
+            mock.patch.object(compiler_build.paths, "TOOLS_BIN", tmp_path / "tools-bin"),
+            mock.patch.object(compiler_build.environment, "cmake_bin", return_value="cmake"),
             mock.patch.object(
-                build.environment,
+                compiler_build.environment,
                 "cmake_path",
                 side_effect=lambda path: str(path),
             ),
-            mock.patch.object(build.environment, "cmake_env", return_value={}),
-            mock.patch.object(build.environment, "sh") as run,
+            mock.patch.object(compiler_build.environment, "cmake_env", return_value={}),
+            mock.patch.object(compiler_build.environment, "sh") as run,
             mock.patch.object(Path, "symlink_to"),
-            mock.patch.object(build.paths, "is_windows", return_value=False),
+            mock.patch.object(compiler_build.paths, "is_windows", return_value=False),
         ):
-            build.cmd_build_hrx_xclbinutil(SimpleNamespace())
+            compiler_build.cmd_build_hrx_xclbinutil(SimpleNamespace())
 
         configure, compile_command = (call.args[0] for call in run.call_args_list)
         assert str(source) in configure
@@ -94,7 +114,7 @@ class TestBuildDomain:
         assert "pdi_transform_test" in compile_command
 
     def test_llvm_build_includes_objcopy_for_relocated_products(self):
-        assert "llvm-objcopy" in build.LLVM_BUILD_TARGETS
+        assert "llvm-objcopy" in compiler_build.LLVM_BUILD_TARGETS
 
 
 class TestSourceDomain:
@@ -133,37 +153,45 @@ class TestSourceDomain:
 class TestTestingDomain:
     def test_gtest_summary_counts_passes_and_skips(self):
         output = "[  PASSED  ] 12 tests.\n[  SKIPPED ] 3 tests.\n"
-        assert testing._gtest_counts(output) == (12, 3)
+        assert device_testing._gtest_counts(output) == (12, 3)
 
     def test_windows_npu_probe_routes_to_windows_owner(self):
         args = SimpleNamespace(bundle=None, runtime_package=False)
         library = Path("hrx.dll")
         with (
-            mock.patch.object(testing.paths, "is_windows", return_value=True),
-            mock.patch.object(testing.hrx_runtime, "libhrx_path", return_value=library),
+            mock.patch.object(device_testing.paths, "is_windows", return_value=True),
+            mock.patch.object(device_testing.hrx_runtime, "libhrx_path", return_value=library),
             mock.patch.object(
-                testing, "probe_windows_npu_runtime", return_value=7
+                device_testing, "probe_windows_npu_runtime", return_value=7
             ) as probe,
         ):
-            assert testing.cmd_npu_probe(args) == 7
+            assert device_testing.cmd_npu_probe(args) == 7
         probe.assert_called_once_with(library)
 
     def test_linux_npu_probe_stops_without_a_device(self):
         args = SimpleNamespace(bundle=None, runtime_package=False)
         with (
-            mock.patch.object(testing.paths, "is_windows", return_value=False),
-            mock.patch.object(testing.linux_npu, "print_npu_driver_info"),
+            mock.patch.object(device_testing.paths, "is_windows", return_value=False),
+            mock.patch.object(device_testing.linux_npu, "print_npu_driver_info"),
             mock.patch.object(
-                testing.linux_npu,
+                device_testing.linux_npu,
                 "probe_npu_devnodes",
                 return_value=(0, []),
             ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            assert testing.cmd_npu_probe(args) == 1
+            assert device_testing.cmd_npu_probe(args) == 1
 
 
 class TestIronPolicy:
+    def test_iron_ops_environment_extends_shared_toolchain(self):
+        base = {"PYTHONPATH": "toolchain"}
+        with mock.patch.object(iron, "iron_env", return_value=base.copy()):
+            env = iron.iron_ops_env()
+        assert env["PYTHONPATH"] == os.pathsep.join(
+            [str(paths.PROJ / "iron-ops"), "toolchain"]
+        )
+
     def test_transaction_generation_matches_target(self, tmp_path):
         transaction = tmp_path / "insts.bin"
         transaction.write_bytes(b"\x00\x00\x04")

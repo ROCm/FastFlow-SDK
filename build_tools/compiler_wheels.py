@@ -10,8 +10,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-from build_tools import compiler_product
-from build_tools.dev import build, environment, paths
+from build_tools import compiler_product, environment, paths
 from build_tools.fastflowlm_artifact import git_source_state, validate_directory_target
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION, COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
@@ -25,7 +24,7 @@ from build_tools.rocm_npu_wheel_common import COMPILER_PACKAGE, default_package_
 
 ROOT = paths.ROOT
 BUILD = paths.BUILD
-IRON_TOOLS_INSTALL = build.IRON_TOOLS_INSTALL
+IRON_TOOLS_INSTALL = paths.IRON_TOOLS_INSTALL
 COMPILER_WHEEL_ARTIFACTS = compiler_product.COMPILER_ARTIFACTS
 COMPILER_WHEEL_STAGE = paths.BUILD / "rocm-npu-compiler-wheel-stage"
 COMPILER_WHEEL_VENV = paths.BUILD / "rocm-npu-compiler-wheel-venv"

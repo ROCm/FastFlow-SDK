@@ -8,7 +8,8 @@ from unittest import mock
 
 import pytest
 
-from build_tools.dev import doctor, paths, profiles
+from build_tools import paths
+from build_tools.dev import doctor, profiles
 
 pytestmark = pytest.mark.presubmit
 

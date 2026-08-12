@@ -1,27 +1,17 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
+from build_tools import npu_test_cases as cases
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
 
 
-ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "tests" / "npu" / "npu_cases.py"
-
-
 @pytest.fixture(scope="module", autouse=True)
 def _load_npu_cases():
-    global cases, np
+    global np
     import numpy as np
-
-    spec = importlib.util.spec_from_file_location("npu_test_cases", MODULE_PATH)
-    cases = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cases)
 
 
 def test_round_to_nearest_even_ties():
