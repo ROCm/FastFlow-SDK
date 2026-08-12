@@ -6,9 +6,9 @@
     {
       "tag": "qwen3:0.6b",
       "source": "https://huggingface.co/FastFlowLM/Qwen3-0.6B-NPU2",
-      "revision": "v0.9.22-faster-q4-1",
-      "identity_policy": "revision-sha256",
-      "registry_sha256": "2615438e0f8a16b0528849120d5db3ca58f373d99ecb6f7960fbba4a3b320e9f",
+      "revision": null,
+      "identity_policy": "content-sha256",
+      "registry_sha256": "b650a430f3e7d3878073b990843ce99acd74e4132dcc14f8f49f6b2678694db8",
       "files": [
         {"path": "config.json", "sha256": "8a5ec72f5c96766168a4024f88d70841ae341900a0c84fd4fd23f8eeae16c6a7"},
         {"path": "model.q4nx", "sha256": "db8dec4dff653817218ff920c5d25d28d1805512906485e654f03980053fa667"},

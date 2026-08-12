@@ -484,8 +484,15 @@ def _vcpkg_dependencies_and_licenses(root: Path, bundle: Path,
         return result
 
     bundle_dlls = runtime_files
+    # The prebuilt FLM engine DLLs (dequant/gemm/q4_npu_eXpress and the per-model
+    # *_npu.dll) live under src/lib and the per-backend src/lib/hrx. Both sets are
+    # project-owned, so treat them as such rather than flagging them as
+    # unclassified external runtime dependencies.
+    fastflowlm_lib = root / "projects" / "FastFlowLM" / "src" / "lib"
     project_dlls = {
-        path.name.lower() for path in (root / "projects" / "FastFlowLM" / "src" / "lib").glob("*.dll")
+        path.name.lower()
+        for lib_dir in (fastflowlm_lib, fastflowlm_lib / "hrx")
+        for path in lib_dir.glob("*.dll")
     }
     project_dlls.update({"flm.exe", "hrx.dll"})
     microsoft_runtime = sorted(
@@ -737,7 +744,21 @@ def _linux_dependencies_and_licenses(
                 query = subprocess.run([dpkg_query, "-S", str(candidate)],
                                        capture_output=True, text=True)
                 if query.returncode == 0:
-                    package = query.stdout.split(":", 1)[0]
+                    # `dpkg -S` can prefix diversion lines (e.g. for libreadline
+                    # on t64 hosts) and may list several comma-separated packages
+                    # before the ": <path>" owner. Skip diversions and take the
+                    # first real package so dpkg-query -W is not handed a bogus
+                    # name like "diversion by libreadline8t64 from".
+                    package = None
+                    for entry in query.stdout.splitlines():
+                        if entry.startswith("diversion by "):
+                            continue
+                        owner = entry.split(":", 1)[0].strip()
+                        if owner:
+                            package = owner.split(",", 1)[0].strip()
+                            break
+                    if not package:
+                        continue
                     package_versions[package] = _run_text(
                         [dpkg_query, "-W", "-f=${Package}=${Version}", package])
                     copyright_file = Path("/usr/share/doc") / package / "copyright"

@@ -534,6 +534,7 @@ def cmd_build_fastflowlm(args):
             "-B",
             environment.cmake_path(FASTFLOWLM_BUILD),
             "-DCMAKE_BUILD_TYPE=Release",
+            "-DFLM_USE_HRX=ON",
             "-DCMAKE_INSTALL_LIBDIR=lib",
             "-DFLM_VERSION=0.9.45",
             "-DNPU_VERSION=32.0.203.304",

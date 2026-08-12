@@ -196,7 +196,11 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
 
     env = environment.cmake_env()
     search_key = "PATH" if paths.is_windows() else "LD_LIBRARY_PATH"
+    # FLM's prebuilt engine libs (dequant/gemm/q4_npu_eXpress) live under the
+    # per-backend lib/hrx, while the flat lib/ carries their third-party runtime
+    # deps, so both belong on the loader path.
     search_dirs = [
+        paths.PROJ / "FastFlowLM" / "src" / "lib" / "hrx",
         paths.PROJ / "FastFlowLM" / "src" / "lib",
         HRX_INSTALL / ("bin" if paths.is_windows() else "lib"),
     ]

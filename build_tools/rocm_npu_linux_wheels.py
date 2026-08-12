@@ -286,6 +286,13 @@ def xclbin_path() -> Path:
     return path
 
 
+def model_info_path() -> Path:
+    path = package_root() / "share" / "flm" / "model_info.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"FastFlowLM model info was not found: {path}")
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     executable = str(flm_path())
     args = list(sys.argv[1:] if argv is None else argv)
@@ -293,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     env.setdefault("HRX_GPU_DRIVER", "amdxdna")
     env.setdefault("FLM_CONFIG_PATH", str(config_path()))
     env.setdefault("FLM_XCLBIN_PATH", str(xclbin_path()))
+    env.setdefault("FLM_MODELINFO_PATH", str(model_info_path()))
     os.execvpe(executable, [executable, *args], env)
     raise RuntimeError("unreachable")
 ''')

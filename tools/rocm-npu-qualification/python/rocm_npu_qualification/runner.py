@@ -95,6 +95,7 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
         path = Path(rocm_npu_fastflowlm.flm_path())
         config = Path(rocm_npu_fastflowlm.config_path())
         xclbins = Path(rocm_npu_fastflowlm.xclbin_path())
+        model_info = Path(rocm_npu_fastflowlm.model_info_path())
         package_root = Path(rocm_npu_fastflowlm.package_root())
     except (ImportError, AttributeError, OSError) as error:
         raise QualificationError(
@@ -106,6 +107,7 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     environment.setdefault("HRX_GPU_DRIVER", "amdxdna")
     environment["FLM_CONFIG_PATH"] = str(config)
     environment["FLM_XCLBIN_PATH"] = str(xclbins)
+    environment["FLM_MODELINFO_PATH"] = str(model_info)
     if os.name == "nt":
         try:
             from rocm_npu_runtime import binary_dir

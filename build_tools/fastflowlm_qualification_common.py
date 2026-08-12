@@ -112,9 +112,13 @@ def configure_qualification_tools(*, fresh=False):
 
 def qualification_runtime_env():
     env = environment.cmake_env()
+    # FLM's prebuilt engine libs (dequant/gemm/q4_npu_eXpress) live under the
+    # per-backend lib/hrx, while the flat lib/ carries their third-party runtime
+    # deps, so both belong on the loader path.
     runtime_directories = [
         path
         for path in (
+            paths.PROJ / "FastFlowLM" / "src" / "lib" / "hrx",
             paths.PROJ / "FastFlowLM" / "src" / "lib",
             HRX_INSTALL / ("bin" if paths.is_windows() else "lib"),
         )

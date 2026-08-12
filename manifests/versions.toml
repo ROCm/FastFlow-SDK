@@ -55,13 +55,13 @@ commit     = "929f24b02e8cde78d60296ca3615dc12f660a499"
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
 note       = "Native amdxdna stack with command-chain capability reporting/fallback, Windows MCDM partial-ELF dispatch support, transaction-ordered resolution of reused buffer descriptors, BD address patching that overwrites baked descriptor addresses instead of double-counting offsets, per-submit restaging of shared Windows command-aperture contents, negotiated legacy/compact Windows MCDM contracts (including Krackan compact/legacy v4), legacy protocol revision 3 support, ABI-hardened HRX-owned amdxdna XADX executable creation, DDI-owned Windows CPU-write publication, KMT residency failure diagnostics, preempt-ELF ERT ABI vocabulary, minimal/relocatable runtime component gating, and legacy Windows MCDM driver ABI selection for the 32.0.203.240/.280 stacks while preserving the 32.0.203.314/.329 and newer layouts."
 
-[fastflowlm]                    # projects/FastFlowLM — HRX-native FastFlowLM PR #602
-repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
+[fastflowlm]                    # projects/FastFlowLM — HRX-native LLM inference engine
+repo       = "github.com/ROCm/FastFlowLM"
 upstream   = "github.com/FastFlowLM/FastFlowLM"
-branch     = "hrx_native_pr"
+branch     = "main"
 pr         = "FastFlowLM/FastFlowLM#602"
-commit     = "71c73ede6b5e8be0e4d1e6bfccf381ee1ff0eed8"
-note       = "Pinned HRX-native app path for FastFlowLM 0.9.45 (hrx_native_pr rebased 1:1 on upstream main) with public HRX amdxdna executable API consumption. All 22 engine libraries rebuilt against that API: the Windows .dll/.lib and the Linux .so, the latter for manylinux_2_28 without Boost runtime dependencies (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
+commit     = "a432a07ddc967f3e5b4a45d5ec66adc4eeeebf91"
+note       = "HRX-native app path for FastFlowLM 0.9.45 consuming the public HRX amdxdna executable API. All 22 engine libraries are built against that API: the Windows .dll/.lib and the Linux .so, the latter for manylinux_2_28 without Boost runtime dependencies (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
