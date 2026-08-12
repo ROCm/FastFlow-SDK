@@ -86,7 +86,7 @@ def _normalize_qualification_contract(value: Any) -> dict[str, Any]:
     case_contracts = value["xadx_case_contracts"]
     if (
         not isinstance(case_contracts, dict)
-        or list(case_contracts) != value["xadx_cases"]
+        or set(case_contracts) != set(value["xadx_cases"])
         or any(
             not isinstance(contract, dict)
             or set(contract)
