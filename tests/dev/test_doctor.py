@@ -79,6 +79,30 @@ class TestSystemCheck:
                 [],
             )
 
+    def test_windows_branch_honors_configured_clang_cl(self):
+        env = {"Path": "toolchain"}
+        compiler = "C:/LLVM/bin/clang-cl.exe"
+
+        def which(executable, selected_env=None, *, windows=None):
+            assert selected_env is env
+            assert windows
+            return executable if executable in {compiler, "git"} else None
+
+        with (
+            mock.patch.object(
+                doctor.environment,
+                "compilers",
+                return_value=(compiler, compiler),
+            ),
+            mock.patch.object(
+                doctor.environment, "windows_msvc_env", return_value=env
+            ),
+            mock.patch.object(doctor.environment, "which", side_effect=which),
+        ):
+            assert doctor.check_compiler_stack_system(
+                verbose=False, windows=True
+            ) == (True, [])
+
 
 class TestDoctorCommand:
     def _repository_layout(self, root):

@@ -39,6 +39,7 @@ from build_tools.rocm_npu_wheel_release import (
     prepare_rocm_npu_release_payload,
     resolve_release_inputs,
 )
+from tests.support.wheels import make_package_tree
 
 
 pytestmark = [
@@ -687,10 +688,8 @@ class TestRocmNpuWheelRelease:
                 )
 
     def _package_tree(self, root: Path, package_name: str) -> Path:
-        tree = root / f"tree-{package_name}"
+        tree = make_package_tree(root, package_name, exist_ok=True)
         package = tree / package_name
-        package.mkdir(parents=True, exist_ok=True)
-        (package / "__init__.py").write_text("", encoding="utf-8")
         _write_package_manifest(
             package,
             {

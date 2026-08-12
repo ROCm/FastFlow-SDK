@@ -38,6 +38,7 @@ from build_tools.rocm_npu_linux_wheels import (
 )
 from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 from build_tools.rocm_npu_wheel_common import COMPILER_BINDINGS_DISTRIBUTION
+from tests.support.wheels import make_package_tree
 
 
 pytestmark = [
@@ -134,7 +135,7 @@ class TestRocmNpuLinuxWheelNative:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             wheel = build_wheel(
-                self._package_tree(root, "rocm_npu_fastflowlm"),
+                make_package_tree(root, "rocm_npu_fastflowlm"),
                 FASTFLOWLM_DISTRIBUTION,
                 "0.0.0.dev1",
                 root / "dist",
@@ -158,7 +159,7 @@ class TestRocmNpuLinuxWheelNative:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = build_wheel(
-                self._package_tree(root, "rocm_npu_runtime"),
+                make_package_tree(root, "rocm_npu_runtime"),
                 RUNTIME_DISTRIBUTION,
                 "0.0.0.dev1",
                 root / "dist",
@@ -166,7 +167,7 @@ class TestRocmNpuLinuxWheelNative:
                 tag=LINUX_WHEEL_TAG,
             )
             fastflowlm = build_wheel(
-                self._package_tree(root, "rocm_npu_fastflowlm"),
+                make_package_tree(root, "rocm_npu_fastflowlm"),
                 FASTFLOWLM_DISTRIBUTION,
                 "0.0.0.dev1",
                 root / "dist",
@@ -489,12 +490,6 @@ class TestRocmNpuLinuxWheelNative:
 
             assert graph[f"{FASTFLOWLM_PACKAGE}/bin/flm"] == ["libhrx.so"]
 
-    def _package_tree(self, root, name):
-        tree = root / f"tree-{name}"
-        package = tree / name
-        package.mkdir(parents=True)
-        (package / "__init__.py").write_text("", encoding="utf-8")
-        return tree
 
     def _write_elf(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)

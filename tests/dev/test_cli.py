@@ -51,7 +51,7 @@ class TestDevCli:
     def test_presubmit_runs_dev_core_tests(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github" / "workflows" / "ci.yml").read_text()
-        assert "python -m pytest -m presubmit" in workflow
+        assert "python -m pytest --basetemp=.pytest-tmp -m presubmit" in workflow
 
     def test_every_public_command_owns_dispatch_metadata(self):
         choices = _public_subparsers()

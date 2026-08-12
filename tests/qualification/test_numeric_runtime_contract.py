@@ -1,7 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
-import importlib.util
 import json
 from types import SimpleNamespace
 
@@ -11,6 +10,7 @@ from build_tools import download_qualification_numeric_wheels as downloader
 from build_tools import rocm_npu_qualification_wheel as qualification_wheel
 from build_tools import rocm_npu_wheel_release as release
 from build_tools import verify_qualification_dependencies as dependency_verifier
+from tests.support.modules import load_module
 
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -22,11 +22,7 @@ def _shipping_numeric_runtime():
         / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
         / "numeric_runtime.py"
     )
-    spec = importlib.util.spec_from_file_location("shipping_numeric_runtime", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module("shipping_numeric_runtime", path)
 
 
 def test_numeric_runtime_contract_has_no_secondary_version_authority():

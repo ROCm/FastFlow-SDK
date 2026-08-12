@@ -177,7 +177,7 @@ jobs:
       - name: Validate and test build tooling
         run: |
           .venv/Scripts/python.exe dev.py doctor fastflowlm
-          .venv/Scripts/python.exe -m pytest -m fastflowlm
+          .venv/Scripts/python.exe -m pytest --basetemp=.pytest-tmp -m fastflowlm
 
       - name: Build HRX
         run: .venv/Scripts/python.exe dev.py build hrx --fresh

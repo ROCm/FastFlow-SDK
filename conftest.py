@@ -3,11 +3,26 @@
 """Shared pytest policy for repository-local tests."""
 
 import sys
+from pathlib import Path
 
 import pytest
 
 
 PROFILE_MARKERS = frozenset({"presubmit", "compiler_stack", "fastflowlm"})
+ROOT = Path(__file__).resolve().parent
+TEST_IMPORT_ROOTS = (
+    ROOT / "tools" / "rocm-npu-qualification" / "python",
+    ROOT / "tests" / "npu",
+)
+
+
+def _prioritize_test_import_roots():
+    """Keep repository test imports ahead of ambient installations."""
+    values = [str(import_root) for import_root in TEST_IMPORT_ROOTS]
+    sys.path[:] = [*values, *(entry for entry in sys.path if entry not in values)]
+
+
+_prioritize_test_import_roots()
 
 
 def pytest_collection_modifyitems(items):

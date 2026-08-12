@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
-import importlib.util
 import email.parser
 import json
 import os
@@ -21,19 +20,24 @@ import pytest
 
 from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
 from build_tools.rocm_npu_qualification_wheel import build_qualification_wheel
+from build_tools.rocm_npu_wheel_common import (
+    FASTFLOWLM_DISTRIBUTION,
+    QUALIFICATION_DISTRIBUTION,
+    RUNTIME_DISTRIBUTION,
+)
+from rocm_npu_qualification.candidate import canonical_candidate_bytes
+from rocm_npu_qualification.numeric_runtime import NUMERIC_RUNTIME
+from tests.support.qualification import (
+    make_candidate,
+    make_evidence,
+    make_policy,
+    write_candidate_wheel,
+)
 
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _load_test_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _repack_installed_wheel(distribution: str, output: Path) -> Path:
@@ -326,24 +330,16 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
         xadx_assets=assets,
         version="1.2.3",
     )
-    candidate_tests = _load_test_module(
-        "installed_candidate_fixtures",
-        ROOT
-        / "tools"
-        / "rocm-npu-qualification"
-        / "tests"
-        / "test_candidate_identity.py",
-    )
     staged_products = tmp_path / "staged-products"
     product_wheels = [
-        candidate_tests._write_wheel(
+        write_candidate_wheel(
             staged_products,
-            candidate_tests.RUNTIME_DISTRIBUTION,
+            RUNTIME_DISTRIBUTION,
             "rocm_npu_runtime",
         ),
-        candidate_tests._write_wheel(
+        write_candidate_wheel(
             staged_products,
-            candidate_tests.FASTFLOWLM_DISTRIBUTION,
+            FASTFLOWLM_DISTRIBUTION,
             "rocm_npu_fastflowlm",
         ),
     ]
@@ -354,7 +350,7 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
     python = environment_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     numeric_wheels = [
         _repack_installed_wheel(distribution, tmp_path)
-        for distribution in ("numpy", "ml-dtypes")
+        for distribution in NUMERIC_RUNTIME
     ]
     installation = subprocess.run(
         [
@@ -425,15 +421,11 @@ assert report["status"] == "pass", report
     )
 
     wheels = tmp_path / "candidate-wheels"
-    candidate_tests._write_wheel(
-        wheels, candidate_tests.RUNTIME_DISTRIBUTION, "rocm_npu_runtime"
-    )
-    candidate_tests._write_wheel(
-        wheels, candidate_tests.FASTFLOWLM_DISTRIBUTION, "rocm_npu_fastflowlm"
-    )
-    candidate_tests._write_wheel(
+    write_candidate_wheel(wheels, RUNTIME_DISTRIBUTION, "rocm_npu_runtime")
+    write_candidate_wheel(wheels, FASTFLOWLM_DISTRIBUTION, "rocm_npu_fastflowlm")
+    write_candidate_wheel(
         wheels,
-        candidate_tests.QUALIFICATION_DISTRIBUTION,
+        QUALIFICATION_DISTRIBUTION,
         "rocm_npu_qualification",
     )
 
@@ -466,15 +458,7 @@ assert report["status"] == "pass", report
     )
     assert generated_candidate.is_file()
 
-    offline_tests = _load_test_module(
-        "installed_offline_fixtures",
-        ROOT
-        / "tools"
-        / "rocm-npu-qualification"
-        / "tests"
-        / "test_offline_intake.py",
-    )
-    evidence = offline_tests._evidence(tmp_path / "evidence")
+    evidence = make_evidence(tmp_path / "evidence")
     incoming = tmp_path / "incoming"
     incoming.mkdir()
     bundle = incoming / "run.evidence.zip"
@@ -484,11 +468,11 @@ assert report["status"] == "pass", report
     canonical_root.mkdir()
     canonical_candidate = canonical_root / "candidate.json"
     canonical_candidate.write_bytes(
-        offline_tests.canonical_candidate_bytes(offline_tests._candidate())
+        canonical_candidate_bytes(make_candidate())
     )
     policy = tmp_path / "policy.json"
     policy.write_text(
-        json.dumps(offline_tests._policy("windows")), encoding="utf-8"
+        json.dumps(make_policy("windows")), encoding="utf-8"
     )
     run_cli(
         "intake",

@@ -113,7 +113,7 @@ jobs:
         run: .venv/bin/python dev.py doctor compiler-stack --deep
 
       - name: Test compiler-stack tooling
-        run: .venv/bin/python -m pytest -m "compiler_stack or presubmit"
+        run: .venv/bin/python -m pytest --basetemp=.pytest-tmp -m "compiler_stack or presubmit"
 
       # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
       - name: Cache ccache

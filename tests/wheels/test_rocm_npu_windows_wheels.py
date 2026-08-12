@@ -22,6 +22,7 @@ from build_tools.rocm_npu_windows_wheels import (
     wheel_tag,
 )
 from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
+from tests.support.wheels import make_package_tree
 
 
 pytestmark = [
@@ -35,7 +36,7 @@ class TestRocmNpuWheel:
     def test_find_rocm_npu_wheels_requires_one_of_each_product(self, tmp_path):
         root = tmp_path
         runtime = build_wheel(
-            self._package_tree(root, "rocm_npu_runtime"),
+            make_package_tree(root, "rocm_npu_runtime"),
             RUNTIME_DISTRIBUTION,
             "0.0.0.dev1",
             root / "dist",
@@ -43,7 +44,7 @@ class TestRocmNpuWheel:
             tag=WINDOWS_WHEEL_TAG,
         )
         fastflowlm = build_wheel(
-            self._package_tree(root, "rocm_npu_fastflowlm"),
+            make_package_tree(root, "rocm_npu_fastflowlm"),
             FASTFLOWLM_DISTRIBUTION,
             "0.0.0.dev1",
             root / "dist",
@@ -205,13 +206,6 @@ class TestRocmNpuWheel:
                 RuntimeError, match="rocm_npu_runtime/bin/hrx.dll -> private.dll"
             ):
                 _verify_windows_products([runtime_root, fastflowlm_root])
-
-    def _package_tree(self, root, name):
-        tree = root / f"tree-{name}"
-        package = tree / name
-        package.mkdir(parents=True)
-        (package / "__init__.py").write_text("", encoding="utf-8")
-        return tree
 
     def _write_pe(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)

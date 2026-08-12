@@ -123,17 +123,26 @@ jobs:
       - name: Set up clang-cl
         run: |
           set -eu
-          if ! command -v clang-cl >/dev/null 2>&1; then
+          clang_cl="$(command -v clang-cl || true)"
+          if [ -z "$clang_cl" ]; then
             vsllvm="$(cygpath -u "${VSINSTALLDIR:-C:/}")VC/Tools/Llvm/x64/bin"
             if [ -x "$vsllvm/clang-cl.exe" ]; then
-              cygpath -m "$vsllvm" >> "$GITHUB_PATH"
+              export PATH="$vsllvm:$PATH"
             else
               choco install --no-progress -y llvm
-              echo "C:/Program Files/LLVM/bin" >> "$GITHUB_PATH"
+              export PATH="/c/Program Files/LLVM/bin:$PATH"
             fi
+            clang_cl="$(command -v clang-cl || true)"
           fi
-          echo "CC=clang-cl"  >> "$GITHUB_ENV"
-          echo "CXX=clang-cl" >> "$GITHUB_ENV"
+          if [ -z "$clang_cl" ] || [ ! -x "$clang_cl" ]; then
+            echo "::error::clang-cl is unavailable after toolchain setup"
+            exit 1
+          fi
+          clang_cl="$(cygpath -m "$clang_cl")"
+          echo "${clang_cl%/*}" >> "$GITHUB_PATH"
+          echo "CC=$clang_cl"  >> "$GITHUB_ENV"
+          echo "CXX=$clang_cl" >> "$GITHUB_ENV"
+          "$clang_cl" --version
 
       # Build LLVM in the runner's job-scoped temp dir rather than under the workspace.
       # LLVM unconditionally attaches a Windows version resource to every executable
@@ -274,7 +283,7 @@ jobs:
         run: .venv/Scripts/python.exe dev.py doctor compiler-stack
 
       - name: Test compiler-stack tooling
-        run: .venv/Scripts/python.exe -m pytest -m "compiler_stack or presubmit"
+        run: .venv/Scripts/python.exe -m pytest --basetemp=.pytest-tmp -m "compiler_stack or presubmit"
 
       # ccache was never installed here, so dev.py silently compiled uncached. It supports
       # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.

@@ -10,7 +10,6 @@ the digests that bind it to real bytes need a build.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from build_tools.fastflowlm_kernel_recipe import (
     build_recipe,
     validate_recipe,
 )
+from tests.support.modules import load_module
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,11 +31,7 @@ def _xadx_rounds():
         ROOT
         / "tools/rocm-npu-qualification/python/rocm_npu_qualification/contracts.py"
     )
-    spec = importlib.util.spec_from_file_location("qualification_contracts", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.XADX_ROUNDS
+    return load_module("qualification_contracts", path).XADX_ROUNDS
 
 
 XADX_ROUNDS = _xadx_rounds()

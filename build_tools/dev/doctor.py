@@ -32,7 +32,18 @@ def check_compiler_stack_system(verbose, *, windows: bool | None = None):
     cc, cxx = environment.compilers(windows=selected_windows)
     if selected_windows:
         env = environment.windows_msvc_env(windows=True)
-        has_clang_cl = bool(environment.which("clang-cl", env, windows=True))
+        clang_cl = None
+        for candidate in (cxx, cc, "clang-cl"):
+            if not candidate:
+                continue
+            resolved = environment.which(candidate, env, windows=True)
+            if resolved and Path(resolved).name.lower() in {
+                "clang-cl",
+                "clang-cl.exe",
+            }:
+                clang_cl = resolved
+                break
+        has_clang_cl = bool(clang_cl)
         has_git = bool(environment.which("git", env, windows=True))
         if verbose:
             print(

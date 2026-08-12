@@ -7,10 +7,29 @@ from pathlib import Path
 
 import pytest
 
+import conftest as repository_conftest
+
 
 pytestmark = pytest.mark.presubmit
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_test_import_roots_are_moved_to_sys_path_front(monkeypatch):
+    roots = [str(path) for path in repository_conftest.TEST_IMPORT_ROOTS]
+    monkeypatch.setattr(
+        repository_conftest.sys,
+        "path",
+        ["ambient-first", roots[1], "ambient-middle", roots[0], roots[1]],
+    )
+
+    repository_conftest._prioritize_test_import_roots()
+
+    assert repository_conftest.sys.path == [
+        *roots,
+        "ambient-first",
+        "ambient-middle",
+    ]
 
 
 def test_suite_does_not_use_unittest_testcase_apis():
@@ -58,9 +77,10 @@ def test_suite_does_not_use_unittest_testcase_apis():
 
 def test_presubmit_workflow_uses_marker_selection():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "python -m pytest -m presubmit" in workflow
+    assert "python -m pytest --basetemp=.pytest-tmp -m presubmit" in workflow
     pytest_config = (ROOT / "pytest.ini").read_text(encoding="utf-8")
     assert "tools/rocm-npu-qualification/tests" in pytest_config
+    assert "tmp_path_retention_policy = failed" in pytest_config
 
 
 def test_test_profile_covers_presubmit_runtime_dependencies():
@@ -111,7 +131,10 @@ def test_compiler_workflows_install_runner_and_use_marker_selection(
     assert f"{python} -m pip install" in workflow
     assert "-r requirements/test.lock" in workflow
     assert "hashFiles('requirements/**/*.txt', 'requirements/**/*.lock'" in workflow
-    assert f'{python} -m pytest -m "compiler_stack or presubmit"' in workflow
+    assert (
+        f"{python} -m pytest --basetemp=.pytest-tmp "
+        '-m "compiler_stack or presubmit"'
+    ) in workflow
 
 
 @pytest.mark.parametrize(
@@ -130,4 +153,7 @@ def test_fastflowlm_workflows_install_runner_and_use_marker_selection(
     workflow = (ROOT / workflow_path).read_text(encoding="utf-8")
     assert f"{python} -m pip install" in workflow
     assert "-r requirements/test.lock" in workflow
-    assert f"{python} -m pytest -m fastflowlm" in workflow
+    assert (
+        f"{python} -m pytest --basetemp=.pytest-tmp "
+        "-m fastflowlm"
+    ) in workflow

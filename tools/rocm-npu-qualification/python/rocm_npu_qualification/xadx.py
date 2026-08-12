@@ -17,17 +17,12 @@ import ctypes
 import hashlib
 import importlib.metadata
 import json
-import math
 import os
 import re
 import time
 from pathlib import Path, PurePosixPath
 
-from .contracts import (
-    KERNEL_RECIPE_SCHEMA_VERSION,
-    XADX_REPORT_SCHEMA_VERSION,
-    XADX_ROUNDS,
-)
+from .contracts import XADX_REPORT_SCHEMA_VERSION, XADX_ROUNDS
 from .numeric_runtime import NUMERIC_DISTRIBUTIONS
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 

@@ -2,13 +2,10 @@
 # SPDX-License-Identifier: MIT
 
 import re
-from pathlib import Path
 
 import pytest
 
-
-ROOT = Path(__file__).resolve().parents[2]
-WORKFLOWS = ROOT / ".github" / "workflows"
+from tests.support.workflows import read_workflow
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -18,7 +15,7 @@ pytestmark = [
 
 
 def _logical_test_commands(filename):
-    text = (WORKFLOWS / filename).read_text(encoding="utf-8")
+    text = read_workflow(filename)
     commands = set()
     for line in text.splitlines():
         if "dev.py test-" not in line:
@@ -37,7 +34,7 @@ def _logical_test_commands(filename):
 
 
 def _runner_labels(filename):
-    text = (WORKFLOWS / filename).read_text(encoding="utf-8")
+    text = read_workflow(filename)
     return set(
         re.findall(
             r"(?:linux|windows)-gfx\d+-gpu-rocm(?:-npu)?",
@@ -60,7 +57,7 @@ class TestNpuWorkflowParity:
             "fastflowlm_hrx_linux.yml",
             "fastflowlm_hrx_windows.yml",
         ):
-            text = (WORKFLOWS / filename).read_text(encoding="utf-8")
+            text = read_workflow(filename)
             assert _logical_test_commands(filename) == expected
             assert "qualify run" in text
             assert "test-fastflowlm-kernels" not in text
@@ -108,6 +105,6 @@ class TestNpuWorkflowParity:
         variable = f"vars.ROCM_NPU_{platform.upper()}_RUNNER_LABELS"
         expected_labels = _runner_labels(workflow_names[0])
         for workflow_name in workflow_names:
-            workflow = (WORKFLOWS / workflow_name).read_text(encoding="utf-8")
+            workflow = read_workflow(workflow_name)
             assert f"fromJSON({variable} ||" in workflow
             assert _runner_labels(workflow_name) == expected_labels
