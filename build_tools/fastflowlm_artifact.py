@@ -484,8 +484,15 @@ def _vcpkg_dependencies_and_licenses(root: Path, bundle: Path,
         return result
 
     bundle_dlls = runtime_files
+    # a432a07 relocated the prebuilt engine DLLs (dequant/gemm/q4_npu_eXpress and
+    # the per-model *_npu.dll) into per-backend subdirs; the HRX build bundles the
+    # lib/hrx set. Treat both the flat lib/ and lib/hrx as project-owned so they
+    # are not flagged as unclassified external runtime dependencies.
+    fastflowlm_lib = root / "projects" / "FastFlowLM" / "src" / "lib"
     project_dlls = {
-        path.name.lower() for path in (root / "projects" / "FastFlowLM" / "src" / "lib").glob("*.dll")
+        path.name.lower()
+        for lib_dir in (fastflowlm_lib, fastflowlm_lib / "hrx")
+        for path in lib_dir.glob("*.dll")
     }
     project_dlls.update({"flm.exe", "hrx.dll"})
     microsoft_runtime = sorted(
