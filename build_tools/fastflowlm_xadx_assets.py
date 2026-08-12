@@ -26,6 +26,7 @@ from build_tools.fastflowlm_qualification_common import (
     file_record,
     load_capabilities,
     recipe_generators,
+    run_native_qualification_tests,
     verify_recipe_generator_parity,
 )
 
@@ -345,7 +346,8 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
 
 def cmd_generate_xadx_assets(args):
     build_xadx_generator(args.fresh)
-    verify_recipe_generator_parity()
+    run_native_qualification_tests(configure=False)
+    verify_recipe_generator_parity(configure=False)
     return generate_xadx_assets(
         paths.PROJ / "FastFlowLM" / "src" / "xclbins",
         destination=args.dir,

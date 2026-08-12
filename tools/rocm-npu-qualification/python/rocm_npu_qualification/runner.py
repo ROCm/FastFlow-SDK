@@ -34,6 +34,7 @@ from .fastflowlm import (
     fresh_benchmark_csvs,
     require_1k_checkpoint,
     smoke_phrase_matches,
+    verify_xclbin_inventory,
 )
 from .hashing import sha256_file
 from .installation import (
@@ -143,13 +144,7 @@ def _test_model(
 
     if model["xclbins"]:
         xclbin_root = Path(environment.get("FLM_XCLBIN_PATH", "")) / "xclbins"
-        errors = []
-        for expected in model["xclbins"]:
-            path = xclbin_root / expected["path"]
-            if not path.is_file():
-                errors.append(f"missing {expected['path']}")
-            elif sha256_file(path) != expected["sha256"]:
-                errors.append(f"SHA256 mismatch for {expected['path']}")
+        errors = verify_xclbin_inventory(xclbin_root, model["xclbins"])
         record = {
             "model": model["tag"],
             "name": "production-xclbin-inventory",

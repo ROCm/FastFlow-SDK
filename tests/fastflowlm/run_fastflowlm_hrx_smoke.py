@@ -5,7 +5,6 @@
 
 import argparse
 import csv
-import hashlib
 import os
 import queue
 import re
@@ -24,17 +23,13 @@ sys.path.insert(
 
 from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     extract_raw_outputs,
+    require_1k_checkpoint as _require_1k_checkpoint,
     smoke_phrase_matches,
+    verify_xclbin_inventory,
 )
+from rocm_npu_qualification.profiles import load_profile  # noqa: E402
 
 IS_WINDOWS = os.name == "nt"
-FASTFLOWLM_XCLBIN_RELEASE = "v0.9.45"
-FASTFLOWLM_QWEN3_06B_XCLBINS = {
-    "attn.xclbin": "9acc30b9412d01b57c0c8c909851eaaaa3607b38d4212b7028c6bf87cdac1d2c",
-    "dequant.xclbin": "575d45e47993315f95f601e07f9f21164f30515f80e232e16255d7c5f2a1d4bf",
-    "layer.xclbin": "9b26f1089ace21f84e26d126957175a6e34eed2a099ca30656fb2a03ef7eea6b",
-    "mm.xclbin": "4afc2a6f2459c0ddcf7de61193a6e83e53a951a0f6c33521456d569bab2c7142",
-}
 
 
 class SmokeFailure(RuntimeError):
@@ -216,11 +211,6 @@ def fail_if_runtime_errors(text, label, path):
         raise SmokeFailure(f"{label} hit the generation length limit: {path}")
 
 
-def extract_raw_output(text):
-    outputs = extract_raw_outputs(text)
-    return outputs[0] if outputs else ""
-
-
 def smoke_setup_commands():
     value = os.environ.get("FLM_SMOKE_SETUP_COMMANDS")
     if value is None:
@@ -229,19 +219,19 @@ def smoke_setup_commands():
 
 
 def verify_qwen3_xclbins(xclbin_prefix):
-    xclbin_dir = xclbin_prefix / "xclbins" / "Qwen3-0.6B-NPU2"
-    errors = []
-    for name, expected in FASTFLOWLM_QWEN3_06B_XCLBINS.items():
-        path = xclbin_dir / name
-        if not path.is_file():
-            errors.append(f"missing {path}")
-            continue
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual != expected:
-            errors.append(f"{path}: expected {expected}, got {actual}")
+    models = [
+        model
+        for model in load_profile("fast")["models"]
+        if model["tag"] == "qwen3:0.6b"
+    ]
+    if len(models) != 1:
+        raise SmokeFailure("fast qualification profile must contain qwen3:0.6b")
+    errors = verify_xclbin_inventory(
+        xclbin_prefix / "xclbins", models[0]["xclbins"]
+    )
     if errors:
         raise SmokeFailure(
-            f"FastFlowLM {FASTFLOWLM_XCLBIN_RELEASE} Qwen3 xclbin check failed:\n  - "
+            "FastFlowLM Qwen3 xclbin check failed:\n  - "
             + "\n  - ".join(errors)
         )
 
@@ -251,24 +241,12 @@ def csv_has_1k_row(path):
         return any(row and row[0].strip() == "1" for row in csv.reader(stream))
 
 def require_1k_checkpoint(text, minimum=950, maximum=1024):
-    values = [
-        int(value)
-        for value in re.findall(
-            r"Creating checkpoint at context length\s+(\d+)", text
+    try:
+        return _require_1k_checkpoint(
+            text, minimum=minimum, maximum=maximum
         )
-    ]
-    if len(values) != 1:
-        raise SmokeFailure(
-            "FastFlowLM 1k benchmark must report exactly one actual "
-            f"checkpoint length; got {values or 'none'}"
-        )
-    actual = values[0]
-    if not minimum <= actual <= maximum:
-        raise SmokeFailure(
-            "FastFlowLM 1k benchmark did not exercise a near-1k prompt: "
-            f"got {actual} tokens, expected {minimum}..{maximum}"
-        )
-    return actual
+    except ValueError as error:
+        raise SmokeFailure(str(error)) from error
 
 
 def require_file(path, label):
@@ -463,7 +441,8 @@ def main():
     )
     fail_if_runtime_errors(bench_text, "FastFlowLM bench", bench_output)
     actual_checkpoint = require_1k_checkpoint(bench_text)
-    bench_raw_text = extract_raw_output(bench_text)
+    bench_raw_outputs = extract_raw_outputs(bench_text)
+    bench_raw_text = bench_raw_outputs[0] if bench_raw_outputs else ""
     bench_raw_output = work_dir / f"bench_{safe_model}_raw.txt"
     bench_raw_output.write_text(bench_raw_text + "\n", encoding="utf-8", errors="replace")
     if len(re.findall(r"[A-Za-z]{2,}", bench_raw_text)) < 8:

@@ -10,8 +10,8 @@ and oracles are computed at qualification time instead of shipped.
 
 Two things are deliberately separated here. `build_recipe` turns measured facts
 into cases and is pure, so it can be tested without a build tree or an NPU.
-`recipe_for_tree` is the part that needs build outputs, because only they know
-the digests that bind a case to the exact bytes it ran against.
+Asset generation supplies the measured build outputs, because only they know the
+digests that bind a case to the exact bytes it ran against.
 
 The facts live with the qualification product in
 `fastflowlm-kernel-capabilities-v1.json`; native tests consume that same

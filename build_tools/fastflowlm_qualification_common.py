@@ -18,6 +18,10 @@ XADX_STAGE = paths.BUILD / "fastflowlm-xadx-assets"
 XADX_PRODUCT = "rocm-npu-fastflowlm-xadx"
 XADX_IMPLEMENTATION_PROBE_TARGET = "fastflowlm-xadx-implementation-probe"
 VECTOR_DUMP_TARGET = "fastflowlm-q4nx-vector-dump"
+NATIVE_TEST_TARGETS = (
+    "fastflowlm-kernel-native-tests",
+    "fastflowlm-kernel-shape-probe",
+)
 VECTORS = paths.BUILD / "fastflowlm-q4nx-vectors"
 CAPABILITIES_SOURCE = (
     paths.ROOT
@@ -97,12 +101,68 @@ def configure_qualification_tools(*, fresh=False):
             "-B",
             environment.cmake_path(QUALIFICATION_BUILD),
             "-DCMAKE_BUILD_TYPE=Release",
+            "-DBUILD_TESTING=ON",
             f"-DCMAKE_PREFIX_PATH={environment.cmake_path(HRX_INSTALL)}",
             f"-DFASTFLOWLM_SOURCE_DIR={environment.cmake_path(fastflowlm_source)}",
         ],
         env=environment.cmake_env(),
     )
     return fastflowlm_source
+
+
+def qualification_runtime_env():
+    env = environment.cmake_env()
+    runtime_directories = [
+        path
+        for path in (
+            paths.PROJ / "FastFlowLM" / "src" / "lib",
+            HRX_INSTALL / ("bin" if paths.is_windows() else "lib"),
+        )
+        if path.is_dir()
+    ]
+    if paths.is_windows():
+        environment.prepend_env_path(env, runtime_directories)
+    else:
+        entries = [str(path) for path in runtime_directories]
+        if env.get("LD_LIBRARY_PATH"):
+            entries.append(env["LD_LIBRARY_PATH"])
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(entries)
+    return env
+
+
+def run_native_qualification_tests(*, configure=True):
+    """Build and run qualification-owned host contract tests."""
+    if configure:
+        configure_qualification_tools(fresh=False)
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(QUALIFICATION_BUILD),
+            "--target",
+            *NATIVE_TEST_TARGETS,
+            "-j",
+            os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4"),
+        ],
+        env=environment.cmake_env(),
+    )
+    cmake = Path(environment.cmake_bin())
+    ctest = (
+        cmake.with_name(paths.executable_name("ctest"))
+        if cmake.is_file()
+        else paths.executable_name("ctest")
+    )
+    environment.sh(
+        [
+            ctest,
+            "--test-dir",
+            environment.cmake_path(QUALIFICATION_BUILD),
+            "--output-on-failure",
+            "-C",
+            "Release",
+        ],
+        env=qualification_runtime_env(),
+    )
 
 
 def file_record(root, path):
@@ -125,7 +185,7 @@ def recipe_generators():
     return module
 
 
-def verify_recipe_generator_parity(destination=VECTORS):
+def verify_recipe_generator_parity(destination=VECTORS, *, configure=True):
     """Verify each recipe generator against the strongest available C++ authority.
 
     Default 32x256 Q4NX vectors are produced by FastFlowLM's converter.
@@ -135,7 +195,8 @@ def verify_recipe_generator_parity(destination=VECTORS):
     """
     import numpy as np
 
-    configure_qualification_tools(fresh=False)
+    if configure:
+        configure_qualification_tools(fresh=False)
     environment.sh(
         [
             environment.cmake_bin(),
@@ -150,25 +211,12 @@ def verify_recipe_generator_parity(destination=VECTORS):
     )
     destination = Path(destination)
     shutil.rmtree(destination, ignore_errors=True)
-    env = environment.cmake_env()
-    search_key = "PATH" if paths.is_windows() else "LD_LIBRARY_PATH"
-    entries = [
-        str(path)
-        for path in (
-            paths.PROJ / "FastFlowLM" / "src" / "lib",
-            HRX_INSTALL / ("bin" if paths.is_windows() else "lib"),
-        )
-        if path.is_dir()
-    ]
-    if env.get(search_key):
-        entries.append(env[search_key])
-    env[search_key] = os.pathsep.join(entries)
     environment.sh(
         [
             str(QUALIFICATION_BUILD / paths.executable_name(VECTOR_DUMP_TARGET)),
             str(destination),
         ],
-        env=env,
+        env=qualification_runtime_env(),
     )
 
     generators = recipe_generators()

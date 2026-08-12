@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .hashing import sha256_file
+
 
 RUNTIME_ERROR_PATTERN = re.compile(
     r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+"
@@ -49,6 +51,20 @@ def normalize_smoke_phrase(text: str) -> str:
 
 def smoke_phrase_matches(raw_text: str, expected: str) -> bool:
     return normalize_smoke_phrase(raw_text) == expected.strip()
+
+
+def verify_xclbin_inventory(
+    xclbin_root: Path, expected_records: list[dict[str, str]]
+) -> list[str]:
+    """Return identity errors for an expected FastFlowLM xclbin inventory."""
+    errors = []
+    for expected in expected_records:
+        path = xclbin_root / expected["path"]
+        if not path.is_file():
+            errors.append(f"missing {expected['path']}")
+        elif sha256_file(path) != expected["sha256"]:
+            errors.append(f"SHA256 mismatch for {expected['path']}")
+    return errors
 
 
 def require_1k_checkpoint(
