@@ -61,7 +61,7 @@ upstream   = "github.com/FastFlowLM/FastFlowLM"
 branch     = "main"
 pr         = "FastFlowLM/FastFlowLM#602"
 commit     = "a432a07ddc967f3e5b4a45d5ec66adc4eeeebf91"
-note       = "Pinned HRX-native app path for FastFlowLM 0.9.45 (hrx_native_pr rebased 1:1 on upstream main) with public HRX amdxdna executable API consumption. All 22 engine libraries rebuilt against that API: the Windows .dll/.lib and the Linux .so, the latter for manylinux_2_28 without Boost runtime dependencies (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
+note       = "HRX-native app path for FastFlowLM 0.9.45 consuming the public HRX amdxdna executable API. All 22 engine libraries are built against that API: the Windows .dll/.lib and the Linux .so, the latter for manylinux_2_28 without Boost runtime dependencies (maximum required GLIBC_2.22 and GLIBCXX_3.4.22). The staging smoke builds this app against projects/hrx and pulls/runs qwen3:0.6b on the NPU."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
