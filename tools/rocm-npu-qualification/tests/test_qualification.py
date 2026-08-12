@@ -37,7 +37,10 @@ from rocm_npu_qualification.commands import (  # noqa: E402
 from rocm_npu_qualification.hashing import canonical_json_sha256  # noqa: E402
 from rocm_npu_qualification.offline import pack_evidence  # noqa: E402
 from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
-from rocm_npu_qualification.fastflowlm import require_1k_checkpoint  # noqa: E402
+from rocm_npu_qualification.fastflowlm import (  # noqa: E402
+    require_1k_checkpoint,
+    verify_xclbin_inventory,
+)
 from rocm_npu_qualification.hashing import file_inventory  # noqa: E402
 from rocm_npu_qualification.profiles import (  # noqa: E402
     ProfileError,
@@ -814,6 +817,21 @@ def test_benchmark_selects_target_from_multi_stage_run():
         f"Starting benchmark for {size}k and iteration 1" for size in (4, 2, 1)
     )
     assert require_1k_checkpoint(transcript, minimum=3800, maximum=4096) == 4096
+
+
+def test_xclbin_inventory_reports_missing_and_mismatched_files(tmp_path):
+    (tmp_path / "mismatch.xclbin").write_bytes(b"wrong")
+    errors = verify_xclbin_inventory(
+        tmp_path,
+        [
+            {"path": "missing.xclbin", "sha256": "0" * 64},
+            {"path": "mismatch.xclbin", "sha256": "0" * 64},
+        ],
+    )
+    assert errors == [
+        "missing missing.xclbin",
+        "SHA256 mismatch for mismatch.xclbin",
+    ]
 
 
 def test_deterministic_inventory_and_secret_redaction(tmp_path):

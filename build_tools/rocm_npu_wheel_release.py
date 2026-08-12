@@ -664,7 +664,3 @@ def prepare_rocm_npu_release_payload(
     _write_simple_index(release_directory, wheel_artifacts)
     _write_release_checksums(release_directory)
     return release_directory
-
-
-# Backward-compatible import for callers migrating with the expanded release.
-prepare_runtime_fastflowlm_release_payload = prepare_rocm_npu_release_payload

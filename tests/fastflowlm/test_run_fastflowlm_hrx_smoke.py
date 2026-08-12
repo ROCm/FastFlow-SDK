@@ -27,7 +27,7 @@ pytestmark = [
 class TestFastFlowLMSmoke:
     def test_extract_raw_output(self):
         transcript = "before\nModel RAW Output:\ncoherent text\n>>> prompt\nafter\n"
-        assert smoke.extract_raw_output(transcript) == "coherent text"
+        assert smoke.extract_raw_outputs(transcript)[0] == "coherent text"
 
     def test_extract_multiple_raw_outputs(self):
         transcript = (
@@ -42,7 +42,7 @@ class TestFastFlowLMSmoke:
 
     def test_extract_benchmark_raw_output_stops_before_metrics(self):
         transcript = "Model RAW Output:\ncoherent text\n[FLM]  TTFT: 1.0s\n"
-        assert smoke.extract_raw_output(transcript) == "coherent text"
+        assert smoke.extract_raw_outputs(transcript)[0] == "coherent text"
 
     def test_smoke_phrase_match_allows_markdown_emphasis(self):
         assert smoke.smoke_phrase_matches(
@@ -112,6 +112,9 @@ class TestFastFlowLMSmoke:
         text = "\x1b[31m[FLM] Creating checkpoint at context length 981\x1b[0m"
         assert smoke.require_1k_checkpoint(text) == 981
 
+    def test_require_1k_checkpoint_accepts_benchmark_size_fallback(self):
+        assert smoke.require_1k_checkpoint("Starting benchmark for 1k") == 1024
+
     @pytest.mark.parametrize(
         "text",
         [
@@ -133,6 +136,18 @@ class TestFastFlowLMSmoke:
             smoke.require_1k_checkpoint(
                 f"Creating checkpoint at context length {value}"
             )
+
+    def test_qwen_xclbin_identity_comes_from_qualification_profile(self, tmp_path):
+        expected = [{"path": "Qwen3-0.6B-NPU2/mm.xclbin", "sha256": "0" * 64}]
+        profile = {"models": [{"tag": "qwen3:0.6b", "xclbins": expected}]}
+        with (
+            mock.patch.object(smoke, "load_profile", return_value=profile),
+            mock.patch.object(
+                smoke, "verify_xclbin_inventory", return_value=[]
+            ) as verify,
+        ):
+            smoke.verify_qwen3_xclbins(tmp_path)
+        verify.assert_called_once_with(tmp_path / "xclbins", expected)
 
     def test_installed_package_paths_use_wheel_modules(self, tmp_path):
         flm = tmp_path / "flm"
