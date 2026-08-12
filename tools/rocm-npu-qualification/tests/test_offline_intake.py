@@ -174,6 +174,24 @@ def _candidate(revision: str = "a" * 40):
     }
 
 
+def test_canonical_candidate_accepts_logical_xadx_case_order():
+    manifest = _candidate()
+    contract = manifest["qualification_contract"]
+    case_contract = contract["xadx_case_contracts"]["xadx-case"]
+    contract["xadx_cases"] = ["z-case", "a-case"]
+    contract["xadx_case_contracts"] = {
+        "z-case": dict(case_contract),
+        "a-case": dict(case_contract),
+    }
+
+    serialized = json.loads(canonical_candidate_bytes(manifest))
+    normalized = installation.normalize_candidate(serialized)
+
+    normalized_contract = normalized["qualification_contract"]
+    assert normalized_contract["xadx_cases"] == ["z-case", "a-case"]
+    assert set(normalized_contract["xadx_case_contracts"]) == {"z-case", "a-case"}
+
+
 def _evidence(
     root: Path,
     *,
