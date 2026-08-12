@@ -16,24 +16,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from build_tools.fastflowlm_artifact import (
+from build_tools.fastflowlm_artifact import (  # noqa: E402
     stage_runtime_bundle,
     validate_directory_target,
     verify_fastflowlm_fresh_installs,
 )
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.rocm_npu_wheel_common import (  # noqa: E402
     PACKAGE_VERSION_ENV,
     default_package_version,
     verify_wheel_checksums,
 )
-from build_tools.rocm_npu_windows_wheels import (
+from build_tools.rocm_npu_windows_wheels import (  # noqa: E402
     FASTFLOWLM_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
     build_runtime_fastflowlm_wheels,
     find_rocm_npu_wheels,
     verify_wheels_do_not_have_text_path_references,
 )
-from build_tools.windows_npu import probe_runtime
+from build_tools.windows_npu import probe_runtime  # noqa: E402
 
 PROJECTS = ROOT / "projects"
 BUILD = ROOT / "build"

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from build_tools import environment, paths
@@ -157,17 +158,31 @@ def run_native_qualification_tests(*, configure=True):
         if cmake.is_file()
         else paths.executable_name("ctest")
     )
-    environment.sh(
-        [
-            ctest,
-            "--test-dir",
-            environment.cmake_path(QUALIFICATION_BUILD),
-            "--output-on-failure",
-            "-C",
-            "Release",
-        ],
-        env=qualification_runtime_env(),
+    QUALIFICATION_BUILD.mkdir(parents=True, exist_ok=True)
+    temporary_directory = Path(
+        tempfile.mkdtemp(prefix="ctest-", dir=QUALIFICATION_BUILD)
     )
+    runtime_env = qualification_runtime_env()
+    runtime_env.update(
+        {
+            name: str(temporary_directory)
+            for name in ("TEMP", "TMP", "TMPDIR")
+        }
+    )
+    try:
+        environment.sh(
+            [
+                ctest,
+                "--test-dir",
+                environment.cmake_path(QUALIFICATION_BUILD),
+                "--output-on-failure",
+                "-C",
+                "Release",
+            ],
+            env=runtime_env,
+        )
+    finally:
+        shutil.rmtree(temporary_directory, ignore_errors=True)
 
 
 def file_record(root, path):

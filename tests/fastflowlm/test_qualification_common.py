@@ -110,6 +110,14 @@ def test_native_contract_tests_build_and_run_through_ctest(tmp_path):
         "-C",
         "Release",
     ]
+    ctest_environment = sh.call_args_list[1].kwargs["env"]
+    temporary_directory = Path(ctest_environment["TMPDIR"])
+    assert {
+        ctest_environment[name] for name in ("TEMP", "TMP", "TMPDIR")
+    } == {str(temporary_directory)}
+    assert temporary_directory.parent == tmp_path / "build"
+    assert temporary_directory.name.startswith("ctest-")
+    assert not temporary_directory.exists()
 
 
 @pytest.mark.parametrize(

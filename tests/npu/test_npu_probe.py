@@ -4,7 +4,6 @@
 import errno
 import os
 import stat
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -12,10 +11,7 @@ from unittest import mock
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-
-from build_tools import linux_npu  # noqa: E402
+from build_tools import linux_npu
 
 
 pytestmark = [

@@ -11,6 +11,8 @@ from pathlib import Path
 from build_tools import environment, hrx_runtime, iron, linux_npu, npu_test_package, paths
 from build_tools.windows_npu import probe_runtime as probe_windows_npu_runtime
 
+HRX_CTS_TIMEOUT_SECONDS = 30 * 60
+
 
 def cmd_test_npu_package(args):
     try:
@@ -91,14 +93,36 @@ def cmd_test_hrx_cts(args):
     failed, counts = [], {}
     for name in names:
         print(f"\n=== hrx CTS: {name} ===", flush=True)
-        result = subprocess.run(
-            [str(executables[name])], capture_output=True, text=True
-        )
-        print(result.stdout, end="")
-        if result.stderr:
-            print(result.stderr, end="", file=sys.stderr)
-        counts[name] = _gtest_counts(result.stdout)
-        if result.returncode != 0:
+        timed_out = False
+        try:
+            result = environment.run(
+                [executables[name]],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=HRX_CTS_TIMEOUT_SECONDS,
+            )
+            stdout, stderr = result.stdout, result.stderr
+            returncode = result.returncode
+        except subprocess.TimeoutExpired as error:
+            timed_out = True
+            stdout = error.stdout or ""
+            stderr = error.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            returncode = 124
+        print(stdout, end="")
+        if stderr:
+            print(stderr, end="", file=sys.stderr)
+        if timed_out:
+            print(
+                f"{name}: timed out after {HRX_CTS_TIMEOUT_SECONDS} seconds",
+                file=sys.stderr,
+            )
+        counts[name] = _gtest_counts(stdout)
+        if returncode != 0:
             failed.append(name)
         elif counts[name][0] == 0:
             print(f"{name}: every case skipped; the suite asserts nothing")

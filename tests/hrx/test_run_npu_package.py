@@ -3,46 +3,14 @@
 
 import io
 import json
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
+import run_test_package as runner
+from tests.support.hrx import FakeBuffer, FakeExecutable
+
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
-
-NPU_TESTS = Path(__file__).resolve().parents[1] / "npu"
-sys.path.insert(0, str(NPU_TESTS))
-import run_test_package as runner  # noqa: E402
-
-
-class FakeExecutable:
-    def __init__(self, runtime, name):
-        self.runtime = runtime
-        self.name = name
-
-    def lookup_export(self, name):
-        self.runtime.events.append(("lookup", self.name, name))
-        return 7
-
-    def close(self):
-        self.runtime.events.append(("executable-close", self.name))
-
-
-class FakeBuffer:
-    def __init__(self, runtime, shape, dtype):
-        self.runtime = runtime
-        self.array = np.zeros(shape, dtype=dtype)
-
-    def flush(self):
-        self.runtime.events.append(("flush", self.array.size))
-
-    def invalidate(self):
-        self.runtime.events.append(("invalidate", self.array.size))
-
-    def close(self):
-        self.runtime.events.append(("buffer-close", self.array.size))
-
 
 class FakeRuntime:
     last = None
@@ -56,10 +24,21 @@ class FakeRuntime:
     def load_xadx(self, data):
         name = data.decode()
         self.events.append(("load", name))
-        return FakeExecutable(self, name)
+        executable = FakeExecutable(
+            export_ordinal=7,
+            name=name,
+            on_lookup=lambda export: self.events.append(("lookup", name, export)),
+            on_close=lambda: self.events.append(("executable-close", name)),
+        )
+        return executable
 
     def allocate_buffer(self, shape, dtype):
-        return FakeBuffer(self, shape, dtype)
+        buffer = FakeBuffer(shape, dtype, zeros=True)
+        size = buffer.array.size
+        buffer.on_flush = lambda: self.events.append(("flush", size))
+        buffer.on_invalidate = lambda: self.events.append(("invalidate", size))
+        buffer.on_close = lambda: self.events.append(("buffer-close", size))
+        return buffer
 
     def dispatch(self, executable, ordinal, buffers):
         self.events.append(("dispatch", executable.name))

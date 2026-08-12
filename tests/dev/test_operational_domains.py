@@ -155,6 +155,39 @@ class TestTestingDomain:
         output = "[  PASSED  ] 12 tests.\n[  SKIPPED ] 3 tests.\n"
         assert device_testing._gtest_counts(output) == (12, 3)
 
+    def test_hrx_cts_timeout_preserves_diagnostics_and_summary(self, tmp_path):
+        executable = tmp_path.joinpath(
+            *device_testing.hrx_runtime.HRX_CTS_DIR,
+            paths.executable_name("core_tests"),
+        )
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+        timeout = device_testing.subprocess.TimeoutExpired(
+            ["core_tests"],
+            device_testing.HRX_CTS_TIMEOUT_SECONDS,
+            output="[  PASSED  ] 2 tests.\n",
+            stderr="partial diagnostic\n",
+        )
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(
+                device_testing.paths, "HRX_CMAKE_BUILD", tmp_path
+            ),
+            mock.patch.object(
+                device_testing.environment, "run", side_effect=timeout
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = device_testing.cmd_test_hrx_cts(
+                SimpleNamespace(suite="core_tests")
+            )
+
+        assert result == 1
+        assert "2 passed" in stdout.getvalue()
+        assert "partial diagnostic" in stderr.getvalue()
+        assert "timed out after" in stderr.getvalue()
+
     def test_windows_npu_probe_routes_to_windows_owner(self):
         args = SimpleNamespace(bundle=None, runtime_package=False)
         library = Path("hrx.dll")

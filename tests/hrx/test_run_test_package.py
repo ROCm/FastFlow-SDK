@@ -1,12 +1,13 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
-import importlib.util
 import json
 from pathlib import Path
-import sys
 
 import pytest
+
+from tests.support.hrx import FakeBuffer, FakeExecutable
+from tests.support.modules import load_module
 
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
@@ -14,7 +15,6 @@ pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
 
 ROOT = Path(__file__).resolve().parents[2]
 NPU_TEST_DIR = ROOT / "tests" / "npu"
-sys.path.insert(0, str(NPU_TEST_DIR))
 MODULE_PATH = NPU_TEST_DIR / "run_test_package.py"
 
 
@@ -23,39 +23,7 @@ def _load_package_runner():
     global np, runner
     import numpy as np
 
-    spec = importlib.util.spec_from_file_location("npu_package_runner", MODULE_PATH)
-    runner = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(runner)
-
-
-class FakeExecutable:
-    def __init__(self, runtime):
-        self.runtime = runtime
-        self.closed = False
-
-    def lookup_export(self, name):
-        self.runtime.export_names.append(name)
-        return 9
-
-    def close(self):
-        self.closed = True
-
-
-class FakeBuffer:
-    def __init__(self, shape, dtype):
-        self.array = np.empty(shape, dtype=dtype)
-        self.flush_count = 0
-        self.invalidate_count = 0
-        self.closed = False
-
-    def flush(self):
-        self.flush_count += 1
-
-    def invalidate(self):
-        self.invalidate_count += 1
-
-    def close(self):
-        self.closed = True
+    runner = load_module("npu_package_runner", MODULE_PATH)
 
 
 class FakeRuntime:
@@ -75,7 +43,10 @@ class FakeRuntime:
 
     def load_xadx(self, data):
         self.loaded.append(data)
-        self.executable = FakeExecutable(self)
+        self.executable = FakeExecutable(
+            export_ordinal=9,
+            on_lookup=self.export_names.append,
+        )
         self.executables.append(self.executable)
         return self.executable
 

@@ -13,10 +13,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
-
-from rocm_npu_qualification import commands  # noqa: E402
+from rocm_npu_qualification import commands
 
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -25,16 +22,30 @@ pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 def _tree_command(sentinel: Path, *, interactive: bool) -> list[str]:
     child = (
         "import pathlib,time;"
-        "time.sleep(3.0);"
-        f"pathlib.Path({str(sentinel)!r}).write_text('orphan',encoding='utf-8')"
+        f"p=pathlib.Path({str(sentinel)!r});"
+        "[(p.open('a',encoding='utf-8').write('x'),time.sleep(.01))"
+        " for _ in range(1000)]"
     )
     parent = (
-        "import subprocess,sys,time;"
+        "import pathlib,subprocess,sys,time;"
         f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
+        f"p=pathlib.Path({str(sentinel)!r});"
+        "deadline=time.monotonic()+2;"
+        "\nwhile not p.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
         + ("print('>>> ',end='',flush=True);" if interactive else "")
         + "time.sleep(10)"
     )
     return [sys.executable, "-c", parent]
+
+
+def _assert_file_stops_changing(path: Path, *, timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    previous_size = path.stat().st_size
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+        current_size = path.stat().st_size
+        if current_size != previous_size:
+            pytest.fail("descendant process continued writing after tree cleanup")
 
 
 @pytest.mark.parametrize("interactive", (False, True))
@@ -57,8 +68,8 @@ def test_timeout_terminates_descendant_process_tree(tmp_path, interactive):
         )
     assert result.returncode == 124
     assert result.timed_out
-    time.sleep(3.1)
-    assert not sentinel.exists()
+    assert sentinel.is_file()
+    _assert_file_stops_changing(sentinel)
 
 
 def test_interruption_always_invokes_tree_cleanup(monkeypatch, tmp_path):

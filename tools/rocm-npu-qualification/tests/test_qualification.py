@@ -19,7 +19,6 @@ from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[3]
 QUALIFICATION_PYTHON = ROOT / "tools" / "rocm-npu-qualification" / "python"
-sys.path.insert(0, str(QUALIFICATION_PYTHON))
 
 from rocm_npu_qualification import (  # noqa: E402
     benchmark,
@@ -42,6 +41,7 @@ from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     verify_xclbin_inventory,
 )
 from rocm_npu_qualification.hashing import file_inventory  # noqa: E402
+from rocm_npu_qualification.numeric_runtime import NUMERIC_RUNTIME  # noqa: E402
 from rocm_npu_qualification.profiles import (  # noqa: E402
     ProfileError,
     load_profile,
@@ -527,6 +527,19 @@ def _patch_qualification(monkeypatch, tmp_path, *, doctor_exit):
         runner,
         "_package_versions",
         lambda: {name: "1.2.3" for name in installation.PACKAGE_DISTRIBUTIONS},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_numeric_runtime_identities",
+        lambda: {
+            distribution: {
+                "version": version,
+                "compatibility_tags": ["cp312-cp312-win_amd64"],
+                "record_sha256": "d" * 64,
+                "payload_sha256": "e" * 64,
+            }
+            for distribution, version in NUMERIC_RUNTIME.items()
+        },
     )
     monkeypatch.setattr(
         runner, "_test_xadx", lambda writer, *, target_family, profile_name: []
@@ -1105,10 +1118,7 @@ def test_evidence_schema_rejects_fabricated_empty_pass():
                     "record_sha256": "d" * 64,
                     "payload_sha256": "e" * 64,
                 }
-                for distribution, version in {
-                    "numpy": "2.4.6",
-                    "ml-dtypes": "0.5.4",
-                }.items()
+                for distribution, version in NUMERIC_RUNTIME.items()
             },
             "flm": {
                 "package_version": "1.2.3",
@@ -1160,10 +1170,7 @@ def test_evidence_schema_accepts_portable_ad_hoc_pass():
                     "record_sha256": "d" * 64,
                     "payload_sha256": "e" * 64,
                 }
-                for distribution, version in {
-                    "numpy": "2.4.6",
-                    "ml-dtypes": "0.5.4",
-                }.items()
+                for distribution, version in NUMERIC_RUNTIME.items()
             },
             "flm": {
                 "package_version": "1.2.3",
@@ -1271,7 +1278,7 @@ def test_shipped_runner_loads_and_executes_the_packaged_recipe(monkeypatch, tmp_
             "resident_rounds": 20,
             "readback_rounds": 32,
             "readback_by_case": {"recipe-case": 32},
-            "numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.5.4"},
+            "numeric_runtime": dict(NUMERIC_RUNTIME),
             "cases": 1,
             "materialized_buffers": [],
             "case_results": [

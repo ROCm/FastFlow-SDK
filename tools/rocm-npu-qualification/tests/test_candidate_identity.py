@@ -8,22 +8,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
-
-from build_tools.rocm_npu_wheel_common import (  # noqa: E402
+from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
 )
-from rocm_npu_qualification import candidate, cli, installation  # noqa: E402
+from rocm_npu_qualification import candidate, cli, installation
+from tests.support.qualification import write_candidate_wheel as _write_wheel
 
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -62,205 +59,6 @@ def _write_numeric_wheel(
             "\n".join(
                 [
                     *(record(path, content) for path, content in members.items()),
-                    f"{record_name},,",
-                ]
-            )
-            + "\n",
-        )
-    return wheel
-
-
-def _write_wheel(
-    root: Path,
-    distribution: str,
-    package: str,
-    *,
-    xadx_data: bytes = b"xadx",
-    oracle_sha: str = "5" * 64,
-    qualification_code: bytes = b"QUALIFICATION = True\n",
-    qualification_mode: int = 0o100644,
-    extra_member: str | None = None,
-) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
-    wheel = root / f"{distribution.replace('-', '_')}-1.2.3-py3-none-any.whl"
-    dist_info = f"{distribution.replace('-', '_')}-1.2.3.dist-info"
-    metadata_name = f"{dist_info}/METADATA"
-    manifest_name = f"{package}/manifest.json"
-    wheel_name = f"{dist_info}/WHEEL"
-    metadata_bytes = (
-        f"Metadata-Version: 2.4\nName: {distribution}\nVersion: 1.2.3\n"
-    ).encode()
-    manifest = json.dumps(
-        {
-            "schema_version": 1,
-            "product": distribution,
-            "version": "1.2.3",
-            "sources": {
-                "rocm-npu-staging": {"revision": "a" * 40},
-            },
-            "files": [],
-        },
-        sort_keys=True,
-    ).encode()
-    record_name = f"{dist_info}/RECORD"
-
-    def record(path: str, content: bytes) -> str:
-        digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=")
-        return f"{path},sha256={digest.decode()},{len(content)}"
-
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr(metadata_name, metadata_bytes)
-        archive.writestr(wheel_name, b"Wheel-Version: 1.0\nTag: py3-none-any\n")
-        archive.writestr(manifest_name, manifest)
-        if distribution != QUALIFICATION_DISTRIBUTION:
-            archive.writestr(f"{package}/__init__.py", b"")
-        if distribution == FASTFLOWLM_DISTRIBUTION:
-            archive.writestr(
-                "rocm_npu_fastflowlm/share/flm/xclbins/xclbins/test.xclbin",
-                b"xclbin",
-            )
-        if distribution == QUALIFICATION_DISTRIBUTION:
-            code = zipfile.ZipInfo("rocm_npu_qualification/__init__.py")
-            code.external_attr = qualification_mode << 16
-            archive.writestr(code, qualification_code)
-            transaction_data = b"transaction"
-            xclbin_sha = hashlib.sha256(b"xclbin").hexdigest()
-            recipe = {
-                "schema_version": 1,
-                "product": "rocm-npu-fastflowlm-kernel-recipe",
-                "target": "npu2",
-                "generator_version": "kernel-recipe-generator-v1",
-                "implementations": [
-                    {
-                        "id": f"dequant-{xclbin_sha[:16]}",
-                        "xclbin_path": "xclbins/test.xclbin",
-                        "xclbin_sha256": xclbin_sha,
-                        "transaction": "transactions/test.bin",
-                        "transaction_sha256": hashlib.sha256(
-                            transaction_data
-                        ).hexdigest(),
-                        "xadx": "xadx/test.xadx",
-                        "xadx_sha256": hashlib.sha256(xadx_data).hexdigest(),
-                    }
-                ],
-                "coverage_limits": [],
-                "cases": [
-                    {
-                        "name": "case",
-                        "stages": [
-                            {
-                                "name": "dequant",
-                                "implementation": f"dequant-{xclbin_sha[:16]}",
-                                "buffers": [
-                                    {
-                                        "name": "output",
-                                        "direction": "output",
-                                        "size": 8,
-                                        "expected": {
-                                            "id": "zero",
-                                            "parameters": {"size": 8},
-                                            "sha256": hashlib.sha256(bytes(8)).hexdigest(),
-                                        },
-                                        "comparison": {"kind": "exact"},
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                ],
-            }
-            recipe_bytes = json.dumps(recipe).encode()
-            profile = {
-                "schema_version": 1,
-                "name": "fast",
-                "description": "test",
-                "models": [
-                    {
-                        "tag": "model",
-                        "source": "https://test",
-                        "revision": "revision",
-                        "identity_policy": "revision-sha256",
-                        "registry_sha256": "a" * 64,
-                        "files": [{"path": "model", "sha256": "b" * 64}],
-                        "xclbins": [],
-                        "tests": [
-                            {
-                                "name": "run",
-                                "kind": "run",
-                                "turns": [{"prompt": "test", "expected": "test"}],
-                                "setup_commands": [],
-                                "process_iterations": 1,
-                                "timeout_seconds": 30,
-                                "ctx_len": 128,
-                            }
-                        ],
-                    }
-                ],
-            }
-            archive.writestr(
-                "rocm_npu_qualification/profiles/fast.json",
-                json.dumps(profile),
-            )
-            archive.writestr(
-                "rocm_npu_qualification/xadx_assets/manifest.json",
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "recipe": {
-                            "path": "recipe.json",
-                            "sha256": hashlib.sha256(recipe_bytes).hexdigest(),
-                        },
-                        "serializer": {
-                            "api": "hrx_amdxdna_xadx_serialize",
-                            "revision": "hrx-amdxdna-v0",
-                        },
-                        "files": [
-                            {
-                                "path": "data/oracle.bin.gz",
-                                "size": 123,
-                                "sha256": oracle_sha,
-                            }
-                        ],
-                    }
-                ),
-            )
-            archive.writestr(
-                "rocm_npu_qualification/xadx_assets/recipe.json", recipe_bytes
-            )
-            archive.writestr(
-                "rocm_npu_qualification/xadx_assets/xadx/test.xadx", xadx_data
-            )
-            archive.writestr(
-                "rocm_npu_qualification/xadx_assets/transactions/test.bin",
-                transaction_data,
-            )
-            archive.writestr(
-                "rocm_npu_qualification/policies/release.json",
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "name": "release",
-                        "requirements": [
-                            {
-                                "platform_os": "windows",
-                                "profile": "fast",
-                                "target_family": "npu2",
-                                "minimum_runs": 1,
-                            }
-                        ],
-                    }
-                ),
-            )
-            if extra_member is not None:
-                archive.writestr(extra_member, b"extra")
-        archive.writestr(
-            record_name,
-            "\n".join(
-                [
-                    *(
-                        record(name, archive.read(name))
-                        for name in archive.namelist()
-                    ),
                     f"{record_name},,",
                 ]
             )

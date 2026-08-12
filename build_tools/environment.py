@@ -2,28 +2,184 @@
 # SPDX-License-Identifier: MIT
 """Shared process, tool-discovery, and subprocess-environment helpers."""
 
+import locale
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from build_tools import paths
 
 UV_VERSION = "0.11.33"
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 2 * 60 * 60
 
 _WINDOWS_BUILD_ENV = None
+_CREATE_NEW_PROCESS_GROUP = getattr(
+    subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+)
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _selected_windows(windows: bool | None) -> bool:
     return paths.is_windows() if windows is None else windows
 
 
-def sh(cmd, cwd=None, env=None, check=True):
+def _managed_process_kwargs() -> dict[str, object]:
+    if paths.is_windows():
+        return {"creationflags": _CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _terminate_process_tree(
+    process: subprocess.Popen, *, grace_seconds: float = 5.0
+) -> None:
+    if paths.is_windows():
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                creationflags=_CREATE_NO_WINDOW,
+                timeout=grace_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + grace_seconds
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    if process.poll() is None:
+        process.kill()
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                f"failed to terminate process tree rooted at PID {process.pid}"
+            ) from error
+
+
+def _read_captured_output(stream, *, text: bool, encoding: str, errors: str):
+    if stream is None:
+        return None
+    stream.flush()
+    stream.seek(0)
+    data = stream.read()
+    return data.decode(encoding, errors=errors) if text else data
+
+
+def run(
+    cmd,
+    cwd=None,
+    env=None,
+    check=True,
+    timeout=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    **kwargs,
+):
+    """Run a bounded command in a process group and clean up its descendants."""
+    command = [str(item) for item in cmd]
+    capture_output = kwargs.pop("capture_output", False)
+    if capture_output:
+        if "stdout" in kwargs or "stderr" in kwargs:
+            raise ValueError(
+                "stdout and stderr arguments may not be used with capture_output"
+            )
+    elif kwargs.get("stdout") == subprocess.PIPE or kwargs.get("stderr") == subprocess.PIPE:
+        raise ValueError("use capture_output=True instead of PIPE")
+
+    text_mode = bool(
+        kwargs.get("text") or kwargs.get("universal_newlines")
+    )
+    encoding = kwargs.get("encoding") or (
+        "utf-8" if sys.flags.utf8_mode else locale.getencoding()
+    )
+    errors = kwargs.get("errors") or "strict"
+    with (
+        tempfile.TemporaryFile() if capture_output else nullcontext() as stdout_file,
+        tempfile.TemporaryFile() if capture_output else nullcontext() as stderr_file,
+    ):
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            **(
+                {"stdout": stdout_file, "stderr": stderr_file}
+                if capture_output
+                else {}
+            ),
+            **kwargs,
+            **_managed_process_kwargs(),
+        )
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            _terminate_process_tree(process)
+            stdout = _read_captured_output(
+                stdout_file, text=text_mode, encoding=encoding, errors=errors
+            )
+            stderr = _read_captured_output(
+                stderr_file, text=text_mode, encoding=encoding, errors=errors
+            )
+            error.output = stdout
+            error.stderr = stderr
+            raise
+        except BaseException:
+            _terminate_process_tree(process)
+            raise
+        stdout = _read_captured_output(
+            stdout_file, text=text_mode, encoding=encoding, errors=errors
+        )
+        stderr = _read_captured_output(
+            stderr_file, text=text_mode, encoding=encoding, errors=errors
+        )
+    result = subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        stdout,
+        stderr,
+    )
+    if check:
+        result.check_returncode()
+    return result
+
+
+def sh(
+    cmd,
+    cwd=None,
+    env=None,
+    check=True,
+    timeout=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+):
     print(f"+ {' '.join(map(str, cmd))}", flush=True)
-    return subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, check=check)
+    return run(
+        cmd,
+        cwd=cwd,
+        env=env,
+        check=check,
+        timeout=timeout,
+    )
 
 
 def venv_py(
@@ -66,7 +222,12 @@ def python_install(python, *arguments, refresh_packages=()):
     ssl_cert_file = env.get("SSL_CERT_FILE")
     if ssl_cert_file and not Path(ssl_cert_file).is_file():
         env.pop("SSL_CERT_FILE")
-    subprocess.run([str(item) for item in command], check=True, env=env)
+    run(
+        [str(item) for item in command],
+        check=True,
+        env=env,
+        timeout=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    )
 
 
 def cmake_bin(
