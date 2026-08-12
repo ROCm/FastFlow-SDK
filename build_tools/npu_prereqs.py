@@ -11,13 +11,12 @@ import sys
 import tarfile
 from pathlib import Path
 
-from build_tools import hrx_runtime
-from build_tools.dev import build, environment, paths
+from build_tools import environment, hrx_runtime, paths
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ
 BUILD = paths.BUILD
-HRX_INSTALL = build.HRX_INSTALL
+HRX_INSTALL = paths.HRX_INSTALL
 NPU_PREREQ_DIR = paths.BUILD / "artifacts"
 IS_WINDOWS = paths.is_windows()
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -128,8 +127,8 @@ def _strip(stage, cts_rel):
 def _stage_npu_runtime_prereqs(stage, hrx_install, cts_src):
     """Stage the runtime-only payload not already in the compiler product."""
     _stage(hrx_install, stage / "build/hrx-install")
-    cts_rel = "/".join(build.HRX_CTS_DIR)
-    for test_name in build.HRX_CTS_TESTS:
+    cts_rel = "/".join(hrx_runtime.HRX_CTS_DIR)
+    for test_name in hrx_runtime.HRX_CTS_TESTS:
         binary = _tool(cts_src / test_name)
         _stage(binary, stage / "projects/hrx/build/cmake" / cts_rel / binary.name)
 
@@ -140,8 +139,8 @@ def cmd_package_npu_prereqs(args):
     Not `tar -h`: staging with a dereferencing copy fails loudly on a dangling symlink,
     where tar would silently drop it."""
     hrxb = PROJ / "hrx" / "build" / "cmake"
-    cts_src = hrxb.joinpath(*build.HRX_CTS_DIR)
-    cts_rel = "/".join(build.HRX_CTS_DIR)
+    cts_src = hrxb.joinpath(*hrx_runtime.HRX_CTS_DIR)
+    cts_rel = "/".join(hrx_runtime.HRX_CTS_DIR)
     stage = BUILD / "npu-stage"
     if stage.exists():
         shutil.rmtree(stage)
@@ -209,7 +208,7 @@ def _rehearse(python, pythonpath, hrx_install):
 
     # Import and load exactly the tiny binding used by the hardware runner.
     script = (
-        "from hrx_api import load_libhrx\n"
+        "from build_tools.hrx_runtime import load_libhrx\n"
         "lib = load_libhrx()\n"
         "print('libhrx:', lib._name)\n"
     )
@@ -221,7 +220,7 @@ def cmd_verify_npu_prereqs(args):
 
     --extracted checks a tree the consumer already unpacked; the default checks the
     archive and then rehearses npu_e2e's imports from it."""
-    cts_rel = "/".join(build.HRX_CTS_DIR)
+    cts_rel = "/".join(hrx_runtime.HRX_CTS_DIR)
     cts_root = f"projects/hrx/build/cmake/{cts_rel}"
     required = [
         ("build/hrx-install/bin/hrx.dll"
@@ -229,13 +228,13 @@ def cmd_verify_npu_prereqs(args):
          "build/hrx-install/lib/libhrx.so"),
         "build/hrx-install/include/hrx/hrx_runtime.h",
         "build/hrx-install/include/hrx/hrx_amdxdna.h",
-        *(f"{cts_root}/{name}{_EXE}" for name in build.HRX_CTS_TESTS),
+        *(f"{cts_root}/{name}{_EXE}" for name in hrx_runtime.HRX_CTS_TESTS),
     ]
     if args.extracted:
         # `find`/rglob over a missing root yields nothing, so assert the roots exist
         # before concluding anything from the absence of symlinks.
         roots = [BUILD / "hrx-install", PROJ.joinpath(
-            "hrx", "build", "cmake", *build.HRX_CTS_DIR)]
+            "hrx", "build", "cmake", *hrx_runtime.HRX_CTS_DIR)]
         for r in roots:
             if not r.is_dir():
                 sys.exit(f"{r} missing: did the artifact extract?")
@@ -268,8 +267,7 @@ def cmd_verify_npu_prereqs(args):
     rehearsal.mkdir(parents=True)
     with _prereq_tar(archive) as tar:   # streamed: a second pass needs a second handle
         tar.extractall(rehearsal, filter="data")
-    runtime_python = ROOT / "tests" / "npu"
-    _rehearse(venv_py(), runtime_python, rehearsal / "build" / "hrx-install")
+    _rehearse(venv_py(), ROOT, rehearsal / "build" / "hrx-install")
     shutil.rmtree(rehearsal)
     print(f"verify-npu-prereqs: ok ({len(members)} entries, no links)")
     return 0

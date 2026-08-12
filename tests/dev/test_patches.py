@@ -15,7 +15,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from build_tools.dev import patches, paths  # noqa: E402
+from build_tools import paths  # noqa: E402
+from build_tools.dev import patches  # noqa: E402
 
 pytestmark = pytest.mark.presubmit
 

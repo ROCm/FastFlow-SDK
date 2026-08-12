@@ -33,8 +33,8 @@ row-major arrays in the declared storage ``dtype``. BF16 buffers use
 ``dtype: "uint16"`` and ``logical_dtype: "bfloat16"``; comparisons decode
 their raw storage to float32. Paths are relative to the package root.
 
-This module depends only on the Python standard library, NumPy, and the sibling
-``hrx_api`` helper.
+This module depends only on the Python standard library, NumPy, and the
+production-owned ``build_tools.hrx_runtime`` contract.
 """
 
 import argparse
@@ -44,7 +44,11 @@ import sys
 
 import numpy as np
 
-from hrx_api import HrxRuntime
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from build_tools.hrx_runtime import HrxRuntime  # noqa: E402
 
 
 def _read_array(package_root, relative_path, dtype, shape):

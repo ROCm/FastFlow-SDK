@@ -16,7 +16,7 @@ on a CPU runner, not an hour later on the one machine that has an NPU. This also
 the operator's own aie_kernels/*.cc through Peano, which the examples' @iron.jit path never
 does.
 
-Which operators, at what size: tests/iron-ops/suite.py. Runs on Linux and Windows.
+Which operators, at what size: build_tools/iron.py. Runs on Linux and Windows.
 
 Must be run BY the stack's venv python, WITH the IRON toolchain env (PYTHONPATH ->
 projects/iron-ops plus the selected compiler's Python package, PEANO_INSTALL_DIR,
@@ -34,10 +34,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
-sys.path[:0] = [str(HERE), str(ROOT / "tests" / "e2e"), str(ROOT)]
-from build_tools.dev import iron  # noqa: E402
-import run_e2e  # noqa: E402   (toolchain paths + the xclbin section check)
-import suite  # noqa: E402   (the operator table)
+sys.path.insert(0, str(ROOT))
+from build_tools import iron  # noqa: E402
 
 # This gate must never open an NPU: it runs on the CPU build runners, and the device it
 # targets is a declared input, not something to detect. IRON_RUNTIME=cpu makes that
@@ -87,7 +85,7 @@ def find_operator_class(name: str) -> type:
 
 
 def instantiate(
-    cls: type, operator_spec: suite.Operator, context: AIEContext
+    cls: type, operator_spec: iron.Operator, context: AIEContext
 ) -> AIEOperatorBase:
     """The operator shape declared in suite.py."""
     params = inspect.signature(cls.__init__).parameters
@@ -114,7 +112,7 @@ def artifact_of(operator: AIEOperatorBase, kind: type) -> Path:
     return found[0]
 
 
-def build(operator_spec: suite.Operator, device: str, build_root: Path) -> None:
+def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
     """Build one operator and check what came out. Raises BuildError on any failure."""
     build_dir = build_root / operator_spec.name
     # Start from nothing: a leftover xclbin from an earlier run must never be what we
@@ -147,8 +145,8 @@ def build(operator_spec: suite.Operator, device: str, build_root: Path) -> None:
     # The same two checks run_e2e makes of an iron-tools design: hrx-xclbinutil really
     # packaged the NPU sections, and the instruction stream targets the device we asked for
     # (a mismatched DevGen is accepted by the driver and then never completes).
-    run_e2e.check_sections(
-        run_e2e.require_xclbinutil(run_e2e.compiler_prefix_from_env()),
+    iron.check_sections(
+        iron.require_xclbinutil(iron.compiler_prefix_from_env()),
         xclbin,
     )
     iron.require_txn_devgen(insts, device)
@@ -173,10 +171,10 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     try:
-        operators = suite.select(args.operator)
+        operators = iron.select(args.operator)
         for operator_spec in operators:
             build(operator_spec, args.device or operator_spec.device, args.build_dir)
-    except (BuildError, run_e2e.E2EError) as e:
+    except (BuildError, iron.E2EError) as e:
         print(f"IRON-OPS BUILD FAIL: {e}", file=sys.stderr)
         return 1
     except KeyError as e:

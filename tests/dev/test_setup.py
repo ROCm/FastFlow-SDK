@@ -11,7 +11,8 @@ from unittest import mock
 
 import pytest
 
-from build_tools.dev import paths, setup
+from build_tools import paths
+from build_tools.dev import setup
 
 pytestmark = pytest.mark.presubmit
 

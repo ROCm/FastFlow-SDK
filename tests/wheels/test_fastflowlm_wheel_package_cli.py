@@ -15,7 +15,7 @@ from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
 )
-from build_tools.dev import testing
+from build_tools.dev import host_testing
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -79,7 +79,7 @@ class TestFastFlowLMWheelPackageCli:
         )
         with mock.patch("builtins.__import__", side_effect=import_without_wheels):
             with pytest.raises(SystemExit) as error:
-                testing.cmd_test_fastflowlm(args)
+                host_testing.cmd_test_fastflowlm(args)
 
         message = str(error.value)
         assert "test-fastflowlm --wheel-package requires" in message
@@ -100,13 +100,13 @@ class TestFastFlowLMWheelPackageCli:
         with (
             mock.patch.dict(sys.modules, modules),
             mock.patch.object(
-                testing.environment,
+                host_testing.environment,
                 "sh",
                 return_value=SimpleNamespace(returncode=7),
             ) as sh,
             pytest.raises(SystemExit) as error,
         ):
-            testing.cmd_test_fastflowlm(args)
+            host_testing.cmd_test_fastflowlm(args)
 
         assert error.value.code == 7
         command = sh.call_args.args[0]

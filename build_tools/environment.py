@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Environment and host-tool helpers for the developer command router."""
+"""Shared process, tool-discovery, and subprocess-environment helpers."""
 
 import os
 import shutil
@@ -10,7 +10,7 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-from build_tools.dev import paths
+from build_tools import paths
 
 UV_VERSION = "0.11.33"
 
@@ -93,6 +93,27 @@ def cmake_source_override(name: str):
     if not source.is_dir():
         sys.exit(f"{name} is not a directory: {source}")
     return [f"-D{name}={cmake_path(source)}"]
+
+
+def cmake_compiler_flags(cc: str | None, cxx: str | None) -> list[str]:
+    """Return CMake cache flags for an explicitly selected compiler pair."""
+    if not cc or not cxx:
+        return []
+    return [
+        f"-DCMAKE_C_COMPILER={cc}",
+        f"-DCMAKE_CXX_COMPILER={cxx}",
+    ]
+
+
+def cmake_ccache_flags() -> list[str]:
+    """Return CMake compiler-launcher flags when ccache is available."""
+    if not shutil.which("ccache"):
+        return []
+    return [
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON",
+    ]
 
 
 def env_path(env=None, *, windows: bool | None = None):
@@ -281,64 +302,3 @@ def have_perl_module(module):
         ).returncode
         == 0
     )
-
-
-def check_fastflowlm_linux_host(verbose: bool) -> tuple[bool, list[str]]:
-    """Checks host tools and interfaces needed to build FastFlowLM dependencies."""
-    missing = []
-    cc, cxx = compilers(windows=False)
-    checks = [
-        ("bash", bool(shutil.which("bash")), "bash"),
-        ("git", bool(shutil.which("git")), "git"),
-        ("make", bool(shutil.which("make")), "build-essential"),
-        ("nasm", bool(shutil.which("nasm")), "nasm"),
-        ("pkg-config", bool(shutil.which("pkg-config")), "pkg-config"),
-        ("tar", bool(shutil.which("tar")), "tar"),
-        ("unzip", bool(shutil.which("unzip")), "unzip"),
-        ("curl or wget", bool(shutil.which("curl") or shutil.which("wget")), "curl"),
-        ("Perl IPC::Cmd", have_perl_module("IPC::Cmd"), "libipc-cmd-perl"),
-        ("<linux/types.h>", have_header("linux/types.h"), "linux-libc-dev"),
-        ("<libdrm/drm.h>", have_header("libdrm/drm.h"), "libdrm-dev"),
-    ]
-    if verbose:
-        print(
-            f"  [{'ok ' if cc else 'MISS'}] C/C++ compiler: "
-            f"{(cc + '/' + cxx) if cc else 'need gcc/g++ (or set CC/CXX)'}"
-        )
-    if not cc:
-        missing.append("build-essential")
-    for label, ok, package in checks:
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
-        if not ok and package not in missing:
-            missing.append(package)
-    return not missing, missing
-
-
-def check_fastflowlm_linux_packaging_tools(
-    *, archive: bool = False, verbose: bool = False
-) -> tuple[bool, list[str]]:
-    """Checks Linux-only tools needed to package FastFlowLM artifacts."""
-    checks = [("patchelf", bool(shutil.which("patchelf")), "patchelf")]
-    if archive:
-        checks.append(("zstd", bool(shutil.which("zstd")), "zstd"))
-    missing = []
-    for label, ok, package in checks:
-        if verbose:
-            print(f"  [{'ok ' if ok else 'MISS'}] {label}")
-        if not ok and package not in missing:
-            missing.append(package)
-    return not missing, missing
-
-
-def require_fastflowlm_linux_packaging_tools(
-    *, archive: bool = False
-) -> None:
-    if paths.is_windows():
-        return
-    ok, missing = check_fastflowlm_linux_packaging_tools(archive=archive)
-    if not ok:
-        sys.exit(
-            "FastFlowLM Linux packaging prerequisite(s) are missing; install: "
-            "sudo apt-get install -y " + " ".join(sorted(set(missing)))
-        )

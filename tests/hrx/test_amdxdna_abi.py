@@ -2,25 +2,12 @@
 # SPDX-License-Identifier: MIT
 
 import ctypes
-import importlib.util
-from pathlib import Path
 
 import pytest
 
+from build_tools import hrx_runtime as abi
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
-
-
-ROOT = Path(__file__).resolve().parents[2]
-ABI_PATH = ROOT / "tests" / "npu" / "hrx_api.py"
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _load_abi_helper():
-    global abi
-    spec = importlib.util.spec_from_file_location("iron_hrx_abi", ABI_PATH)
-    abi = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(abi)
 
 
 def test_builder_retains_four_distinct_run_records():

@@ -3,211 +3,175 @@
 
 from __future__ import annotations
 
+import argparse
 import ast
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
-import dev
+from build_tools.dev import build, cli, device_testing, host_testing
 
 pytestmark = pytest.mark.presubmit
 
 
-def _public_subparser_cases():
-    parser = dev.create_parser()
-    subparsers = next(
+def _public_subparsers():
+    return next(
         action
-        for action in parser._actions
-        if isinstance(action, dev.argparse._SubParsersAction)
-    )
-    return list(subparsers.choices.items())
+        for action in cli.create_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    ).choices
 
 
 class TestDevCli:
-    def test_dev_module_is_a_structural_cli_facade(self):
+    @pytest.mark.parametrize("arguments", [["--help"], ["setup", "--help"]])
+    def test_bootstrap_help_does_not_require_site_packages(self, arguments):
+        root = Path(__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [sys.executable, "-S", root / "dev.py", *arguments],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    def test_root_module_is_executable_shim(self):
         root = Path(__file__).resolve().parents[2]
         tree = ast.parse((root / "dev.py").read_text(encoding="utf-8"))
-        allowed_functions = {
-            "argparse_positive_int",
-            "_dispatch_build",
-            "_add_command",
-            "dispatch",
-            "create_parser",
-            "main",
-        }
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if node.name.startswith("cmd_"):
-                assert len(node.body) == 1, node.name
-                assert isinstance(node.body[0], ast.Return), node.name
-                assert isinstance(node.body[0].value, ast.Call), node.name
-            else:
-                assert node.name in allowed_functions
-
-        imported = {
-            alias.name.split(".")[0]
-            for node in tree.body
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        }
-        assert imported == {"argparse", "sys"}
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+        assert functions == []
+        imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)]
+        assert [
+            (node.module, [alias.name for alias in node.names]) for node in imports
+        ] == [("build_tools.dev.cli", ["main"])]
 
     def test_presubmit_runs_dev_core_tests(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github" / "workflows" / "ci.yml").read_text()
         assert "python -m pytest -m presubmit" in workflow
 
-    @pytest.mark.parametrize(
-        ("name", "command_parser"),
-        _public_subparser_cases(),
-        ids=lambda value: value if isinstance(value, str) else None,
-    )
-    def test_every_public_subparser_owns_dispatch_metadata(self, name, command_parser):
-        assert len(_public_subparser_cases()) > 20
-        assert "_handler" in command_parser._defaults
-        assert "_exit_on_return" in command_parser._defaults
-        expected_name = (
-            "_dispatch_build" if name == "build" else f"cmd_{name.replace('-', '_')}"
+    def test_every_public_command_owns_dispatch_metadata(self):
+        choices = _public_subparsers()
+        assert len(choices) > 20
+        assert all("_handler" in parser._defaults for parser in choices.values())
+        assert all("_exit_on_return" in parser._defaults for parser in choices.values())
+
+    def test_commands_register_actual_owner_functions(self):
+        choices = _public_subparsers()
+        expected_test_handlers = {
+            "test": host_testing.cmd_test,
+            "test-fastflowlm": host_testing.cmd_test_fastflowlm,
+            "test-iron-ops": host_testing.cmd_test_iron_ops,
+            "smoke": host_testing.cmd_smoke,
+            "test-npu-package": device_testing.cmd_test_npu_package,
+            "npu-probe": device_testing.cmd_npu_probe,
+            "test-hrx-cts": device_testing.cmd_test_hrx_cts,
+            "test-npu": device_testing.cmd_test_npu,
+            "test-npu-iron-ops": device_testing.cmd_test_npu_iron_ops,
+        }
+        for name, handler in expected_test_handlers.items():
+            assert choices[name]._defaults["_handler"] is handler
+        assert all(
+            parser._defaults["_handler"].__module__ != cli.__name__
+            for name, parser in choices.items()
+            if name != "build"
         )
-        assert command_parser._defaults["_handler"] is getattr(dev, expected_name)
+        assert (
+            choices["doctor"]._defaults["_handler"].__module__
+            == "build_tools.dev.doctor"
+        )
+        assert (
+            choices["setup"]._defaults["_handler"].__module__ == "build_tools.dev.setup"
+        )
+        assert (
+            choices["fetch"]._defaults["_handler"].__module__
+            == "build_tools.dev.patches"
+        )
+        assert (
+            choices["submodules"]._defaults["_handler"].__module__
+            == "build_tools.dev.sources"
+        )
+        assert choices["build"]._defaults["_handler"] is cli._dispatch_build
+
+    def test_build_registry_has_direct_domain_handlers(self):
+        expected_modules = {
+            "llvm": "build_tools.dev.compiler_build",
+            "iron-tools": "build_tools.dev.compiler_build",
+            "hrx-xclbinutil": "build_tools.dev.compiler_build",
+            "hrx": "build_tools.dev.runtime_build",
+            "hrx-cts": "build_tools.dev.runtime_build",
+            "rocm-npu-cli": "build_tools.dev.runtime_build",
+            "fastflowlm": "build_tools.dev.fastflowlm_build",
+            "all": "build_tools.dev.build",
+        }
+        assert {
+            name: handler.__module__ for name, handler in build.BUILD_HANDLERS.items()
+        } == expected_modules
+        parsed = cli.create_parser().parse_args(["build", "llvm"])
+        assert set(parsed._handler.__globals__["dev_build"].BUILD_HANDLERS) == set(
+            expected_modules
+        )
+
+    def test_build_all_preserves_compiler_stack_sequence(self):
+        calls = []
+        names = (
+            (build.runtime_build, "cmd_build_rocm_npu_cli"),
+            (build.compiler_build, "cmd_build_hrx_xclbinutil"),
+            (build.compiler_build, "cmd_build_llvm"),
+            (build.compiler_build, "cmd_build_iron_tools"),
+            (build.runtime_build, "cmd_build_hrx"),
+        )
+        patches = [
+            mock.patch.object(
+                owner, name, side_effect=lambda _, name=name: calls.append(name)
+            )
+            for owner, name in names
+        ]
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            build.cmd_build_all(SimpleNamespace(fresh=False))
+        assert calls == [name for _, name in names]
+
+    def test_help_discovers_every_registered_command(self, capsys):
+        parser = cli.create_parser()
+        with pytest.raises(SystemExit) as raised:
+            parser.parse_args(["--help"])
+        assert raised.value.code == 0
+        help_text = capsys.readouterr().out
+        assert all(name in help_text for name in _public_subparsers())
 
     def test_exit_commands_preserve_exit_dispatch(self):
-        choices = dict(_public_subparser_cases())
-        exit_commands = {
+        assert {
             name
-            for name, command_parser in choices.items()
-            if command_parser._defaults["_exit_on_return"]
-        }
-        assert exit_commands == {
-            "doctor",
-            "smoke",
-            "verify-npu-prereqs",
-            "npu-probe",
-            "test-hrx-cts",
-        }
+            for name, parser in _public_subparsers().items()
+            if parser._defaults["_exit_on_return"]
+        } == {"doctor", "smoke", "verify-npu-prereqs", "npu-probe", "test-hrx-cts"}
 
-    def test_core_command_wrappers_delegate_to_owning_modules(self):
-        args = SimpleNamespace()
-        with (
-            mock.patch.object(
-                dev.dev_patches, "cmd_fetch", return_value="fetch"
-            ) as fetch,
-            mock.patch.object(
-                dev.dev_doctor, "cmd_doctor", return_value="doctor"
-            ) as doctor,
-            mock.patch.object(
-                dev.dev_setup, "cmd_setup", return_value="setup"
-            ) as setup,
-            mock.patch.object(
-                dev.dev_build, "cmd_build_llvm", return_value="build"
-            ) as build,
-            mock.patch.object(
-                dev.dev_sources, "cmd_submodules", return_value="sources"
-            ) as sources,
-            mock.patch.object(
-                dev.dev_testing, "cmd_smoke", return_value="smoke"
-            ) as smoke,
-        ):
-            assert dev.cmd_fetch(args, {"hrx"}) == "fetch"
-            assert dev.cmd_doctor(args) == "doctor"
-            assert dev.cmd_setup(args) == "setup"
-            assert dev.cmd_build_llvm(args) == "build"
-            assert dev.cmd_submodules(args) == "sources"
-            assert dev.cmd_smoke(args) == "smoke"
-        fetch.assert_called_once_with(args, {"hrx"})
-        doctor.assert_called_once_with(args)
-        setup.assert_called_once_with(args)
-        build.assert_called_once_with(args)
-        sources.assert_called_once_with(args)
-        smoke.assert_called_once_with(args)
-
-    @pytest.mark.parametrize(
-        ("wrapper_name", "owner", "owner_name"),
-        [
-            (
-                "cmd_package_fastflowlm",
-                dev.fastflowlm_package,
-                "cmd_package_fastflowlm",
-            ),
-            (
-                "cmd_package_compiler_product",
-                dev.compiler_product,
-                "cmd_package_compiler_product",
-            ),
-            (
-                "cmd_verify_compiler_wheels",
-                dev.compiler_wheels,
-                "cmd_verify_compiler_wheels",
-            ),
-            (
-                "cmd_package_npu_prereqs",
-                dev.npu_prereqs,
-                "cmd_package_npu_prereqs",
-            ),
-            (
-                "cmd_package_npu_test_package",
-                dev.npu_test_package,
-                "cmd_package_npu_test_package",
-            ),
-        ],
-    )
-    def test_artifact_wrappers_delegate_to_product_owners(
-        self, wrapper_name, owner, owner_name
-    ):
-        args = SimpleNamespace()
-        with mock.patch.object(
-            owner, owner_name, return_value=wrapper_name
-        ) as operation:
-            assert getattr(dev, wrapper_name)(args) == wrapper_name
-        operation.assert_called_once_with(args)
-
-    def test_dispatch_returns_for_regular_commands(self):
-        handler = mock.Mock(return_value=7)
-        args = SimpleNamespace(cmd="setup", _handler=handler, _exit_on_return=False)
-        assert dev.dispatch(args) == 7
-        handler.assert_called_once_with(args)
-
-    def test_dispatch_preserves_exit_commands(self):
-        handler = mock.Mock(return_value=3)
-        args = SimpleNamespace(cmd="doctor", _handler=handler, _exit_on_return=True)
+    def test_dispatch_exit_contract(self):
+        regular = mock.Mock(return_value=7)
+        assert (
+            cli.dispatch(SimpleNamespace(_handler=regular, _exit_on_return=False)) == 7
+        )
+        exiting = mock.Mock(return_value=3)
         with pytest.raises(SystemExit) as raised:
-            dev.dispatch(args)
+            cli.dispatch(SimpleNamespace(_handler=exiting, _exit_on_return=True))
         assert raised.value.code == 3
 
-    def test_setup_parser_defaults_are_preserved(self):
-        with (
-            mock.patch.object(dev.sys, "argv", ["dev.py", "setup"]),
-            mock.patch.object(dev, "dispatch") as dispatch,
-        ):
-            dev.main()
-        args = dispatch.call_args.args[0]
-        assert args.cmd == "setup"
-        assert args.profile == "compiler-stack"
-        assert not args.iron_ops_tests
+    def test_parser_defaults_are_preserved(self):
+        parser = cli.create_parser()
+        setup = parser.parse_args(["setup"])
+        assert setup.profile == "compiler-stack"
+        assert not setup.iron_ops_tests
+        doctor = parser.parse_args(["doctor", "fastflowlm", "--deep"])
+        assert doctor.profile == "fastflowlm" and doctor.deep
+        fastflowlm = parser.parse_args(["test-fastflowlm"])
+        assert fastflowlm.inference_iterations == 1
+        package = parser.parse_args(["test-npu-package"])
+        assert package.lifecycle_rounds == 5 and package.resident_rounds == 10
 
-    def test_doctor_parser_accepts_deep_profile(self):
-        with (
-            mock.patch.object(
-                dev.sys,
-                "argv",
-                ["dev.py", "doctor", "fastflowlm", "--deep"],
-            ),
-            mock.patch.object(dev, "dispatch") as dispatch,
-        ):
-            dev.main()
-        args = dispatch.call_args.args[0]
-        assert args.profile == "fastflowlm"
-        assert args.deep
-
-    def test_artifact_defaults_come_from_owner_modules(self):
-        parser = dev.create_parser()
-        fastflowlm = parser.parse_args(["verify-fastflowlm-wheels"])
-        assert fastflowlm.dir == str(dev.fastflowlm_package.FASTFLOWLM_ARTIFACTS)
-        assert fastflowlm.venv == str(dev.fastflowlm_package.FASTFLOWLM_WHEEL_VENV)
-
-        compiler = parser.parse_args(["verify-compiler-wheels"])
-        assert compiler.dir == str(dev.compiler_wheels.COMPILER_WHEEL_ARTIFACTS)
-        assert compiler.venv == str(dev.compiler_wheels.COMPILER_WHEEL_VENV)
+    @pytest.mark.parametrize("value", ["0", "-1", "abc"])
+    def test_positive_integer_rejects_invalid_values(self, value):
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.argparse_positive_int(value)

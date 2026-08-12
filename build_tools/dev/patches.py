@@ -11,8 +11,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from build_tools.dev import paths
-from build_tools.dev.environment import sh, venv_py
+from build_tools import paths
+from build_tools.environment import sh, venv_py
 from build_tools.dev.profiles import PIN_SECTION_TO_SUBMODULE
 from build_tools.fastflowlm_artifact import git_source_state, sha256_file
 

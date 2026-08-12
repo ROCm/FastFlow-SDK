@@ -4,18 +4,21 @@
 
 Ownership is intentionally split by concern:
 
-* ``paths`` owns repository layout and host path conventions.
-* ``environment`` owns tool discovery and subprocess environments.
 * ``profiles`` owns declarative dependency-closure policy.
 * ``patches`` owns source pin, patch, and prefetch state.
 * ``doctor`` reports readiness without mutating the repository.
 * ``setup`` resolves and executes dependency setup plans.
-* ``build`` owns build output paths and CMake build orchestration.
+* ``cli`` owns parser construction, command registration, and dispatch.
+* ``build`` coordinates the build graph; ``compiler_build``, ``runtime_build``,
+  and ``fastflowlm_build`` own their build domains.
 * ``sources`` owns source checkout and submodule operations.
-* ``iron`` owns shared IRON targets and toolchain policy.
-* ``testing`` owns host and on-device test command orchestration.
+* ``host_testing`` and ``device_testing`` own their respective test commands.
 
-The root ``dev.py`` file owns only public CLI parsing and command dispatch.
+The root ``dev.py`` file is only an executable shim for ``dev.cli.main``.
+Shared repository paths and process/tool environments are foundations owned by
+``build_tools.paths`` and ``build_tools.environment``. Product-specific checks
+remain with their product owners.
+Shared IRON targets and toolchain policy live in ``build_tools.iron``.
 Artifact commands are delegated to product-specific owner modules alongside
 this package: ``build_tools.fastflowlm_package``,
 ``build_tools.compiler_product``, ``build_tools.compiler_wheels``,

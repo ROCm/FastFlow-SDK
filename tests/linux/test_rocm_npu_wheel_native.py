@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from build_tools import fastflowlm_package
-from build_tools.dev import paths
+from build_tools import paths
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_LINUX_WHEEL_TAG,

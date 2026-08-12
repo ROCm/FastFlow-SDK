@@ -4,7 +4,7 @@
 
 import sys
 
-from build_tools.dev import environment, paths
+from build_tools import environment, paths
 
 
 # Submodules with nested submodules of their own, and those a patch touches.

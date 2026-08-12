@@ -8,12 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from build_tools.dev import build, environment, paths
+from build_tools import environment, paths
 from build_tools.fastflowlm_artifact import (
     create_archive, extract_archive, sha256_file, stage_runtime_bundle,
     validate_directory_target, validate_source_policy,
     verify_fastflowlm_fresh_installs, verify_bundle,
 )
+from build_tools.fastflowlm_deps import require_fastflowlm_linux_packaging_tools
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_LINUX_WHEEL_TAG, FASTFLOWLM_DISTRIBUTION, LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION, auditwheel_policy, build_runtime_fastflowlm_wheels,
@@ -25,8 +26,8 @@ from build_tools.rocm_npu_wheel_common import default_package_version, verify_wh
 ROOT = paths.ROOT
 PROJ = paths.PROJ
 BUILD = paths.BUILD
-HRX_INSTALL = build.HRX_INSTALL
-FASTFLOWLM_INSTALL = build.FASTFLOWLM_INSTALL
+HRX_INSTALL = paths.HRX_INSTALL
+FASTFLOWLM_INSTALL = paths.FASTFLOWLM_INSTALL
 FASTFLOWLM_BUNDLE_STAGE = paths.BUILD / "FastFlowLM-bundle"
 FASTFLOWLM_ARTIFACTS = paths.BUILD / "artifacts"
 FASTFLOWLM_EXTRACTED = paths.BUILD / "FastFlowLM-extracted"
@@ -52,7 +53,7 @@ def _verify_fastflowlm_fresh_installs():
 
 def cmd_package_fastflowlm(args):
     """Create and independently re-extract the relocatable FLM + HRX runtime."""
-    environment.require_fastflowlm_linux_packaging_tools(archive=True)
+    require_fastflowlm_linux_packaging_tools(archive=True)
     _verify_fastflowlm_fresh_installs()
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
                                   FASTFLOWLM_BUNDLE_STAGE)
@@ -68,7 +69,7 @@ def cmd_package_fastflowlm_wheels(args):
     """Build split rocm-npu-runtime and rocm-npu-fastflowlm Linux wheels."""
     if IS_WINDOWS:
         sys.exit("rocm-npu runtime/FastFlowLM wheel packaging is Linux-only for now")
-    environment.require_fastflowlm_linux_packaging_tools()
+    require_fastflowlm_linux_packaging_tools()
     _verify_fastflowlm_fresh_installs()
     version = args.version or default_package_version(ROOT)
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,

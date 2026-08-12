@@ -12,8 +12,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from build_tools import hrx_runtime, npu_prereqs
-from build_tools.dev import iron, paths
+from build_tools import hrx_runtime, iron, npu_prereqs, npu_test_cases, paths
 from build_tools.fastflowlm_artifact import sha256_file
 
 
@@ -221,13 +220,6 @@ OUT = paths.OUT
 NPU_TEST_PACKAGE_STAGE = paths.BUILD / "npu-test-package"
 NPU_TEST_PACKAGE_EXTRACTED = paths.BUILD / "npu-test-package-extracted"
 IS_WINDOWS = paths.is_windows()
-def _npu_test_modules():
-    module_dir = ROOT / "tests" / "npu"
-    if str(module_dir) not in sys.path:
-        sys.path.insert(0, str(module_dir))
-    import hrx_api
-    import npu_cases
-    return hrx_api, npu_cases
 
 
 def _single_artifact(directory, pattern, description):
@@ -242,10 +234,9 @@ def _single_artifact(directory, pattern, description):
 
 def cmd_package_npu_test_package(args):
     """Build execute-only XADX kernels and deterministic numeric cases for NPU CI."""
-    hrx_api, test_cases = _npu_test_modules()
     libhrx_env = hrx_runtime.add_hrx_install_env(os.environ.copy())
-    serializer = hrx_api.HrxApi(
-        hrx_api.load_libhrx(libhrx_env, "nt" if IS_WINDOWS else "posix")
+    serializer = hrx_runtime.HrxApi(
+        hrx_runtime.load_libhrx(libhrx_env, "nt" if IS_WINDOWS else "posix")
     )
 
     if NPU_TEST_PACKAGE_STAGE.exists():
@@ -257,8 +248,7 @@ def cmd_package_npu_test_package(args):
     # from the matrix_scalar_add compiler/HAL contract gate run earlier.
     design = "vector_scalar_add"
     design_dir = PROJ / "iron-tools" / "programming_examples" / "basic" / design
-    run_e2e = iron.run_e2e_module()
-    artifacts = run_e2e.build_design(
+    artifacts = iron.build_design(
         design_dir, iron.NPU_TARGETS["npu2"]["device"], [], iron.iron_env()
     )
     iron.require_txn_devgen(artifacts.insts, "npu2")
@@ -267,7 +257,7 @@ def cmd_package_npu_test_package(args):
     cases.append(
         write_case(
             NPU_TEST_PACKAGE_STAGE,
-            test_cases.generate_case(design),
+            npu_test_cases.generate_case(design),
             serializer.serialize_xadx(
                 vector_xclbin, vector_transaction, "MLIR_AIE"
             ),
@@ -277,7 +267,7 @@ def cmd_package_npu_test_package(args):
     cases.append(
         write_case(
             NPU_TEST_PACKAGE_STAGE,
-            test_cases.generate_case("vector_scalar_add_chain4"),
+            npu_test_cases.generate_case("vector_scalar_add_chain4"),
             serializer.serialize_xadx(
                 vector_xclbin,
                 entry_name="MLIR_AIE",
@@ -292,8 +282,7 @@ def cmd_package_npu_test_package(args):
         )
     )
 
-    suite = iron.iron_ops_suite()
-    for operator in suite.OPERATORS:
+    for operator in iron.OPERATORS:
         build_dir = OUT / "iron-ops" / operator.name
         xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
         insts = _single_artifact(build_dir, "*.bin", "operator transaction")
@@ -301,7 +290,7 @@ def cmd_package_npu_test_package(args):
         cases.append(
             write_case(
                 NPU_TEST_PACKAGE_STAGE,
-                test_cases.generate_case(operator.name),
+                npu_test_cases.generate_case(operator.name),
                 serializer.serialize_xadx(
                     xclbin.read_bytes(), insts.read_bytes(), "MLIR_AIE"
                 ),
@@ -345,7 +334,7 @@ def _source_revision():
 
 def verify_npu_test_package(package):
     expected_cases = ["vector_scalar_add", "vector_scalar_add_chain4"] + [
-        operator.name for operator in iron.iron_ops_suite().OPERATORS
+        operator.name for operator in iron.OPERATORS
     ]
     return verify_tree(
         package, expected_cases, _source_revision(), platform.system().lower()

@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from build_tools.dev import environment
+from build_tools import environment, fastflowlm_deps
 from build_tools.fastflowlm_deps import (
     dependency_errors,
     dependency_policy,
@@ -98,7 +98,7 @@ class TestFastFlowLMDependencies:
             return f"/usr/bin/{name}" if name in available else None
 
         with (
-            mock.patch.object(environment.shutil, "which", side_effect=which),
+            mock.patch.object(fastflowlm_deps.shutil, "which", side_effect=which),
             mock.patch.object(
                 environment, "compilers", return_value=("gcc", "g++")
             ),
@@ -107,7 +107,7 @@ class TestFastFlowLMDependencies:
                 environment, "have_perl_module", return_value=True
             ),
         ):
-            ok, missing = environment.check_fastflowlm_linux_host(
+            ok, missing = fastflowlm_deps.check_fastflowlm_linux_host(
                 verbose=False
             )
 
@@ -116,7 +116,7 @@ class TestFastFlowLMDependencies:
 
         with (
             mock.patch.object(
-                environment.shutil,
+                fastflowlm_deps.shutil,
                 "which",
                 side_effect=lambda name: which(name) if name != "nasm" else None,
             ),
@@ -128,7 +128,7 @@ class TestFastFlowLMDependencies:
                 environment, "have_perl_module", return_value=True
             ),
         ):
-            ok, missing = environment.check_fastflowlm_linux_host(
+            ok, missing = fastflowlm_deps.check_fastflowlm_linux_host(
                 verbose=False
             )
 
@@ -136,13 +136,24 @@ class TestFastFlowLMDependencies:
         assert missing == ["nasm"]
 
     def test_fastflowlm_packaging_gate_reports_packaging_tools_only(self):
-        with mock.patch.object(environment.shutil, "which", return_value=None):
-            ok, missing = environment.check_fastflowlm_linux_packaging_tools(
+        with mock.patch.object(fastflowlm_deps.shutil, "which", return_value=None):
+            ok, missing = fastflowlm_deps.check_fastflowlm_linux_packaging_tools(
                 archive=True, verbose=False)
 
         assert not ok
         assert missing == ["patchelf", "zstd"]
         assert "nasm" not in missing
+
+    def test_packaging_requirement_is_skipped_on_windows(self):
+        with (
+            mock.patch.object(fastflowlm_deps.paths, "is_windows", return_value=True),
+            mock.patch.object(
+                fastflowlm_deps, "check_fastflowlm_linux_packaging_tools"
+            ) as check,
+        ):
+            fastflowlm_deps.require_fastflowlm_linux_packaging_tools(archive=True)
+
+        check.assert_not_called()
 
     def test_vcpkg_caches_are_saved_only_after_complete_setup(self):
         for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):

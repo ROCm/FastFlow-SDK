@@ -12,15 +12,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from build_tools import environment, paths
+from build_tools.dev import doctor
+from build_tools.dev import patches
+from build_tools.dev.profiles import profile
 from build_tools.fastflowlm_deps import (
+    check_fastflowlm_linux_host,
     dependency_paths as fastflowlm_dependency_paths,
     vcpkg_commit as fastflowlm_vcpkg_commit,
 )
-from build_tools.dev import doctor
-from build_tools.dev import environment
-from build_tools.dev import patches
-from build_tools.dev import paths
-from build_tools.dev.profiles import profile
 
 
 @dataclass(frozen=True)
@@ -104,7 +104,7 @@ def install_iron_ops(pip: list[str], with_tests: bool = False) -> None:
 def _install_fastflowlm_deps() -> None:
     """Installs the manifest-defined native dependencies into the managed cache."""
     if not paths.is_windows():
-        host_ok, missing = environment.check_fastflowlm_linux_host(verbose=False)
+        host_ok, missing = check_fastflowlm_linux_host(verbose=False)
         if not host_ok:
             sys.exit(
                 "FastFlowLM host build prerequisites are missing; install: "
