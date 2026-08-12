@@ -43,8 +43,6 @@ from the Peano wheel). Mirrors the command-router shape of hrx's dev.py.
                                      #   --device npu2|npu1   --chain (opt-in chained testbench)
   python dev.py test-fastflowlm       # pull qwen3:0.6b + run a 1k HRX benchmark
   python dev.py generate-fastflowlm-xadx # serialize qualification XADX (no flm build)
-  python dev.py package-fastflowlm-kernels # build checksummed production-xclbin helper
-  python dev.py test-fastflowlm-kernels # run Qwen3/LFM2 dequant+MM HRX stress
   python dev.py test-npu-iron-ops [OP] # ON-DEVICE e2e: an iron-ops operator, numerics checked (needs an NPU)
   python dev.py deps                  # print the dependency overview
 
@@ -57,7 +55,7 @@ import sys
 from build_tools import (
     compiler_product,
     compiler_wheels,
-    fastflowlm_kernel_tests,
+    fastflowlm_xadx_assets,
     fastflowlm_package,
     npu_prereqs,
     npu_test_package,
@@ -126,20 +124,8 @@ def cmd_test_fastflowlm(args):
     return dev_testing.cmd_test_fastflowlm(args)
 
 
-def cmd_package_fastflowlm_kernels(args):
-    return fastflowlm_kernel_tests.package_helper(args)
-
-
 def cmd_generate_fastflowlm_xadx(args):
-    return fastflowlm_kernel_tests.cmd_generate_xadx_assets(args)
-
-
-def cmd_verify_fastflowlm_kernels(args):
-    return fastflowlm_kernel_tests.verify_helper(args)
-
-
-def cmd_test_fastflowlm_kernels(args):
-    return fastflowlm_kernel_tests.run_helper(args)
+    return fastflowlm_xadx_assets.cmd_generate_xadx_assets(args)
 
 
 def cmd_test_iron_ops(args):
@@ -356,14 +342,6 @@ def create_parser():
         metavar="N",
         help="run N independent two-turn FLM inference processes before the benchmark",
     )
-    pfk = _add_command(
-        sub, "package-fastflowlm-kernels", cmd_package_fastflowlm_kernels
-    )
-    pfk.add_argument(
-        "--fresh",
-        action="store_true",
-        help="clear generated CMake state before building",
-    )
     gfx = _add_command(sub, "generate-fastflowlm-xadx", cmd_generate_fastflowlm_xadx)
     gfx.add_argument(
         "--fresh",
@@ -372,31 +350,8 @@ def create_parser():
     )
     gfx.add_argument(
         "--dir",
-        default=str(fastflowlm_kernel_tests.XADX_STAGE),
+        default=str(fastflowlm_xadx_assets.XADX_STAGE),
         help="generated XADX asset directory",
-    )
-    vfk = _add_command(sub, "verify-fastflowlm-kernels", cmd_verify_fastflowlm_kernels)
-    vfk.add_argument(
-        "--dir", default=".artifact", help="directory containing the helper archive"
-    )
-    tfk = _add_command(sub, "test-fastflowlm-kernels", cmd_test_fastflowlm_kernels)
-    tfk.add_argument("--dir", help="directory containing the helper archive")
-    tfk.add_argument(
-        "--wheel-package",
-        action="store_true",
-        help="use installed rocm-npu-runtime/fastflowlm wheels",
-    )
-    tfk.add_argument(
-        "--iterations",
-        type=argparse_positive_int,
-        default=20,
-        help="resident round-robin iterations (default: 20)",
-    )
-    tfk.add_argument(
-        "--readback-iterations",
-        type=argparse_positive_int,
-        default=32,
-        help="host-mapping coherence rounds (default: 32)",
     )
     to = _add_command(sub, "test-iron-ops", cmd_test_iron_ops)
     to.add_argument(

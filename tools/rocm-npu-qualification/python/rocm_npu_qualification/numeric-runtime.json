@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "requires_python": ">=3.11,<3.15",
+  "python_abis": ["cp311", "cp312", "cp313", "cp314"],
+  "packages": {
+    "ml-dtypes": "0.5.4",
+    "numpy": "2.4.6"
+  }
+}

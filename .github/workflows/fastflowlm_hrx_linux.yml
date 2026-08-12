@@ -163,8 +163,8 @@ jobs:
       - name: Build FastFlowLM
         run: .venv/bin/python dev.py build fastflowlm --fresh
 
-      - name: Package FastFlowLM production-xclbin smoke helper
-        run: .venv/bin/python dev.py package-fastflowlm-kernels --fresh
+      - name: Generate attested FastFlowLM kernel recipe assets
+        run: .venv/bin/python dev.py generate-fastflowlm-xadx --fresh
 
       - name: Build local qualification wheel with generated XADX assets
         run: >-
@@ -213,15 +213,6 @@ jobs:
           path: |
             build/artifacts/rocm_npu_runtime-*.whl*
             build/artifacts/rocm_npu_fastflowlm-*.whl*
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-
-      - name: Upload FastFlowLM production-xclbin smoke helper
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: fastflowlm-kernel-smoke-linux-x86_64
-          path: build/artifacts/fastflowlm-kernel-smoke/fastflowlm-kernel-smoke.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -280,14 +271,6 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
-      - name: Download FastFlowLM production-xclbin smoke helper
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: fastflowlm-kernel-smoke-linux-x86_64
-          path: .kernel-artifact
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-
       - name: Download qualification plugin wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -299,19 +282,17 @@ jobs:
       - name: Install and verify rocm-npu runtime wheels
         run: python3 dev.py verify-fastflowlm-wheels --dir .artifact
 
-      - name: Install qualification plugin wheel
+      - name: Install qualification plugin wheel and numeric runtime
         run: |
           build/rocm-npu-wheel-venv/bin/python -m pip install \
-            --no-index --no-deps .qualification-artifact/rocm_npu_qualification-*.whl
+            --disable-pip-version-check --only-binary=:all: \
+            .qualification-artifact/rocm_npu_qualification-*.whl
           build/rocm-npu-wheel-venv/bin/python -m pip check
           build/rocm-npu-wheel-venv/bin/rocm-npu plugin list --json
           build/rocm-npu-wheel-venv/bin/rocm-npu qualify --list-profiles --json
 
       - name: Probe NPU driver, firmware, and packaged libHRX
         run: build/rocm-npu-wheel-venv/bin/python dev.py npu-probe --runtime-package
-
-      - name: Run FastFlowLM production-xclbin and host-readback HRX smoke
-        run: build/rocm-npu-wheel-venv/bin/python dev.py test-fastflowlm-kernels --wheel-package --dir .kernel-artifact --iterations 20 --readback-iterations 32
 
       - name: Run native runtime diagnostics and self-test
         run: >-
@@ -345,7 +326,7 @@ jobs:
             "${cli}" self-test --json > .native-reports/archive-self-test.json
           fi
 
-      - name: Run bounded model qualification through native dispatch
+      - name: Run bounded kernel and model qualification through native dispatch
         run: >-
           build/rocm-npu-wheel-venv/bin/rocm-npu qualify run
           --fast

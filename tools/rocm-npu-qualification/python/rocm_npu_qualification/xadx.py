@@ -3,59 +3,81 @@
 
 """Compiler-free FastFlowLM XADX qualification runner.
 
-Only the Python standard library and the public HRX C ABI are used here.  The
-asset producer is deliberately separate: installed qualification wheels never
-need FastFlowLM, NumPy, or a compiler.
+This module itself needs only the standard library and the public HRX C ABI, but
+that is a property of the dispatch code rather than a constraint on the package:
+buffers and oracles are computed with NumPy, which a qualification install
+carries. What an install genuinely never needs is FastFlowLM or a compiler, so
+the asset producer stays separate from the runner.
 """
 
 from __future__ import annotations
 
+import builtins
 import ctypes
 import hashlib
-import importlib.util
+import importlib.metadata
 import json
 import math
 import os
 import re
-import struct
-from pathlib import Path
+import time
+from pathlib import Path, PurePosixPath
 
 from .contracts import (
-    XADX_LIFECYCLE_ROUNDS,
-    XADX_READBACK_ROUNDS,
-    XADX_RESIDENT_ROUNDS,
+    KERNEL_RECIPE_SCHEMA_VERSION,
+    XADX_REPORT_SCHEMA_VERSION,
+    XADX_ROUNDS,
 )
+from .numeric_runtime import NUMERIC_DISTRIBUTIONS
+from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
 
 _Handle = ctypes.c_void_p
 _Status = ctypes.c_void_p
-XADX_MANIFEST_SCHEMA_VERSION = 1
 _FORMAT = b"amdxdna-xclbin-fb"
 _MEMORY_TYPE = 0x00000046 | 0x00000010
+
+
+def _numeric_runtime():
+    return {
+        distribution: importlib.metadata.version(distribution)
+        for distribution in NUMERIC_DISTRIBUTIONS
+    }
+
+
+def validate_xadx_report(report):
+    """Validate a raw XADX report against its packaged wire contract."""
+    try:
+        validate_schema(report, load_packaged_schema("xadx-report-v1.schema.json"))
+    except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
+        raise XadxError(f"XADX report does not satisfy the v1 schema: {error}") from error
+    if report.get("schema_version") != XADX_REPORT_SCHEMA_VERSION:
+        raise XadxError("XADX report schema version is invalid")
+    return report
 _BUFFER_USAGE = 0x00000C03 | 0x02000000
 _MAPPING_MODE = 0x00000002
 _ARCHITECTURE_PROPERTY = 1
+_GUARD_BYTES = 4096
+_GUARD_VALUE = 0xA5
+_MAX_BUFFER_BYTES = 16 * 1024 * 1024
+_MAX_MATERIALIZED_BYTES = 128 * 1024 * 1024
+_MAX_RESIDENT_BYTES = 256 * 1024 * 1024
+np = None
+ml_dtypes = None
 
 
 class XadxError(RuntimeError):
     pass
 
 
-def _generator_module():
-    try:
-        from . import xadx_generators
+def _ensure_numeric_runtime():
+    global np, ml_dtypes
+    if np is None:
+        import importlib
 
-        return xadx_generators
-    except ImportError:
-        path = Path(__file__).with_name("xadx_generators.py")
-        spec = importlib.util.spec_from_file_location(
-            "rocm_npu_qualification_xadx_generators", path
-        )
-        if spec is None or spec.loader is None:
-            raise XadxError(f"cannot load XADX generators from {path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        np = importlib.import_module("numpy")
+        ml_dtypes = importlib.import_module("ml_dtypes")
+    return np, ml_dtypes
 
 
 class _DispatchConfig(ctypes.Structure):
@@ -72,6 +94,22 @@ class _BufferRef(ctypes.Structure):
         ("offset", ctypes.c_size_t),
         ("length", ctypes.c_size_t),
     ]
+
+
+class _GuardedBuffer:
+    """A device binding into the guarded middle of a larger allocation."""
+
+    def __init__(self, handle, storage, backing, offset):
+        self.handle = handle
+        self.storage = storage
+        self.backing = backing
+        self.offset = offset
+
+    def __iter__(self):
+        return iter((self.handle, self.storage))
+
+    def __getitem__(self, index):
+        return (self.handle, self.storage)[index]
 
 
 def _bind(library, name, result, arguments):
@@ -272,40 +310,78 @@ class _Runtime:
             "hrx_executable_load_data",
         )
         ordinal = ctypes.c_uint32()
-        self._check(
-            self._lookup(handle, export.encode(), ctypes.byref(ordinal)),
-            "export lookup",
-        )
+        try:
+            self._check(
+                self._lookup(handle, export.encode(), ctypes.byref(ordinal)),
+                "export lookup",
+            )
+        except Exception:
+            self._executable_release(handle)
+            raise
         self.resources.append(("executable", handle, storage))
         return handle, ordinal.value
 
     def allocate(self, data):
         size = len(data)
+        allocation_size = size + 2 * _GUARD_BYTES
         handle = _Handle()
         self._check(
             self._allocate(
-                self.stream, size, _MEMORY_TYPE, _BUFFER_USAGE, ctypes.byref(handle)
+                self.stream,
+                allocation_size,
+                _MEMORY_TYPE,
+                _BUFFER_USAGE,
+                ctypes.byref(handle),
             ),
             "hrx_buffer_allocate",
         )
         pointer = ctypes.c_void_p()
+        mapped = False
         try:
             self._check(
-                self._map(handle, _MAPPING_MODE, 3, 0, size, ctypes.byref(pointer)),
+                self._map(
+                    handle,
+                    _MAPPING_MODE,
+                    3,
+                    0,
+                    allocation_size,
+                    ctypes.byref(pointer),
+                ),
                 "hrx_buffer_map_with_mode",
             )
+            mapped = True
+            backing = (ctypes.c_uint8 * allocation_size).from_address(pointer.value)
+            backing[:] = bytes([_GUARD_VALUE]) * allocation_size
+            storage = memoryview(backing).cast("B")[
+                _GUARD_BYTES : _GUARD_BYTES + size
+            ]
+            storage[:] = data
+            self._check(
+                self._flush(handle, 0, allocation_size),
+                "hrx_buffer_flush_range",
+            )
         except Exception:
+            if mapped:
+                status = self._unmap(handle)
+                if status:
+                    self._status_ignore(status)
             self._buffer_release(handle)
             raise
-        storage = (ctypes.c_uint8 * size).from_address(pointer.value)
-        storage[:] = data
-        self._check(self._flush(handle, 0, size), "hrx_buffer_flush_range")
-        self.resources.append(("buffer", handle, storage))
-        return handle, storage
+        self.resources.append(("buffer", handle, backing))
+        return _GuardedBuffer(handle, storage, backing, _GUARD_BYTES)
 
     def run(self, executable, ordinal, buffers):
         refs = (_BufferRef * len(buffers))(
-            *(_BufferRef(handle, 0, len(storage)) for handle, storage in buffers)
+            *(
+                _BufferRef(
+                    allocation.handle,
+                    allocation.offset,
+                    len(allocation.storage),
+                )
+                if isinstance(allocation, _GuardedBuffer)
+                else _BufferRef(allocation[0], 0, len(allocation[1]))
+                for allocation in buffers
+            )
         )
         config = _DispatchConfig((1, 1, 1), (1, 1, 1), 0)
         self._check(
@@ -326,10 +402,60 @@ class _Runtime:
 
     def read(self, buffer):
         handle, storage = buffer
+        offset = buffer.offset if isinstance(buffer, _GuardedBuffer) else 0
         self._check(
-            self._invalidate(handle, 0, len(storage)), "hrx_buffer_invalidate_range"
+            self._invalidate(handle, offset, len(storage)),
+            "hrx_buffer_invalidate_range",
         )
         return bytes(storage)
+
+    def inspect(self, buffer):
+        if not isinstance(buffer, _GuardedBuffer):
+            return b"", self.read(buffer), b""
+        self._check(
+            self._invalidate(buffer.handle, 0, len(buffer.backing)),
+            "hrx_buffer_invalidate_range",
+        )
+        end = buffer.offset + len(buffer.storage)
+        return (
+            bytes(buffer.backing[: buffer.offset]),
+            bytes(buffer.storage),
+            bytes(buffer.backing[end:]),
+        )
+
+    def inspect_guards(self, buffer):
+        """Inspect only guard ranges, without invalidating the payload."""
+        if not isinstance(buffer, _GuardedBuffer):
+            return b"", b""
+        if buffer.offset:
+            self._check(
+                self._invalidate(buffer.handle, 0, buffer.offset),
+                "hrx_buffer_invalidate_range",
+            )
+        end = buffer.offset + len(buffer.storage)
+        suffix_size = len(buffer.backing) - end
+        if suffix_size:
+            self._check(
+                self._invalidate(buffer.handle, end, suffix_size),
+                "hrx_buffer_invalidate_range",
+            )
+        return bytes(buffer.backing[: buffer.offset]), bytes(buffer.backing[end:])
+
+    def rollback(self, mark):
+        """Release resources allocated after a failed preparation checkpoint."""
+        cleanup_error = None
+        for kind, handle, _ in reversed(self.resources[mark:]):
+            if kind == "buffer":
+                try:
+                    self._check(self._unmap(handle), "hrx_buffer_unmap")
+                except Exception as error:
+                    cleanup_error = cleanup_error or error
+                self._buffer_release(handle)
+            else:
+                self._executable_release(handle)
+        del self.resources[mark:]
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def close(self):
         for kind, handle, _ in reversed(self.resources):
@@ -348,248 +474,1017 @@ class _Runtime:
         self._check(self._shutdown(), "hrx_gpu_shutdown")
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def verify_package(root):
-    root = Path(root)
-    manifest = json.loads((root / "manifest.json").read_text("utf-8"))
-    if (
-        manifest.get("schema_version") != XADX_MANIFEST_SCHEMA_VERSION
-        or manifest.get("product") != "rocm-npu-fastflowlm-xadx"
-        or manifest.get("target") != "npu2"
-    ):
-        raise XadxError("unsupported FastFlowLM XADX package manifest")
-    inventory = manifest.get("files")
-    if not isinstance(inventory, list):
-        raise XadxError("XADX manifest has no file inventory")
-    expected = {item["path"]: item for item in inventory}
-    actual = {
-        path.relative_to(root).as_posix(): path
-        for path in root.rglob("*")
-        if path.is_file() and path.name != "manifest.json"
-    }
-    if set(expected) != set(actual):
-        raise XadxError("XADX package inventory mismatch")
-    for relative, path in actual.items():
-        record = expected[relative]
-        if path.stat().st_size != record["size"] or _sha256(path) != record["sha256"]:
-            raise XadxError(f"XADX package corruption: {relative}")
-    return manifest
-
-
-def _bf16(bits):
-    return struct.unpack("<f", struct.pack("<I", bits << 16))[0]
-
-
 def _compare(actual, expected, comparison, atol, rtol):
+    return _compare_details(actual, expected, comparison, atol, rtol)["failure"]
+
+
+def _compare_details(actual, expected, comparison, atol, rtol):
     if len(actual) != len(expected):
-        return f"size mismatch: {len(actual)} != {len(expected)}"
+        return {
+            "failure": f"size mismatch: {len(actual)} != {len(expected)}",
+            "mismatch_count": abs(len(actual) - len(expected)) or 1,
+            "first_mismatch": {
+                "kind": "size",
+                "actual": len(actual),
+                "expected": len(expected),
+            },
+        }
     if comparison == "exact":
         if actual == expected:
-            return None
-        return f"exact mismatch at byte {next(i for i, pair in enumerate(zip(actual, expected)) if pair[0] != pair[1])}"
+            return {"failure": None, "mismatch_count": 0, "first_mismatch": None}
+        np, _ = _ensure_numeric_runtime()
+        mismatch = np.frombuffer(actual, dtype=np.uint8) != np.frombuffer(
+            expected, dtype=np.uint8
+        )
+        mismatch_count = int(np.count_nonzero(mismatch))
+        first = int(np.argmax(mismatch))
+        return {
+            "failure": f"exact mismatch at byte {first}",
+            "mismatch_count": mismatch_count,
+            "first_mismatch": {
+                "kind": "byte",
+                "index": first,
+                "actual": actual[first],
+                "expected": expected[first],
+            },
+        }
     if comparison != "bf16-tolerance" or len(actual) % 2:
         raise XadxError(f"unsupported comparison contract: {comparison}")
-    mismatches = 0
-    first = None
-    for index, (left, right) in enumerate(
-        zip(struct.iter_unpack("<H", actual), struct.iter_unpack("<H", expected))
-    ):
-        got, wanted = _bf16(left[0]), _bf16(right[0])
-        if not math.isfinite(got) or abs(got - wanted) > atol + rtol * abs(wanted):
-            mismatches += 1
-            first = first or (index, got, wanted)
-    return None if not mismatches else f"{mismatches} BF16 mismatches; first {first}"
+    np, ml_dtypes = _ensure_numeric_runtime()
+    got = np.frombuffer(actual, dtype="<u2").view(ml_dtypes.bfloat16).astype(np.float32)
+    wanted = (
+        np.frombuffer(expected, dtype="<u2")
+        .view(ml_dtypes.bfloat16)
+        .astype(np.float32)
+    )
+    # isclose handles infinities by exact signed equality. Equal NaNs are
+    # accepted because an expected NaN is a bit-level statement that the result
+    # is also undefined; a finite result may never pass against NaN or infinity.
+    close = np.isclose(got, wanted, atol=atol, rtol=rtol, equal_nan=True)
+    mismatch_indices = np.flatnonzero(~close)
+    if not mismatch_indices.size:
+        return {"failure": None, "mismatch_count": 0, "first_mismatch": None}
+    first = int(mismatch_indices[0])
+    actual_value = float(got[first])
+    expected_value = float(wanted[first])
+    return {
+        "failure": (
+            f"{mismatch_indices.size} BF16 mismatches; first "
+            f"({first}, {actual_value}, {expected_value})"
+        ),
+        "mismatch_count": int(mismatch_indices.size),
+        "first_mismatch": {
+            "kind": "bf16",
+            "index": first,
+            "actual": actual_value if np.isfinite(actual_value) else str(actual_value),
+            "expected": (
+                expected_value if np.isfinite(expected_value) else str(expected_value)
+            ),
+        },
+    }
 
 
-def run_package(
+class _Session:
+    """Holds the runtime so a lifecycle round can replace a leaking one.
+
+    A case that leaves a resource behind must not carry that state into the next
+    round, and the only reliable way to drop it is to close the runtime and open
+    a fresh one. Callers reach the current runtime through this rather than
+    capturing it, so the replacement is visible to them.
+    """
+
+    def __init__(self, factory):
+        self.factory = factory
+        self.runtime = factory()
+
+    def reset(self):
+        self.runtime.close()
+        self.runtime = self.factory()
+
+    def close(self):
+        self.runtime.close()
+
+
+def _run_rounds(
+    session,
+    cases,
+    *,
+    prepare,
+    dispatch,
+    readback,
+    lifecycle_rounds,
+    resident_rounds,
+    readback_rounds,
+):
+    """Drive the lifecycle, resident, and readback rounds over a set of cases.
+
+    This is the qualification contract rather than a detail of any one case
+    format, so it is shared: a kernel is torn down and rebuilt, then held
+    resident, then has an input rewritten underneath it between dispatches.
+
+    `readback` returns None for a case with nothing to read back, or a callable
+    taking the prepared case and the round index.
+
+    Returns the failures and how many readback rounds each case actually
+    received, so nothing downstream has to infer that from a case name.
+    """
+    failures = []
+
+    def record(case, phase, round_number, message):
+        failures.append(
+            {
+                "case": case["name"],
+                "phase": phase,
+                "round": round_number,
+                "message": str(message),
+            }
+        )
+
+    for round_index in range(lifecycle_rounds):
+        for case in cases:
+            mark = len(session.runtime.resources)
+            try:
+                failure = dispatch(case, prepare(case))
+                if failure:
+                    record(case, "lifecycle", round_index + 1, failure)
+            except Exception as error:
+                record(case, "lifecycle", round_index + 1, error)
+            finally:
+                if len(session.runtime.resources) != mark:
+                    session.reset()
+
+    # Keep the full case inventory loaded together. Besides testing repeated
+    # dispatch through one executable, preserving executable and device-buffer
+    # residency pressure across the declared case inventory.
+    resident = []
+    for case in cases:
+        mark = len(session.runtime.resources)
+        try:
+            resident.append((case, prepare(case), readback(case)))
+        except Exception as error:
+            record(case, "resident-preparation", None, error)
+            if hasattr(session.runtime, "rollback"):
+                session.runtime.rollback(mark)
+            else:
+                del session.runtime.resources[mark:]
+    for round_index in range(resident_rounds):
+        for case, prepared, _ in resident:
+            try:
+                failure = dispatch(case, prepared)
+                if failure:
+                    record(case, "resident", round_index + 1, failure)
+            except Exception as error:
+                record(case, "resident", round_index + 1, error)
+
+    coherence = [
+        (case, prepared, revisit)
+        for case, prepared, revisit in resident
+        if revisit is not None
+    ]
+    visits = {case["name"]: 0 for case, _, _ in coherence}
+    for round_index in range(readback_rounds):
+        for case, prepared, revisit in coherence:
+            visits[case["name"]] += 1
+            try:
+                failure = revisit(prepared, round_index)
+                if failure:
+                    record(case, "readback", round_index + 1, failure)
+            except Exception as error:
+                record(case, "readback", round_index + 1, error)
+    return failures, visits
+
+
+def _expected_size(case):
+    """Size of the buffer a case is judged on, which the last expectation names."""
+    for stage in reversed(case["stages"]):
+        for record in reversed(stage["buffers"]):
+            if record["direction"] == "output" and "expected" in record:
+                return record["size"]
+    raise XadxError(f"{case['name']} declares no expectation")
+
+
+def _materialize_recipe_buffers(cases, generators):
+    """Bound all unique bytes before allocating any generator output."""
+    planned = {}
+    resident_bytes = 0
+
+    def plan(specification, expected_size):
+        if not 1 <= expected_size <= _MAX_BUFFER_BYTES:
+            raise XadxError(
+                f"recipe buffer size {expected_size} exceeds the 16 MiB limit"
+            )
+        try:
+            predicted = (
+                generators.predicted_size(
+                    specification["id"], specification["parameters"]
+                )
+                if hasattr(generators, "predicted_size")
+                else expected_size
+            )
+        except (TypeError, ValueError, KeyError) as error:
+            raise XadxError(f"invalid recipe generator parameters: {error}") from error
+        if predicted != expected_size:
+            raise XadxError(
+                f"recipe generator predicts {predicted} bytes, not {expected_size}"
+            )
+        key = json.dumps(specification, sort_keys=True, separators=(",", ":"))
+        previous = planned.setdefault(key, (specification, predicted))
+        if previous[1] != predicted:
+            raise XadxError("recipe reuses a generator at conflicting sizes")
+
+    for case in cases:
+        buffers = {
+            (stage["name"], record["name"]): record
+            for stage in case["stages"]
+            for record in stage["buffers"]
+        }
+        for stage in case["stages"]:
+            for record in stage["buffers"]:
+                if "stage_output" not in record.get("source", {}):
+                    resident_bytes += record["size"] + 2 * _GUARD_BYTES
+                for specification in (
+                    record.get("source"),
+                    record.get("expected"),
+                    record.get("preserved"),
+                ):
+                    if specification and "stage_output" not in specification:
+                        plan(specification, record["size"])
+        for variant in case.get("readback_variants", ()):
+            plan(
+                variant["source"],
+                buffers[(variant["stage"], variant["buffer"])]["size"],
+            )
+            plan(variant["expected"], _expected_size(case))
+
+    materialized_bytes = sum(size for _, size in planned.values())
+    if materialized_bytes > _MAX_MATERIALIZED_BYTES:
+        raise XadxError("recipe exceeds the 128 MiB materialization limit")
+    if resident_bytes > _MAX_RESIDENT_BYTES:
+        raise XadxError("recipe exceeds the 256 MiB resident allocation limit")
+
+    result = {}
+    for key, (specification, expected_size) in planned.items():
+        try:
+            data = generators.materialize(
+                specification["id"], specification["parameters"]
+            )
+        except (OSError, ValueError, KeyError) as error:
+            raise XadxError(f"cannot materialize recipe buffer: {error}") from error
+        if len(data) != expected_size:
+            raise XadxError(
+                f"recipe buffer size mismatch: {len(data)} != {expected_size}"
+            )
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != specification["sha256"]:
+            raise XadxError(
+                f"recipe generator {specification['id']} produced {digest}; "
+                f"expected {specification['sha256']}"
+            )
+        result[key] = (
+            data,
+            {
+                "source": specification,
+                "size": len(data),
+                "sha256": digest,
+                "contract_sha256": hashlib.sha256(key.encode()).hexdigest(),
+            },
+        )
+    return result
+
+
+def _architecture_verdict(architecture, target_family):
+    """Whether an observed architecture may run NPU2 assets.
+
+    HRX does not distinguish the silicon: on NPU2 parts it reports "amdxdna" for
+    both the device name and the architecture, and offers no compute-unit, PCI, or
+    clock property to corroborate it. The part is identified upstream instead, by
+    the native probe reading the PCI device ID, so accepting the driver's generic
+    name requires the probe to have named the family first.
+    """
+    tokens = {
+        token for token in re.split(r"[^a-z0-9]+", architecture.casefold()) if token
+    }
+    return bool(tokens.intersection({"npu2", "xdna2"})) or (
+        target_family == "npu2" and bool(tokens.intersection({"amdxdna"}))
+    )
+
+
+def _executable_identities(implementations):
+    identities = []
+    for id, entry in implementations.items():
+        for execution, executable in [
+            (None, entry),
+            *[
+                (variant["id"], variant)
+                for variant in entry.get("execution_variants", ())
+            ],
+        ]:
+            identities.append(
+                {
+                    "id": id,
+                    **({} if execution is None else {"execution": execution}),
+                    "xclbin_path": entry["xclbin_path"],
+                    "xclbin_sha256": entry["xclbin_sha256"],
+                    "xadx": executable["xadx"],
+                    "xadx_sha256": executable["xadx_sha256"],
+                    "transaction": executable["transaction"],
+                    "transaction_sha256": executable["transaction_sha256"],
+                }
+            )
+    return sorted(identities, key=lambda item: (item["id"], item.get("execution", "")))
+
+
+def _unsupported_report(recipe, recipe_bytes, cases, executables, architecture, reason):
+    return validate_xadx_report(
+        {
+            "schema_version": XADX_REPORT_SCHEMA_VERSION,
+            "report_kind": "execution",
+            "status": "unsupported",
+            "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
+            "generator_version": recipe["generator_version"],
+            "executables": executables,
+            "reason": reason,
+            "architecture": architecture,
+            "case_names": [case["name"] for case in cases],
+            "case_results": [
+                {
+                    "name": case["name"],
+                    "status": "unsupported",
+                    "dispatches": 0,
+                    "readbacks": 0,
+                    "validated_bytes": 0,
+                    "duration_seconds": 0.0,
+                    "mismatch_count": 0,
+                    "first_mismatch": None,
+                    "failures": [],
+                }
+                for case in cases
+            ],
+            "failures": [],
+        }
+    )
+
+
+def _validate_recipe(recipe):
+    """Rejects ambiguous or unsafe recipes before opening the device."""
+    try:
+        validate_schema(
+            recipe, load_packaged_schema("kernel-recipe-v1.schema.json")
+        )
+    except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
+        raise XadxError(
+            f"kernel recipe does not satisfy the v1 schema: {error}"
+        ) from error
+    entries = recipe["implementations"]
+    cases = recipe["cases"]
+    implementations = {}
+    for entry in entries:
+        id = entry.get("id")
+        if not isinstance(id, str) or id in implementations:
+            raise XadxError("kernel recipe implementation IDs are invalid")
+        xadx_path = entry.get("xadx")
+        parsed = PurePosixPath(xadx_path) if isinstance(xadx_path, str) else None
+        xclbin_path = entry.get("xclbin_path")
+        parsed_xclbin = (
+            PurePosixPath(xclbin_path) if isinstance(xclbin_path, str) else None
+        )
+        transaction_path = entry.get("transaction")
+        parsed_transaction = (
+            PurePosixPath(transaction_path)
+            if isinstance(transaction_path, str)
+            else None
+        )
+        if (
+            parsed is None
+            or parsed.is_absolute()
+            or ".." in parsed.parts
+            or "\\" in xadx_path
+            or parsed.suffix != ".xadx"
+        ):
+            raise XadxError(f"implementation {id} has an unsafe XADX path")
+        if (
+            parsed_xclbin is None
+            or parsed_xclbin.is_absolute()
+            or ".." in parsed_xclbin.parts
+            or "\\" in xclbin_path
+            or parsed_xclbin.suffix != ".xclbin"
+        ):
+            raise XadxError(f"implementation {id} has an unsafe source xclbin path")
+        if (
+            parsed_transaction is None
+            or parsed_transaction.is_absolute()
+            or ".." in parsed_transaction.parts
+            or "\\" in transaction_path
+            or parsed_transaction.suffix != ".bin"
+        ):
+            raise XadxError(f"implementation {id} has an unsafe transaction path")
+        for field in (
+            "xclbin_sha256",
+            "transaction_sha256",
+            "xadx_sha256",
+        ):
+            value = entry.get(field)
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise XadxError(f"implementation {id} has an invalid {field}")
+        expected_id = f"{entry.get('kernel')}-{entry['xclbin_sha256'][:16]}"
+        if id != expected_id:
+            raise XadxError(
+                f"implementation {id} does not match source identity {expected_id}"
+            )
+        variants = entry.get("execution_variants", [])
+        variant_ids = set()
+        if not isinstance(variants, list) or len(variants) > 8:
+            raise XadxError(f"implementation {id} has invalid execution variants")
+        for variant in variants:
+            variant_id = variant.get("id")
+            if (
+                not isinstance(variant_id, str)
+                or not variant_id
+                or variant_id in variant_ids
+            ):
+                raise XadxError(
+                    f"implementation {id} has invalid execution variant IDs"
+                )
+            variant_ids.add(variant_id)
+            shape = variant.get("shape")
+            if (
+                not isinstance(shape, dict)
+                or set(shape) != {"m", "k", "n"}
+                or any(
+                    not isinstance(value, int) or not 0 < value <= 4096
+                    for value in shape.values()
+                )
+            ):
+                raise XadxError(
+                    f"implementation {id}/{variant_id} has invalid shape"
+                )
+            for path_field, suffix in (("xadx", ".xadx"), ("transaction", ".bin")):
+                value = variant.get(path_field)
+                parsed_variant = (
+                    PurePosixPath(value) if isinstance(value, str) else None
+                )
+                if (
+                    parsed_variant is None
+                    or parsed_variant.is_absolute()
+                    or ".." in parsed_variant.parts
+                    or "\\" in value
+                    or parsed_variant.suffix != suffix
+                ):
+                    raise XadxError(
+                        f"implementation {id}/{variant_id} has unsafe {path_field}"
+                    )
+            for field in ("transaction_sha256", "xadx_sha256"):
+                value = variant.get(field)
+                if (
+                    not isinstance(value, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                ):
+                    raise XadxError(
+                        f"implementation {id}/{variant_id} has invalid {field}"
+                    )
+        implementations[id] = entry
+    case_names = set()
+    for case in cases:
+        name = case.get("name")
+        if not isinstance(name, str) or not name or name in case_names:
+            raise XadxError("kernel recipe case names are invalid")
+        case_names.add(name)
+        stages = case.get("stages")
+        if not isinstance(stages, list) or not stages or len(stages) > 8:
+            raise XadxError(f"{name} has an invalid stage inventory")
+        staged = {}
+        expected_count = 0
+        stage_names = set()
+        for stage in stages:
+            implementation = stage.get("implementation")
+            if implementation not in implementations:
+                raise XadxError(
+                    f"{name} dispatches {implementation}, "
+                    "which the recipe does not describe"
+                )
+            execution = stage.get("execution")
+            if execution is not None and execution not in {
+                variant["id"]
+                for variant in implementations[implementation].get(
+                    "execution_variants", ()
+                )
+            }:
+                raise XadxError(
+                    f"{name} dispatches unknown execution variant "
+                    f"{implementation}/{execution}"
+                )
+            stage_name = stage.get("name")
+            if (
+                not isinstance(stage_name, str)
+                or not stage_name
+                or stage_name in stage_names
+            ):
+                raise XadxError(f"{name} has duplicate stage name {stage_name!r}")
+            stage_names.add(stage_name)
+            buffers = stage.get("buffers")
+            if not isinstance(buffers, list) or not buffers or len(buffers) > 16:
+                raise XadxError(f"{name}/{stage_name} has invalid buffers")
+            local_names = set()
+            for buffer in buffers:
+                buffer_name = buffer.get("name")
+                if (
+                    not isinstance(buffer_name, str)
+                    or not buffer_name
+                    or buffer_name in local_names
+                ):
+                    raise XadxError(
+                        f"{name}/{stage_name} has duplicate or invalid buffer names"
+                    )
+                local_names.add(buffer_name)
+                size = buffer.get("size")
+                if not isinstance(size, int) or not 0 < size <= _MAX_BUFFER_BYTES:
+                    raise XadxError(
+                        f"{name}/{stage_name}.{buffer_name} has invalid size"
+                    )
+                direction = buffer.get("direction")
+                source = buffer.get("source")
+                expected = buffer.get("expected")
+                preserved = buffer.get("preserved")
+                comparison = buffer.get("comparison")
+                if direction == "input" and source is None:
+                    raise XadxError(
+                        f"{name}/{stage_name}.{buffer_name} has no source"
+                    )
+                if direction == "output":
+                    if source is not None:
+                        raise XadxError(
+                            f"{name}/{stage_name}.{buffer_name} output has a source"
+                        )
+                    staged[f"{stage_name}.{buffer_name}"] = {
+                        "size": size,
+                        "preserved": preserved,
+                    }
+                elif direction != "input":
+                    raise XadxError(
+                        f"{name}/{stage_name}.{buffer_name} has invalid direction"
+                    )
+                if isinstance(source, dict) and "stage_output" in source:
+                    alias = source["stage_output"]
+                    if alias not in staged:
+                        raise XadxError(
+                            f"{name} binds {alias}, which no earlier stage wrote"
+                        )
+                    if staged[alias]["size"] != size:
+                        raise XadxError(
+                            f"{name} binds {alias} at {staged[alias]['size']} B into a "
+                            f"{size} B role"
+                        )
+                    if staged[alias]["preserved"] is None:
+                        raise XadxError(
+                            f"{name} binds {alias} without a preserved-output oracle"
+                        )
+                if expected is not None:
+                    expected_count += 1
+                    if direction != "output" or not isinstance(comparison, dict):
+                        raise XadxError(
+                            f"{name}/{stage_name}.{buffer_name} has an invalid "
+                            "expectation"
+                        )
+                elif comparison is not None:
+                    raise XadxError(
+                        f"{name}/{stage_name}.{buffer_name} compares no expectation"
+                    )
+                if preserved is not None:
+                    if direction != "output":
+                        raise XadxError(
+                            f"{name}/{stage_name}.{buffer_name} preserves a non-output"
+                        )
+        if expected_count != 1:
+            raise XadxError(f"{name} must declare exactly one expectation")
+        for variant in case.get("readback_variants", ()):
+            identity = f"{variant.get('stage')}.{variant.get('buffer')}"
+            target = next(
+                (
+                    buffer
+                    for stage in stages
+                    if stage["name"] == variant.get("stage")
+                    for buffer in stage["buffers"]
+                    if buffer["name"] == variant.get("buffer")
+                ),
+                None,
+            )
+            if (
+                not isinstance(variant.get("stage"), str)
+                or target is None
+            ):
+                raise XadxError(
+                    f"{name} readback names unknown buffer {identity!r}"
+                )
+            if target["direction"] != "input" or "stage_output" in target.get(
+                "source", {}
+            ):
+                raise XadxError(
+                    f"{name} readback target {identity!r} is not a resident input"
+                )
+    return implementations, cases
+
+
+def run_recipe(
+    recipe,
     root,
     *,
     runtime_factory=_Runtime,
-    lifecycle_rounds=XADX_LIFECYCLE_ROUNDS,
-    resident_rounds=XADX_RESIDENT_ROUNDS,
-    readback_rounds=XADX_READBACK_ROUNDS,
+    generators=None,
+    lifecycle_rounds=XADX_ROUNDS["default"]["lifecycle_rounds"],
+    resident_rounds=XADX_ROUNDS["default"]["resident_rounds"],
+    readback_rounds=XADX_ROUNDS["default"]["readback_rounds"],
     target_family=None,
 ):
-    """Runs bounded lifecycle, resident, and host-readback/coherence rounds."""
+    """Run a kernel recipe, staging buffers between dispatches within a case.
+
+    A recipe case is a sequence of stages sharing buffers, so a dequant stage can
+    hand its output straight to an MM stage without a host round trip. Only the
+    stage that declares an expectation is compared; earlier stages are the setup
+    the expectation depends on.
+    """
     if min(lifecycle_rounds, resident_rounds, readback_rounds) < 0:
         raise ValueError("round counts must be nonnegative")
     if max(lifecycle_rounds, resident_rounds, readback_rounds) > 1000:
         raise ValueError("round counts exceed the safety bound (1000)")
     root = Path(root)
-    manifest = verify_package(root)
-    runtime = runtime_factory()
+    if isinstance(recipe, (str, Path)):
+        recipe_path = Path(recipe)
+        try:
+            recipe_bytes = recipe_path.read_bytes()
+            recipe = json.loads(recipe_bytes)
+        except (OSError, json.JSONDecodeError) as error:
+            raise XadxError(f"cannot read kernel recipe: {error}") from error
+    elif isinstance(recipe, (bytes, bytearray)):
+        recipe_bytes = bytes(recipe)
+        try:
+            recipe = json.loads(recipe_bytes)
+        except json.JSONDecodeError as error:
+            raise XadxError(f"cannot parse kernel recipe: {error}") from error
+    elif isinstance(recipe, dict):
+        recipe_bytes = (
+            json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
+        )
+    else:
+        raise TypeError("recipe must be a mapping, bytes, or a path")
+    if generators is None:
+        from . import recipe_generators as generators
+
+    implementations, cases = _validate_recipe(recipe)
+    executable_identities = _executable_identities(implementations)
+    if target_family not in (None, "npu2"):
+        return _unsupported_report(
+            recipe,
+            recipe_bytes,
+            cases,
+            executable_identities,
+            "unknown",
+            f"platform probe reported unsupported target family {target_family!r}",
+        )
+    uneven = [
+        case["name"]
+        for case in cases
+        if case.get("readback_variants")
+        and readback_rounds % len(case["readback_variants"])
+    ]
+    if uneven:
+        raise XadxError(
+            "readback rounds do not evenly cover variants for: "
+            + ", ".join(uneven)
+        )
+    materialized = _materialize_recipe_buffers(cases, generators)
+    executable_data = {}
+    for id, entry in implementations.items():
+        executions = [(None, entry), *[
+            (variant["id"], variant)
+            for variant in entry.get("execution_variants", ())
+        ]]
+        for execution, executable in executions:
+            label = id if execution is None else f"{id}/{execution}"
+            try:
+                data = (root / executable["xadx"]).read_bytes()
+            except OSError as error:
+                raise XadxError(f"cannot read {label} XADX: {error}") from error
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != executable["xadx_sha256"]:
+                raise XadxError(
+                    f"{label} XADX digest mismatch: {digest} != "
+                    f"{executable['xadx_sha256']}"
+                )
+            executable_data[(id, execution)] = data
+            try:
+                transaction = (root / executable["transaction"]).read_bytes()
+            except OSError as error:
+                raise XadxError(
+                    f"cannot read {label} transaction: {error}"
+                ) from error
+            transaction_digest = hashlib.sha256(transaction).hexdigest()
+            if transaction_digest != executable["transaction_sha256"]:
+                raise XadxError(
+                    f"{label} transaction digest mismatch: {transaction_digest} "
+                    f"!= {executable['transaction_sha256']}"
+                )
+    session = _Session(runtime_factory)
     try:
-        architecture = runtime.architecture()
+        architecture = session.runtime.architecture()
     except Exception:
-        runtime.close()
+        session.close()
         raise
-    architecture_tokens = {
-        token
-        for token in re.split(r"[^a-z0-9]+", architecture.casefold())
-        if token
-    }
-    architecture_matches = bool(
-        architecture_tokens.intersection({"npu2", "xdna2"})
-    ) or (
-        target_family == "npu2"
-        and architecture_tokens.intersection({"amdxdna"})
-    )
-    if not architecture_matches:
-        runtime.close()
-        return {
-            "status": "unsupported",
-            "reason": (
-                "FastFlowLM XADX assets require a positively identified "
-                "NPU2/XDNA2 architecture; "
-                f"observed {architecture!r} with target family {target_family!r}"
+    if not _architecture_verdict(architecture, target_family):
+        session.close()
+        return _unsupported_report(
+            recipe,
+            recipe_bytes,
+            cases,
+            executable_identities,
+            architecture,
+            (
+                "FastFlowLM kernel recipes require an NPU2/XDNA2 part, named "
+                "either by the runtime or by the platform probe; the runtime "
+                f"reported architecture {architecture!r} and the probe reported "
+                f"target family {target_family!r}"
             ),
-            "architecture": architecture,
-            "case_names": [case["name"] for case in manifest["cases"]],
+        )
+
+    case_metrics = {
+        case["name"]: {
+            "dispatches": 0,
+            "validated_bytes": 0,
+            "duration_seconds": 0.0,
+            "mismatch_count": 0,
+            "first_mismatch": None,
         }
-    try:
-        generator_module = _generator_module()
-    except Exception:
-        runtime.close()
-        raise
-    failures = []
-    materialized = {}
+        for case in cases
+    }
 
     def materialize(specification, expected_size):
-        key = (
-            json.dumps(specification, sort_keys=True)
-            if isinstance(specification, dict)
-            else str(specification)
+        key = json.dumps(
+            specification, sort_keys=True, separators=(",", ":")
         )
-        if key not in materialized:
-            try:
-                data, metadata = generator_module.materialize(specification, root)
-            except (OSError, ValueError) as error:
-                raise XadxError(f"cannot materialize XADX buffer: {error}") from error
-            if len(data) != expected_size:
-                raise XadxError(
-                    f"materialized buffer size mismatch: {len(data)} != {expected_size}"
-                )
-            materialized[key] = (data, metadata)
-        return materialized[key][0]
+        data = materialized[key][0]
+        if len(data) != expected_size:
+            raise XadxError(
+                f"recipe buffer size mismatch: {len(data)} != {expected_size}"
+            )
+        return data
 
     def prepare(case):
-        executable, ordinal = runtime.load(
-            (root / case["xadx"]).read_bytes(), case["export"]
-        )
-        buffers = []
-        expected = None
-        for record in case["buffers"]:
-            if record["direction"] == "output":
-                data = bytes(record["size"])
-                expected = (
-                    record,
-                    materialize(record["expected"], record["size"]),
+        """Allocate every stage's buffers, sharing the ones a chain binds."""
+        runtime = session.runtime
+        staged, plan, comparison, chained_allocations = {}, [], None, set()
+        preserved_allocations = {}
+        for stage in case["stages"]:
+            entry = implementations[stage["implementation"]]
+            execution = stage.get("execution")
+            executable_entry = entry if execution is None else next(
+                (
+                    variant
+                    for variant in entry.get("execution_variants", ())
+                    if variant["id"] == execution
+                ),
+                None,
+            )
+            if executable_entry is None:
+                raise XadxError(
+                    f"{case['name']} names unavailable execution "
+                    f"{entry['id']}/{execution}"
                 )
-            else:
-                data = materialize(record["input"], record["size"])
-            buffers.append(runtime.allocate(data))
-        return executable, ordinal, buffers, expected
+            executable, ordinal = runtime.load(
+                executable_data[(entry["id"], execution)],
+                executable_entry["export"],
+            )
+            buffers, outputs = [], []
+            for record in stage["buffers"]:
+                source = record.get("source")
+                if source is not None and "stage_output" in source:
+                    staged_output = staged.get(source["stage_output"])
+                    if staged_output is None:
+                        raise XadxError(
+                            f"{case['name']} binds {source['stage_output']}, "
+                            "which no earlier stage wrote"
+                        )
+                    allocation, preserved = staged_output
+                    if len(allocation[1]) != record["size"]:
+                        raise XadxError(
+                            f"{case['name']} binds {source['stage_output']} at "
+                            f"{len(allocation[1])} B into a {record['size']} B role"
+                        )
+                    buffers.append(allocation)
+                    chained_allocations.add(builtins.id(allocation))
+                    preserved_allocations[builtins.id(allocation)] = (
+                        record["name"],
+                        preserved,
+                        record["size"],
+                        allocation,
+                    )
+                    continue
+                if record["direction"] == "output":
+                    allocation = runtime.allocate(bytes(record["size"]))
+                    outputs.append(allocation)
+                    staged[f"{stage['name']}.{record['name']}"] = (
+                        allocation,
+                        record.get("preserved"),
+                    )
+                    if "expected" in record:
+                        comparison = (
+                            allocation,
+                            record["expected"],
+                            record["size"],
+                            record["comparison"],
+                        )
+                else:
+                    allocation = runtime.allocate(
+                        materialize(source, record["size"])
+                    )
+                buffers.append(allocation)
+            plan.append((executable, ordinal, buffers, outputs, stage["buffers"]))
+        if comparison is None:
+            raise XadxError(f"{case['name']} declares no expectation")
+        return plan, comparison, chained_allocations, preserved_allocations
 
     def dispatch(case, prepared, clear_output=True, expected_source=None):
-        executable, ordinal, buffers, expected = prepared
-        output_record, wanted = expected
-        if expected_source is not None:
-            wanted = materialize(expected_source, output_record["size"])
+        started = time.monotonic()
+        metrics = case_metrics[case["name"]]
+        metrics["dispatches"] += 1
+        runtime = session.runtime
+        (
+            plan,
+            (output, expected, size, contract),
+            chained_allocations,
+            preserved_allocations,
+        ) = prepared
         if clear_output:
-            buffers[0][1][:] = bytes(len(buffers[0][1]))
-            runtime._check(
-                runtime._flush(buffers[0][0], 0, len(buffers[0][1])), "output flush"
-            )
-        runtime.run(executable, ordinal, buffers)
-        actual = runtime.read(buffers[0])
-        return _compare(
+            for _, _, _, outputs, _ in plan:
+                for allocation in outputs:
+                    handle, storage = allocation
+                    storage[:] = bytes(len(storage))
+                    offset = (
+                        allocation.offset
+                        if isinstance(allocation, _GuardedBuffer)
+                        else 0
+                    )
+                    runtime._check(
+                        runtime._flush(handle, offset, len(storage)), "output flush"
+                    )
+        for executable, ordinal, buffers, _, records in plan:
+            immutable = {
+                builtins.id(allocation): bytes(allocation[1])
+                for record, allocation in zip(records, buffers)
+                if record["direction"] == "input"
+                and builtins.id(allocation) not in chained_allocations
+            }
+            runtime.run(executable, ordinal, buffers)
+            for record, allocation in zip(records, buffers):
+                if builtins.id(allocation) in chained_allocations:
+                    if hasattr(runtime, "inspect_guards"):
+                        prefix, suffix = runtime.inspect_guards(allocation)
+                    else:
+                        prefix, suffix = b"", b""
+                    payload = None
+                elif hasattr(runtime, "inspect"):
+                    prefix, payload, suffix = runtime.inspect(allocation)
+                else:
+                    prefix, payload, suffix = b"", runtime.read(allocation), b""
+                if prefix != bytes([_GUARD_VALUE]) * len(prefix):
+                    return f"{record['name']} modified its leading guard"
+                if suffix != bytes([_GUARD_VALUE]) * len(suffix):
+                    return f"{record['name']} modified its trailing guard"
+                if (
+                    record["direction"] == "input"
+                    and payload is not None
+                    and payload != immutable[builtins.id(allocation)]
+                ):
+                    return f"{record['name']} input was modified"
+        for name, preserved, preserved_size, allocation in preserved_allocations.values():
+            if hasattr(runtime, "inspect"):
+                prefix, payload, suffix = runtime.inspect(allocation)
+            else:
+                prefix, payload, suffix = b"", runtime.read(allocation), b""
+            if prefix != bytes([_GUARD_VALUE]) * len(prefix):
+                return f"{name} modified its leading guard"
+            if suffix != bytes([_GUARD_VALUE]) * len(suffix):
+                return f"{name} modified its trailing guard"
+            if payload != materialize(preserved, preserved_size):
+                return f"{name} input was modified"
+        wanted = materialize(expected_source or expected, size)
+        actual = runtime.read(output)
+        comparison_result = _compare_details(
             actual,
             wanted,
-            output_record["comparison"],
-            float(output_record.get("atol", 0)),
-            float(output_record.get("rtol", 0)),
+            contract["kind"],
+            float(contract.get("atol", 0)),
+            float(contract.get("rtol", 0)),
         )
+        metrics["validated_bytes"] += len(actual)
+        metrics["duration_seconds"] += max(time.monotonic() - started, 1e-9)
+        metrics["mismatch_count"] += comparison_result["mismatch_count"]
+        if metrics["first_mismatch"] is None:
+            metrics["first_mismatch"] = comparison_result["first_mismatch"]
+        return comparison_result["failure"]
+
+    def readback(case):
+        variants = case.get("readback_variants")
+        if not variants:
+            return None
+
+        def revisit(prepared, round_index):
+            runtime = session.runtime
+            variant = variants[round_index % len(variants)]
+            plan = prepared[0]
+            for stage, (_, _, buffers, _, _) in zip(case["stages"], plan):
+                if stage["name"] != variant["stage"]:
+                    continue
+                for record, allocation in zip(stage["buffers"], buffers):
+                    if record["name"] != variant["buffer"]:
+                        continue
+                    handle, storage = allocation
+                    data = materialize(variant["source"], record["size"])
+                    if len(data) != len(storage):
+                        raise XadxError("readback buffer size mismatch")
+                    storage[:] = data
+                    offset = (
+                        allocation.offset
+                        if isinstance(allocation, _GuardedBuffer)
+                        else 0
+                    )
+                    runtime._check(
+                        runtime._flush(handle, offset, len(storage)),
+                        "readback flush",
+                    )
+                    return dispatch(
+                        case,
+                        prepared,
+                        clear_output=False,
+                        expected_source=variant["expected"],
+                    )
+            raise XadxError(
+                f"{case['name']} has no buffer named "
+                f"{variant['stage']}.{variant['buffer']}"
+            )
+
+        return revisit
 
     try:
-        cases = manifest["cases"]
-        for round_index in range(lifecycle_rounds):
-            for case in cases:
-                mark = len(runtime.resources)
-                try:
-                    failure = dispatch(case, prepare(case))
-                    if failure:
-                        failures.append(
-                            f"{case['name']} lifecycle {round_index + 1}: {failure}"
-                        )
-                except Exception as error:
-                    failures.append(
-                        f"{case['name']} lifecycle {round_index + 1}: {error}"
-                    )
-                finally:
-                    # Lifecycle resources are released by closing/reopening the runtime.
-                    if len(runtime.resources) != mark:
-                        runtime.close()
-                        runtime = runtime_factory()
-        resident = [(case, prepare(case)) for case in cases]
-        for round_index in range(resident_rounds):
-            for case, prepared in resident:
-                failure = dispatch(case, prepared)
-                if failure:
-                    failures.append(
-                        f"{case['name']} resident {round_index + 1}: {failure}"
-                    )
-        coherence = [
-            (case, prepared)
-            for case, prepared in resident
-            if case.get("readback_variants")
-        ]
-        for round_index in range(readback_rounds):
-            if coherence:
-                case, prepared = coherence[round_index % len(coherence)]
-                variants = case["readback_variants"]
-                variant = variants[round_index % len(variants)]
-                activation_index = next(
-                    index
-                    for index, record in enumerate(case["buffers"])
-                    if record["name"] == variant["buffer"]
-                )
-                activation_record = case["buffers"][activation_index]
-                activation = materialize(variant["input"], activation_record["size"])
-                handle, storage = prepared[2][activation_index]
-                if len(activation) != len(storage):
-                    raise XadxError("readback activation size mismatch")
-                storage[:] = activation
-                runtime._check(
-                    runtime._flush(handle, 0, len(storage)),
-                    "activation flush",
-                )
-                failure = dispatch(
-                    case,
-                    prepared,
-                    clear_output=False,
-                    expected_source=variant["expected"],
-                )
-                if failure:
-                    failures.append(
-                        f"{case['name']} readback {round_index + 1}: {failure}"
-                    )
+        failures, readback_by_case = _run_rounds(
+            session,
+            cases,
+            prepare=prepare,
+            dispatch=dispatch,
+            readback=readback,
+            lifecycle_rounds=lifecycle_rounds,
+            resident_rounds=resident_rounds,
+            readback_rounds=readback_rounds,
+        )
     finally:
-        runtime.close()
-    return {
+        session.close()
+    case_results = []
+    for case in cases:
+        name = case["name"]
+        metrics = case_metrics[name]
+        case_failures = [
+            {
+                "phase": failure["phase"],
+                "round": failure["round"],
+                "message": failure["message"],
+            }
+            for failure in failures
+            if failure["case"] == name
+        ]
+        case_results.append(
+            {
+                "name": name,
+                "status": "fail" if case_failures else "pass",
+                "dispatches": metrics["dispatches"],
+                "readbacks": readback_by_case.get(name, 0),
+                "validated_bytes": metrics["validated_bytes"],
+                "duration_seconds": metrics["duration_seconds"],
+                "mismatch_count": metrics["mismatch_count"],
+                "first_mismatch": metrics["first_mismatch"],
+                "failures": case_failures,
+            }
+        )
+    return validate_xadx_report({
+        "schema_version": XADX_REPORT_SCHEMA_VERSION,
+        "report_kind": "execution",
         "status": "pass" if not failures else "fail",
+        "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
+        "generator_version": recipe["generator_version"],
+        "executables": executable_identities,
         "architecture": architecture,
+        "numeric_runtime": _numeric_runtime(),
         "lifecycle_rounds": lifecycle_rounds,
         "resident_rounds": resident_rounds,
         "readback_rounds": readback_rounds,
-        "cases": len(manifest["cases"]),
-        "case_names": [case["name"] for case in manifest["cases"]],
-        "materialized_buffers": [metadata for _, metadata in materialized.values()],
+        "cases": len(cases),
+        "case_names": [case["name"] for case in cases],
+        "readback_by_case": readback_by_case,
+        "case_results": case_results,
+        "materialized_buffers": sorted(
+            (metadata for _, metadata in materialized.values()),
+            key=lambda item: item["contract_sha256"],
+        ),
         "failures": failures,
-    }
+    })

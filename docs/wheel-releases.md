@@ -58,8 +58,13 @@ replace or reuse a published version; produce a new development or release
 candidate version instead.
 
 `rocm-npu-qualification` is `py3-none-any` and requires
-`rocm-npu-fastflowlm` at exactly the same version. Linux and Windows generate
-it independently from the same source pins. Linux publishes the canonical
+`rocm-npu-fastflowlm` at exactly the same version plus NumPy 2.4.6 and
+ml-dtypes 0.5.4. Pip resolves the numeric wheels from the package index for
+CPython 3.11 through 3.14 on Linux and Windows. Candidate v1 binds the required
+versions, and qualification evidence records the installed wheel tags, RECORD
+digest, and verified payload digest.
+Linux and Windows generate the qualification wheel independently from the same
+source pins. Linux publishes the canonical
 wheel. Windows NPU jobs currently install the Windows-local wheel to avoid
 depending on Linux artifact scheduling; those runs remain platform validation,
 not canonical candidate evidence. When the canonical artifact is supplied,

@@ -39,6 +39,21 @@ class TestRequirementsFile:
             "compiler-stack", root=tmp_path, is_windows=False
         ) == (lock, False)
 
+    def test_compiler_lock_preserves_non_registry_sources(self):
+        source = (
+            paths.ROOT / "requirements" / "compiler-stack.txt"
+        ).read_text(encoding="utf-8")
+        lock = (
+            paths.ROOT / "requirements" / "compiler-stack.lock"
+        ).read_text(encoding="utf-8")
+        find_links = {
+            line.strip()
+            for line in source.splitlines()
+            if line.strip().startswith("--find-links ")
+        }
+        assert find_links
+        assert find_links.issubset(set(lock.splitlines()))
+
     @pytest.mark.parametrize(
         ("profile_name", "actions"),
         [

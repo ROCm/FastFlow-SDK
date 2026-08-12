@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: MIT
 # Minimal dependency closure for execute-only NPU CI.
 #
-# Kernels and expected outputs are built into the NPU test package on the CPU
-# runner. The hardware runner only needs NumPy for mapped buffers and numeric
-# comparison; it does not need Peano, MLIR Python bindings, torch, or pytest.
+# Kernels are built on the CPU runner. The hardware runner generates numeric
+# inputs and BF16 oracles, so it needs NumPy and ml-dtypes; it does not need
+# Peano, MLIR Python bindings, torch, or pytest.
 # Regenerate requirements/npu-test-runtime.lock with:
 #   uv pip compile requirements/npu-test-runtime.txt --generate-hashes \
 #     --python-version 3.12 --universal --system-certs \
 #     --output-file requirements/npu-test-runtime.lock
-numpy==1.26.4
+ml-dtypes==0.5.4
+numpy==2.4.6

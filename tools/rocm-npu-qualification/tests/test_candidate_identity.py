@@ -29,12 +29,53 @@ from rocm_npu_qualification import candidate, cli, installation  # noqa: E402
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 
+def _write_numeric_wheel(
+    root: Path,
+    distribution: str,
+    version: str,
+    tag: str = "py3-none-any",
+) -> Path:
+    normalized = distribution.replace("-", "_")
+    wheel = root / f"{normalized}-{version}-{tag}.whl"
+    dist_info = f"{normalized}-{version}.dist-info"
+    members = {
+        f"{dist_info}/METADATA": (
+            f"Metadata-Version: 2.4\nName: {normalized}\nVersion: {version}\n"
+        ).encode(),
+        f"{dist_info}/WHEEL": f"Wheel-Version: 1.0\nTag: {tag}\n".encode(),
+        f"{normalized}/__init__.py": f"__version__ = {version!r}\n".encode(),
+        f"{normalized}.libs/runtime.bin": b"native-runtime",
+    }
+
+    def record(path: str, content: bytes) -> str:
+        digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(
+            b"="
+        )
+        return f"{path},sha256={digest.decode()},{len(content)}"
+
+    record_name = f"{dist_info}/RECORD"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for path, content in members.items():
+            archive.writestr(path, content)
+        archive.writestr(
+            record_name,
+            "\n".join(
+                [
+                    *(record(path, content) for path, content in members.items()),
+                    f"{record_name},,",
+                ]
+            )
+            + "\n",
+        )
+    return wheel
+
+
 def _write_wheel(
     root: Path,
     distribution: str,
     package: str,
     *,
-    xadx_sha: str = "3" * 64,
+    xadx_data: bytes = b"xadx",
     oracle_sha: str = "5" * 64,
     qualification_code: bytes = b"QUALIFICATION = True\n",
     qualification_mode: int = 0o100644,
@@ -45,6 +86,7 @@ def _write_wheel(
     dist_info = f"{distribution.replace('-', '_')}-1.2.3.dist-info"
     metadata_name = f"{dist_info}/METADATA"
     manifest_name = f"{package}/manifest.json"
+    wheel_name = f"{dist_info}/WHEEL"
     metadata_bytes = (
         f"Metadata-Version: 2.4\nName: {distribution}\nVersion: 1.2.3\n"
     ).encode()
@@ -68,19 +110,66 @@ def _write_wheel(
 
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(metadata_name, metadata_bytes)
+        archive.writestr(wheel_name, b"Wheel-Version: 1.0\nTag: py3-none-any\n")
         archive.writestr(manifest_name, manifest)
+        if distribution != QUALIFICATION_DISTRIBUTION:
+            archive.writestr(f"{package}/__init__.py", b"")
+        if distribution == FASTFLOWLM_DISTRIBUTION:
+            archive.writestr(
+                "rocm_npu_fastflowlm/share/flm/xclbins/xclbins/test.xclbin",
+                b"xclbin",
+            )
         if distribution == QUALIFICATION_DISTRIBUTION:
             code = zipfile.ZipInfo("rocm_npu_qualification/__init__.py")
             code.external_attr = qualification_mode << 16
             archive.writestr(code, qualification_code)
-            case_contract = json.dumps(
-                {
-                    "schema_version": 1,
-                    "families": [],
-                    "case_suffixes": [],
-                    "global_cases": ["case"],
-                }
-            ).encode()
+            transaction_data = b"transaction"
+            xclbin_sha = hashlib.sha256(b"xclbin").hexdigest()
+            recipe = {
+                "schema_version": 1,
+                "product": "rocm-npu-fastflowlm-kernel-recipe",
+                "target": "npu2",
+                "generator_version": "kernel-recipe-generator-v1",
+                "implementations": [
+                    {
+                        "id": f"dequant-{xclbin_sha[:16]}",
+                        "xclbin_path": "xclbins/test.xclbin",
+                        "xclbin_sha256": xclbin_sha,
+                        "transaction": "transactions/test.bin",
+                        "transaction_sha256": hashlib.sha256(
+                            transaction_data
+                        ).hexdigest(),
+                        "xadx": "xadx/test.xadx",
+                        "xadx_sha256": hashlib.sha256(xadx_data).hexdigest(),
+                    }
+                ],
+                "coverage_limits": [],
+                "cases": [
+                    {
+                        "name": "case",
+                        "stages": [
+                            {
+                                "name": "dequant",
+                                "implementation": f"dequant-{xclbin_sha[:16]}",
+                                "buffers": [
+                                    {
+                                        "name": "output",
+                                        "direction": "output",
+                                        "size": 8,
+                                        "expected": {
+                                            "id": "zero",
+                                            "parameters": {"size": 8},
+                                            "sha256": hashlib.sha256(bytes(8)).hexdigest(),
+                                        },
+                                        "comparison": {"kind": "exact"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+            recipe_bytes = json.dumps(recipe).encode()
             profile = {
                 "schema_version": 1,
                 "name": "fast",
@@ -113,30 +202,18 @@ def _write_wheel(
                 json.dumps(profile),
             )
             archive.writestr(
-                "rocm_npu_qualification/xadx_cases.json",
-                case_contract,
-            )
-            archive.writestr(
                 "rocm_npu_qualification/xadx_assets/manifest.json",
                 json.dumps(
                     {
                         "schema_version": 1,
-                        "case_contract_sha256": hashlib.sha256(
-                            case_contract
-                        ).hexdigest(),
+                        "recipe": {
+                            "path": "recipe.json",
+                            "sha256": hashlib.sha256(recipe_bytes).hexdigest(),
+                        },
                         "serializer": {
                             "api": "hrx_amdxdna_xadx_serialize",
                             "revision": "hrx-amdxdna-v0",
                         },
-                        "executables": [
-                            {
-                                "id": "test",
-                                "source_xclbin_sha256": "1" * 64,
-                                "transaction_sha256": "2" * 64,
-                                "xadx_sha256": xadx_sha,
-                            }
-                        ],
-                        "cases": [{"name": "case"}],
                         "files": [
                             {
                                 "path": "data/oracle.bin.gz",
@@ -146,6 +223,16 @@ def _write_wheel(
                         ],
                     }
                 ),
+            )
+            archive.writestr(
+                "rocm_npu_qualification/xadx_assets/recipe.json", recipe_bytes
+            )
+            archive.writestr(
+                "rocm_npu_qualification/xadx_assets/xadx/test.xadx", xadx_data
+            )
+            archive.writestr(
+                "rocm_npu_qualification/xadx_assets/transactions/test.bin",
+                transaction_data,
             )
             archive.writestr(
                 "rocm_npu_qualification/policies/release.json",
@@ -169,11 +256,13 @@ def _write_wheel(
         archive.writestr(
             record_name,
             "\n".join(
-                (
-                    record(metadata_name, metadata_bytes),
-                    record(manifest_name, manifest),
+                [
+                    *(
+                        record(name, archive.read(name))
+                        for name in archive.namelist()
+                    ),
                     f"{record_name},,",
-                )
+                ]
             )
             + "\n",
         )
@@ -196,7 +285,7 @@ def test_qualification_wheel_parity_binds_xadx_hashes(tmp_path):
         tmp_path / "different",
         QUALIFICATION_DISTRIBUTION,
         "rocm_npu_qualification",
-        xadx_sha="4" * 64,
+        xadx_data=b"different-xadx",
     )
     with pytest.raises(
         candidate.CandidateError,
@@ -250,6 +339,56 @@ def test_qualification_wheel_parity_binds_every_member_and_mode(tmp_path):
         candidate.verify_qualification_wheel_parity(canonical, extra_member)
 
 
+def test_recipe_provenance_binds_source_xclbin_bytes(tmp_path):
+    payload = b"source xclbin"
+    digest = hashlib.sha256(payload).hexdigest()
+    wheel = tmp_path / "fastflowlm.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "rocm_npu_fastflowlm/share/flm/xclbins/Family/mm.xclbin", payload
+        )
+    contract = {
+        "xadx_provenance": {
+            "recipe_sha256": "0" * 64,
+            "executables": [
+                {
+                    "id": f"mm-{digest[:16]}",
+                    "xclbin_path": "Family/mm.xclbin",
+                    "xclbin_sha256": digest,
+                    "transaction_sha256": "1" * 64,
+                    "xadx_sha256": "2" * 64,
+                }
+            ],
+        }
+    }
+    candidate._verify_recipe_source_xclbins(contract, [wheel])
+    contract["xadx_provenance"]["executables"][0]["xclbin_sha256"] = "f" * 64
+    with pytest.raises(candidate.CandidateError, match="differs from recipe"):
+        candidate._verify_recipe_source_xclbins(contract, [wheel])
+
+
+def test_recipe_provenance_refuses_missing_source_xclbin(tmp_path):
+    wheel = tmp_path / "fastflowlm.whl"
+    with zipfile.ZipFile(wheel, "w"):
+        pass
+    contract = {
+        "xadx_provenance": {
+            "recipe_sha256": "0" * 64,
+            "executables": [
+                {
+                    "id": "mm-0000000000000000",
+                    "xclbin_path": "Family/mm.xclbin",
+                    "xclbin_sha256": "0" * 64,
+                    "transaction_sha256": "1" * 64,
+                    "xadx_sha256": "2" * 64,
+                }
+            ],
+        }
+    }
+    with pytest.raises(candidate.CandidateError, match="exactly one source xclbin"):
+        candidate._verify_recipe_source_xclbins(contract, [wheel])
+
+
 def test_candidate_manifest_binds_exact_wheels(tmp_path):
     _write_wheel(tmp_path, RUNTIME_DISTRIBUTION, "rocm_npu_runtime")
     _write_wheel(tmp_path, FASTFLOWLM_DISTRIBUTION, "rocm_npu_fastflowlm")
@@ -269,6 +408,10 @@ def test_candidate_manifest_binds_exact_wheels(tmp_path):
         identity = identities[0]
         assert len(identity["sha256"]) == 64
         assert len(identity["package_manifest_sha256"]) == 64
+    assert candidate_manifest["numeric_runtime"] == {
+        "numpy": "2.4.6",
+        "ml-dtypes": "0.5.4",
+    }
     normalized = installation.normalize_candidate(candidate_manifest)
     selected = {
         distribution: identities[0]
@@ -284,6 +427,20 @@ def test_candidate_manifest_binds_exact_wheels(tmp_path):
     next(tmp_path.glob("rocm_npu_runtime-*.whl")).write_bytes(b"substituted")
     with pytest.raises(cli.QualificationError, match="wheel SHA256"):
         installation.verify_candidate_wheels(selected, output)
+
+
+def test_candidate_does_not_require_numeric_wheels_in_release_payload(tmp_path):
+    _write_wheel(tmp_path, RUNTIME_DISTRIBUTION, "rocm_npu_runtime")
+    _write_wheel(tmp_path, FASTFLOWLM_DISTRIBUTION, "rocm_npu_fastflowlm")
+    _write_wheel(tmp_path, QUALIFICATION_DISTRIBUTION, "rocm_npu_qualification")
+    output = candidate.write_candidate_manifest(
+        [tmp_path], tmp_path / "candidate-manifest.json"
+    )
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    assert manifest["numeric_runtime"] == {
+        "numpy": "2.4.6",
+        "ml-dtypes": "0.5.4",
+    }
 
 
 def test_candidate_rejects_external_wheels_before_publishing(tmp_path):
@@ -389,12 +546,12 @@ def test_candidate_rejects_untrusted_fields():
             for distribution in installation.PACKAGE_DISTRIBUTIONS
         },
     }
-    with pytest.raises(cli.QualificationError, match="properties"):
+    with pytest.raises(cli.QualificationError, match="v1 schema"):
         installation.normalize_candidate(manifest)
 
 
 def test_legacy_candidate_shape_is_rejected():
-    with pytest.raises(cli.QualificationError, match="properties"):
+    with pytest.raises(cli.QualificationError, match="v1 schema"):
         installation.normalize_candidate(
             {
                 "schema_version": 1,
@@ -492,3 +649,83 @@ def test_installed_dist_info_is_bound_to_candidate_wheel(monkeypatch, tmp_path):
     metadata_path.write_text("substituted", encoding="utf-8")
     with pytest.raises(cli.QualificationError, match="wheel metadata"):
         installation.verify_installed_wheel_metadata({RUNTIME_DISTRIBUTION: wheel})
+
+
+def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path):
+    installed_root = tmp_path / "installed"
+    distributions = {}
+
+    class InstalledDistribution:
+        def __init__(self, root, distribution, version):
+            self.root = root
+            self.version = version
+            normalized = distribution.replace("-", "_")
+            self.dist_info = root / f"{normalized}-{version}.dist-info"
+
+        def read_text(self, name):
+            path = self.dist_info / name
+            return path.read_text(encoding="utf-8") if path.is_file() else None
+
+        def locate_file(self, member):
+            return self.root / str(member)
+
+        @property
+        def files(self):
+            rows = [
+                row
+                for row in installation.csv.reader(
+                    self.read_text("RECORD").splitlines()
+                )
+                if row
+            ]
+            result = []
+            for row in rows:
+                item = installation.metadata.PackagePath(row[0])
+                item.dist = self
+                item.hash = (
+                    installation.metadata.FileHash(row[1]) if row[1] else None
+                )
+                item.size = int(row[2]) if row[2] else None
+                result.append(item)
+            return result
+
+    for distribution, version in (("numpy", "2.4.6"), ("ml-dtypes", "0.5.4")):
+        wheel = _write_numeric_wheel(tmp_path, distribution, version)
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(installed_root)
+        distributions[distribution] = InstalledDistribution(
+            installed_root, distribution, version
+        )
+    monkeypatch.setattr(
+        installation.metadata,
+        "distribution",
+        lambda name: distributions[name],
+    )
+    identities = installation.numeric_runtime_identities()
+    assert {
+        distribution: identity["version"]
+        for distribution, identity in identities.items()
+    } == {"numpy": "2.4.6", "ml-dtypes": "0.5.4"}
+    manifest = {"numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.5.4"}}
+    installation.verify_numeric_runtime(manifest)
+
+    numpy_payload = installed_root / "numpy/__init__.py"
+    original_payload = numpy_payload.read_bytes()
+    numpy_payload.write_bytes(b"tampered")
+    with pytest.raises(cli.QualificationError, match="payload hash"):
+        installation.verify_numeric_runtime(manifest)
+    numpy_payload.write_bytes(original_payload)
+
+    sibling_extra = installed_root / "numpy.libs/injected.dll"
+    sibling_extra.write_bytes(b"injected")
+    with pytest.raises(cli.QualificationError, match="unrecorded file"):
+        installation.verify_numeric_runtime(manifest)
+    sibling_extra.unlink()
+
+    numpy_record = installed_root / "numpy-2.4.6.dist-info/RECORD"
+    numpy_record.write_text(
+        numpy_record.read_text(encoding="utf-8") + "injected.pth,,\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(cli.QualificationError, match="unbound file"):
+        installation.verify_numeric_runtime(manifest)

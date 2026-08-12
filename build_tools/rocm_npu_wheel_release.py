@@ -36,6 +36,19 @@ from build_tools.rocm_npu_wheel_common import (
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_POLICY_PATH = ROOT / "release.toml"
+NUMERIC_RUNTIME_CONTRACT = json.loads(
+    (
+        ROOT
+        / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+        / "numeric-runtime.json"
+    ).read_text(encoding="utf-8")
+)
+NUMERIC_RUNTIME = NUMERIC_RUNTIME_CONTRACT["packages"]
+NUMERIC_PYTHON_ABIS = tuple(NUMERIC_RUNTIME_CONTRACT["python_abis"])
+
+
+def _canonical_distribution(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 RELEASE_DISTRIBUTIONS = (
     RUNTIME_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
@@ -388,7 +401,9 @@ def _find_release_wheels(
     wheels: dict[tuple[str, str], Path] = {}
     unexpected = []
     for wheel in sorted(wheel_directory.rglob("*.whl")):
-        distribution = _wheel_metadata(wheel)["Name"]
+        distribution = _canonical_distribution(_wheel_metadata(wheel)["Name"])
+        if distribution in NUMERIC_RUNTIME:
+            continue
         if distribution not in RELEASE_DISTRIBUTIONS:
             unexpected.append(wheel.name)
             continue
@@ -577,6 +592,10 @@ def prepare_rocm_npu_release_payload(
             },
             QUALIFICATION_DISTRIBUTION: {
                 f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+                *(
+                    f"{distribution} =={numeric_version}"
+                    for distribution, numeric_version in NUMERIC_RUNTIME.items()
+                ),
             },
             COMPILER_DISTRIBUTION: {
                 f"{COMPILER_CORE_DISTRIBUTION} =={version}",

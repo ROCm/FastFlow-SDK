@@ -53,18 +53,17 @@ class TestNpuWorkflowParity:
         assert _logical_test_commands("build_rocm_npu_staging_windows.yml") == expected
 
     def test_fastflowlm_npu_matrices_use_kernel_and_fast_qualification(self):
-        expected = {
-            (
-                "test-fastflowlm-kernels --wheel-package "
-                "--dir .kernel-artifact --iterations 20 --readback-iterations 32"
-            ),
-        }
+        # Kernel qualification is part of `rocm-npu qualify run`; no separate
+        # helper artifact or legacy dev.py test is allowed in the NPU jobs.
+        expected = set()
         for filename in (
             "fastflowlm_hrx_linux.yml",
             "fastflowlm_hrx_windows.yml",
         ):
             text = (WORKFLOWS / filename).read_text(encoding="utf-8")
             assert _logical_test_commands(filename) == expected
+            assert "qualify run" in text
+            assert "test-fastflowlm-kernels" not in text
             assert re.search(r"rocm-npu(?:\.exe)? qualify", text)
             assert "--fast" in text
             assert "--candidate-manifest" not in text

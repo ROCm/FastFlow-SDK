@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amd.com/rocm-npu/schemas/xadx-report-v1.schema.json",
+  "title": "ROCm NPU XADX execution report v1",
+  "type": "object",
+  "required": [
+    "schema_version", "report_kind", "status", "architecture",
+    "case_names", "case_results", "failures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "report_kind": {"enum": ["execution", "package-validation"]},
+    "status": {"enum": ["pass", "fail", "unsupported"]},
+    "recipe_sha256": {"$ref": "#/$defs/sha256"},
+    "generator_version": {"const": "kernel-recipe-generator-v1"},
+    "executables": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/executable"}
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "architecture": {"type": "string"},
+    "numeric_runtime": {"$ref": "#/$defs/numeric_runtime"},
+    "lifecycle_rounds": {"type": "integer", "minimum": 0},
+    "resident_rounds": {"type": "integer", "minimum": 0},
+    "readback_rounds": {"type": "integer", "minimum": 0},
+    "cases": {"type": "integer", "minimum": 1},
+    "case_names": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "readback_by_case": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "case_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/case_result"}
+    },
+    "materialized_buffers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/materialized_buffer"}
+    },
+    "failures": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/top_failure"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["report_kind"],
+        "properties": {"report_kind": {"const": "package-validation"}}
+      },
+      "then": {
+        "properties": {
+          "status": {"const": "fail"},
+          "case_names": {"const": ["package-validation"]}
+        }
+      },
+      "else": {
+        "required": [
+          "recipe_sha256", "generator_version", "executables"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": {"status": {"const": "unsupported"}}
+      },
+      "then": {
+        "required": ["reason"],
+        "properties": {"report_kind": {"const": "execution"}}
+      },
+      "else": {
+        "if": {
+          "required": ["report_kind"],
+          "properties": {"report_kind": {"const": "execution"}}
+        },
+        "then": {
+          "required": [
+            "numeric_runtime", "lifecycle_rounds", "resident_rounds",
+            "readback_rounds", "cases", "readback_by_case",
+            "materialized_buffers"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "failure": {
+      "type": "object",
+      "required": ["phase", "round", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "enum": [
+            "lifecycle", "resident-preparation", "resident", "readback",
+            "package-validation"
+          ]
+        },
+        "round": {"type": ["integer", "null"], "minimum": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    },
+    "top_failure": {
+      "type": "object",
+      "required": ["case", "phase", "round", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "case": {"type": "string", "minLength": 1},
+        "phase": {
+          "enum": [
+            "lifecycle", "resident-preparation", "resident", "readback",
+            "package-validation"
+          ]
+        },
+        "round": {"type": ["integer", "null"], "minimum": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    },
+    "mismatch": {
+      "type": ["object", "null"],
+      "properties": {
+        "kind": {"enum": ["size", "byte", "bf16"]},
+        "index": {"type": "integer", "minimum": 0},
+        "actual": {"type": ["integer", "number", "string"]},
+        "expected": {"type": ["integer", "number", "string"]}
+      },
+      "additionalProperties": false
+    },
+    "case_result": {
+      "type": "object",
+      "required": [
+        "name", "status", "dispatches", "readbacks", "validated_bytes",
+        "duration_seconds", "mismatch_count", "first_mismatch", "failures"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "status": {"enum": ["pass", "fail", "unsupported"]},
+        "dispatches": {"type": "integer", "minimum": 0},
+        "readbacks": {"type": "integer", "minimum": 0},
+        "validated_bytes": {"type": "integer", "minimum": 0},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "mismatch_count": {"type": "integer", "minimum": 0},
+        "first_mismatch": {"$ref": "#/$defs/mismatch"},
+        "failures": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/failure"}
+        }
+      }
+    },
+    "numeric_runtime": {
+      "type": "object",
+      "required": ["numpy", "ml-dtypes"],
+      "additionalProperties": false,
+      "properties": {
+        "numpy": {"type": "string"},
+        "ml-dtypes": {"type": "string"}
+      }
+    },
+    "materialized_buffer": {
+      "type": "object",
+      "required": ["source", "size", "sha256", "contract_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"$ref": "kernel-recipe-v1.schema.json#/$defs/generator"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "contract_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "executable": {
+      "type": "object",
+      "required": [
+        "id", "xclbin_path", "xclbin_sha256", "transaction",
+        "transaction_sha256", "xadx", "xadx_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "execution": {"type": "string", "minLength": 1},
+        "xclbin_path": {"type": "string", "minLength": 1},
+        "xclbin_sha256": {"$ref": "#/$defs/sha256"},
+        "transaction": {"type": "string", "minLength": 1},
+        "transaction_sha256": {"$ref": "#/$defs/sha256"},
+        "xadx": {"type": "string", "minLength": 1},
+        "xadx_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

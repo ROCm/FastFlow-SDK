@@ -5,12 +5,13 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from build_tools.fastflowlm_kernel_tests import verify_xadx_assets
+from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
 from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
@@ -24,6 +25,23 @@ from build_tools.rocm_npu_wheel_common import (
 
 QUALIFICATION_WHEEL_TAG = "py3-none-any"
 ROOT = Path(__file__).resolve().parents[1]
+
+# The package computes its own qualification buffers and BF16 oracles rather
+# than shipping them. Keep these exact: qualification evidence must mean the
+# same arithmetic in an offline install as it did in CI.
+NUMERIC_RUNTIME_CONTRACT = json.loads(
+    (
+        ROOT
+        / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+        / "numeric-runtime.json"
+    ).read_text(encoding="utf-8")
+)
+NUMERIC_RUNTIME = NUMERIC_RUNTIME_CONTRACT["packages"]
+QUALIFICATION_REQUIRES_PYTHON = NUMERIC_RUNTIME_CONTRACT["requires_python"]
+QUALIFICATION_REQUIRES = tuple(
+    f"{distribution} =={version}"
+    for distribution, version in sorted(NUMERIC_RUNTIME.items())
+)
 
 
 def stage_qualification_tree(
@@ -40,14 +58,25 @@ def stage_qualification_tree(
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     xadx_assets = Path(xadx_assets)
-    xadx_manifest = verify_xadx_assets(xadx_assets)
+    xadx_manifest, recipe = verify_kernel_recipe_assets(xadx_assets)
+    capabilities = json.loads(
+        (xadx_assets / "capability-manifest.json").read_text(encoding="utf-8")
+    )
     if (
-        len(xadx_manifest.get("executables", [])) != 4
-        or len(xadx_manifest.get("cases", [])) != 5
+        {entry["id"] for entry in recipe.get("implementations", [])}
+        != set(capabilities["implementations"]["entries"])
+        or {entry["id"] for entry in recipe.get("coverage_limits", [])}
+        != (
+            set(capabilities["implementations"]["unreached"])
+            | {
+                id
+                for id, facts in capabilities["implementations"]["entries"].items()
+                if facts.get("numeric_limit") is not None
+            }
+        )
     ):
         raise RuntimeError(
-            "qualification wheel requires four production XADX executables "
-            "and five stress cases"
+            "qualification recipe coverage differs from its capability manifest"
         )
     shutil.copytree(xadx_assets, package_root / "xadx_assets")
     licenses = package_root / "licenses"
@@ -77,7 +106,7 @@ def stage_qualification_tree(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    requires = (f"{FASTFLOWLM_DISTRIBUTION} =={version}",)
+    requires = (f"{FASTFLOWLM_DISTRIBUTION} =={version}", *QUALIFICATION_REQUIRES)
     _write_package_manifest(
         package_root,
         {
@@ -101,27 +130,46 @@ def stage_qualification_tree(
                 "fastflowlm_xadx": {
                     "manifest": "xadx_assets/manifest.json",
                     "target": xadx_manifest["target"],
-                    "serializer": xadx_manifest["serializer"],
-                    "case_contract_sha256": xadx_manifest["case_contract_sha256"],
+                    "recipe": "xadx_assets/recipe.json",
+                    "recipe_sha256": xadx_manifest["recipe"]["sha256"],
                     "executables": [
                         {
-                            key: executable[key]
-                            for key in (
-                                "xadx",
-                                "xadx_sha256",
-                                "source_xclbin",
-                                "source_xclbin_sha256",
-                                "transaction_sha256",
-                            )
+                            "xadx": execution.get("xadx"),
+                            "xadx_sha256": execution.get("xadx_sha256"),
+                            "xclbin_path": implementation.get("xclbin_path"),
+                            "xclbin_sha256": implementation.get(
+                                "xclbin_sha256"
+                            ),
+                            "transaction": execution.get("transaction"),
+                            "transaction_sha256": execution.get(
+                                "transaction_sha256"
+                            ),
+                            **(
+                                {}
+                                if execution_id is None
+                                else {"execution": execution_id}
+                            ),
                         }
-                        for executable in xadx_manifest["executables"]
+                        for implementation in recipe["implementations"]
+                        for execution_id, execution in [
+                            (None, implementation),
+                            *[
+                                (variant["id"], variant)
+                                for variant in implementation.get(
+                                    "execution_variants", ()
+                                )
+                            ],
+                        ]
                     ],
                     "license_expression": (
                         "LicenseRef-FastFlowLM-Proprietary-Kernel-Terms"
                     ),
                 }
             },
-            "toolchain": {"python": "standard-library"},
+            "toolchain": {
+                "python": "cpython",
+                **NUMERIC_RUNTIME,
+            },
         },
     )
     return destination
@@ -154,10 +202,11 @@ def build_qualification_wheel(
             Path(output_directory),
             summary="Installed-product model qualification for ROCm NPU",
             tag=QUALIFICATION_WHEEL_TAG,
-            requires=(f"{FASTFLOWLM_DISTRIBUTION} =={version}",),
+            requires=(f"{FASTFLOWLM_DISTRIBUTION} =={version}", *QUALIFICATION_REQUIRES),
             console_scripts={
                 "rocm-npu-qualify": f"{QUALIFICATION_PACKAGE}.cli:main",
             },
+            requires_python=QUALIFICATION_REQUIRES_PYTHON,
             root_is_purelib=True,
         )
     verify_wheel_checksums({QUALIFICATION_DISTRIBUTION: wheel})

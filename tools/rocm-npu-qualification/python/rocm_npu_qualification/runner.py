@@ -19,7 +19,12 @@ from typing import Any
 
 from .benchmark import benchmark_csv_checkpoint as _benchmark_csv_checkpoint
 from .commands import run_command, run_interactive_command
-from .contracts import COMMAND_REPORT_SCHEMA_VERSION, EVIDENCE_SCHEMA_VERSION
+from .contracts import (
+    COMMAND_REPORT_SCHEMA_VERSION,
+    EVIDENCE_SCHEMA_VERSION,
+    XADX_REPORT_SCHEMA_VERSION,
+    xadx_rounds,
+)
 from .evidence import EvidenceWriter
 from .errors import QualificationError
 from .fastflowlm import (
@@ -32,6 +37,7 @@ from .fastflowlm import (
 )
 from .hashing import sha256_file
 from .installation import (
+    numeric_runtime_identities as _numeric_runtime_identities,
     normalize_candidate as _normalize_candidate_manifest,
     package_versions as _package_versions,
     validate_protocol as _validate_protocol,
@@ -40,7 +46,7 @@ from .installation import (
 from .models import ModelError, fastflow_environment, resolve_model
 from .profiles import load_profile, profile_names
 from .prompts import materialize_turn
-from .xadx import XadxError, run_package
+from .xadx import XadxError, run_recipe, validate_xadx_report
 
 
 def _now() -> str:
@@ -367,56 +373,110 @@ def _test_model(
     return records
 
 
+def _report_xadx_plan(recipe_path: Path, rounds: dict[str, int]) -> None:
+    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+    cases = recipe.get("cases")
+    if not isinstance(cases, list):
+        return
+    print(
+        f"qualify: XADX recipe scheduled {len(cases)} cases "
+        f"(lifecycle={rounds['lifecycle_rounds']}, "
+        f"resident={rounds['resident_rounds']}, "
+        f"readback={rounds['readback_rounds']})",
+        file=sys.stderr,
+        flush=True,
+    )
+    for case in cases:
+        if isinstance(case, dict) and isinstance(case.get("name"), str):
+            print(
+                f"qualify: test fastflowlm-production-kernels/"
+                f"{case['name']}: scheduled",
+                file=sys.stderr,
+                flush=True,
+            )
+
+
 def _test_xadx(
-    writer: EvidenceWriter, *, target_family: str
+    writer: EvidenceWriter, *, target_family: str, profile_name: str
 ) -> list[dict[str, Any]]:
     started = time.monotonic()
     try:
+        rounds = xadx_rounds(profile_name)
         asset_resource = resources.files("rocm_npu_qualification").joinpath(
             "xadx_assets"
         )
         if not asset_resource.is_dir():
             raise XadxError("qualification wheel has no embedded XADX assets")
         with resources.as_file(asset_resource) as asset_root:
-            report = run_package(asset_root, target_family=target_family)
+            recipe_path = asset_root / "recipe.json"
+            _report_xadx_plan(recipe_path, rounds)
+            report = run_recipe(
+                recipe_path,
+                asset_root,
+                target_family=target_family,
+                **rounds,
+            )
     except (OSError, ValueError, XadxError) as error:
+        failure = {
+            "phase": "package-validation",
+            "round": None,
+            "message": str(error),
+        }
         report = {
+            "schema_version": XADX_REPORT_SCHEMA_VERSION,
+            "report_kind": "package-validation",
             "status": "fail",
             "architecture": "unknown",
             "case_names": ["package-validation"],
-            "failures": [str(error)],
-            "lifecycle_rounds": 0,
-            "resident_rounds": 0,
-            "readback_rounds": 0,
+            "case_results": [
+                {
+                    "name": "package-validation",
+                    "status": "fail",
+                    "dispatches": 0,
+                    "readbacks": 0,
+                    "validated_bytes": 0,
+                    "duration_seconds": max(time.monotonic() - started, 0.0),
+                    "mismatch_count": 0,
+                    "first_mismatch": None,
+                    "failures": [failure],
+                }
+            ],
+            "failures": [{"case": "package-validation", **failure}],
         }
-    duration = time.monotonic() - started
+    validate_xadx_report(report)
     writer.write_json("xadx-report.json", report)
     records = []
-    for name in report.get("case_names", ["package-validation"]):
-        status = report["status"]
-        failures = [
-            failure for failure in report.get("failures", []) if name in failure
+    case_results = report.get("case_results")
+    if not isinstance(case_results, list):
+        case_results = [
+            {
+                "name": name,
+                "status": report["status"],
+                "dispatches": 0,
+                "readbacks": 0,
+                "validated_bytes": 0,
+                "duration_seconds": 0.0,
+                "mismatch_count": 0,
+                "first_mismatch": None,
+                "failures": list(report.get("failures", [])),
+            }
+            for name in report.get("case_names", ["package-validation"])
         ]
-        if status == "fail" and not failures:
-            failures = list(report.get("failures", []))
-        readback_rounds = (
-            int(report.get("readback_rounds", 0))
-            if name == "host-readback/coherence"
-            else 0
-        )
-        rounds = (
-            int(report.get("lifecycle_rounds", 0))
-            + int(report.get("resident_rounds", 0))
-            + readback_rounds
-        )
+    for case_result in case_results:
+        name = case_result["name"]
+        status = case_result["status"]
+        failures = case_result["failures"]
+        readback_rounds = int(case_result["readbacks"])
+        rounds = int(case_result["dispatches"])
         records.append(
             {
                 "model": "fastflowlm-production-kernels",
                 "name": name,
                 "kind": "xadx",
                 "status": status,
-                "duration_seconds": duration
-                / max(1, len(report.get("case_names", []))),
+                "duration_seconds": float(
+                    case_result.get("duration_seconds", 0.0)
+                ),
                 "log": "xadx-report.json",
                 "rounds": rounds,
                 "metrics": {
@@ -424,6 +484,11 @@ def _test_xadx(
                     "lifecycle_rounds": report.get("lifecycle_rounds", 0),
                     "resident_rounds": report.get("resident_rounds", 0),
                     "readback_rounds": readback_rounds,
+                    "validated_bytes": int(
+                        case_result.get("validated_bytes", 0)
+                    ),
+                    "mismatch_count": int(case_result.get("mismatch_count", 0)),
+                    "first_mismatch": case_result.get("first_mismatch"),
                 },
                 "artifacts": ["xadx-report.json"],
                 **(
@@ -432,7 +497,9 @@ def _test_xadx(
                     else {
                         "error": (
                             report.get("reason")
-                            or "; ".join(failures)
+                            or "; ".join(
+                                failure["message"] for failure in failures
+                            )
                             or "FastFlowLM XADX qualification failed"
                         )
                     }
@@ -508,6 +575,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         candidate = _normalize_candidate_manifest(candidate)
 
     _validate_versions(installed, core_version, candidate, args.candidate_manifest)
+    numeric_runtime = _numeric_runtime_identities()
     writer = EvidenceWriter(args.output)
     writer.write_candidate_manifest(candidate)
     writer.write_json("profile.json", profile)
@@ -529,6 +597,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 ),
             },
             "packages": installed,
+            "numeric_runtime": numeric_runtime,
         },
         "observed_platform": {},
         "profile": {
@@ -623,6 +692,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     xadx_tests = _test_xadx(
         writer,
         target_family=str(evidence["observed_platform"].get("target_family", "")),
+        profile_name=profile["name"],
     )
     evidence["tests"].extend(xadx_tests)
     _report_test_results(xadx_tests)

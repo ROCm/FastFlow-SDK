@@ -143,6 +143,41 @@ std::vector<Tensor> make_quantized_weight_tensors(
   };
 }
 
+std::vector<Tensor> quantized_weight_tensors_from(
+    const std::string& name, size_t rows, size_t columns,
+    const std::vector<uint32_t>& quantized,
+    const std::vector<float>& scales,
+    const std::vector<int32_t>& zero_points) {
+  if (rows % 32 || columns % 256) {
+    throw std::runtime_error(
+        "Q4NX dimensions must be row/column chunk aligned");
+  }
+  if (quantized.size() != rows * columns ||
+      scales.size() != rows * columns / 32 ||
+      zero_points.size() != rows * columns / 32) {
+    throw std::runtime_error("Q4NX packing inputs have inconsistent sizes");
+  }
+  std::vector<int32_t> packed(rows * columns / 8);
+  for (size_t word = 0; word < packed.size(); ++word) {
+    uint32_t value = 0;
+    for (size_t nibble = 0; nibble < 8; ++nibble) {
+      value |= (quantized[word * 8 + nibble] & 0xF) << (nibble * 4);
+    }
+    packed[word] = static_cast<int32_t>(value);
+  }
+  std::vector<bf16> scale_values(scales.size());
+  for (size_t block = 0; block < scales.size(); ++block) {
+    scale_values[block] = bf16(scales[block]);
+  }
+  return {
+      {name, "I32", {rows, columns / 8}, as_bytes(packed)},
+      {name + "_scale", "BF16", {rows, columns / 32},
+       as_bytes(scale_values)},
+      {name + "_zero_point", "I32", {rows, columns / 32},
+       as_bytes(zero_points)},
+  };
+}
+
 void append(std::vector<Tensor>& destination, std::vector<Tensor> source) {
   for (Tensor& tensor : source) destination.push_back(std::move(tensor));
 }
@@ -164,10 +199,10 @@ class TemporaryDirectory {
   std::filesystem::path path;
 };
 
-}  // namespace
-
-Q4Weight make_q4_weight(
-    size_t rows, size_t columns, int salt, Q4Profile profile) {
+// Assembles the surrounding model a Q4NX conversion needs and returns the
+// converted bytes of the single tensor under test.
+bytes convert_target(
+    std::vector<Tensor> target, size_t rows, size_t columns, int salt) {
   std::vector<Tensor> tensors;
   constexpr size_t kDummyRows = 32;
   constexpr size_t kDummyColumns = 256;
@@ -176,9 +211,7 @@ Q4Weight make_q4_weight(
                       kDummyRows, kDummyColumns, salt + 1));
   tensors.push_back(make_bf16_tensor(
       "model.layers.0.input_layernorm.weight", {columns}, salt + 2));
-  append(tensors, make_quantized_weight_tensors(
-                      "model.layers.0.self_attn.q_proj.weight",
-                      rows, columns, salt, profile));
+  append(tensors, std::move(target));
   for (const char* suffix : {
            "k_proj.weight", "v_proj.weight", "o_proj.weight"}) {
     append(tensors, make_quantized_weight_tensors(
@@ -214,6 +247,31 @@ Q4Weight make_q4_weight(
   }
   bytes packed_storage(metadata.byte_size);
   converted.load_weights(packed_storage, name);
+  return packed_storage;
+}
+
+}  // namespace
+
+std::vector<uint8_t> pack_q4nx(
+    size_t rows, size_t columns,
+    const std::vector<uint32_t>& quantized,
+    const std::vector<float>& scales,
+    const std::vector<int32_t>& zero_points) {
+  bytes packed = convert_target(
+      quantized_weight_tensors_from(
+          "model.layers.0.self_attn.q_proj.weight", rows, columns, quantized,
+          scales, zero_points),
+      rows, columns, 0);
+  return {packed.data(), packed.data() + packed.size()};
+}
+
+Q4Weight make_q4_weight(
+    size_t rows, size_t columns, int salt, Q4Profile profile) {
+  bytes packed_storage = convert_target(
+      make_quantized_weight_tensors(
+          "model.layers.0.self_attn.q_proj.weight", rows, columns, salt,
+          profile),
+      rows, columns, salt);
   Q4Weight result{rows, columns, {}, {}, {}, {}, {}};
   result.packed.assign(
       packed_storage.data(), packed_storage.data() + packed_storage.size());

@@ -27,6 +27,7 @@ from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
 from rocm_npu_qualification.offline import (  # noqa: E402
     CandidateMismatchError,
     EvidenceError,
+    _reconcile_xadx_report,
     intake_evidence,
     pack_evidence,
     verify_archive,
@@ -101,27 +102,62 @@ def _candidate(revision: str = "a" * 40):
             ]
             for distribution in installation.PACKAGE_DISTRIBUTIONS
         },
+        "numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.5.4"},
         "qualification_contract": {
             "schema_version": 1,
             "native_checks": ["version", "probe", "doctor", "self-test"],
             "xadx_cases": ["xadx-case"],
+            "xadx_case_contracts": {
+                "xadx-case": {
+                    "readback_capable": True,
+                    "validated_bytes_per_dispatch": 8,
+                }
+            },
+            "xadx_materializations": [
+                {
+                    "source": {
+                        "id": "zero",
+                        "parameters": {"size": 8},
+                        "sha256": "8" * 64,
+                    },
+                    "size": 8,
+                    "sha256": "8" * 64,
+                    "contract_sha256": hashlib.sha256(
+                        json.dumps(
+                            {
+                                "id": "zero",
+                                "parameters": {"size": 8},
+                                "sha256": "8" * 64,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode()
+                    ).hexdigest(),
+                }
+            ],
             "xadx_execution": {
-                "lifecycle_rounds": 5,
-                "resident_rounds": 10,
-                "readback_rounds": 32,
+                "fast": {
+                    "lifecycle_rounds": 5,
+                    "resident_rounds": 20,
+                    "readback_rounds": 32,
+                }
             },
             "xadx_provenance": {
-                "case_contract_sha256": "d" * 64,
+                "recipe_sha256": "d" * 64,
                 "manifest_sha256": "e" * 64,
                 "serializer": {
                     "api": "hrx_amdxdna_xadx_serialize",
                     "revision": "hrx-amdxdna-v0",
                 },
+                "generator_version": "kernel-recipe-generator-v1",
                 "executables": [
                     {
                         "id": "test",
-                        "source_xclbin_sha256": "1" * 64,
+                        "xclbin_path": "xclbins/test.xclbin",
+                        "xclbin_sha256": "1" * 64,
+                        "transaction": "transactions/test.bin",
                         "transaction_sha256": "2" * 64,
+                        "xadx": "xadx/test.xadx",
                         "xadx_sha256": "3" * 64,
                     }
                 ],
@@ -203,6 +239,18 @@ def _evidence(
                 distribution: "1.2.3"
                 for distribution in installation.PACKAGE_DISTRIBUTIONS
             },
+            "numeric_runtime": {
+                distribution: {
+                    "version": version,
+                    "compatibility_tags": ["cp312-cp312-win_amd64"],
+                    "record_sha256": "6" * 64,
+                    "payload_sha256": "7" * 64,
+                }
+                for distribution, version in {
+                    "numpy": "2.4.6",
+                    "ml-dtypes": "0.5.4",
+                }.items()
+            },
             "flm": {
                 "package_version": "1.2.3",
                 "command": "flm",
@@ -251,12 +299,15 @@ def _evidence(
                 "status": "pass",
                 "duration_seconds": 1,
                 "log": "xadx-report.json",
-                "rounds": 15,
+                "rounds": 57,
                 "metrics": {
                     "architecture": "AMD_AIE2_NPU2",
                     "lifecycle_rounds": 5,
-                    "resident_rounds": 10,
-                    "readback_rounds": 0,
+                    "resident_rounds": 20,
+                    "readback_rounds": 32,
+                    "validated_bytes": 456,
+                    "mismatch_count": 0,
+                    "first_mismatch": None,
                 },
                 "artifacts": ["xadx-report.json"],
             },
@@ -287,12 +338,38 @@ def _evidence(
     writer.write_json(
         "xadx-report.json",
         {
+            "schema_version": 1,
+            "report_kind": "execution",
             "status": "pass",
+            "recipe_sha256": "d" * 64,
+            "generator_version": "kernel-recipe-generator-v1",
+            "executables": candidate["qualification_contract"][
+                "xadx_provenance"
+            ]["executables"],
             "architecture": "AMD_AIE2_NPU2",
             "lifecycle_rounds": 5,
-            "resident_rounds": 10,
+            "resident_rounds": 20,
             "readback_rounds": 32,
+            "cases": 1,
+            "readback_by_case": {"xadx-case": 32},
+            "numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.5.4"},
+            "case_results": [
+                {
+                    "name": "xadx-case",
+                    "status": "pass",
+                    "dispatches": 57,
+                    "readbacks": 32,
+                    "validated_bytes": 456,
+                    "duration_seconds": 1,
+                    "mismatch_count": 0,
+                    "first_mismatch": None,
+                    "failures": [],
+                }
+            ],
             "case_names": ["xadx-case"],
+            "materialized_buffers": candidate["qualification_contract"][
+                "xadx_materializations"
+            ],
             "failures": [],
         },
     )
@@ -323,6 +400,68 @@ def test_deterministic_pack_and_offline_verify(tmp_path):
     summary = verify_evidence(first)
     assert summary["status"] == "pass"
     assert summary["evidence_status"] == "pass"
+
+
+def test_failed_resident_preparation_remains_ingestible_evidence(tmp_path):
+    source = _evidence(tmp_path / "resident-preparation")
+    failure = {
+        "case": "xadx-case",
+        "phase": "resident-preparation",
+        "round": None,
+        "message": "preparation failed",
+    }
+    report_path = source / "xadx-report.json"
+    report = json.loads(report_path.read_text())
+    report["status"] = "fail"
+    report["readback_by_case"] = {}
+    report["failures"] = [failure]
+    report["case_results"][0].update(
+        {
+            "status": "fail",
+            "dispatches": 5,
+            "readbacks": 0,
+            "validated_bytes": 40,
+            "duration_seconds": 0.5,
+            "failures": [
+                {key: value for key, value in failure.items() if key != "case"}
+            ],
+        }
+    )
+    writer = EvidenceWriter(source, allow_existing=True)
+    writer.write_json("xadx-report.json", report)
+
+    def mark_failed(evidence):
+        evidence["status"] = "fail"
+        test = next(row for row in evidence["tests"] if row["kind"] == "xadx")
+        test["status"] = "fail"
+        test["error"] = "resident preparation failed"
+        test["rounds"] = 5
+        test["duration_seconds"] = 0.5
+        test["metrics"]["readback_rounds"] = 0
+        test["metrics"]["validated_bytes"] = 40
+
+    _rewrite_evidence(source, mark_failed)
+    summary = verify_evidence(source)
+    assert summary["evidence_status"] == "fail"
+
+
+def test_report_without_v1_runtime_fields_is_rejected(tmp_path):
+    source = _evidence(tmp_path / "evidence")
+    report_path = source / "xadx-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.pop("numeric_runtime")
+    report.pop("readback_by_case")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    def remove_new_metric(evidence):
+        test = next(
+            record for record in evidence["tests"] if record["kind"] == "xadx"
+        )
+        test["metrics"].pop("validated_bytes")
+
+    _rewrite_evidence(source, remove_new_metric)
+    with pytest.raises(EvidenceError, match="v1 schema"):
+        verify_evidence(source)
 
 
 def test_verify_accepts_model_files_in_different_order(tmp_path):
@@ -356,6 +495,16 @@ def test_verify_binds_subject_identity_and_full_evidence_schema(tmp_path):
         lambda evidence: evidence["subject"].update({"source_revision": "f" * 40}),
     )
     with pytest.raises(CandidateMismatchError, match="subject"):
+        verify_evidence(source)
+
+    source = _evidence(tmp_path / "numeric-version")
+    _rewrite_evidence(
+        source,
+        lambda evidence: evidence["subject"]["numeric_runtime"]["numpy"].update(
+            {"version": "0"}
+        ),
+    )
+    with pytest.raises(EvidenceError, match="numeric runtime"):
         verify_evidence(source)
 
     source = _evidence(tmp_path / "schema")
@@ -566,7 +715,7 @@ def test_verify_rejects_missing_or_forged_native_reports(tmp_path):
 def test_verify_rejects_forged_xadx_report_and_rounds(tmp_path):
     source = _evidence(tmp_path / "report")
     report = json.loads((source / "xadx-report.json").read_text())
-    report["resident_rounds"] = 1
+    report["resident_rounds"] = 7
     writer = EvidenceWriter(source, allow_existing=True)
     writer.write_json("xadx-report.json", report)
     writer.finalize()
@@ -578,8 +727,123 @@ def test_verify_rejects_forged_xadx_report_and_rounds(tmp_path):
         source,
         lambda evidence: evidence["tests"][-1].__setitem__("rounds", 1),
     )
-    with pytest.raises(EvidenceError, match="invalid rounds"):
+    with pytest.raises(EvidenceError, match="execution budget"):
         verify_evidence(source)
+
+    # Readback rounds must be accounted for per case, and only for cases that
+    # the run actually reported.
+    for mutation, message in (
+        ({"xadx-case": 5}, "candidate case contracts"),
+        ({"xadx-case": 3, "invented-case": 3}, "unknown cases"),
+        ("not-a-mapping", "v1 schema"),
+    ):
+        source = _evidence(tmp_path / f"attribution-{message.split()[0]}")
+        report = json.loads((source / "xadx-report.json").read_text())
+        report["readback_by_case"] = mutation
+        writer = EvidenceWriter(source, allow_existing=True)
+        writer.write_json("xadx-report.json", report)
+        writer.finalize()
+        with pytest.raises(EvidenceError, match=message):
+            verify_evidence(source)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("validated_bytes", "invalid per-case metrics"),
+        ("duration_seconds", "invalid per-case metrics"),
+    ],
+)
+def test_verify_rejects_empty_passing_case_measurements(tmp_path, field, message):
+    source = _evidence(tmp_path / field)
+    report_path = source / "xadx-report.json"
+    report = json.loads(report_path.read_text())
+    report["case_results"][0][field] = 0
+    evidence = json.loads((source / "evidence.json").read_text())
+    xadx_test = next(test for test in evidence["tests"] if test["kind"] == "xadx")
+    if field == "duration_seconds":
+        xadx_test[field] = 0
+    else:
+        xadx_test["metrics"][field] = 0
+    writer = EvidenceWriter(source, allow_existing=True)
+    writer.write_json("xadx-report.json", report)
+    writer.write_json("tests.json", evidence["tests"])
+    writer.write_junit(evidence["tests"])
+    writer.write_json("evidence.json", evidence)
+    writer.finalize()
+    with pytest.raises(EvidenceError, match=message):
+        verify_evidence(source)
+
+
+def test_report_cannot_redistribute_or_omit_case_execution(tmp_path):
+    source = _evidence(tmp_path / "history")
+    report = json.loads((source / "xadx-report.json").read_text())
+    evidence = json.loads((source / "evidence.json").read_text())
+    report["case_results"][0]["dispatches"] = 56
+    report["case_results"][0]["validated_bytes"] = 448
+    xadx_test = next(test for test in evidence["tests"] if test["kind"] == "xadx")
+    xadx_test["rounds"] = 56
+    xadx_test["metrics"]["validated_bytes"] = 448
+    with pytest.raises(EvidenceError, match="invalid per-case metrics"):
+        _reconcile_xadx_report(
+            report, evidence, _candidate()["qualification_contract"]
+        )
+
+
+def test_passing_case_budget_is_exact_even_when_report_fails(tmp_path):
+    source = _evidence(tmp_path / "failed-report")
+    report = json.loads((source / "xadx-report.json").read_text())
+    evidence = json.loads((source / "evidence.json").read_text())
+    contract = _candidate()["qualification_contract"]
+    contract["xadx_cases"].append("failed-case")
+    contract["xadx_case_contracts"]["failed-case"] = {
+        "readback_capable": False,
+        "validated_bytes_per_dispatch": 8,
+    }
+    report["status"] = "fail"
+    report["cases"] = 2
+    report["case_names"].append("failed-case")
+    failure = {
+        "case": "failed-case",
+        "phase": "resident-preparation",
+        "round": None,
+        "message": "preparation failed",
+    }
+    report["failures"] = [failure]
+    report["case_results"].append(
+        {
+            "name": "failed-case",
+            "status": "fail",
+            "dispatches": 0,
+            "readbacks": 0,
+            "validated_bytes": 0,
+            "duration_seconds": 0,
+            "mismatch_count": 0,
+            "first_mismatch": None,
+            "failures": [{key: value for key, value in failure.items() if key != "case"}],
+        }
+    )
+    failed_test = dict(
+        next(test for test in evidence["tests"] if test["kind"] == "xadx")
+    )
+    failed_test["name"] = "failed-case"
+    failed_test["status"] = "fail"
+    evidence["tests"].append(failed_test)
+    report["case_results"][0]["dispatches"] = 0
+    report["case_results"][0]["validated_bytes"] = 0
+    with pytest.raises(EvidenceError, match="invalid per-case metrics"):
+        _reconcile_xadx_report(report, evidence, contract)
+
+
+def test_report_materializations_are_candidate_bound(tmp_path):
+    source = _evidence(tmp_path / "materializations")
+    report = json.loads((source / "xadx-report.json").read_text())
+    evidence = json.loads((source / "evidence.json").read_text())
+    report["materialized_buffers"] = []
+    with pytest.raises(EvidenceError, match="materialization inventory"):
+        _reconcile_xadx_report(
+            report, evidence, _candidate()["qualification_contract"]
+        )
 
 
 def test_verify_rejects_junit_not_derived_from_tests(tmp_path):
