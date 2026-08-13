@@ -11,6 +11,11 @@ from unittest import mock
 
 import pytest
 
+from build_tools.compiler_native import (
+    linux_system_runtime,
+    relocate_linux_compiler_rpaths,
+    windows_system_runtime,
+)
 from build_tools.compiler_wheels import verify_compiler_wheel_source_revision
 from build_tools.native_dependencies import is_loadable_elf
 from build_tools.release_policy import (
@@ -24,12 +29,10 @@ from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     _is_core_aie_native,
-    _linux_system_runtime,
     binding_wheel_tag,
     build_compiler_wheel_family,
     compiler_core_shared_library_names,
     compiler_product_report,
-    relocate_linux_compiler_rpaths,
     stage_compiler_bindings,
     stage_compiler_core,
     verify_compiler_binding_stable_abi,
@@ -189,7 +192,21 @@ class TestRocmNpuCompilerWheels:
         assert _is_core_aie_native(Path("libmlir_apfloat_wrappers.so.23.0git"))
 
     def test_zlib_is_a_manylinux_system_dependency(self):
-        assert _linux_system_runtime("libz.so.1")
+        assert linux_system_runtime("libz.so.1")
+
+    def test_windows_compiler_system_runtime_classification(
+        self, monkeypatch, tmp_path
+    ):
+        system32 = tmp_path / "System32"
+        system32.mkdir()
+        (system32 / "kernel32.dll").write_bytes(b"MZ")
+        monkeypatch.setenv("SystemRoot", str(tmp_path))
+
+        assert windows_system_runtime("python3.dll")
+        assert windows_system_runtime("api-ms-win-core-file-l1-1-0.dll")
+        assert windows_system_runtime("kernel32.dll")
+        assert not windows_system_runtime("python312.dll")
+        assert not windows_system_runtime("private.dll")
 
     def test_runtime_closure_ignores_relocatable_elf_objects(self, tmp_path):
         root = tmp_path
@@ -237,7 +254,7 @@ class TestRocmNpuCompilerWheels:
 
         with (
             mock.patch(
-                "build_tools.rocm_npu_compiler_wheels.shutil.which",
+                "build_tools.compiler_native.shutil.which",
                 return_value="/usr/bin/patchelf",
             ),
             mock.patch(
@@ -420,7 +437,7 @@ class TestRocmNpuCompilerWheels:
                 side_effect=imports,
             ),
             mock.patch(
-                "build_tools.rocm_npu_compiler_wheels._windows_system_runtime",
+                "build_tools.rocm_npu_compiler_wheels.windows_system_runtime",
                 side_effect=lambda name: name in ("kernel32.dll", "python3.dll"),
             ),
         ):
@@ -452,7 +469,7 @@ class TestRocmNpuCompilerWheels:
                 ),
             ),
             mock.patch(
-                "build_tools.rocm_npu_compiler_wheels._windows_system_runtime",
+                "build_tools.rocm_npu_compiler_wheels.windows_system_runtime",
                 side_effect=lambda name: name == "kernel32.dll",
             ),
             pytest.raises(RuntimeError, match="versioned CPython DLL"),

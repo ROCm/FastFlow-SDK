@@ -20,6 +20,11 @@ from pathlib import Path, PurePosixPath
 from build_tools import release_policy
 from build_tools.archive import extract_archive
 from build_tools.artifact import reset_directory
+from build_tools.compiler_native import (
+    linux_system_runtime,
+    relocate_linux_compiler_rpaths,
+    windows_system_runtime,
+)
 from build_tools.manylinux_audit import validate_manylinux_policy
 from build_tools.native_dependencies import (
     elf_needed,
@@ -27,7 +32,6 @@ from build_tools.native_dependencies import (
     is_loadable_elf,
     is_pe,
     pe_imports,
-    set_elf_rpath,
 )
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
@@ -683,54 +687,6 @@ def _extract_wheel(wheel: Path, destination: Path) -> Path:
     return destination
 
 
-def relocate_linux_compiler_rpaths(product: Path) -> dict[str, str]:
-    """Replaces build-tree ELF search paths with product-relative locations."""
-    product = Path(product)
-    patchelf = shutil.which("patchelf")
-    if not patchelf:
-        raise RuntimeError("patchelf is required to relocate the Linux compiler product")
-    library_roots = tuple(
-        path for path in (product / "lib", product / "lib" / "aie")
-        if path.is_dir()
-    )
-    rewritten = {}
-    for path in sorted(
-        item for item in product.rglob("*")
-        if item.is_file() and is_loadable_elf(item)
-    ):
-        current = elf_rpath(path, patchelf=patchelf)
-        entries = current.split(":") if current else []
-        relative_entries = [entry for entry in entries if not entry.startswith("/")]
-        for library_root in library_roots:
-            relative = os.path.relpath(library_root, path.parent).replace(os.sep, "/")
-            relative_entries.append(
-                "$ORIGIN" if relative == "." else f"$ORIGIN/{relative}"
-            )
-        relocated = ":".join(dict.fromkeys(relative_entries))
-        if relocated == current:
-            continue
-        set_elf_rpath(path, relocated, patchelf=patchelf)
-        rewritten[path.relative_to(product).as_posix()] = relocated
-    return rewritten
-
-
-def _windows_system_runtime(name: str) -> bool:
-    name = name.casefold()
-    # Stable-ABI extensions resolve the implementation-neutral CPython DLL.
-    if name == "python3.dll":
-        return True
-    if name.startswith(("api-ms-", "ext-ms-")):
-        return True
-    return (
-        Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / name
-    ).is_file()
-
-
-def windows_system_runtime(name: str) -> bool:
-    """Public compiler-product predicate for Windows-owned runtime DLLs."""
-    return _windows_system_runtime(name)
-
-
 def verify_windows_compiler_wheels(
     wheels: list[Path],
 ) -> dict[str, list[str]]:
@@ -790,7 +746,7 @@ def verify_windows_compiler_wheels(
                 missing.extend(
                     f"{key} -> {name}" for name in imports
                     if name.casefold() not in allowed
-                    and not _windows_system_runtime(name)
+                    and not windows_system_runtime(name)
                 )
         if versioned_python_imports:
             raise RuntimeError(
@@ -807,28 +763,6 @@ def verify_windows_compiler_wheels(
                 + "\n  ".join(sorted(missing))
             )
         return graph
-
-
-def _linux_system_runtime(name: str) -> bool:
-    return (
-        name.startswith(("ld-linux", "linux-vdso"))
-        or name in {
-            "libc.so.6",
-            "libdl.so.2",
-            "libgcc_s.so.1",
-            "libm.so.6",
-            "libpthread.so.0",
-            "librt.so.1",
-            "libstdc++.so.6",
-            "libutil.so.1",
-            "libz.so.1",
-        }
-    )
-
-
-def linux_system_runtime(name: str) -> bool:
-    """Public compiler-product predicate for Linux-owned runtime libraries."""
-    return _linux_system_runtime(name)
 
 
 def verify_linux_compiler_wheels(
@@ -885,7 +819,7 @@ def verify_linux_compiler_wheels(
                 )
                 missing.extend(
                     f"{key} -> {name}" for name in needed
-                    if name not in allowed and not _linux_system_runtime(name)
+                    if name not in allowed and not linux_system_runtime(name)
                 )
         if absolute_rpaths:
             raise RuntimeError(

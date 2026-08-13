@@ -27,17 +27,17 @@ from build_tools.artifact import (
     verify_sha256_sidecar,
     write_sha256_sidecar,
 )
+from build_tools.compiler_native import (
+    linux_system_runtime,
+    relocate_linux_compiler_rpaths,
+    windows_system_runtime,
+)
 from build_tools.fastflowlm_artifact import verify_bundle
 from build_tools.native_dependencies import (
     elf_needed,
     is_loadable_elf,
     is_pe,
     pe_imports,
-)
-from build_tools.rocm_npu_compiler_wheels import (
-    linux_system_runtime,
-    relocate_linux_compiler_rpaths,
-    windows_system_runtime,
 )
 
 ROOT = paths.ROOT
