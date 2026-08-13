@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
+from build_tools.package_version import default_package_version
 from build_tools.release_policy import (
     numeric_package_versions,
     numeric_requires_python,
@@ -20,11 +21,10 @@ from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
     QUALIFICATION_PACKAGE,
-    _write_package_manifest,
     build_wheel,
-    default_package_version,
     verify_wheel_checksums,
 )
+from build_tools.wheel_payload import write_package_manifest as _write_package_manifest
 
 QUALIFICATION_WHEEL_TAG = "py3-none-any"
 ROOT = Path(__file__).resolve().parents[1]

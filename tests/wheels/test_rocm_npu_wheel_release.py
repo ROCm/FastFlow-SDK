@@ -33,7 +33,6 @@ from build_tools.rocm_npu_wheel_common import (
     QUALIFICATION_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    _write_package_manifest,
     build_wheel,
 )
 from build_tools.rocm_npu_wheel_release import (
@@ -41,6 +40,7 @@ from build_tools.rocm_npu_wheel_release import (
     prepare_rocm_npu_release_payload,
     resolve_release_inputs,
 )
+from build_tools.wheel_payload import write_package_manifest as _write_package_manifest
 from tests.support.wheels import make_package_tree
 
 NUMERIC_RUNTIME = numeric_package_versions()

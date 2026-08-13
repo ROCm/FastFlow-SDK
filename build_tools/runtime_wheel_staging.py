@@ -13,13 +13,23 @@ from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    _copy_license,
-    _copy_license_as,
-    _copy_relative_tree,
-    _write_file,
-    _write_package_manifest,
     fastflowlm_artifact_name,
     runtime_artifact_name,
+)
+from build_tools.wheel_payload import (
+    copy_license as _copy_license,
+)
+from build_tools.wheel_payload import (
+    copy_license_as as _copy_license_as,
+)
+from build_tools.wheel_payload import (
+    copy_relative_tree as _copy_relative_tree,
+)
+from build_tools.wheel_payload import (
+    write_file as _write_file,
+)
+from build_tools.wheel_payload import (
+    write_package_manifest as _write_package_manifest,
 )
 
 

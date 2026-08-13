@@ -39,7 +39,7 @@ from build_tools.native_dependencies import (
     pe_imports,
     set_elf_rpath,
 )
-from build_tools.rocm_npu_wheel_common import default_package_version
+from build_tools.package_version import default_package_version
 
 SCHEMA_VERSION = 1
 

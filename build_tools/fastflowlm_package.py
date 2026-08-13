@@ -22,21 +22,19 @@ from build_tools.fastflowlm_artifact import (
     verify_fastflowlm_fresh_installs,
 )
 from build_tools.fastflowlm_deps import require_fastflowlm_linux_packaging_tools
+from build_tools.manylinux_audit import auditwheel_policy
+from build_tools.package_version import default_package_version
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_LINUX_WHEEL_TAG,
     LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION,
-    auditwheel_policy,
     build_runtime_fastflowlm_wheels,
     find_rocm_npu_wheels,
     validate_auditwheel_policy,
     verify_wheels_do_not_have_text_path_references,
 )
-from build_tools.rocm_npu_wheel_common import (
-    default_package_version,
-    verify_wheel_checksums,
-)
+from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ

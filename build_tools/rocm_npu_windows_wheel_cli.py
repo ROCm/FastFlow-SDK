@@ -21,9 +21,11 @@ from build_tools.fastflowlm_artifact import (  # noqa: E402
     stage_runtime_bundle,
     verify_fastflowlm_fresh_installs,
 )
-from build_tools.rocm_npu_wheel_common import (  # noqa: E402
+from build_tools.package_version import (  # noqa: E402
     PACKAGE_VERSION_ENV,
     default_package_version,
+)
+from build_tools.rocm_npu_wheel_common import (  # noqa: E402
     verify_wheel_checksums,
 )
 from build_tools.rocm_npu_windows_wheels import (  # noqa: E402

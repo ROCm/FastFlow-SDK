@@ -20,6 +20,7 @@ from pathlib import Path, PurePosixPath
 from build_tools import release_policy
 from build_tools.archive import extract_archive
 from build_tools.artifact import reset_directory
+from build_tools.manylinux_audit import validate_manylinux_policy
 from build_tools.native_dependencies import (
     elf_needed,
     elf_rpath,
@@ -34,12 +35,18 @@ from build_tools.rocm_npu_wheel_common import (
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     COMPILER_PACKAGE,
-    _copy_file,
-    _write_file,
-    _write_package_manifest,
     build_wheel,
     find_wheel_path_references,
     remove_distribution_wheels,
+)
+from build_tools.wheel_payload import (
+    copy_file as _copy_file,
+)
+from build_tools.wheel_payload import (
+    write_file as _write_file,
+)
+from build_tools.wheel_payload import (
+    write_package_manifest as _write_package_manifest,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +55,23 @@ COMPILER_DISTRIBUTIONS = (
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_BINDINGS_DISTRIBUTION,
 )
+
+
+def validate_compiler_auditwheel_policy(distribution: str, policy: str) -> str:
+    """Checks compiler wheel audit policy against the compiler release contract."""
+    if distribution not in (
+        COMPILER_CORE_DISTRIBUTION,
+        COMPILER_BINDINGS_DISTRIBUTION,
+    ):
+        raise RuntimeError(f"unexpected Linux compiler wheel distribution: {distribution}")
+    try:
+        return validate_manylinux_policy(policy, maximum_glibc=(2, 28))
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"{distribution} is not manylinux_2_28 compatible: {policy}"
+        ) from error
+
+
 COMPILER_TOOLS = (
     "aiecc",
     "aie-opt",

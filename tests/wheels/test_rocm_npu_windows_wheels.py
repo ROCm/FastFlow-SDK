@@ -6,11 +6,7 @@ from unittest import mock
 
 import pytest
 
-from build_tools.rocm_npu_wheel_common import (
-    _copy_dependency_licenses,
-    _dependency_license_packages,
-    verify_wheel_checksums,
-)
+from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 from build_tools.rocm_npu_windows_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
@@ -23,6 +19,12 @@ from build_tools.rocm_npu_windows_wheels import (
     find_rocm_npu_wheels,
     verify_wheels_do_not_have_text_path_references,
     wheel_tag,
+)
+from build_tools.wheel_payload import (
+    _dependency_license_packages,
+)
+from build_tools.wheel_payload import (
+    copy_dependency_licenses as _copy_dependency_licenses,
 )
 from tests.support.wheels import make_package_tree
 

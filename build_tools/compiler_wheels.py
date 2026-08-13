@@ -12,6 +12,8 @@ from pathlib import Path
 
 from build_tools import compiler_product, environment, paths
 from build_tools.artifact import git_source_state, validate_directory_target
+from build_tools.manylinux_audit import auditwheel_policy
+from build_tools.package_version import default_package_version
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
@@ -20,18 +22,14 @@ from build_tools.rocm_npu_compiler_wheels import (
     build_compiler_wheel_family,
     compiler_core_shared_library_names,
     compiler_product_report,
+    validate_compiler_auditwheel_policy,
     verify_compiler_binding_stable_abi,
     verify_compiler_wheel_path_references,
     verify_linux_compiler_wheels,
     verify_windows_compiler_wheels,
 )
-from build_tools.rocm_npu_linux_wheels import (
-    auditwheel_policy,
-    validate_auditwheel_policy,
-)
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_PACKAGE,
-    default_package_version,
     verify_wheel_checksums,
 )
 
@@ -185,7 +183,7 @@ def cmd_audit_compiler_wheels(args):
                 else frozenset()
             ),
         )
-        validate_auditwheel_policy(distribution, policy)
+        validate_compiler_auditwheel_policy(distribution, policy)
         if "manylinux_2_28_x86_64" in wheel.name and not policy.startswith(
             "manylinux_"
         ):
