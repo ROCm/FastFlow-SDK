@@ -18,14 +18,14 @@ except ImportError:
 
 import pytest
 
-from build_tools import rocm_npu_wheel_common
+from build_tools import rocm_npu_wheel_common, wheel_payload
 from build_tools.artifact import sha256_file
+from build_tools.package_version import validate_version
 from build_tools.rocm_npu_wheel_common import (
     build_wheel,
     find_distribution_wheels,
     find_wheel_path_references,
     remove_distribution_wheels,
-    validate_version,
     verify_wheel_checksums,
 )
 from build_tools.runtime_wheel_staging import (
@@ -111,7 +111,7 @@ class TestRocmNpuWheelCommon:
         payload.parent.mkdir()
         payload.write_bytes(b"runtime")
 
-        manifest = rocm_npu_wheel_common._write_package_manifest(
+        manifest = wheel_payload.write_package_manifest(
             package, {"schema_version": 1}
         )
 

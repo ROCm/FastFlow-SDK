@@ -14,18 +14,21 @@ from build_tools import (
     fastflowlm_package,
     fastflowlm_xadx_assets,
     hrx_runtime,
-    iron as dev_iron,
     npu_prereqs,
     npu_test_package,
     rocm_npu_qualification_wheel,
 )
+from build_tools import (
+    iron as dev_iron,
+)
 from build_tools.dev import build as dev_build
-from build_tools.dev import device_testing, doctor as dev_doctor, host_testing
+from build_tools.dev import device_testing, host_testing
+from build_tools.dev import doctor as dev_doctor
 from build_tools.dev import patches as dev_patches
 from build_tools.dev import setup as dev_setup
 from build_tools.dev import sources as dev_sources
 from build_tools.dev.profiles import doctor_profile_names, setup_profile_names
-from build_tools.rocm_npu_wheel_common import PACKAGE_VERSION_ENV
+from build_tools.package_version import PACKAGE_VERSION_ENV
 
 
 def argparse_positive_int(value):

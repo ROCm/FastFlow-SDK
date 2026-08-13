@@ -11,19 +11,15 @@ from pathlib import Path
 
 from build_tools.fastflowlm_artifact import verify_bundle
 from build_tools.native_dependencies import is_pe, pe_imports
+from build_tools.package_version import validate_version
 from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    _copy_dependency_licenses,
-    _copy_file,
-    _copy_license,
-    _copy_relative_file,
     find_distribution_wheels,
     find_wheel_path_references,
     remove_distribution_wheels,
-    validate_version,
 )
 from build_tools.rocm_npu_wheel_common import (
     build_wheel as _build_wheel,
@@ -31,6 +27,18 @@ from build_tools.rocm_npu_wheel_common import (
 from build_tools.runtime_wheel_staging import (
     prepare_runtime_wheel_trees,
     write_runtime_wheel_manifests,
+)
+from build_tools.wheel_payload import (
+    copy_dependency_licenses as _copy_dependency_licenses,
+)
+from build_tools.wheel_payload import (
+    copy_file as _copy_file,
+)
+from build_tools.wheel_payload import (
+    copy_license as _copy_license,
+)
+from build_tools.wheel_payload import (
+    copy_relative_file as _copy_relative_file,
 )
 
 WINDOWS_WHEEL_TAG = "py3-none-win_amd64"

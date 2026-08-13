@@ -10,14 +10,13 @@ import re
 import shutil
 import subprocess
 import zipfile
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 from build_tools.fastflowlm_artifact import (
     _is_linux_system_runtime,
     verify_bundle,
 )
+from build_tools.manylinux_audit import validate_manylinux_policy
 from build_tools.native_dependencies import (
     elf_needed,
     elf_rpath,
@@ -25,21 +24,15 @@ from build_tools.native_dependencies import (
     is_elf,
     set_elf_rpath,
 )
+from build_tools.package_version import validate_version
 from build_tools.rocm_npu_wheel_common import (
-    COMPILER_BINDINGS_DISTRIBUTION,
-    COMPILER_CORE_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    _copy_dependency_licenses,
-    _copy_file,
-    _copy_relative_file,
-    _copy_relative_tree,
     find_distribution_wheels,
     find_wheel_path_references,
     remove_distribution_wheels,
-    validate_version,
 )
 from build_tools.rocm_npu_wheel_common import (
     build_wheel as _build_wheel,
@@ -48,61 +41,41 @@ from build_tools.runtime_wheel_staging import (
     prepare_runtime_wheel_trees,
     write_runtime_wheel_manifests,
 )
+from build_tools.wheel_payload import (
+    copy_dependency_licenses as _copy_dependency_licenses,
+)
+from build_tools.wheel_payload import (
+    copy_file as _copy_file,
+)
+from build_tools.wheel_payload import (
+    copy_relative_file as _copy_relative_file,
+)
+from build_tools.wheel_payload import (
+    copy_relative_tree as _copy_relative_tree,
+)
 
 LINUX_WHEEL_TAG = "py3-none-manylinux_2_28_x86_64"
 FASTFLOWLM_LINUX_WHEEL_TAG = "py3-none-linux_x86_64"
-AUDITWHEEL_API_VERSION = "6.7.0"
 
 
-def _auditwheel_policy_diagnostics(wheel_info, target_policy_name: str) -> str:
-    """Formats the structured reasons a wheel misses its claimed policy."""
-    target = wheel_info.policies.get_policy_by_name(target_policy_name)
-    components = (
-        ("external references", wheel_info.ref_policy),
-        ("versioned symbols", wheel_info.sym_policy),
-        ("UCS-2 symbols", wheel_info.ucs_policy),
-        ("PyFPE symbols", wheel_info.pyfpe_policy),
-        ("blacklisted symbols", wheel_info.blacklist_policy),
-        ("machine ISA", wheel_info.machine_policy),
-    )
-    lines = [
-        f"auditwheel policy diagnostics for {target_policy_name}:",
-        f"  overall: {wheel_info.overall_policy.name}",
-    ]
-    for label, policy in components:
-        marker = "LIMITING" if policy < target else "ok"
-        lines.append(f"  {label}: {policy.name} ({marker})")
-
-    target_refs = wheel_info.external_refs[target.name]
-    if target_refs.libs:
-        lines.append("  external libraries:")
-        lines.extend(
-            f"    {name}: {path if path is not None else '<unresolved>'}"
-            for name, path in sorted(target_refs.libs.items())
-        )
-    if target_refs.blacklist:
-        lines.append("  blacklisted symbol references:")
-        lines.extend(
-            f"    {name}: {', '.join(sorted(symbols))}"
-            for name, symbols in sorted(target_refs.blacklist.items())
-        )
-
-    if wheel_info.sym_policy < target:
-        allowed = {
-            f"{prefix}_{version}"
-            for prefix, versions in target.symbol_versions.items()
-            for version in versions
-        }
-        required = {
-            symbol
-            for symbols in wheel_info.versioned_symbols.values()
-            for symbol in symbols
-        }
-        unsupported = sorted(required - allowed)
-        if unsupported:
-            lines.append("  unsupported versioned symbols:")
-            lines.extend(f"    {symbol}" for symbol in unsupported)
-    return "\n".join(lines)
+def validate_auditwheel_policy(distribution: str, policy: str) -> str:
+    """Checks runtime-product audit policy against its claimed wheel tag."""
+    if distribution == RUNTIME_DISTRIBUTION:
+        try:
+            return validate_manylinux_policy(policy, maximum_glibc=(2, 28))
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"{distribution} is not manylinux_2_28 compatible: {policy}"
+            ) from error
+    if distribution == FASTFLOWLM_DISTRIBUTION:
+        if policy != "linux_x86_64" and not re.fullmatch(
+            r"manylinux_\d+_\d+_x86_64", policy
+        ):
+            raise RuntimeError(
+                f"{distribution} has an unexpected auditwheel policy: {policy}"
+            )
+        return policy
+    raise RuntimeError(f"unexpected Linux runtime wheel distribution: {distribution}")
 
 
 def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
@@ -122,75 +95,6 @@ def fastflowlm_wheel_tag(
 ) -> str:
     wheel_tag(system, machine)
     return FASTFLOWLM_LINUX_WHEEL_TAG
-
-
-def auditwheel_policy(
-    wheel: Path,
-    *,
-    exclude: frozenset[str] = frozenset(),
-) -> str:
-    """Returns auditwheel's structured overall policy for a wheel."""
-    try:
-        installed_version = distribution_version("auditwheel")
-    except PackageNotFoundError as error:
-        raise RuntimeError(
-            f"auditwheel {AUDITWHEEL_API_VERSION} is required to audit Linux wheels"
-        ) from error
-    if installed_version != AUDITWHEEL_API_VERSION:
-        raise RuntimeError(
-            "unsupported auditwheel structured API version: "
-            f"{installed_version}; expected {AUDITWHEEL_API_VERSION}"
-        )
-    from auditwheel.error import NonPlatformWheelError, WheelToolsError
-    from auditwheel.wheel_abi import analyze_wheel_abi
-    from auditwheel.wheeltools import get_wheel_architecture, get_wheel_libc
-
-    try:
-        architecture = get_wheel_architecture(wheel.name)
-    except (WheelToolsError, NonPlatformWheelError):
-        architecture = None
-    try:
-        libc = get_wheel_libc(wheel.name)
-    except WheelToolsError:
-        libc = None
-    wheel_info = analyze_wheel_abi(
-        libc,
-        architecture,
-        wheel,
-        exclude,
-        disable_isa_ext_check=False,
-        allow_graft=False,
-    )
-    claimed_policy = re.search(r"manylinux_\d+_\d+_x86_64", wheel.name)
-    if claimed_policy:
-        target = wheel_info.policies.get_policy_by_name(claimed_policy.group())
-        if wheel_info.overall_policy < target:
-            print(_auditwheel_policy_diagnostics(wheel_info, target.name))
-    return wheel_info.overall_policy.name
-
-
-def validate_auditwheel_policy(distribution: str, policy: str) -> str:
-    """Checks auditwheel's structured policy against the claimed wheel policy."""
-    if distribution in (
-        RUNTIME_DISTRIBUTION,
-        COMPILER_CORE_DISTRIBUTION,
-        COMPILER_BINDINGS_DISTRIBUTION,
-    ):
-        manylinux = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", policy)
-        if not manylinux or tuple(map(int, manylinux.groups())) > (2, 28):
-            raise RuntimeError(
-                f"{distribution} is not manylinux_2_28 compatible: {policy}"
-            )
-    elif distribution == FASTFLOWLM_DISTRIBUTION:
-        if policy != "linux_x86_64" and not re.fullmatch(
-            r"manylinux_\d+_\d+_x86_64", policy
-        ):
-            raise RuntimeError(
-                f"{distribution} has an unexpected auditwheel policy: {policy}"
-            )
-    else:
-        raise RuntimeError(f"unexpected Linux wheel distribution: {distribution}")
-    return policy
 
 
 def _elf_files(package_root: Path) -> list[Path]:

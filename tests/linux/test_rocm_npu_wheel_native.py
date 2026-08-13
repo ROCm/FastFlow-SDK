@@ -15,6 +15,13 @@ from unittest import mock
 import pytest
 
 from build_tools import fastflowlm_package, paths
+from build_tools.manylinux_audit import (
+    _auditwheel_policy_diagnostics,
+    auditwheel_policy,
+)
+from build_tools.rocm_npu_compiler_wheels import (
+    validate_compiler_auditwheel_policy,
+)
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_LINUX_WHEEL_TAG,
@@ -22,11 +29,9 @@ from build_tools.rocm_npu_linux_wheels import (
     LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    _auditwheel_policy_diagnostics,
     _copy_hrx_soname,
     _copy_runtime_native_closure,
     _patch_and_verify_linux_products,
-    auditwheel_policy,
     build_wheel,
     fastflowlm_wheel_tag,
     find_rocm_npu_wheels,
@@ -251,7 +256,7 @@ class TestRocmNpuLinuxWheelNative:
             == "linux_x86_64"
         )
         assert (
-            validate_auditwheel_policy(
+            validate_compiler_auditwheel_policy(
                 COMPILER_BINDINGS_DISTRIBUTION,
                 "manylinux_2_28_x86_64",
             )
@@ -338,7 +343,7 @@ class TestRocmNpuLinuxWheelNative:
         }
         with (
             mock.patch(
-                "build_tools.rocm_npu_linux_wheels.distribution_version",
+                "build_tools.manylinux_audit.distribution_version",
                 return_value="6.7.0",
             ),
             mock.patch.dict(sys.modules, modules),
@@ -360,7 +365,7 @@ class TestRocmNpuLinuxWheelNative:
 
     def test_auditwheel_policy_rejects_unpinned_api_version(self):
         with mock.patch(
-            "build_tools.rocm_npu_linux_wheels.distribution_version",
+            "build_tools.manylinux_audit.distribution_version",
             return_value="6.8.0",
         ):
             with pytest.raises(RuntimeError, match="expected 6.7.0"):
@@ -368,7 +373,7 @@ class TestRocmNpuLinuxWheelNative:
 
     def test_auditwheel_policy_requires_pinned_tool(self):
         with mock.patch(
-            "build_tools.rocm_npu_linux_wheels.distribution_version",
+            "build_tools.manylinux_audit.distribution_version",
             side_effect=PackageNotFoundError,
         ):
             with pytest.raises(
