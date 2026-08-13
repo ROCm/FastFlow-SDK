@@ -16,6 +16,16 @@ BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or str(os.cpu_count() or 8)
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 
 
+def _hrx_test_cmake_options(include_tests, include_cts):
+    enabled = "ON" if include_tests or include_cts else "OFF"
+    # IREE's async CTS test libraries include benchmark support whenever tests
+    # are enabled, even when only non-benchmark targets are built.
+    return (
+        f"-DIREE_BUILD_TESTS={enabled}",
+        f"-DIREE_BUILD_BENCHMARKS={enabled}",
+    )
+
+
 def _prepare_fresh_cmake_tree(path):
     """Clear generated CMake state in an owned runtime build tree."""
     allowed = {paths.HRX_CMAKE_BUILD.resolve(), paths.ROCM_NPU_CLI_BUILD.resolve()}
@@ -29,6 +39,23 @@ def _prepare_fresh_cmake_tree(path):
             child.unlink()
 
 
+def _build_hrx_cts_binaries(env):
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(paths.HRX_CMAKE_BUILD),
+            *[
+                f"--target=iree_hal_drivers_amdxdna_cts_{test}"
+                for test in hrx_runtime.HRX_CTS_TESTS
+            ],
+            "-j",
+            BUILD_JOBS,
+        ],
+        env=env,
+    )
+
+
 def cmd_build_hrx(args):
     source = paths.PROJ / "hrx"
     if not (source / "CMakeLists.txt").exists():
@@ -37,6 +64,8 @@ def cmd_build_hrx(args):
         )
     patches.apply_patches({"hrx"})
     fresh = getattr(args, "fresh", False)
+    include_tests = getattr(args, "include_tests", False)
+    include_cts = getattr(args, "include_cts", False)
     if fresh:
         patches.validate_declared_patch_state("hrx", source)
         _prepare_fresh_cmake_tree(paths.HRX_CMAKE_BUILD)
@@ -56,8 +85,7 @@ def cmd_build_hrx(args):
             "-DCMAKE_INSTALL_LIBDIR=lib",
             "-DIREE_HAL_DRIVER_AMDGPU=OFF",
             "-DIREE_HAL_DRIVER_AMDXDNA=ON",
-            "-DIREE_BUILD_TESTS=OFF",
-            "-DIREE_BUILD_BENCHMARKS=OFF",
+            *_hrx_test_cmake_options(include_tests, include_cts),
             "-DLIBHRX_BUILD_CTS=OFF",
             "-DHRX_INSTALL_TESTS=OFF",
             "-DLIBHRX_BUILD_PASSTHROUGH=OFF",
@@ -87,6 +115,33 @@ def cmd_build_hrx(args):
         ],
         env=env,
     )
+    if include_tests:
+        host_tests = hrx_runtime.hrx_amdxdna_host_tests()
+        environment.sh(
+            [
+                environment.cmake_bin(),
+                "--build",
+                environment.cmake_path(paths.HRX_CMAKE_BUILD),
+                *[
+                    f"--target={name}"
+                    for name in hrx_runtime.hrx_amdxdna_host_test_targets()
+                ],
+                "-j",
+                BUILD_JOBS,
+            ],
+            env=env,
+        )
+        environment.sh(
+            [
+                "ctest",
+                "--test-dir",
+                environment.cmake_path(paths.HRX_CMAKE_BUILD),
+                "-R",
+                hrx_runtime.hrx_amdxdna_host_test_regex(),
+                "--output-on-failure",
+            ],
+            env=env,
+        )
     shutil.rmtree(paths.HRX_INSTALL, ignore_errors=True)
     environment.sh(
         [
@@ -111,10 +166,14 @@ def cmd_build_hrx(args):
         (paths.HRX_INSTALL / FRESH_BUILD_MARKER).write_text(
             json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8"
         )
-    print(
-        "build hrx (minimal amdxdna HAL + installed package): ok ->",
-        paths.HRX_INSTALL,
-    )
+    if include_cts:
+        _build_hrx_cts_binaries(env)
+    summary = "minimal amdxdna HAL + installed package"
+    if include_tests:
+        summary += f" + {len(hrx_runtime.hrx_amdxdna_host_tests())} host unit tests"
+    if include_cts:
+        summary += f" + on-device CTS ({', '.join(hrx_runtime.HRX_CTS_TESTS)})"
+    print(f"build hrx ({summary}): ok ->", paths.HRX_INSTALL)
 
 
 def _smoke_installed_hrx(source, cc, cxx, env):
@@ -153,39 +212,6 @@ def _smoke_installed_hrx(source, cc, cxx, env):
             [paths.HRX_PACKAGE_SMOKE_BUILD / paths.executable_name(name)],
             env=smoke_env,
         )
-
-
-def cmd_build_hrx_cts(args):
-    if not (paths.HRX_CMAKE_BUILD / "CMakeCache.txt").exists():
-        sys.exit("hrx not configured — run: python dev.py build hrx")
-    env = environment.cmake_env()
-    environment.sh(
-        [
-            environment.cmake_bin(),
-            "-S",
-            environment.cmake_path(paths.PROJ / "hrx"),
-            "-B",
-            environment.cmake_path(paths.HRX_CMAKE_BUILD),
-            "-DIREE_BUILD_TESTS=ON",
-            "-DIREE_BUILD_BENCHMARKS=ON",
-        ],
-        env=env,
-    )
-    environment.sh(
-        [
-            environment.cmake_bin(),
-            "--build",
-            environment.cmake_path(paths.HRX_CMAKE_BUILD),
-            *[
-                f"--target=iree_hal_drivers_amdxdna_cts_{test}"
-                for test in hrx_runtime.HRX_CTS_TESTS
-            ],
-            "-j",
-            BUILD_JOBS,
-        ],
-        env=env,
-    )
-    print(f"build hrx-cts: ok ({', '.join(hrx_runtime.HRX_CTS_TESTS)})")
 
 
 def cmd_build_rocm_npu_cli(args):

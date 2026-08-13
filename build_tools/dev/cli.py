@@ -98,6 +98,17 @@ def create_parser():
         action="store_true",
         help="clear generated CMake state and outputs before configuring",
     )
+    b.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="when building hrx, build and run hermetic amdxdna host unit tests",
+    )
+    b.add_argument(
+        "--include-cts",
+        action="store_true",
+        help="when building hrx, also build on-device amdxdna CTS binaries "
+        "(run them with test-hrx-cts)",
+    )
     t = _add_command(sub, "test", host_testing.cmd_test)
     t.add_argument("design", nargs="?")
     t.add_argument(

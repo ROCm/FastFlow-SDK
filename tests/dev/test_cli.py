@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest import mock
 
 import pytest
 
+from build_tools import hrx_runtime
 from build_tools.dev import build, cli, device_testing, host_testing
 
 pytestmark = pytest.mark.presubmit
@@ -102,7 +104,6 @@ class TestDevCli:
             "iron-tools": "build_tools.dev.compiler_build",
             "hrx-xclbinutil": "build_tools.dev.compiler_build",
             "hrx": "build_tools.dev.runtime_build",
-            "hrx-cts": "build_tools.dev.runtime_build",
             "rocm-npu-cli": "build_tools.dev.runtime_build",
             "fastflowlm": "build_tools.dev.fastflowlm_build",
             "all": "build_tools.dev.build",
@@ -170,6 +171,44 @@ class TestDevCli:
         assert fastflowlm.inference_iterations == 1
         package = parser.parse_args(["test-npu-package"])
         assert package.lifecycle_rounds == 5 and package.resident_rounds == 10
+        hrx = parser.parse_args(["build", "hrx", "--fresh", "--include-tests"])
+        assert hrx.what == "hrx" and hrx.fresh and hrx.include_tests
+        hrx_cts = parser.parse_args(["build", "hrx", "--include-cts"])
+        assert hrx_cts.what == "hrx" and hrx_cts.include_cts
+
+    @pytest.mark.parametrize(
+        ("include_tests", "include_cts", "enabled"),
+        [
+            (False, False, "OFF"),
+            (True, False, "ON"),
+            (False, True, "ON"),
+            (True, True, "ON"),
+        ],
+    )
+    def test_hrx_tests_configure_required_benchmark_support(
+        self, include_tests, include_cts, enabled
+    ):
+        assert build.runtime_build._hrx_test_cmake_options(
+            include_tests, include_cts
+        ) == (
+            f"-DIREE_BUILD_TESTS={enabled}",
+            f"-DIREE_BUILD_BENCHMARKS={enabled}",
+        )
+
+    def test_hrx_host_test_names_map_to_scoped_cmake_and_ctest_names(self):
+        with mock.patch.object(hrx_runtime.paths, "is_windows", return_value=False):
+            tests = hrx_runtime.hrx_amdxdna_host_tests()
+            targets = hrx_runtime.hrx_amdxdna_host_test_targets()
+            pattern = re.compile(hrx_runtime.hrx_amdxdna_host_test_regex())
+        assert "native_windows_mcdm_test" not in tests
+        assert targets == tuple(
+            f"iree_hal_drivers_amdxdna_{name}" for name in tests
+        )
+        assert pattern.fullmatch("iree/hal/drivers/amdxdna/allocator_test")
+        assert not pattern.fullmatch("iree/base/allocator_test")
+
+        with mock.patch.object(hrx_runtime.paths, "is_windows", return_value=True):
+            assert "native_windows_mcdm_test" in hrx_runtime.hrx_amdxdna_host_tests()
 
     @pytest.mark.parametrize("value", ["0", "-1", "abc"])
     def test_positive_integer_rejects_invalid_values(self, value):

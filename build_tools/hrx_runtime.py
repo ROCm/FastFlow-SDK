@@ -5,6 +5,7 @@
 import contextlib
 import ctypes
 import os
+import re
 from pathlib import Path
 
 from build_tools import paths
@@ -12,6 +13,47 @@ from build_tools import paths
 
 HRX_CTS_TESTS = ("core_tests", "buffer_tests", "command_buffer_tests", "queue_tests")
 HRX_CTS_DIR = ("runtime", "src", "iree", "hal", "drivers", "amdxdna", "cts")
+# Hermetic iree_cc_test targets under amdxdna/ (host-side; not the on-device cts/ suite).
+HRX_AMDXDNA_HOST_TESTS = (
+    "allocator_test",
+    "xclbin_util_test",
+    "direct_command_buffer_chain_cache_test",
+    "direct_command_buffer_single_cache_test",
+    "direct_command_buffer_planning_test",
+    "async_queue_test",
+    "completion_queue_test",
+    "command_buffer_test",
+    "buffer_test",
+    "direct_command_buffer_test",
+    "device_test",
+    "driver_test",
+    "event_test",
+    "executable_test",
+    "executable_xclbin_test",
+    "nop_executable_cache_test",
+    "semaphore_test",
+)
+HRX_AMDXDNA_HOST_TESTS_WINDOWS = ("native_windows_mcdm_test",)
+
+
+def hrx_amdxdna_host_tests():
+    """Returns hermetic amdxdna iree_cc_test names for the host OS."""
+    if paths.is_windows():
+        return HRX_AMDXDNA_HOST_TESTS + HRX_AMDXDNA_HOST_TESTS_WINDOWS
+    return HRX_AMDXDNA_HOST_TESTS
+
+
+def hrx_amdxdna_host_test_targets():
+    """Returns the CMake target names generated for the host tests."""
+    return tuple(
+        f"iree_hal_drivers_amdxdna_{name}" for name in hrx_amdxdna_host_tests()
+    )
+
+
+def hrx_amdxdna_host_test_regex():
+    """Returns a ctest regex matching only the selected amdxdna host tests."""
+    names = "|".join(re.escape(name) for name in hrx_amdxdna_host_tests())
+    return rf"^iree/hal/drivers/amdxdna/({names})$"
 
 
 def _numpy():

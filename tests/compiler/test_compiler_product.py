@@ -350,6 +350,28 @@ def test_ci_runs_one_deep_doctor_and_uses_content_addressed_caches():
     assert cache_inputs in windows
 
 
+def test_ci_builds_hrx_unit_tests_without_installing_test_artifacts():
+    workflows = ROOT / ".github" / "workflows"
+    linux = (workflows / "build_rocm_npu_staging_linux.yml").read_text()
+    windows = (workflows / "build_rocm_npu_staging_windows.yml").read_text()
+    runtime_build = (ROOT / "build_tools" / "dev" / "runtime_build.py").read_text()
+
+    assert "dev.py build all --include-tests" in linux
+    assert "dev.py build all --include-tests" in windows
+    assert '"-DHRX_INSTALL_TESTS=OFF"' in runtime_build
+    assert '"HrxPublicDist"' in runtime_build
+
+
+def test_windows_ci_retries_transient_chocolatey_llvm_lookup_failures():
+    workflow = (
+        ROOT / ".github" / "workflows" / "build_rocm_npu_staging_windows.yml"
+    ).read_text()
+
+    assert "*NuGetResolverInputException*" in workflow
+    assert '*"503 (Service Unavailable)"*' in workflow
+    assert "Transient Chocolatey LLVM lookup failure" in workflow
+
+
 def test_npu_prerequisites_exclude_separate_compiler_product(tmp_path):
     root = tmp_path
     hrx_install = root / "hrx-install"
