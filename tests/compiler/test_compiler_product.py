@@ -7,10 +7,11 @@ import platform
 import subprocess
 import sys
 import sysconfig
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
 
@@ -22,10 +23,21 @@ sys.path[:0] = [
     str(ROOT / "tests" / "compiler"),
 ]
 
-from build_tools import compiler_product, compiler_wheels, hrx_runtime, iron, npu_prereqs, npu_test_cases, npu_test_package, paths  # noqa: E402
-from build_tools.fastflowlm_artifact import extract_archive, sha256_file  # noqa: E402
 import run_e2e  # noqa: E402
 import verify_compiler_bindings  # noqa: E402
+
+from build_tools import (  # noqa: E402
+    compiler_product,
+    compiler_wheels,
+    hrx_runtime,
+    iron,
+    npu_prereqs,
+    npu_test_cases,
+    npu_test_package,
+    paths,
+)
+from build_tools.archive import extract_archive_atomic  # noqa: E402
+from build_tools.artifact import sha256_file  # noqa: E402
 from build_tools.dev import compiler_build as build  # noqa: E402
 
 
@@ -252,7 +264,7 @@ def test_compiler_product_can_extract_to_explicit_short_root(tmp_path):
         ),
         mock.patch.object(
             compiler_product,
-            "extract_archive",
+            "extract_archive_atomic",
             return_value=short_root / "rocm-npu-compiler-windows-x86_64",
         ) as extract,
     ):
@@ -260,7 +272,12 @@ def test_compiler_product_can_extract_to_explicit_short_root(tmp_path):
             SimpleNamespace(dir=tmp_path, output_dir=str(short_root))
         )
 
-    extract.assert_called_once_with(archive, short_root, allowed_root=short_root.parent)
+    extract.assert_called_once_with(
+        archive,
+        short_root,
+        allowed_root=short_root.parent,
+        verify_root=compiler_product.verify_product_inventory,
+    )
 
 
 def test_inventory_accepts_complete_product(tmp_path):
@@ -413,7 +430,12 @@ def test_windows_tar_zst_is_deterministic_and_extracts_valid_files(tmp_path):
     assert first.name.endswith(".tar.zst")
     assert first.read_bytes() == second.read_bytes()
     assert first.with_name(first.name + ".sha256").is_file()
-    extracted = extract_archive(first, root / "extracted", allowed_root=root)
+    extracted = extract_archive_atomic(
+        first,
+        root / "extracted",
+        allowed_root=root,
+        verify_root=compiler_product.verify_product_inventory,
+    )
     assert (extracted / "python" / "aie" / "ir.py").read_bytes() == b"x"
     compiler_product.verify_product_inventory(extracted)
 
@@ -583,7 +605,10 @@ def test_linux_compiler_product_bundles_non_manylinux_dependencies(tmp_path):
             "which",
             return_value="/usr/bin/patchelf",
         ),
-        mock.patch.object(compiler_product.subprocess, "run", side_effect=run),
+        mock.patch(
+            "build_tools.native_dependencies.subprocess.run",
+            side_effect=run,
+        ),
     ):
         copied = compiler_product._stage_compiler_native_dependencies(product)
 
@@ -604,7 +629,12 @@ def test_linux_archive_is_tar_gz_without_zstd(tmp_path):
 
     assert archive.name.endswith(".tar.gz")
     assert archive.with_name(archive.name + ".sha256").is_file()
-    extracted = extract_archive(archive, root / "extracted", allowed_root=root)
+    extracted = extract_archive_atomic(
+        archive,
+        root / "extracted",
+        allowed_root=root,
+        verify_root=compiler_product.verify_product_inventory,
+    )
     compiler_product.verify_product_inventory(extracted)
     assert os.access(extracted / "bin" / "xclbinutil", os.X_OK)
 

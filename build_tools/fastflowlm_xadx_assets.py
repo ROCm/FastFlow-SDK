@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 from build_tools import environment, paths
-from build_tools.fastflowlm_artifact import sha256_file
+from build_tools.artifact import file_record, sha256_file
 from build_tools.fastflowlm_kernel_recipe import (
     attest_recipe_generators,
     build_recipe,
@@ -22,7 +22,6 @@ from build_tools.fastflowlm_qualification_common import (
     XADX_PRODUCT,
     XADX_STAGE,
     configure_qualification_tools,
-    file_record,
     load_capabilities,
     recipe_generators,
     run_native_qualification_tests,

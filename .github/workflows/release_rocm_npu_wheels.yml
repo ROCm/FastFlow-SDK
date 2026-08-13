@@ -431,7 +431,7 @@ jobs:
                 "${platform_args[@]}" \
                 --target "${target}" \
                 "${numeric_requirements[@]}"
-              python build_tools/verify_qualification_dependencies.py \
+              python -m build_tools.verify_qualification_dependencies \
                 --target "${target}" \
                 --version "${ROCM_NPU_PACKAGE_VERSION}"
             done

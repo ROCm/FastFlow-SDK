@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from build_tools import environment, paths
+from build_tools.artifact import directory_state, git_source_state
 from build_tools.dev import patches
-from build_tools.fastflowlm_artifact import directory_state, git_source_state
 from build_tools.fastflowlm_deps import dependency_errors, dependency_paths
 
 BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or str(os.cpu_count() or 8)

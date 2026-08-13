@@ -19,16 +19,19 @@ except ImportError:
 import pytest
 
 from build_tools import rocm_npu_wheel_common
+from build_tools.artifact import sha256_file
 from build_tools.rocm_npu_wheel_common import (
     build_wheel,
     find_distribution_wheels,
     find_wheel_path_references,
     remove_distribution_wheels,
-    sha256_file,
     validate_version,
     verify_wheel_checksums,
 )
-
+from build_tools.runtime_wheel_staging import (
+    prepare_runtime_wheel_trees,
+    write_runtime_wheel_manifests,
+)
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -38,6 +41,70 @@ pytestmark = [
 
 
 class TestRocmNpuWheelCommon:
+    def test_runtime_wheel_tree_and_manifest_staging_is_platform_neutral(
+        self, tmp_path
+    ):
+        source = tmp_path / "bundle"
+        files = {
+            "share/rocm-npu/self-test/case/manifest.json": "{}",
+            "share/flm/model_list.json": "{}",
+            "licenses/rocm-npu-staging-LICENSE": "staging",
+            "licenses/hrx-LICENSE/LICENSE": "hrx",
+            "licenses/nlohmann-json-LICENSE.MIT": "json",
+            "licenses/THIRD_PARTY_NOTICES.md": "notices",
+            "licenses/FastFlowLM-LICENSE_RUNTIME.txt": "fastflowlm",
+            "licenses/FastFlowLM-TERMS.md": "terms",
+        }
+        for relative, contents in files.items():
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+
+        trees = prepare_runtime_wheel_trees(source, tmp_path / "staging")
+        assert (trees.runtime_root / "__init__.py").is_file()
+        assert (
+            trees.runtime_root / "share/rocm-npu/self-test/case/manifest.json"
+        ).is_file()
+        assert (trees.fastflowlm_root / "share/flm/model_list.json").is_file()
+        assert (
+            trees.runtime_root / "licenses/rocm-npu-LICENSE"
+        ).read_text(encoding="utf-8") == "staging"
+
+        write_runtime_wheel_manifests(
+            trees,
+            {
+                "artifact": "source-artifact",
+                "product": "source-product",
+                "platform": {"system": "test"},
+                "components": [{"name": "component"}],
+            },
+            version="1.2.3",
+            runtime_wheel_tag="py3-none-runtime",
+            fastflowlm_wheel_tag="py3-none-fastflowlm",
+            strip_report={"stripped": 1},
+            binary_dependencies={
+                "rocm_npu_runtime/bin/runtime": ["system"],
+                "rocm_npu_fastflowlm/bin/flm": ["runtime"],
+            },
+        )
+        runtime_manifest = json.loads(
+            (trees.runtime_root / "manifest.json").read_text(encoding="utf-8")
+        )
+        fastflowlm_manifest = json.loads(
+            (trees.fastflowlm_root / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert runtime_manifest["wheel_tag"] == "py3-none-runtime"
+        assert runtime_manifest["source_artifact"] == "source-artifact"
+        assert runtime_manifest["binary_dependencies"] == {
+            "rocm_npu_runtime/bin/runtime": ["system"]
+        }
+        assert fastflowlm_manifest["requires"] == [
+            "rocm-npu-runtime ==1.2.3"
+        ]
+        assert fastflowlm_manifest["binary_dependencies"] == {
+            "rocm_npu_fastflowlm/bin/flm": ["runtime"]
+        }
+
     def test_package_manifest_records_payload_checksums(self, tmp_path):
         package = tmp_path
         payload = package / "bin" / "runtime.bin"

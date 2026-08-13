@@ -66,7 +66,9 @@ class TestRocmNpuReleaseWheelWorkflow:
             workflow.index("Resolve qualification dependencies") :
             workflow.index("Resolve compiler core")
         ]
-        assert "build_tools/verify_qualification_dependencies.py" in section
+        assert (
+            "python -m build_tools.verify_qualification_dependencies" in section
+        )
         assert "--no-index" in section
         assert "--no-deps" in section
         assert '"${numeric_requirements[@]}"' in section
@@ -215,7 +217,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "-cp314-" not in workflow
         assert "--platform linux_x86_64" in workflow
         assert "--platform manylinux_2_28_x86_64" in workflow
-        assert "verify_qualification_dependencies.py" in workflow
+        assert "python -m build_tools.verify_qualification_dependencies" in workflow
         assert '"rocm-npu-compiler-bindings": version' in workflow
         compiler_resolution = workflow.split(
             "- name: Resolve compiler core and bindings", 1

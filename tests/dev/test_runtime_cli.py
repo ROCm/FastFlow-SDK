@@ -13,7 +13,6 @@ import pytest
 from build_tools import validate_rocm_npu_cli
 from build_tools.validate_rocm_npu_cli import run_reports, validate_report
 
-
 pytestmark = pytest.mark.presubmit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -309,9 +308,15 @@ def test_hardware_report_validator_allows_optional_ioctl_errors():
     "module",
     ("rocm_npu_linux_wheels.py", "rocm_npu_windows_wheels.py"),
 )
-def test_runtime_wheels_ship_native_cli_fixture_and_license(module):
+def test_runtime_wheels_ship_native_cli(module):
     source = (ROOT / "build_tools" / module).read_text(encoding="utf-8")
     assert "rocm-npu" in source
+    assert 'console_scripts={"rocm-npu": f"{RUNTIME_PACKAGE}:main"}' in source
+
+
+def test_runtime_wheel_staging_ships_fixture_and_license():
+    source = (
+        ROOT / "build_tools" / "runtime_wheel_staging.py"
+    ).read_text(encoding="utf-8")
     assert "share/rocm-npu/self-test" in source
     assert "nlohmann-json-LICENSE.MIT" in source
-    assert 'console_scripts={"rocm-npu": f"{RUNTIME_PACKAGE}:main"}' in source

@@ -12,6 +12,10 @@ import tempfile
 from pathlib import Path
 
 from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
+from build_tools.release_policy import (
+    numeric_package_versions,
+    numeric_requires_python,
+)
 from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
@@ -22,22 +26,14 @@ from build_tools.rocm_npu_wheel_common import (
     verify_wheel_checksums,
 )
 
-
 QUALIFICATION_WHEEL_TAG = "py3-none-any"
 ROOT = Path(__file__).resolve().parents[1]
 
 # The package computes its own qualification buffers and BF16 oracles rather
 # than shipping them. Keep these exact: qualification evidence must mean the
 # same arithmetic in an offline install as it did in CI.
-NUMERIC_RUNTIME_CONTRACT = json.loads(
-    (
-        ROOT
-        / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
-        / "numeric-runtime.json"
-    ).read_text(encoding="utf-8")
-)
-NUMERIC_RUNTIME = NUMERIC_RUNTIME_CONTRACT["packages"]
-QUALIFICATION_REQUIRES_PYTHON = NUMERIC_RUNTIME_CONTRACT["requires_python"]
+NUMERIC_RUNTIME = numeric_package_versions()
+QUALIFICATION_REQUIRES_PYTHON = numeric_requires_python()
 QUALIFICATION_REQUIRES = tuple(
     f"{distribution} =={version}"
     for distribution, version in sorted(NUMERIC_RUNTIME.items())

@@ -17,16 +17,23 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
-import tomllib
-
-from build_tools.fastflowlm_artifact import pe_imports, reset_directory
+from build_tools import release_policy
+from build_tools.archive import extract_archive
+from build_tools.artifact import reset_directory
+from build_tools.native_dependencies import (
+    elf_needed,
+    elf_rpath,
+    is_loadable_elf,
+    is_pe,
+    pe_imports,
+    set_elf_rpath,
+)
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_PACKAGE,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     COMPILER_PACKAGE,
-    COMPILER_STABLE_ABI_MINOR,
     _copy_file,
     _write_file,
     _write_package_manifest,
@@ -35,9 +42,7 @@ from build_tools.rocm_npu_wheel_common import (
     remove_distribution_wheels,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_POLICY_PATH = ROOT / "release.toml"
 COMPILER_DISTRIBUTIONS = (
     COMPILER_DISTRIBUTION,
     COMPILER_CORE_DISTRIBUTION,
@@ -79,73 +84,8 @@ CORE_AIE_NATIVE_PREFIXES = (
 )
 
 
-def compiler_python_versions(
-    policy_path: Path = RELEASE_POLICY_PATH,
-) -> tuple[str, ...]:
-    with Path(policy_path).open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
-    release = policy.get("wheel_release")
-    versions = release.get("compiler_python_versions") if isinstance(release, dict) else None
-    if not isinstance(versions, list) or not versions:
-        raise RuntimeError(
-            f"wheel_release.compiler_python_versions must be a non-empty list: "
-            f"{policy_path}"
-        )
-    normalized = []
-    for version in versions:
-        value = str(version)
-        if not re.fullmatch(r"3\.[0-9]+", value):
-            raise RuntimeError(f"invalid compiler Python minor in {policy_path}: {value}")
-        normalized.append(value)
-    if len(set(normalized)) != len(normalized):
-        raise RuntimeError(f"duplicate compiler Python minor in {policy_path}")
-    return tuple(normalized)
-
-
-def compiler_python_stable_abi(
-    policy_path: Path = RELEASE_POLICY_PATH,
-) -> str:
-    with Path(policy_path).open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
-    release = policy.get("wheel_release")
-    stable_abi = (
-        release.get("compiler_python_stable_abi")
-        if isinstance(release, dict)
-        else None
-    )
-    if (
-        not isinstance(stable_abi, str)
-        or not re.fullmatch(r"3\.[0-9]+", stable_abi)
-        or stable_abi != COMPILER_STABLE_ABI_MINOR
-        or stable_abi not in compiler_python_versions(policy_path)
-    ):
-        raise RuntimeError(
-            "wheel_release.compiler_python_stable_abi must match the pinned "
-            f"MLIR stable ABI floor {COMPILER_STABLE_ABI_MINOR}: {policy_path}"
-        )
-    return stable_abi
-
-
-def compiler_requires_python(
-    policy_path: Path = RELEASE_POLICY_PATH,
-) -> str:
-    versions = compiler_python_versions(policy_path)
-    parsed = [tuple(map(int, version.split("."))) for version in versions]
-    expected = [
-        (parsed[0][0], parsed[0][1] + offset)
-        for offset in range(len(parsed))
-    ]
-    if parsed != expected or versions[0] != compiler_python_stable_abi(policy_path):
-        raise RuntimeError(
-            "wheel_release.compiler_python_versions must be a contiguous, "
-            f"ascending range beginning at {COMPILER_STABLE_ABI_MINOR}: {policy_path}"
-        )
-    upper = parsed[-1][1] + 1
-    return f">={versions[0]},<{parsed[-1][0]}.{upper}"
-
-
 def python_abi_tag() -> str:
-    return "cp" + compiler_python_stable_abi().replace(".", "")
+    return "cp" + release_policy.compiler_python_stable_abi().replace(".", "")
 
 
 def binding_wheel_tag(platform_tag: str) -> str:
@@ -515,8 +455,10 @@ def stage_compiler_bindings(
             requires=requirements,
         )
         | {
-            "python_stable_abi": compiler_python_stable_abi(),
-            "supported_python_minors": list(compiler_python_versions()),
+            "python_stable_abi": release_policy.compiler_python_stable_abi(),
+            "supported_python_minors": list(
+                release_policy.compiler_python_versions()
+            ),
         },
     )
     return tree
@@ -632,7 +574,7 @@ def build_compiler_wheel_family(
                 summary="ROCm NPU compiler toolchain core",
                 tag=compiler_core_wheel_tag(platform_tag),
                 console_scripts=core_scripts,
-                requires_python=compiler_requires_python(),
+                requires_python=release_policy.compiler_requires_python(),
                 compression_level=COMPILER_WHEEL_COMPRESSION_LEVEL,
             )
         bindings_future = executor.submit(
@@ -644,7 +586,7 @@ def build_compiler_wheel_family(
             summary="ROCm NPU compiler bindings for CPython 3.12+",
             tag=binding_wheel_tag(platform_tag),
             requires=requirements,
-            requires_python=compiler_requires_python(),
+            requires_python=release_policy.compiler_requires_python(),
             compression_level=COMPILER_WHEEL_COMPRESSION_LEVEL,
         )
         if meta_tree is not None:
@@ -660,7 +602,7 @@ def build_compiler_wheel_family(
                 summary="ROCm NPU compiler",
                 tag="py3-none-any",
                 requires=meta_requires,
-                requires_python=compiler_requires_python(),
+                requires_python=release_policy.compiler_requires_python(),
                 root_is_purelib=True,
             )
         if core_future is not None:
@@ -682,7 +624,7 @@ def verify_compiler_binding_stable_abi(wheel: Path) -> None:
             "--strict",
             "--summary",
             "--assume-minimum-abi3",
-            compiler_python_stable_abi(),
+            release_policy.compiler_python_stable_abi(),
             str(wheel),
         ],
         capture_output=True,
@@ -713,36 +655,8 @@ def _wheel_distribution(wheel: Path) -> str:
 
 def _extract_wheel(wheel: Path, destination: Path) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(wheel) as archive:
-        archive.extractall(destination)
+    extract_archive(wheel, destination)
     return destination
-
-
-def _is_pe(path: Path) -> bool:
-    try:
-        return path.read_bytes()[:2] == b"MZ"
-    except OSError:
-        return False
-
-
-def _is_loadable_elf(path: Path) -> bool:
-    try:
-        header = path.read_bytes()[:18]
-    except OSError:
-        return False
-    if len(header) < 18 or header[:4] != b"\x7fELF":
-        return False
-    byteorder = {1: "little", 2: "big"}.get(header[5])
-    if byteorder is None:
-        return False
-    # Runtime closure applies only to executables and shared objects. Relocatable
-    # ET_REL files have no dynamic dependency table and are rejected by patchelf.
-    return int.from_bytes(header[16:18], byteorder) in (2, 3)
-
-
-def is_loadable_elf(path: Path) -> bool:
-    """Public compiler-product predicate for runtime-loadable ELF files."""
-    return _is_loadable_elf(path)
 
 
 def relocate_linux_compiler_rpaths(product: Path) -> dict[str, str]:
@@ -758,14 +672,9 @@ def relocate_linux_compiler_rpaths(product: Path) -> dict[str, str]:
     rewritten = {}
     for path in sorted(
         item for item in product.rglob("*")
-        if item.is_file() and _is_loadable_elf(item)
+        if item.is_file() and is_loadable_elf(item)
     ):
-        current = subprocess.run(
-            [patchelf, "--print-rpath", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        current = elf_rpath(path, patchelf=patchelf)
         entries = current.split(":") if current else []
         relative_entries = [entry for entry in entries if not entry.startswith("/")]
         for library_root in library_roots:
@@ -776,10 +685,7 @@ def relocate_linux_compiler_rpaths(product: Path) -> dict[str, str]:
         relocated = ":".join(dict.fromkeys(relative_entries))
         if relocated == current:
             continue
-        subprocess.run(
-            [patchelf, "--set-rpath", relocated, str(path)],
-            check=True,
-        )
+        set_elf_rpath(path, relocated, patchelf=patchelf)
         rewritten[path.relative_to(product).as_posix()] = relocated
     return rewritten
 
@@ -823,7 +729,7 @@ def verify_windows_compiler_wheels(
         core_names = {
             path.name.casefold()
             for path in core.rglob("*")
-            if path.is_file() and _is_pe(path)
+            if path.is_file() and is_pe(path)
         }
         graph: dict[str, list[str]] = {}
         missing = []
@@ -838,12 +744,12 @@ def verify_windows_compiler_wheels(
             own_names = {
                 path.name.casefold()
                 for path in tree.rglob("*")
-                if path.is_file() and _is_pe(path)
+                if path.is_file() and is_pe(path)
             }
             allowed = own_names | core_names
             for path in sorted(
                 item for item in tree.rglob("*")
-                if item.is_file() and _is_pe(item)
+                if item.is_file() and is_pe(item)
             ):
                 imports = pe_imports(path)
                 key = f"{distribution}/{path.relative_to(tree).as_posix()}"
@@ -924,7 +830,7 @@ def verify_linux_compiler_wheels(
             raise RuntimeError("Linux compiler wheel validation requires one core wheel")
         core_names = {
             path.name for path in core_roots[0].rglob("*")
-            if path.is_file() and _is_loadable_elf(path)
+            if path.is_file() and is_loadable_elf(path)
         }
         graph: dict[str, list[str]] = {}
         missing = []
@@ -937,26 +843,16 @@ def verify_linux_compiler_wheels(
                 continue
             own_names = {
                 path.name for path in tree.rglob("*")
-                if path.is_file() and _is_loadable_elf(path)
+                if path.is_file() and is_loadable_elf(path)
             }
             allowed = own_names | core_names
             for path in sorted(
                 item for item in tree.rglob("*")
-                if item.is_file() and _is_loadable_elf(item)
+                if item.is_file() and is_loadable_elf(item)
             ):
                 key = f"{distribution}/{path.relative_to(tree).as_posix()}"
-                needed = subprocess.run(
-                    [patchelf, "--print-needed", str(path)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.splitlines()
-                rpath = subprocess.run(
-                    [patchelf, "--print-rpath", str(path)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
+                needed = elf_needed(path, patchelf=patchelf)
+                rpath = elf_rpath(path, patchelf=patchelf)
                 graph[key] = sorted(needed)
                 absolute_rpaths.extend(
                     f"{key} -> {entry}"

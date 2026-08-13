@@ -5,33 +5,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_PATH = (
-    ROOT
-    / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
-    / "numeric-runtime.json"
-)
-
-
-def numeric_runtime_contract(path: Path = CONTRACT_PATH) -> dict:
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
-    if (
-        document.get("schema_version") != 1
-        or not document.get("python_abis")
-        or not document.get("packages")
-    ):
-        raise RuntimeError(f"invalid numeric runtime contract: {path}")
-    return document
+from build_tools import release_policy
 
 
 def download_numeric_wheels(destination: Path) -> None:
-    contract = numeric_runtime_contract()
+    contract = release_policy.numeric_runtime_contract()
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     requirements = [

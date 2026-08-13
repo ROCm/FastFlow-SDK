@@ -16,8 +16,14 @@ from pathlib import Path
 
 from build_tools.fastflowlm_artifact import (
     _is_linux_system_runtime,
-    reset_directory,
     verify_bundle,
+)
+from build_tools.native_dependencies import (
+    elf_needed,
+    elf_rpath,
+    elf_soname,
+    is_elf,
+    set_elf_rpath,
 )
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
@@ -26,23 +32,22 @@ from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
-    build_wheel as _build_wheel,
-    fastflowlm_artifact_name,
+    _copy_dependency_licenses,
+    _copy_file,
+    _copy_relative_file,
+    _copy_relative_tree,
     find_distribution_wheels,
     find_wheel_path_references,
     remove_distribution_wheels,
-    runtime_artifact_name,
     validate_version,
-    _copy_dependency_licenses,
-    _copy_file,
-    _copy_license,
-    _copy_license_as,
-    _copy_relative_file,
-    _copy_relative_tree,
-    _write_file,
-    _write_package_manifest,
 )
-
+from build_tools.rocm_npu_wheel_common import (
+    build_wheel as _build_wheel,
+)
+from build_tools.runtime_wheel_staging import (
+    prepare_runtime_wheel_trees,
+    write_runtime_wheel_manifests,
+)
 
 LINUX_WHEEL_TAG = "py3-none-manylinux_2_28_x86_64"
 FASTFLOWLM_LINUX_WHEEL_TAG = "py3-none-linux_x86_64"
@@ -188,150 +193,9 @@ def validate_auditwheel_policy(distribution: str, policy: str) -> str:
     return policy
 
 
-def _write_runtime_module(package_root: Path) -> None:
-    _write_file(package_root / "__init__.py", '''"""Package-local HRX runtime helpers."""
-
-from __future__ import annotations
-
-import ctypes
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-
-def package_root() -> Path:
-    return Path(__file__).resolve().parent
-
-
-def rocm_npu_path() -> Path:
-    path = package_root() / "bin" / "rocm-npu"
-    if not path.is_file():
-        raise FileNotFoundError(f"rocm-npu executable was not found: {path}")
-    return path
-
-
-def libhrx_path() -> Path:
-    direct = package_root() / "lib" / "libhrx.so"
-    if direct.is_file():
-        return direct
-    candidates = sorted((package_root() / "lib").glob("libhrx.so*"))
-    if candidates:
-        return candidates[0]
-    raise FileNotFoundError(f"libhrx.so was not found under {package_root() / 'lib'}")
-
-
-def initialize_process():
-    return ctypes.CDLL(str(libhrx_path()), mode=getattr(ctypes, "RTLD_GLOBAL", 0))
-
-
-def self_test(*, load: bool = False) -> Path:
-    path = libhrx_path()
-    if load:
-        initialize_process()
-    return path
-
-
-def main() -> int:
-    environment = os.environ.copy()
-    scripts = str(Path(sys.executable).parent)
-    existing = environment.get("ROCM_NPU_PLUGIN_PATH")
-    environment["ROCM_NPU_PLUGIN_PATH"] = (
-        scripts if not existing else scripts + os.pathsep + existing
-    )
-    return subprocess.run(
-        [str(rocm_npu_path()), *sys.argv[1:]],
-        env=environment,
-        check=False,
-    ).returncode
-''')
-    _write_file(package_root / "__main__.py", '''from . import main
-
-raise SystemExit(main())
-''')
-
-
-def _write_fastflowlm_module(package_root: Path) -> None:
-    _write_file(package_root / "__init__.py", '''"""Package-local FastFlowLM runtime helpers."""
-
-from __future__ import annotations
-
-import os
-import sys
-from pathlib import Path
-
-
-def package_root() -> Path:
-    return Path(__file__).resolve().parent
-
-
-def flm_path() -> Path:
-    path = package_root() / "bin" / "flm"
-    if not path.is_file():
-        raise FileNotFoundError(f"FastFlowLM executable was not found: {path}")
-    return path
-
-
-def config_path() -> Path:
-    path = package_root() / "share" / "flm" / "model_list.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"FastFlowLM model list was not found: {path}")
-    return path
-
-
-def xclbin_path() -> Path:
-    path = package_root() / "share" / "flm"
-    if not (path / "xclbins").is_dir():
-        raise FileNotFoundError(f"FastFlowLM xclbins were not found: {path / 'xclbins'}")
-    return path
-
-
-def model_info_path() -> Path:
-    path = package_root() / "share" / "flm" / "model_info.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"FastFlowLM model info was not found: {path}")
-    return path
-
-
-def main(argv: list[str] | None = None) -> int:
-    executable = str(flm_path())
-    args = list(sys.argv[1:] if argv is None else argv)
-    env = dict(os.environ)
-    env.setdefault("HRX_GPU_DRIVER", "amdxdna")
-    env.setdefault("FLM_CONFIG_PATH", str(config_path()))
-    env.setdefault("FLM_XCLBIN_PATH", str(xclbin_path()))
-    env.setdefault("FLM_MODELINFO_PATH", str(model_info_path()))
-    os.execvpe(executable, [executable, *args], env)
-    raise RuntimeError("unreachable")
-''')
-    _write_file(package_root / "__main__.py", '''from __future__ import annotations
-
-from . import main
-
-
-if __name__ == "__main__":
-    main()
-''')
-
-
-def _is_elf(path: Path) -> bool:
-    try:
-        return path.read_bytes()[:4] == b"\x7fELF"
-    except OSError:
-        return False
-
-
 def _elf_files(package_root: Path) -> list[Path]:
     return sorted(path for path in package_root.rglob("*")
-                  if path.is_file() and _is_elf(path))
-
-
-def _print_soname(patchelf: str, path: Path) -> str | None:
-    result = subprocess.run([patchelf, "--print-soname", str(path)],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+                  if path.is_file() and is_elf(path))
 
 
 def _copy_hrx_soname(source_bundle: Path, runtime_root: Path) -> str:
@@ -347,7 +211,7 @@ def _copy_hrx_soname(source_bundle: Path, runtime_root: Path) -> str:
         )
     sonames = {
         soname for library in libraries
-        if (soname := _print_soname(patchelf, library))
+        if (soname := elf_soname(library, patchelf=patchelf))
     }
     if len(sonames) != 1:
         raise RuntimeError(
@@ -363,20 +227,6 @@ def _copy_hrx_soname(source_bundle: Path, runtime_root: Path) -> str:
     return soname
 
 
-def _print_needed(patchelf: str, path: Path) -> list[str]:
-    return subprocess.run(
-        [patchelf, "--print-needed", str(path)], check=True,
-        capture_output=True, text=True,
-    ).stdout.splitlines()
-
-
-def _print_rpath(patchelf: str, path: Path) -> str:
-    return subprocess.run(
-        [patchelf, "--print-rpath", str(path)], check=True,
-        capture_output=True, text=True,
-    ).stdout.strip()
-
-
 def _provided_library_filenames(package_root: Path) -> set[str]:
     return {path.name for path in _elf_files(package_root)}
 
@@ -384,10 +234,10 @@ def _provided_library_filenames(package_root: Path) -> set[str]:
 def _source_linux_library_candidates(source_bundle: Path, patchelf: str) -> dict[str, Path]:
     candidates: dict[str, Path] = {}
     for path in sorted((source_bundle / "lib").rglob("*.so*")):
-        if not path.is_file() or not _is_elf(path):
+        if not path.is_file() or not is_elf(path):
             continue
         candidates.setdefault(path.name, path)
-        soname = _print_soname(patchelf, path)
+        soname = elf_soname(path, patchelf=patchelf)
         if soname:
             candidates.setdefault(soname, path)
     return candidates
@@ -403,7 +253,7 @@ def _copy_native_closure(source_bundle: Path, package_root: Path,
     queue = _elf_files(package_root)
     while queue:
         path = queue.pop(0)
-        for needed in _print_needed(patchelf, path):
+        for needed in elf_needed(path, patchelf=patchelf):
             provided = _provided_library_filenames(package_root)
             for external_root in external_roots:
                 provided.update(_provided_library_filenames(external_root))
@@ -468,10 +318,11 @@ def _patch_and_verify_linux_products(package_roots: list[Path]) -> dict[str, lis
 
     for package_root, elf_files in package_elf_files.items():
         for path in elf_files:
-            subprocess.run([patchelf, "--set-rpath", _rpath_for(path, package_root),
-                            str(path)], check=True)
+            set_elf_rpath(
+                path, _rpath_for(path, package_root), patchelf=patchelf
+            )
             absolute_entries = [
-                entry for entry in _print_rpath(patchelf, path).split(":")
+                entry for entry in elf_rpath(path, patchelf=patchelf).split(":")
                 if entry.startswith("/")
             ]
             if absolute_entries:
@@ -497,7 +348,7 @@ def _patch_and_verify_linux_products(package_roots: list[Path]) -> dict[str, lis
         if package_root.name == FASTFLOWLM_PACKAGE:
             allowed_names.update(runtime_names)
         for path in elf_files:
-            needed = _print_needed(patchelf, path)
+            needed = elf_needed(path, patchelf=patchelf)
             relative = f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
             graph[relative] = sorted(needed)
             missing.extend(f"{relative} -> {name}" for name in needed
@@ -517,41 +368,22 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
         raise RuntimeError("rocm-npu runtime/FastFlowLM wheel staging is Linux-only for now")
     version = validate_version(version)
     source_manifest = verify_bundle(source_bundle)
-    reset_directory(destination, destination.parent)
+    trees = prepare_runtime_wheel_trees(source_bundle, destination)
+    runtime_tree = trees.runtime_tree
+    fastflowlm_tree = trees.fastflowlm_tree
+    runtime_root = trees.runtime_root
+    fastflowlm_root = trees.fastflowlm_root
 
-    runtime_tree = destination / "runtime"
-    fastflowlm_tree = destination / "fastflowlm"
-    runtime_root = runtime_tree / RUNTIME_PACKAGE
-    fastflowlm_root = fastflowlm_tree / FASTFLOWLM_PACKAGE
-    runtime_root.mkdir(parents=True)
-    fastflowlm_root.mkdir(parents=True)
-
-    _write_runtime_module(runtime_root)
     _copy_hrx_soname(source_bundle, runtime_root)
     _copy_relative_file(source_bundle, "bin/rocm-npu", runtime_root)
-    _copy_relative_tree(source_bundle, "share/rocm-npu/self-test", runtime_root)
     runtime_license_names = _copy_runtime_native_closure(source_bundle, runtime_root)
 
-    _write_fastflowlm_module(fastflowlm_root)
     _copy_relative_file(source_bundle, "bin/flm", fastflowlm_root)
-    _copy_relative_tree(source_bundle, "share/flm", fastflowlm_root)
     flm_lib_dir = source_bundle / "lib" / "flm"
     if flm_lib_dir.is_dir():
         _copy_relative_tree(source_bundle, "lib/flm", fastflowlm_root)
     fastflowlm_license_names = _copy_fastflowlm_native_closure(
         source_bundle, fastflowlm_root, runtime_root)
-
-    _copy_license_as(source_bundle, "licenses/rocm-npu-staging-LICENSE",
-                     runtime_root, "licenses/rocm-npu-LICENSE")
-    _copy_license(source_bundle, "licenses/hrx-LICENSE", runtime_root)
-    _copy_license(source_bundle, "licenses/nlohmann-json-LICENSE.MIT",
-                  runtime_root)
-    _copy_license(source_bundle, "licenses/THIRD_PARTY_NOTICES.md",
-                  runtime_root)
-    _copy_license_as(source_bundle, "licenses/rocm-npu-staging-LICENSE",
-                     fastflowlm_root, "licenses/rocm-npu-LICENSE")
-    _copy_license(source_bundle, "licenses/FastFlowLM-LICENSE_RUNTIME.txt", fastflowlm_root)
-    _copy_license(source_bundle, "licenses/FastFlowLM-TERMS.md", fastflowlm_root)
 
     runtime_names = {path.name for path in runtime_root.rglob("*") if path.is_file()}
     runtime_names.update(runtime_license_names)
@@ -563,41 +395,15 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     strip_report = _strip_debug([runtime_root, fastflowlm_root])
     binary_dependencies = _patch_and_verify_linux_products([runtime_root, fastflowlm_root])
 
-    common_manifest = {
-        "schema_version": 1,
-        "version": version,
-        "platform": source_manifest.get("platform", {}),
-        "sources": source_manifest.get("sources", {}),
-        "patches": source_manifest.get("patches", []),
-        "dependencies": source_manifest.get("dependencies", {}),
-        "toolchain": source_manifest.get("toolchain", {}),
-        "source_artifact": source_manifest.get("artifact"),
-        "source_product": source_manifest.get("product"),
-        "strip": strip_report,
-    }
-    _write_package_manifest(runtime_root, {
-        **common_manifest,
-        "product": RUNTIME_DISTRIBUTION,
-        "artifact": runtime_artifact_name(),
-        "components": source_manifest.get("components", []),
-        "wheel_tag": wheel_tag(),
-        "binary_dependencies": {
-            name: needed for name, needed in binary_dependencies.items()
-            if name.startswith(f"{RUNTIME_PACKAGE}/")
-        },
-    })
-    _write_package_manifest(fastflowlm_root, {
-        **common_manifest,
-        "product": FASTFLOWLM_DISTRIBUTION,
-        "artifact": fastflowlm_artifact_name(),
-        "components": [],
-        "wheel_tag": fastflowlm_wheel_tag(),
-        "requires": [f"{RUNTIME_DISTRIBUTION} =={version}"],
-        "binary_dependencies": {
-            name: needed for name, needed in binary_dependencies.items()
-            if name.startswith(f"{FASTFLOWLM_PACKAGE}/")
-        },
-    })
+    write_runtime_wheel_manifests(
+        trees,
+        source_manifest,
+        version=version,
+        runtime_wheel_tag=wheel_tag(),
+        fastflowlm_wheel_tag=fastflowlm_wheel_tag(),
+        strip_report=strip_report,
+        binary_dependencies=binary_dependencies,
+    )
     return {
         RUNTIME_DISTRIBUTION: runtime_tree,
         FASTFLOWLM_DISTRIBUTION: fastflowlm_tree,

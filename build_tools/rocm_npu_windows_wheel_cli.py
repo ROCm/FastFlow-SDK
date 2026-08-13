@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from build_tools.artifact import validate_directory_target  # noqa: E402
 from build_tools.fastflowlm_artifact import (  # noqa: E402
     stage_runtime_bundle,
-    validate_directory_target,
     verify_fastflowlm_fresh_installs,
 )
 from build_tools.rocm_npu_wheel_common import (  # noqa: E402

@@ -2,16 +2,20 @@
 # SPDX-License-Identifier: MIT
 """NPU runtime prerequisite artifact packaging orchestration."""
 
-import contextlib
 import ctypes
 import os
 import shutil
 import subprocess
 import sys
-import tarfile
 from pathlib import Path
 
 from build_tools import environment, hrx_runtime, paths
+from build_tools.archive import (
+    create_deterministic_tar_gz,
+    create_deterministic_tar_zstd_cli,
+    extract_archive,
+    open_tar,
+)
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ
@@ -55,30 +59,6 @@ def _find_prereq_archive(where):
             return p
     return None
 
-
-@contextlib.contextmanager
-def _prereq_tar(path):
-    """Read the archive. tarfile handles .gz natively; .zst goes through the zstd CLI, as the
-    stdlib has no zstd codec before Python 3.14 and this targets 3.12. Streamed ('r|'), so a
-    handle is a single forward pass — reopen for a second pass."""
-    if path.suffix != ".zst":
-        with tarfile.open(path) as tar:
-            yield tar
-        return
-    # The producer had zstd and we do not. Only reachable if the two ends stopped sharing a
-    # container image; say so, rather than dying on a bare FileNotFoundError from Popen.
-    if not shutil.which("zstd"):
-        sys.exit(f"{path.name} needs zstd to read, and zstd is not on PATH — install it, or "
-                 f"re-package where zstd is absent (dev.py then writes .tar.gz)")
-    proc = subprocess.Popen(["zstd", "-dc", str(path)], stdout=subprocess.PIPE)
-    try:
-        with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
-            yield tar
-    finally:
-        proc.stdout.close()
-        # SIGPIPE (-13) is expected when the reader stopped early; anything else is a failure.
-        if proc.wait() not in (0, -13):
-            sys.exit(f"zstd -dc {path} failed (exit {proc.returncode})")
 
 def _tool(path):
     """Return the platform tool path, failing when it is absent."""
@@ -160,16 +140,13 @@ def cmd_package_npu_prereqs(args):
         if other != archive:
             other.unlink()
     if archive.suffix == ".zst":
-        proc = subprocess.Popen(["zstd", "-6", "-T0", "-q", "-f", "-o", str(archive)],
-                                stdin=subprocess.PIPE)
-        with tarfile.open(fileobj=proc.stdin, mode="w|") as tar:
-            tar.add(stage, arcname=".")
-        proc.stdin.close()
-        if proc.wait() != 0:
-            sys.exit(f"zstd failed (exit {proc.returncode})")
+        create_deterministic_tar_zstd_cli(
+            stage, archive, arcname=".", level=6
+        )
     else:
-        with tarfile.open(archive, "w:gz", compresslevel=6) as tar:
-            tar.add(stage, arcname=".")
+        create_deterministic_tar_gz(
+            stage, archive, arcname=".", compresslevel=6
+        )
     shutil.rmtree(stage)
     mb = archive.stat().st_size / 1e6
     print(f"package-npu-prereqs: ok -> {archive} ({mb:.0f} MB)")
@@ -251,7 +228,7 @@ def cmd_verify_npu_prereqs(args):
     archive = _find_prereq_archive(NPU_PREREQ_DIR)
     if archive is None:
         sys.exit(f"no npu-prereqs.tar.* under {NPU_PREREQ_DIR} — run: python dev.py package-npu-prereqs")
-    with _prereq_tar(archive) as tar:
+    with open_tar(archive) as tar:
         members = tar.getmembers()
         links = [m.name for m in members if m.issym() or m.islnk()]
         if links:
@@ -265,8 +242,7 @@ def cmd_verify_npu_prereqs(args):
     if rehearsal.exists():
         shutil.rmtree(rehearsal)
     rehearsal.mkdir(parents=True)
-    with _prereq_tar(archive) as tar:   # streamed: a second pass needs a second handle
-        tar.extractall(rehearsal, filter="data")
+    extract_archive(archive, rehearsal)
     _rehearse(venv_py(), ROOT, rehearsal / "build" / "hrx-install")
     shutil.rmtree(rehearsal)
     print(f"verify-npu-prereqs: ok ({len(members)} entries, no links)")
@@ -283,6 +259,5 @@ def cmd_unpack_npu_prereqs(args):
     archive = _find_prereq_archive(src)
     if archive is None:
         sys.exit(f"no npu-prereqs.tar.* under {src} — did the download-artifact step run?")
-    with _prereq_tar(archive) as tar:
-        tar.extractall(ROOT, filter="data")
+    extract_archive(archive, ROOT)
     print(f"unpack-npu-prereqs: ok ({archive.name} -> {ROOT})")

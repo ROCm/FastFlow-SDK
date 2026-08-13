@@ -7,17 +7,34 @@ import os
 import platform
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import sysconfig
-import tarfile
 from pathlib import Path
 
 from build_tools import environment, iron, paths
-from build_tools.fastflowlm_artifact import (extract_archive, git_source_state, pe_imports, sha256_file, verify_bundle)
-from build_tools.rocm_npu_compiler_wheels import (
+from build_tools.archive import (
+    create_deterministic_tar_gz,
+    create_deterministic_tar_zst,
+    extract_archive_atomic,
+)
+from build_tools.artifact import (
+    file_inventory,
+    file_record,
+    git_source_state,
+    reset_directory,
+    sha256_sidecar_path,
+    verify_sha256_sidecar,
+    write_sha256_sidecar,
+)
+from build_tools.fastflowlm_artifact import verify_bundle
+from build_tools.native_dependencies import (
+    elf_needed,
     is_loadable_elf,
+    is_pe,
+    pe_imports,
+)
+from build_tools.rocm_npu_compiler_wheels import (
     linux_system_runtime,
     relocate_linux_compiler_rpaths,
     windows_system_runtime,
@@ -31,7 +48,6 @@ COMPILER_PRODUCT_STAGE = paths.BUILD / "rocm-npu-compiler-product"
 COMPILER_PRODUCT_EXTRACTED = paths.BUILD / "rocm-npu-compiler-extracted"
 COMPILER_PRODUCT_RELOCATED = paths.BUILD / "rocm-npu-compiler-relocated"
 COMPILER_ARTIFACTS = paths.BUILD / "artifacts"
-ARCHIVE_FIXED_MTIME = 946684800
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
@@ -73,18 +89,6 @@ def _platform_machine(machine=None):
 
 def _compiler_product_name(system=None, machine=None):
     return f"rocm-npu-compiler-{(system or platform.system()).lower()}-{_platform_machine(machine)}"
-
-
-def _reset_build_child(path):
-    resolved = Path(path).resolve()
-    build_root = BUILD.resolve()
-    if resolved == build_root or build_root not in resolved.parents:
-        raise RuntimeError(f"refusing to remove directory outside {build_root}: {resolved}")
-    if Path(path).is_symlink():
-        Path(path).unlink()
-    elif Path(path).exists():
-        shutil.rmtree(path)
-    Path(path).mkdir(parents=True)
 
 
 def _assert_no_symlinks(root):
@@ -196,12 +200,7 @@ def _stage_compiler_linux_native_dependencies(product):
     ]
     while queue:
         path = queue.pop(0)
-        needed_libraries = subprocess.run(
-            [patchelf, "--print-needed", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
+        needed_libraries = elf_needed(path, patchelf=patchelf)
         for needed in needed_libraries:
             if needed in provided or linux_system_runtime(needed):
                 continue
@@ -225,12 +224,6 @@ def _stage_compiler_native_dependencies(product):
     """Closes non-system native imports required by the compiler product."""
     if not IS_WINDOWS:
         return _stage_compiler_linux_native_dependencies(product)
-
-    def is_pe(path):
-        try:
-            return path.read_bytes()[:2] == b"MZ"
-        except OSError:
-            return False
 
     candidate_roots = []
     for variable in ("OPENSSL_ROOT_DIR", "VCPKG_INSTALLED_DIR"):
@@ -286,12 +279,6 @@ def _verify_compiler_native_dependencies(product):
     if not IS_WINDOWS:
         return {}
 
-    def is_pe(path):
-        try:
-            return path.read_bytes()[:2] == b"MZ"
-        except OSError:
-            return False
-
     binaries = [
         path for path in product.rglob("*")
         if path.is_file() and is_pe(path)
@@ -327,25 +314,11 @@ def _verify_compiler_native_dependencies(product):
     return graph
 
 
-def _manifest_file_record(path, root=ROOT):
-    return {
-        "path": path.relative_to(root).as_posix() if path.is_relative_to(root)
-                else str(path),
-        "size": path.stat().st_size,
-        "sha256": sha256_file(path),
-    }
-
-
 def _write_product_manifest(bundle, manifest):
     manifest_path = bundle / "manifest.json"
     if manifest_path.exists():
         manifest_path.unlink()
-    files = []
-    for path in sorted(p for p in bundle.rglob("*") if p.is_file()):
-        files.append({"path": path.relative_to(bundle).as_posix(),
-                      "size": path.stat().st_size,
-                      "sha256": sha256_file(path)})
-    manifest = dict(manifest, files=files)
+    manifest = dict(manifest, files=file_inventory(bundle))
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                              encoding="utf-8")
     # _create_compiler_product_archive verifies this inventory immediately
@@ -359,7 +332,7 @@ def stage_product():
     if not it.is_dir():
         raise RuntimeError("iron-tools is not installed - run: python dev.py build iron-tools")
 
-    _reset_build_child(COMPILER_PRODUCT_STAGE)
+    reset_directory(COMPILER_PRODUCT_STAGE, BUILD)
     product = COMPILER_PRODUCT_STAGE / _compiler_product_name()
     product.mkdir(parents=True)
 
@@ -470,12 +443,8 @@ def stage_product():
         },
         "dependencies": {
             "requirements": [
-                _manifest_file_record(
-                    ROOT / "requirements" / "compiler-stack.txt"
-                ),
-                _manifest_file_record(
-                    ROOT / "requirements" / "compiler-stack.lock"
-                ),
+                file_record(ROOT, ROOT / "requirements" / "compiler-stack.txt"),
+                file_record(ROOT, ROOT / "requirements" / "compiler-stack.lock"),
             ],
             "native_runtime_files": native_dependencies,
             "relocated_elf_rpaths": relocated_rpaths,
@@ -504,71 +473,31 @@ def resolve_product_root(location):
     return candidates[0]
 
 
-def _write_compiler_product_tar_members(product, output):
-    for path in sorted([product, *product.rglob("*")]):
-        relative = (product.name if path == product else
-                    f"{product.name}/{path.relative_to(product).as_posix()}")
-        info = tarfile.TarInfo(relative)
-        info.uid = info.gid = 0
-        info.uname = info.gname = ""
-        info.mtime = ARCHIVE_FIXED_MTIME
-        if path.is_file():
-            info.type = tarfile.REGTYPE
-            info.size = path.stat().st_size
-            mode = stat.S_IMODE(path.stat().st_mode)
-            info.mode = 0o755 if mode & 0o111 else 0o644
-            with path.open("rb") as stream:
-                output.addfile(info, stream)
-        elif path.is_dir() and not path.is_symlink():
-            info.type = tarfile.DIRTYPE
-            info.mode = 0o755
-            output.addfile(info)
-        else:
-            raise RuntimeError(f"unsupported compiler product filesystem entry: {path}")
-
-
-def _write_compiler_product_tar_gz(product, archive):
-    with tarfile.open(archive, "w:gz", compresslevel=6,
-                      format=tarfile.PAX_FORMAT) as output:
-        _write_compiler_product_tar_members(product, output)
-
-
-def _write_compiler_product_tar_zst(product, archive):
-    try:
-        import zstandard
-    except ImportError as error:
-        raise RuntimeError(
-            "the zstandard Python package is required to package the Windows "
-            "compiler product; run: python dev.py setup"
-        ) from error
-    parameters = zstandard.ZstdCompressionParameters.from_level(
-        COMPILER_PRODUCT_ZSTD_LEVEL,
-        enable_ldm=True,
-        window_log=COMPILER_PRODUCT_ZSTD_WINDOW_LOG,
-        threads=-1,
-        write_checksum=True,
-    )
-    compressor = zstandard.ZstdCompressor(compression_params=parameters)
-    with archive.open("wb") as raw_stream:
-        with compressor.stream_writer(raw_stream, closefd=False) as compressed_stream:
-            with tarfile.open(fileobj=compressed_stream, mode="w|",
-                              format=tarfile.PAX_FORMAT) as output:
-                _write_compiler_product_tar_members(product, output)
-
-
 def _create_compiler_product_archive(product, output_directory):
     verify_product_inventory(product)
     output_directory.mkdir(parents=True, exist_ok=True)
     archive = output_directory / f"{product.name}{'.tar.zst' if IS_WINDOWS else '.tar.gz'}"
     for stale in output_directory.glob(f"{product.name}.*"):
-        if stale != archive and stale != archive.with_name(archive.name + ".sha256"):
+        if stale != archive and stale != sha256_sidecar_path(archive):
             stale.unlink()
     if IS_WINDOWS:
-        _write_compiler_product_tar_zst(product, archive)
+        create_deterministic_tar_zst(
+            product,
+            archive,
+            arcname=product.name,
+            level=COMPILER_PRODUCT_ZSTD_LEVEL,
+            compression_parameters={
+                "enable_ldm": True,
+                "window_log": COMPILER_PRODUCT_ZSTD_WINDOW_LOG,
+                "threads": -1,
+                "write_checksum": True,
+            },
+        )
     else:
-        _write_compiler_product_tar_gz(product, archive)
-    archive.with_name(archive.name + ".sha256").write_text(
-        f"{sha256_file(archive)}  {archive.name}\n", encoding="ascii")
+        create_deterministic_tar_gz(
+            product, archive, arcname=product.name, compresslevel=6
+        )
+    write_sha256_sidecar(archive)
     return archive
 
 
@@ -582,15 +511,7 @@ def _find_compiler_product_archive(directory):
             f"expected exactly one rocm-npu-compiler artifact in {directory}, "
             f"found {len(archives)}")
     archive = archives[0]
-    checksum_path = archive.with_name(archive.name + ".sha256")
-    if not checksum_path.is_file():
-        raise RuntimeError(f"artifact checksum missing: {checksum_path}")
-    fields = checksum_path.read_text(encoding="ascii").strip().split()
-    if (len(fields) != 2 or fields[1] != archive.name or
-            not re.fullmatch(r"[0-9a-f]{64}", fields[0])):
-        raise RuntimeError(f"malformed artifact checksum: {checksum_path}")
-    if sha256_file(archive) != fields[0]:
-        raise RuntimeError(f"artifact checksum mismatch: {archive}")
+    verify_sha256_sidecar(archive)
     return archive
 
 
@@ -658,7 +579,7 @@ def _smoke_compiler_product(prefix):
 
 
 def _relocate_compiler_product(product):
-    _reset_build_child(COMPILER_PRODUCT_RELOCATED)
+    reset_directory(COMPILER_PRODUCT_RELOCATED, BUILD)
     relocated = COMPILER_PRODUCT_RELOCATED / product.name
     _stage(product, relocated)
     _smoke_compiler_product(relocated)
@@ -687,10 +608,11 @@ def cmd_unpack_compiler_product(args):
     try:
         archive = _find_compiler_product_archive(args.dir)
         output_directory = Path(args.output_dir)
-        product = extract_archive(
+        product = extract_archive_atomic(
             archive,
             output_directory,
             allowed_root=output_directory.parent,
+            verify_root=verify_product_inventory,
         )
     except RuntimeError as error:
         sys.exit(str(error))

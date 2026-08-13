@@ -12,22 +12,23 @@ from unittest import mock
 import pytest
 
 from build_tools.compiler_wheels import verify_compiler_wheel_source_revision
-from build_tools.rocm_npu_wheel_release import _copy_release_wheel
+from build_tools.native_dependencies import is_loadable_elf
+from build_tools.release_policy import (
+    compiler_python_stable_abi,
+    compiler_python_versions,
+    compiler_requires_python,
+)
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     _is_core_aie_native,
-    _is_loadable_elf,
     _linux_system_runtime,
     binding_wheel_tag,
     build_compiler_wheel_family,
     compiler_core_shared_library_names,
     compiler_product_report,
-    compiler_requires_python,
-    compiler_python_stable_abi,
-    compiler_python_versions,
     relocate_linux_compiler_rpaths,
     stage_compiler_bindings,
     stage_compiler_core,
@@ -35,7 +36,7 @@ from build_tools.rocm_npu_compiler_wheels import (
     verify_compiler_wheel_path_references,
     verify_windows_compiler_wheels,
 )
-
+from build_tools.rocm_npu_wheel_release import _copy_release_wheel
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -202,9 +203,9 @@ class TestRocmNpuCompilerWheels:
             path.write_bytes(header)
             return path
 
-        assert not _is_loadable_elf(write_elf("object.o", 1))
-        assert _is_loadable_elf(write_elf("executable", 2))
-        assert _is_loadable_elf(write_elf("library.so", 3))
+        assert not is_loadable_elf(write_elf("object.o", 1))
+        assert is_loadable_elf(write_elf("executable", 2))
+        assert is_loadable_elf(write_elf("library.so", 3))
 
     def test_linux_compiler_rpaths_are_relocated_into_product(self, tmp_path):
         product = tmp_path / "product"
@@ -240,7 +241,7 @@ class TestRocmNpuCompilerWheels:
                 return_value="/usr/bin/patchelf",
             ),
             mock.patch(
-                "build_tools.rocm_npu_compiler_wheels.subprocess.run",
+                "build_tools.native_dependencies.subprocess.run",
                 side_effect=run,
             ),
         ):

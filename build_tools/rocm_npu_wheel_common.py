@@ -21,6 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+from build_tools.artifact import (
+    file_inventory,
+    verify_sha256_sidecar,
+    write_sha256_sidecar,
+)
 
 FIXED_ZIP_DATE = (2000, 1, 1, 0, 0, 0)
 PACKAGE_VERSION_ENV = "ROCM_NPU_PACKAGE_VERSION"
@@ -30,7 +35,6 @@ QUALIFICATION_DISTRIBUTION = "rocm-npu-qualification"
 COMPILER_DISTRIBUTION = "rocm-npu-compiler"
 COMPILER_CORE_DISTRIBUTION = "rocm-npu-compiler-core"
 COMPILER_BINDINGS_DISTRIBUTION = "rocm-npu-compiler-bindings"
-COMPILER_STABLE_ABI_MINOR = "3.12"
 RUNTIME_PACKAGE = "rocm_npu_runtime"
 FASTFLOWLM_PACKAGE = "rocm_npu_fastflowlm"
 QUALIFICATION_PACKAGE = "rocm_npu_qualification"
@@ -60,15 +64,6 @@ class WheelPathReference:
     wheel: Path
     member: str
     forbidden_path: Path
-
-
-def sha256_file(path: Path) -> str:
-    """Returns the SHA-256 digest of a file."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def runtime_artifact_name(system: str | None = None, machine: str | None = None) -> str:
@@ -181,17 +176,8 @@ def _write_file(path: Path, text: str, mode: int = 0o644) -> None:
 
 
 def _file_records(package_root: Path) -> list[dict[str, object]]:
-    records = []
     manifest = package_root / "manifest.json"
-    for path in sorted(item for item in package_root.rglob("*") if item.is_file()):
-        if path == manifest:
-            continue
-        records.append({
-            "path": path.relative_to(package_root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": sha256_file(path),
-        })
-    return records
+    return file_inventory(package_root, exclude_paths=(manifest,))
 
 
 def _write_package_manifest(package_root: Path, manifest: dict[str, object]) -> dict[str, object]:
@@ -789,9 +775,7 @@ def build_wheel(
         output.writestr(
             _zip_info(record_name), record, compresslevel=compression_level
         )
-    wheel.with_name(wheel.name + ".sha256").write_text(
-        f"{sha256_file(wheel)}  {wheel.name}\n", encoding="ascii"
-    )
+    write_sha256_sidecar(wheel)
     return wheel
 
 
@@ -830,14 +814,7 @@ def remove_distribution_wheels(
 def verify_wheel_checksums(wheels: dict[str, Path]) -> None:
     """Verifies every wheel's required SHA-256 sidecar."""
     for wheel in wheels.values():
-        checksum = wheel.with_name(wheel.name + ".sha256")
-        if not checksum.is_file():
-            raise RuntimeError(f"wheel checksum missing: {checksum}")
-        fields = checksum.read_text(encoding="ascii").strip().split()
-        if len(fields) != 2 or fields[1] != wheel.name:
-            raise RuntimeError(f"malformed wheel checksum: {checksum}")
-        if sha256_file(wheel) != fields[0]:
-            raise RuntimeError(f"wheel checksum mismatch: {wheel}")
+        verify_sha256_sidecar(wheel, kind="wheel")
 
 
 def path_needles(path: Path) -> tuple[bytes, ...]:
