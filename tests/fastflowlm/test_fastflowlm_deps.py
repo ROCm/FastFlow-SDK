@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -10,12 +11,11 @@ import pytest
 from build_tools import environment, fastflowlm_deps
 from build_tools.fastflowlm_deps import (
     dependency_errors,
-    dependency_policy,
     dependency_paths,
+    dependency_policy,
     vcpkg_commit,
     vcpkg_triplet,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = [
@@ -166,6 +166,128 @@ class TestFastFlowLMDependencies:
                 in workflow
             )
             assert "if: always() && steps.vcpkg" not in workflow
+
+    def test_managed_vcpkg_installs_locked_manifest_and_writes_marker(
+        self, tmp_path
+    ):
+        populate_policy_files(tmp_path)
+        config = dependency_paths(tmp_path, "Windows")
+        source = Path(config["source"])
+        (source / ".git").mkdir(parents=True)
+        executable = Path(config["executable"])
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.touch()
+        commands = []
+
+        with (
+            mock.patch.object(
+                fastflowlm_deps.subprocess,
+                "run",
+                return_value=mock.Mock(stdout=vcpkg_commit(tmp_path)),
+            ),
+            mock.patch.object(
+                fastflowlm_deps.environment,
+                "sh",
+                side_effect=lambda command, **kwargs: commands.append(
+                    (command, kwargs)
+                ),
+            ),
+            mock.patch.object(fastflowlm_deps.shutil, "which", return_value=None),
+        ):
+            installed = fastflowlm_deps.install_managed_vcpkg(
+                tmp_path, system_name="Windows"
+            )
+
+        install_command, install_kwargs = commands[-1]
+        assert install_command[0] == executable
+        assert install_command[1] == "install"
+        assert f"--triplet={config['triplet']}" not in install_command
+        assert install_command[install_command.index("--triplet") + 1] == config["triplet"]
+        assert "VCPKG_BINARY_SOURCES" in install_kwargs["env"]
+        assert installed == config
+        assert json.loads(Path(config["marker"]).read_text()) == config["policy"]
+
+    def test_managed_vcpkg_initializes_fetches_and_bootstraps_fresh_checkout(
+        self, tmp_path
+    ):
+        populate_policy_files(tmp_path)
+        config = dependency_paths(tmp_path, "Windows")
+        commands = []
+        with (
+            mock.patch.object(
+                fastflowlm_deps.subprocess,
+                "run",
+                return_value=mock.Mock(stdout="outdated"),
+            ),
+            mock.patch.object(
+                fastflowlm_deps.environment,
+                "sh",
+                side_effect=lambda command, **kwargs: commands.append(
+                    (command, kwargs)
+                ),
+            ),
+            mock.patch.object(fastflowlm_deps.shutil, "which", return_value=None),
+        ):
+            fastflowlm_deps.install_managed_vcpkg(
+                tmp_path, system_name="Windows"
+            )
+
+        command_lines = [[str(item) for item in command] for command, _ in commands]
+        assert ["git", "init", str(config["source"])] in command_lines
+        assert any("fetch" in command for command in command_lines)
+        assert any("checkout" in command for command in command_lines)
+        assert any(
+            "bootstrap-vcpkg.bat" in " ".join(command)
+            for command in command_lines
+        )
+        assert Path(config["marker"]).is_file()
+
+    def test_managed_vcpkg_reports_linux_prerequisites_without_exiting(
+        self, tmp_path
+    ):
+        with (
+            mock.patch.object(
+                fastflowlm_deps,
+                "check_fastflowlm_linux_host",
+                return_value=(False, ["nasm"]),
+            ),
+            mock.patch.object(fastflowlm_deps.environment, "sh") as sh,
+            pytest.raises(RuntimeError, match="nasm"),
+        ):
+            fastflowlm_deps.install_managed_vcpkg(
+                tmp_path, system_name="Linux"
+            )
+        sh.assert_not_called()
+
+    def test_managed_vcpkg_does_not_write_marker_after_install_failure(
+        self, tmp_path
+    ):
+        populate_policy_files(tmp_path)
+        config = dependency_paths(tmp_path, "Windows")
+        source = Path(config["source"])
+        (source / ".git").mkdir(parents=True)
+        Path(config["executable"]).touch()
+
+        def run(command, **_kwargs):
+            if len(command) > 1 and command[1] == "install":
+                raise subprocess.CalledProcessError(1, command)
+
+        with (
+            mock.patch.object(
+                fastflowlm_deps.subprocess,
+                "run",
+                return_value=mock.Mock(stdout=vcpkg_commit(tmp_path)),
+            ),
+            mock.patch.object(
+                fastflowlm_deps.environment, "sh", side_effect=run
+            ),
+            mock.patch.object(fastflowlm_deps.shutil, "which", return_value=None),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            fastflowlm_deps.install_managed_vcpkg(
+                tmp_path, system_name="Windows"
+            )
+        assert not Path(config["marker"]).exists()
 
     def test_linux_runtime_uses_cmake_dependency_sets(self):
         cmake = ROOT / "projects/FastFlowLM/src/CMakeLists.txt"

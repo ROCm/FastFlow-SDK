@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 
-from build_tools import fastflowlm_qualification_common as qualification
+from build_tools import fastflowlm_qualification_native as qualification
 from build_tools import fastflowlm_xadx_assets as xadx_assets
 from build_tools.artifact import file_record
 
@@ -43,7 +43,7 @@ def test_build_helper_import_does_not_require_numpy():
             "-c",
             (
                 "import sys; sys.modules['numpy'] = None; "
-                "import build_tools.fastflowlm_qualification_common"
+                "import build_tools.fastflowlm_qualification_native"
             ),
         ],
         check=False,

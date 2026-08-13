@@ -158,11 +158,13 @@ class TestSetupCommand:
             ),
             mock.patch.object(setup.patches, "cmd_fetch"),
             mock.patch.object(setup, "install_iron_ops") as install_iron_ops,
-            mock.patch.object(setup, "_install_fastflowlm_deps") as install_native,
+            mock.patch.object(
+                setup.fastflowlm_deps, "install_managed_vcpkg"
+            ) as install_native,
             contextlib.redirect_stdout(io.StringIO()),
         ):
             setup.cmd_setup(args)
 
         assert "--require-hashes" in commands[-1]
         install_iron_ops.assert_not_called()
-        install_native.assert_called_once_with()
+        install_native.assert_called_once_with(paths.ROOT)

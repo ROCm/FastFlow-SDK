@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: MIT
 """FastFlowLM bundle and wheel packaging orchestration."""
 
+import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 from build_tools import environment, paths
@@ -24,17 +26,11 @@ from build_tools.fastflowlm_artifact import (
 from build_tools.fastflowlm_deps import require_fastflowlm_linux_packaging_tools
 from build_tools.manylinux_audit import auditwheel_policy
 from build_tools.package_version import default_package_version
-from build_tools.rocm_npu_linux_wheels import (
+from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
-    FASTFLOWLM_LINUX_WHEEL_TAG,
-    LINUX_WHEEL_TAG,
     RUNTIME_DISTRIBUTION,
-    build_runtime_fastflowlm_wheels,
-    find_rocm_npu_wheels,
-    validate_auditwheel_policy,
-    verify_wheels_do_not_have_text_path_references,
+    verify_wheel_checksums,
 )
-from build_tools.rocm_npu_wheel_common import verify_wheel_checksums
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ
@@ -44,12 +40,25 @@ FASTFLOWLM_INSTALL = paths.FASTFLOWLM_INSTALL
 FASTFLOWLM_BUNDLE_STAGE = paths.BUILD / "FastFlowLM-bundle"
 FASTFLOWLM_ARTIFACTS = paths.BUILD / "artifacts"
 FASTFLOWLM_EXTRACTED = paths.BUILD / "FastFlowLM-extracted"
-FASTFLOWLM_WHEEL_STAGE = paths.BUILD / "rocm-npu-wheel-stage"
-FASTFLOWLM_WHEEL_VENV = paths.BUILD / "rocm-npu-wheel-venv"
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 IS_WINDOWS = paths.is_windows()
+FASTFLOWLM_WHEEL_STAGE = paths.BUILD / "rocm-npu-wheel-stage"
+FASTFLOWLM_WHEEL_VENV = paths.BUILD / "rocm-npu-wheel-venv"
+WINDOWS_WHEEL_STAGE = paths.BUILD / "rocm-npu-windows-wheel-stage"
+WINDOWS_WHEEL_VENV = paths.BUILD / "rocm-npu-windows-wheel-venv"
+FASTFLOWLM_MODEL_CACHE = paths.BUILD / "FastFlowLM-models"
 _EXE = ".exe" if IS_WINDOWS else ""
 sh = environment.sh
+
+
+def _wheel_implementation():
+    if IS_WINDOWS:
+        from build_tools import rocm_npu_windows_wheels
+
+        return rocm_npu_windows_wheels
+    from build_tools import rocm_npu_linux_wheels
+
+    return rocm_npu_linux_wheels
 
 def _verify_fastflowlm_fresh_installs():
     try:
@@ -78,17 +87,23 @@ def cmd_package_fastflowlm(args):
     print("  extracted:", extracted)
 
 
-def cmd_package_fastflowlm_wheels(args):
-    """Build split rocm-npu-runtime and rocm-npu-fastflowlm Linux wheels."""
-    if IS_WINDOWS:
-        sys.exit("rocm-npu runtime/FastFlowLM wheel packaging is Linux-only for now")
-    require_fastflowlm_linux_packaging_tools()
+def package_fastflowlm_wheels(version: str | None) -> dict[str, Path]:
+    """Builds the platform-native runtime and FastFlowLM wheel pair."""
+    if not IS_WINDOWS:
+        require_fastflowlm_linux_packaging_tools()
     _verify_fastflowlm_fresh_installs()
-    version = args.version or default_package_version(ROOT)
+    version = version or default_package_version(ROOT)
     bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
                                   FASTFLOWLM_BUNDLE_STAGE)
-    wheels = build_runtime_fastflowlm_wheels(
-        bundle, FASTFLOWLM_WHEEL_STAGE, FASTFLOWLM_ARTIFACTS, version)
+    wheel_stage = WINDOWS_WHEEL_STAGE if IS_WINDOWS else FASTFLOWLM_WHEEL_STAGE
+    wheels = _wheel_implementation().build_runtime_fastflowlm_wheels(
+        bundle, wheel_stage, FASTFLOWLM_ARTIFACTS, version)
+    return wheels
+
+
+def cmd_package_fastflowlm_wheels(args):
+    """Build split rocm-npu-runtime and rocm-npu-fastflowlm wheels."""
+    wheels = package_fastflowlm_wheels(args.version)
     print("package fastflowlm wheels: ok")
     for product in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
         print(f"  {product}: {wheels[product]}")
@@ -105,11 +120,12 @@ def _python_executable_tool(name):
 def cmd_audit_fastflowlm_wheels(args):
     if IS_WINDOWS:
         sys.exit("audit-fastflowlm-wheels is Linux-only")
-    wheels = find_rocm_npu_wheels(Path(args.dir))
+    implementation = _wheel_implementation()
+    wheels = implementation.find_rocm_npu_wheels(Path(args.dir))
     verify_wheel_checksums(wheels)
     expected_tags = {
-        RUNTIME_DISTRIBUTION: LINUX_WHEEL_TAG,
-        FASTFLOWLM_DISTRIBUTION: FASTFLOWLM_LINUX_WHEEL_TAG,
+        RUNTIME_DISTRIBUTION: implementation.LINUX_WHEEL_TAG,
+        FASTFLOWLM_DISTRIBUTION: implementation.FASTFLOWLM_LINUX_WHEEL_TAG,
     }
     for product in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
         print(f"== auditwheel analyze: {wheels[product].name} ==")
@@ -120,20 +136,22 @@ def cmd_audit_fastflowlm_wheels(args):
             )
         policy = auditwheel_policy(wheels[product])
         print(f"auditwheel overall policy: {policy}")
-        validate_auditwheel_policy(product, policy)
+        implementation.validate_auditwheel_policy(product, policy)
 
 
 def _venv_python(venv_dir):
     return Path(venv_dir) / ("Scripts" if IS_WINDOWS else "bin") / f"python{_EXE}"
 
 
-def cmd_verify_fastflowlm_wheels(args):
-    wheel_directory = Path(args.dir)
-    wheels = find_rocm_npu_wheels(wheel_directory)
+def verify_fastflowlm_wheels(wheel_directory: Path, venv_dir: Path) -> None:
+    """Verifies and smoke-tests a platform-native runtime wheel pair."""
+    wheel_directory = Path(wheel_directory)
+    implementation = _wheel_implementation()
+    wheels = implementation.find_rocm_npu_wheels(wheel_directory)
     verify_wheel_checksums(wheels)
-    verify_wheels_do_not_have_text_path_references(wheels, (ROOT,))
+    implementation.verify_wheels_do_not_have_text_path_references(wheels, (ROOT,))
 
-    venv_dir = Path(args.venv)
+    venv_dir = Path(venv_dir)
     validate_directory_target(venv_dir, BUILD)
     if venv_dir.exists():
         shutil.rmtree(venv_dir)
@@ -167,6 +185,45 @@ def cmd_verify_fastflowlm_wheels(args):
     )
     sh([py, "-c", smoke])
     print(f"verify fastflowlm wheels: ok -> {venv_dir}")
+
+
+def cmd_verify_fastflowlm_wheels(args):
+    verify_fastflowlm_wheels(Path(args.dir), Path(args.venv))
+
+
+def probe_runtime_package() -> int:
+    """Probes libHRX supplied by an installed runtime wheel."""
+    import rocm_npu_runtime
+
+    from build_tools.windows_npu import probe_runtime
+
+    return probe_runtime(rocm_npu_runtime.libhrx_path())
+
+
+def smoke_fastflowlm(iterations: int) -> int:
+    """Runs the FastFlowLM smoke test against installed wheel packages."""
+    import rocm_npu_fastflowlm
+    import rocm_npu_runtime
+
+    env = os.environ.copy()
+    env["FLM_BIN"] = str(
+        Path(sysconfig.get_path("scripts")) / ("flm.exe" if IS_WINDOWS else "flm")
+    )
+    env["HRX_LIBHRX"] = str(rocm_npu_runtime.libhrx_path())
+    env["FLM_CONFIG_PATH"] = str(rocm_npu_fastflowlm.config_path())
+    env["FLM_XCLBIN_PATH"] = str(rocm_npu_fastflowlm.xclbin_path())
+    env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
+    result = subprocess.run(
+        [
+            sys.executable,
+            ROOT / "tests" / "fastflowlm" / "run_fastflowlm_hrx_smoke.py",
+            "--inference-iterations",
+            str(iterations),
+        ],
+        env=env,
+        check=False,
+    )
+    return result.returncode
 
 
 def _find_fastflowlm_archive(directory):

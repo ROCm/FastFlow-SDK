@@ -14,13 +14,10 @@ from build_tools.fastflowlm_kernel_recipe import (
     build_recipe,
     validate_recipe,
 )
-from build_tools.fastflowlm_qualification_common import (
+from build_tools.fastflowlm_qualification_native import (
     CAPABILITIES_SOURCE,
     KERNEL_RECIPE_SCHEMA,
     QUALIFICATION_BUILD,
-    XADX_IMPLEMENTATION_PROBE_TARGET,
-    XADX_PRODUCT,
-    XADX_STAGE,
     configure_qualification_tools,
     load_capabilities,
     recipe_generators,
@@ -29,6 +26,9 @@ from build_tools.fastflowlm_qualification_common import (
 )
 
 HRX_INSTALL = paths.HRX_INSTALL
+XADX_STAGE = paths.BUILD / "fastflowlm-xadx-assets"
+XADX_PRODUCT = "rocm-npu-fastflowlm-xadx"
+XADX_IMPLEMENTATION_PROBE_TARGET = "fastflowlm-xadx-implementation-probe"
 
 def build_xadx_generator(fresh=False):
     """Builds the implementation/transaction probe used by recipe generation."""
