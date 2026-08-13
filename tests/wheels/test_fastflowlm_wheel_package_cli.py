@@ -11,11 +11,11 @@ from unittest import mock
 import pytest
 
 from build_tools import fastflowlm_package
+from build_tools.dev import host_testing
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
 )
-from build_tools.dev import host_testing
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -25,6 +25,37 @@ pytestmark = [
 
 
 class TestFastFlowLMWheelPackageCli:
+    def test_package_dispatches_to_platform_wheel_implementation(self):
+        wheels = {
+            RUNTIME_DISTRIBUTION: Path("runtime.whl"),
+            FASTFLOWLM_DISTRIBUTION: Path("fastflowlm.whl"),
+        }
+        implementation = SimpleNamespace(
+            build_runtime_fastflowlm_wheels=mock.Mock(return_value=wheels)
+        )
+        with (
+            mock.patch.object(fastflowlm_package, "IS_WINDOWS", True),
+            mock.patch.object(
+                fastflowlm_package,
+                "_wheel_implementation",
+                return_value=implementation,
+            ),
+            mock.patch.object(fastflowlm_package, "_verify_fastflowlm_fresh_installs"),
+            mock.patch.object(
+                fastflowlm_package,
+                "stage_runtime_bundle",
+                return_value=Path("bundle"),
+            ),
+        ):
+            assert fastflowlm_package.package_fastflowlm_wheels("1.2.3") == wheels
+
+        implementation.build_runtime_fastflowlm_wheels.assert_called_once_with(
+            Path("bundle"),
+            fastflowlm_package.WINDOWS_WHEEL_STAGE,
+            fastflowlm_package.FASTFLOWLM_ARTIFACTS,
+            "1.2.3",
+        )
+
     def test_verify_resolves_runtime_as_fastflowlm_dependency(self, tmp_path):
         wheel_directory = tmp_path
         runtime_wheel = wheel_directory / "runtime.whl"
@@ -37,17 +68,17 @@ class TestFastFlowLMWheelPackageCli:
             dir=str(wheel_directory),
             venv=str(wheel_directory / "venv"),
         )
+        implementation = SimpleNamespace(
+            find_rocm_npu_wheels=mock.Mock(return_value=wheels),
+            verify_wheels_do_not_have_text_path_references=mock.Mock(),
+        )
         with (
             mock.patch.object(
                 fastflowlm_package,
-                "find_rocm_npu_wheels",
-                return_value=wheels,
+                "_wheel_implementation",
+                return_value=implementation,
             ),
             mock.patch.object(fastflowlm_package, "verify_wheel_checksums"),
-            mock.patch.object(
-                fastflowlm_package,
-                "verify_wheels_do_not_have_text_path_references",
-            ),
             mock.patch.object(fastflowlm_package, "validate_directory_target"),
             mock.patch.object(
                 fastflowlm_package,
@@ -63,6 +94,7 @@ class TestFastFlowLMWheelPackageCli:
         assert wheel_directory in install
         assert fastflowlm_wheel in install
         assert runtime_wheel not in install
+        implementation.verify_wheels_do_not_have_text_path_references.assert_called_once()
 
     def test_wheel_package_requires_installed_wheels(self):
         real_import = builtins.__import__

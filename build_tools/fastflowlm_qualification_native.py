@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Shared build and parity infrastructure owned by qualification."""
+"""Native build and parity infrastructure owned by FastFlowLM qualification."""
 
 import importlib.util
 import json
@@ -15,9 +15,6 @@ HRX_INSTALL = paths.HRX_INSTALL
 
 
 QUALIFICATION_BUILD = paths.BUILD / "fastflowlm-qualification-tools"
-XADX_STAGE = paths.BUILD / "fastflowlm-xadx-assets"
-XADX_PRODUCT = "rocm-npu-fastflowlm-xadx"
-XADX_IMPLEMENTATION_PROBE_TARGET = "fastflowlm-xadx-implementation-probe"
 VECTOR_DUMP_TARGET = "fastflowlm-q4nx-vector-dump"
 NATIVE_TEST_TARGETS = (
     "fastflowlm-kernel-native-tests",

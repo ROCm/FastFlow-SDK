@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 from build_tools import environment, paths
-
 
 VCPKG_TRIPLETS = {
     "Linux": "x64-linux-rel",
@@ -161,6 +162,116 @@ def dependency_paths(repo_root: Path, system_name: str | None = None) -> dict[st
         "bin": install_root / triplet / "bin",
         "marker": install_root / POLICY_MARKER,
     }
+
+
+def install_managed_vcpkg(
+    repo_root: Path, *, system_name: str | None = None
+) -> dict[str, Path | str]:
+    """Bootstraps vcpkg and installs the locked FastFlowLM manifest."""
+    system_name = system_name or platform.system()
+    is_windows = system_name == "Windows"
+    if not is_windows:
+        host_ok, missing = check_fastflowlm_linux_host(verbose=False)
+        if not host_ok:
+            raise RuntimeError(
+                "FastFlowLM host build prerequisites are missing; install: "
+                "sudo apt-get install -y " + " ".join(sorted(set(missing)))
+            )
+
+    config = dependency_paths(repo_root, system_name)
+    source = Path(config["source"])
+    install_root = Path(config["install_root"])
+    binary_cache = repo_root / ".cache" / "vcpkg-bincache"
+    downloads = repo_root / ".cache" / "vcpkg-downloads"
+    for path in (source.parent, install_root, binary_cache, downloads):
+        path.mkdir(parents=True, exist_ok=True)
+
+    source_changed = False
+    if not (source / ".git").is_dir():
+        environment.sh(["git", "init", str(source)])
+        environment.sh(
+            [
+                "git",
+                "-C",
+                str(source),
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/microsoft/vcpkg.git",
+            ]
+        )
+        source_changed = True
+    else:
+        environment.sh(
+            [
+                "git",
+                "-C",
+                str(source),
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/microsoft/vcpkg.git",
+            ]
+        )
+
+    head = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    commit = vcpkg_commit(repo_root)
+    if head != commit:
+        environment.sh(["git", "-C", str(source), "fetch", "--depth", "1", "origin", commit])
+        environment.sh(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
+        source_changed = True
+
+    executable = Path(config["executable"])
+    if source_changed or not executable.is_file():
+        bootstrap = source / ("bootstrap-vcpkg.bat" if is_windows else "bootstrap-vcpkg.sh")
+        command = (
+            ["cmd.exe", "/d", "/c", str(bootstrap), "-disableMetrics"]
+            if is_windows
+            else [str(bootstrap), "-disableMetrics"]
+        )
+        environment.sh(command)
+
+    command_env = os.environ.copy()
+    command_env["VCPKG_BINARY_SOURCES"] = (
+        f"clear;files,{environment.cmake_path(binary_cache)},readwrite"
+    )
+    command_env["VCPKG_DOWNLOADS"] = str(downloads)
+    powershell = shutil.which("powershell.exe") if is_windows else None
+    downloader = repo_root / ".github" / "scripts" / "vcpkg-download.ps1"
+    if powershell and downloader.is_file():
+        template = (
+            f'"{powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+            f'-File "{downloader}" -Url {{url}} -Sha512 {{sha512}} '
+            "-Destination {dst}"
+        )
+        command_env["X_VCPKG_ASSET_SOURCES"] = f"clear;x-script,{template}"
+
+    environment.sh(
+        [
+            executable,
+            "install",
+            "--triplet",
+            config["triplet"],
+            f"--overlay-triplets={repo_root / '.github' / 'vcpkg' / 'triplets'}",
+            f"--x-manifest-root={repo_root / '.github' / 'vcpkg' / 'fastflowlm'}",
+            f"--x-install-root={install_root}",
+        ],
+        env=command_env,
+    )
+    marker = Path(config["marker"])
+    marker_tmp = marker.with_suffix(".tmp")
+    marker_tmp.write_text(
+        json.dumps(config["policy"], indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    marker_tmp.replace(marker)
+    print("setup: FastFlowLM native dependencies ->", config["triplet_root"])
+    return config
 
 
 def dependency_errors(

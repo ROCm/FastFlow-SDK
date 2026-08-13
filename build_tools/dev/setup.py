@@ -4,23 +4,13 @@
 
 from __future__ import annotations
 
-import json
-import os
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from build_tools import environment, paths
-from build_tools.dev import doctor
-from build_tools.dev import patches
+from build_tools import environment, fastflowlm_deps, paths
+from build_tools.dev import doctor, patches
 from build_tools.dev.profiles import profile
-from build_tools.fastflowlm_deps import (
-    check_fastflowlm_linux_host,
-    dependency_paths as fastflowlm_dependency_paths,
-    vcpkg_commit as fastflowlm_vcpkg_commit,
-)
 
 
 @dataclass(frozen=True)
@@ -101,120 +91,6 @@ def install_iron_ops(pip: list[str], with_tests: bool = False) -> None:
         environment.sh(pip + ["-r", str(source)])
 
 
-def _install_fastflowlm_deps() -> None:
-    """Installs the manifest-defined native dependencies into the managed cache."""
-    if not paths.is_windows():
-        host_ok, missing = check_fastflowlm_linux_host(verbose=False)
-        if not host_ok:
-            sys.exit(
-                "FastFlowLM host build prerequisites are missing; install: "
-                "sudo apt-get install -y " + " ".join(sorted(set(missing)))
-            )
-    dependency_config = fastflowlm_dependency_paths(paths.ROOT)
-    source = Path(dependency_config["source"])
-    install_root = Path(dependency_config["install_root"])
-    binary_cache = paths.ROOT / ".cache" / "vcpkg-bincache"
-    downloads = paths.ROOT / ".cache" / "vcpkg-downloads"
-    for path in (source.parent, install_root, binary_cache, downloads):
-        path.mkdir(parents=True, exist_ok=True)
-
-    source_changed = False
-    if not (source / ".git").is_dir():
-        environment.sh(["git", "init", str(source)])
-        environment.sh(
-            [
-                "git",
-                "-C",
-                str(source),
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/microsoft/vcpkg.git",
-            ]
-        )
-        source_changed = True
-    else:
-        environment.sh(
-            [
-                "git",
-                "-C",
-                str(source),
-                "remote",
-                "set-url",
-                "origin",
-                "https://github.com/microsoft/vcpkg.git",
-            ]
-        )
-    head = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-    vcpkg_commit = fastflowlm_vcpkg_commit(paths.ROOT)
-    if head != vcpkg_commit:
-        environment.sh(
-            ["git", "-C", str(source), "fetch", "--depth", "1", "origin", vcpkg_commit]
-        )
-        environment.sh(
-            ["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"]
-        )
-        source_changed = True
-    executable = Path(dependency_config["executable"])
-    if source_changed or not executable.is_file():
-        if paths.is_windows():
-            environment.sh(
-                [
-                    "cmd.exe",
-                    "/d",
-                    "/c",
-                    str(source / "bootstrap-vcpkg.bat"),
-                    "-disableMetrics",
-                ]
-            )
-        else:
-            environment.sh([str(source / "bootstrap-vcpkg.sh"), "-disableMetrics"])
-
-    command_env = os.environ.copy()
-    command_env["VCPKG_BINARY_SOURCES"] = (
-        f"clear;files,{environment.cmake_path(binary_cache)},readwrite"
-    )
-    command_env["VCPKG_DOWNLOADS"] = str(downloads)
-    powershell = shutil.which("powershell.exe") if paths.is_windows() else None
-    downloader = paths.ROOT / ".github" / "scripts" / "vcpkg-download.ps1"
-    if powershell and downloader.is_file():
-        template = (
-            f'"{powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass '
-            f'-File "{downloader}" -Url {{url}} -Sha512 {{sha512}} '
-            "-Destination {dst}"
-        )
-        command_env["X_VCPKG_ASSET_SOURCES"] = f"clear;x-script,{template}"
-
-    environment.sh(
-        [
-            executable,
-            "install",
-            "--triplet",
-            dependency_config["triplet"],
-            f"--overlay-triplets={paths.ROOT / '.github' / 'vcpkg' / 'triplets'}",
-            f"--x-manifest-root={paths.ROOT / '.github' / 'vcpkg' / 'fastflowlm'}",
-            f"--x-install-root={install_root}",
-        ],
-        env=command_env,
-    )
-    marker = Path(dependency_config["marker"])
-    marker_tmp = marker.with_suffix(".tmp")
-    marker_tmp.write_text(
-        json.dumps(dependency_config["policy"], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    marker_tmp.replace(marker)
-    print(
-        "setup: FastFlowLM native dependencies ->",
-        dependency_config["triplet_root"],
-    )
-
-
 def cmd_setup(args) -> None:
     """Prepares the selected dependency closure in repository-local caches."""
     paths.OUT.mkdir(exist_ok=True)
@@ -263,5 +139,8 @@ def cmd_setup(args) -> None:
             with_tests=plan.install_iron_ops_tests,
         )
     if plan.install_fastflowlm_native:
-        _install_fastflowlm_deps()
+        try:
+            fastflowlm_deps.install_managed_vcpkg(paths.ROOT)
+        except RuntimeError as error:
+            sys.exit(str(error))
     print(f"setup: ok ({args.profile} dependencies are ready)")
