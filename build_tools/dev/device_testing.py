@@ -87,7 +87,7 @@ def cmd_test_hrx_cts(args):
         if not candidate.is_file():
             sys.exit(
                 f"CTS binary missing ({candidate}) — "
-                "run: python dev.py build hrx-cts"
+                "run: python dev.py build hrx --include-cts"
             )
         executables[name] = candidate
     failed, counts = [], {}

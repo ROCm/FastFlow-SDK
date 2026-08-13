@@ -13,7 +13,6 @@ BUILD_HANDLERS = {
     "iron-tools": compiler_build.cmd_build_iron_tools,
     "hrx-xclbinutil": compiler_build.cmd_build_hrx_xclbinutil,
     "hrx": runtime_build.cmd_build_hrx,
-    "hrx-cts": runtime_build.cmd_build_hrx_cts,
     "fastflowlm": fastflowlm_build.cmd_build_fastflowlm,
     "rocm-npu-cli": runtime_build.cmd_build_rocm_npu_cli,
 }

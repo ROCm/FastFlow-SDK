@@ -123,13 +123,37 @@ jobs:
       - name: Set up clang-cl
         run: |
           set -eu
+          install_llvm() {
+            local attempt output
+            for attempt in 1 2 3; do
+              if output="$(choco install --no-progress -y llvm 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              printf '%s\n' "$output"
+              case "$output" in
+                *NuGetResolverInputException*|*"503 (Service Unavailable)"*)
+                  if [ "$attempt" -eq 3 ]; then
+                    echo "::error::Chocolatey LLVM lookup remained unavailable after 3 attempts"
+                    return 1
+                  fi
+                  echo "::warning::Transient Chocolatey LLVM lookup failure (attempt $attempt/3) — retrying"
+                  sleep $((attempt * 20))
+                  ;;
+                *)
+                  return 1
+                  ;;
+              esac
+            done
+          }
+
           clang_cl="$(command -v clang-cl || true)"
           if [ -z "$clang_cl" ]; then
             vsllvm="$(cygpath -u "${VSINSTALLDIR:-C:/}")VC/Tools/Llvm/x64/bin"
             if [ -x "$vsllvm/clang-cl.exe" ]; then
               export PATH="$vsllvm:$PATH"
             else
-              choco install --no-progress -y llvm
+              install_llvm
               export PATH="/c/Program Files/LLVM/bin:$PATH"
             fi
             clang_cl="$(command -v clang-cl || true)"
@@ -302,11 +326,11 @@ jobs:
       - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
         run: |
           ccache -z
-          .venv/Scripts/python.exe dev.py build all
+          .venv/Scripts/python.exe dev.py build all --include-tests
 
       - name: Build amdxdna HAL conformance binaries
         if: ${{ inputs.run_npu_e2e }}
-        run: .venv/Scripts/python.exe dev.py build hrx-cts
+        run: .venv/Scripts/python.exe dev.py build hrx --include-cts
 
       # Save immediately after compilation so later smoke, packaging, or wheel failures
       # cannot discard a warm LLVM/MLIR object cache.
