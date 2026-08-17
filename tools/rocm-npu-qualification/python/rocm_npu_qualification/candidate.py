@@ -24,6 +24,7 @@ from .hashing import sha256_file
 from .numeric_runtime import NUMERIC_RUNTIME
 from .policy import PolicyValidationError, normalize_policy
 from .profiles import ProfileError, validate_profile
+from .recipe_contract import recipe_materialization_requests
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
 
@@ -424,27 +425,14 @@ def _recipe_materializations(cases: list[dict[str, Any]]) -> list[dict[str, Any]
                 "qualification recipe reuses a generator with conflicting sizes"
             )
 
-    for case in cases:
-        expected_size = next(
-            buffer["size"]
-            for stage in case["stages"]
-            for buffer in stage["buffers"]
-            if "expected" in buffer
-        )
-        buffers = {
-            (stage["name"], buffer["name"]): buffer
-            for stage in case["stages"]
-            for buffer in stage["buffers"]
-        }
-        for buffer in buffers.values():
-            record(buffer.get("source"), buffer["size"])
-            record(buffer.get("expected"), buffer["size"])
-        for variant in case.get("readback_variants", ()):
-            record(
-                variant.get("source"),
-                buffers[(variant["stage"], variant["buffer"])]["size"],
-            )
-            record(variant.get("expected"), expected_size)
+    try:
+        requests = recipe_materialization_requests(cases)
+    except (KeyError, ValueError) as error:
+        raise CandidateError(
+            f"qualification recipe materialization contract is invalid: {error}"
+        ) from error
+    for specification, size in requests:
+        record(specification, size)
     return [materializations[key] for key in sorted(materializations)]
 
 

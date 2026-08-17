@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 
 from .contracts import XADX_REPORT_SCHEMA_VERSION, XADX_ROUNDS
 from .numeric_runtime import NUMERIC_DISTRIBUTIONS
+from .recipe_contract import recipe_materialization_requests
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
 
@@ -649,15 +650,6 @@ def _run_rounds(
     return failures, visits
 
 
-def _expected_size(case):
-    """Size of the buffer a case is judged on, which the last expectation names."""
-    for stage in reversed(case["stages"]):
-        for record in reversed(stage["buffers"]):
-            if record["direction"] == "output" and "expected" in record:
-                return record["size"]
-    raise XadxError(f"{case['name']} declares no expectation")
-
-
 def _materialize_recipe_buffers(cases, generators):
     """Bound all unique bytes before allocating any generator output."""
     planned = {}
@@ -688,28 +680,16 @@ def _materialize_recipe_buffers(cases, generators):
             raise XadxError("recipe reuses a generator at conflicting sizes")
 
     for case in cases:
-        buffers = {
-            (stage["name"], record["name"]): record
-            for stage in case["stages"]
-            for record in stage["buffers"]
-        }
         for stage in case["stages"]:
             for record in stage["buffers"]:
                 if "stage_output" not in record.get("source", {}):
                     resident_bytes += record["size"] + 2 * _GUARD_BYTES
-                for specification in (
-                    record.get("source"),
-                    record.get("expected"),
-                    record.get("preserved"),
-                ):
-                    if specification and "stage_output" not in specification:
-                        plan(specification, record["size"])
-        for variant in case.get("readback_variants", ()):
-            plan(
-                variant["source"],
-                buffers[(variant["stage"], variant["buffer"])]["size"],
-            )
-            plan(variant["expected"], _expected_size(case))
+    try:
+        requests = recipe_materialization_requests(cases)
+    except (KeyError, ValueError) as error:
+        raise XadxError(f"invalid recipe materialization contract: {error}") from error
+    for specification, size in requests:
+        plan(specification, size)
 
     materialized_bytes = sum(size for _, size in planned.values())
     if materialized_bytes > _MAX_MATERIALIZED_BYTES:

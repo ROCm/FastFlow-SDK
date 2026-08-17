@@ -26,6 +26,68 @@ from tests.support.qualification import write_candidate_wheel as _write_wheel
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 
+def test_recipe_materializations_bind_preserved_chain_buffers():
+    def generator(name: str, digest: str) -> dict:
+        return {
+            "id": name,
+            "parameters": {"size": 8},
+            "sha256": digest * 64,
+        }
+
+    cases = [
+        {
+            "name": "chained",
+            "stages": [
+                {
+                    "name": "dequant",
+                    "buffers": [
+                        {
+                            "name": "input",
+                            "direction": "input",
+                            "size": 8,
+                            "source": generator("source", "1"),
+                        },
+                        {
+                            "name": "weight",
+                            "direction": "output",
+                            "size": 8,
+                            "preserved": generator("preserved", "2"),
+                        },
+                    ],
+                },
+                {
+                    "name": "mm",
+                    "buffers": [
+                        {
+                            "name": "weight",
+                            "direction": "input",
+                            "size": 8,
+                            "source": {"stage_output": "dequant.weight"},
+                        },
+                        {
+                            "name": "output",
+                            "direction": "output",
+                            "size": 8,
+                            "expected": generator("expected", "3"),
+                        },
+                    ],
+                },
+            ],
+        }
+    ]
+
+    materializations = candidate._recipe_materializations(cases)
+
+    assert {item["source"]["id"] for item in materializations} == {
+        "source",
+        "preserved",
+        "expected",
+    }
+    assert [item["contract_sha256"] for item in materializations] == sorted(
+        item["contract_sha256"] for item in materializations
+    )
+
+
 def _write_numeric_wheel(
     root: Path,
     distribution: str,
