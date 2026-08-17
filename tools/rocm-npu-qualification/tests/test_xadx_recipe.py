@@ -22,7 +22,7 @@ import ml_dtypes
 import numpy as np
 import pytest
 
-from rocm_npu_qualification import xadx
+from rocm_npu_qualification import candidate, xadx
 from rocm_npu_qualification.contracts import KERNEL_RECIPE_SCHEMA_VERSION
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -397,6 +397,7 @@ def test_a_later_stage_reads_what_the_earlier_stage_wrote(
     assert signature not in runtimes[0].payload_reads
     assert (signature, 2) in runtimes[0].inspection_dispatch_counts
     assert report["status"] == "pass", report["failures"]
+    assert report["materialized_buffers"] == candidate._recipe_materializations(cases)
 
 
 def test_a_later_stage_may_not_modify_its_chained_input(tmp_path):
