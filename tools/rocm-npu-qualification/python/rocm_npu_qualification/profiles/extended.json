@@ -26,7 +26,7 @@
             {"prompt": "Reply with the word beta.", "expected_regex": "beta"},
             {"prompt": "Reply with the word gamma.", "expected_regex": "gamma"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 32"],
           "process_iterations": 2,
           "timeout_seconds": 600,
           "ctx_len": 4096
@@ -38,7 +38,7 @@
             {"prompt": "Reply with the word robust.", "expected_regex": "robust"},
             {"prompt": "Reply with the word complete.", "expected_regex": "complete"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 32"],
           "process_iterations": 3,
           "timeout_seconds": 600,
           "ctx_len": 4096
@@ -58,7 +58,7 @@
               "expected_regex": "HRX[- ]NPU[- ]CONTEXT[- ]4K[- ]PASS"
             }
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 32"],
           "process_iterations": 1,
           "timeout_seconds": 900,
           "ctx_len": 4096

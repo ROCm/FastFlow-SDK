@@ -57,6 +57,14 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def configure_standard_streams():
+    """Uses UTF-8 for model transcripts independent of the host console locale."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def parse_duration_seconds(value, default):
     if not value:
         return default
@@ -214,7 +222,7 @@ def fail_if_runtime_errors(text, label, path):
 def smoke_setup_commands():
     value = os.environ.get("FLM_SMOKE_SETUP_COMMANDS")
     if value is None:
-        return ["/set topk 1", "/set gen-lim 16"]
+        return ["/set topk 1", "/set temp 0", "/set gen-lim 16"]
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
@@ -270,6 +278,7 @@ def installed_package_paths():
 
 
 def main():
+    configure_standard_streams()
     args = parse_args()
     bundle = Path(os.environ["FASTFLOWLM_BUNDLE"]) if os.environ.get("FASTFLOWLM_BUNDLE") else None
     installed_package = os.environ.get("FASTFLOWLM_INSTALLED_PACKAGE") == "1"
