@@ -30,7 +30,7 @@
             {"prompt": "Reply with the word beta.", "expected_regex": "beta"},
             {"prompt": "Reply with the word gamma.", "expected_regex": "gamma"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 16"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 16"],
           "process_iterations": 2,
           "timeout_seconds": 300,
           "ctx_len": 1024
@@ -42,7 +42,7 @@
             {"prompt": "Reply with the word stable.", "expected_regex": "stable"},
             {"prompt": "Reply with the word ready.", "expected_regex": "ready"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 16"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 16"],
           "process_iterations": 3,
           "timeout_seconds": 300,
           "ctx_len": 1024
@@ -82,7 +82,7 @@
             {"prompt": "Name the capital of France in one word.", "expected_regex": "Paris"},
             {"prompt": "Reply with the word five.", "expected_regex": "five"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 32"],
           "process_iterations": 2,
           "timeout_seconds": 360,
           "ctx_len": 1024
@@ -94,7 +94,7 @@
             {"prompt": "Reply with the word stable.", "expected_regex": "stable"},
             {"prompt": "Reply with the word ready.", "expected_regex": "ready"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 32"],
           "process_iterations": 3,
           "timeout_seconds": 360,
           "ctx_len": 1024
@@ -132,7 +132,7 @@
             {"prompt": "Reply with the word beta.", "expected_regex": "beta"},
             {"prompt": "Reply with the word gamma.", "expected_regex": "gamma"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 16"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 16"],
           "process_iterations": 2,
           "timeout_seconds": 360,
           "ctx_len": 1024
@@ -144,7 +144,7 @@
             {"prompt": "Reply with the word stable.", "expected_regex": "stable"},
             {"prompt": "Reply with the word ready.", "expected_regex": "ready"}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 16"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 16"],
           "process_iterations": 3,
           "timeout_seconds": 360,
           "ctx_len": 1024
@@ -164,7 +164,7 @@
               "expected_regex": "HRX[- ]NPU[- ]CONTEXT[- ]4K[- ]PASS"
             }
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 32"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 32"],
           "process_iterations": 1,
           "timeout_seconds": 360,
           "ctx_len": 4096

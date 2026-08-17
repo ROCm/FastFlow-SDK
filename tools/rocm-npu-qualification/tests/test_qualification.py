@@ -162,7 +162,11 @@ def test_profile_selection_and_fast_parity_contract():
     assert qwen["tag"] == "qwen3:0.6b"
     assert run["process_iterations"] == 5
     assert len(run["turns"]) == 2
-    assert run["setup_commands"] == ["/set topk 1", "/set gen-lim 16"]
+    assert run["setup_commands"] == [
+        "/set topk 1",
+        "/set temp 0",
+        "/set gen-lim 16",
+    ]
     assert (bench["checkpoint_min"], bench["checkpoint_max"]) == (950, 1024)
     assert {entry["path"] for entry in qwen["xclbins"]} == {
         f"Qwen3-0.6B-NPU2/{name}.xclbin" for name in ("attn", "dequant", "layer", "mm")
@@ -176,6 +180,52 @@ def test_profile_registry_digest_matches_fastflowlm_source():
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     profile_digest = load_profile("fast")["models"][0]["registry_sha256"]
     assert profile_digest == canonical_json_sha256(registry)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows DLL search-path contract")
+def test_resolve_flm_prefers_authoritative_runtime_override(monkeypatch, tmp_path):
+    package_root = tmp_path / "fastflowlm"
+    flm = package_root / "bin" / "flm.exe"
+    config = package_root / "model_list.json"
+    xclbins = package_root / "xclbins"
+    model_info = package_root / "model_info.json"
+    runtime_bin = tmp_path / "installed-runtime" / "bin"
+    candidate = tmp_path / "candidate" / "hrx.dll"
+    for path in (flm, config, model_info, candidate):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    xclbins.mkdir()
+    runtime_bin.mkdir(parents=True)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "rocm_npu_fastflowlm",
+        SimpleNamespace(
+            flm_path=lambda: flm,
+            config_path=lambda: config,
+            xclbin_path=lambda: xclbins,
+            model_info_path=lambda: model_info,
+            package_root=lambda: package_root,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "rocm_npu_runtime",
+        SimpleNamespace(binary_dir=lambda: runtime_bin),
+    )
+    monkeypatch.setenv("ROCM_NPU_RUNTIME_PATH", str(candidate))
+    monkeypatch.setenv("PATH", "existing-path")
+
+    resolved_flm, resolved_config, environment = runner._resolve_flm()
+
+    assert resolved_flm == flm.resolve()
+    assert resolved_config == config.resolve()
+    assert environment["PATH"].split(os.pathsep) == [
+        str(package_root / "bin"),
+        str(candidate.parent),
+        str(runtime_bin),
+        "existing-path",
+    ]
 
 
 def test_4k_profiles_separate_benchmark_from_tail_retrieval():
@@ -692,6 +742,39 @@ def test_model_test_validates_every_turn(monkeypatch, tmp_path):
     assert records[0]["status"] == "pass"
     assert records[0]["turn_count"] == 2
     assert records[0]["metrics"]["responses"] == 2
+    assert records[0]["metrics"]["raw_outputs_sha256"] == canonical_json_sha256(
+        ["alpha", "bravo"]
+    )
+
+
+def test_model_test_reports_expected_regex_before_generic_text_quality(
+    monkeypatch, tmp_path
+):
+    model = _model()
+    model["tests"][0]["turns"] = [
+        {"prompt": "beta", "expected_regex": "beta"}
+    ]
+    transcript = "Model RAW Output:\n\u03b2\n>>>"
+    monkeypatch.setattr(
+        runner, "run_command", lambda *args, **kwargs: _result(stdout=transcript)
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_interactive_command",
+        lambda *args, **kwargs: _result(stdout=transcript),
+    )
+
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+    )
+
+    assert records[0]["status"] == "fail"
+    assert records[0]["error"] == "FastFlowLM turn 1 did not match regex"
 
 
 def test_model_test_materializes_generated_context_prompt(monkeypatch, tmp_path):

@@ -36,7 +36,7 @@ from .fastflowlm import (
     smoke_phrase_matches,
     verify_xclbin_inventory,
 )
-from .hashing import sha256_file
+from .hashing import canonical_json_sha256, sha256_file
 from .installation import (
     numeric_runtime_identities as _numeric_runtime_identities,
     normalize_candidate as _normalize_candidate_manifest,
@@ -115,12 +115,22 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
             raise QualificationError(
                 "rocm-npu-runtime binary directory is unavailable"
             ) from error
+        runtime_override = environment.get("ROCM_NPU_RUNTIME_PATH")
+        override_directory = None
+        if runtime_override:
+            override_path = Path(runtime_override)
+            override_directory = (
+                override_path if override_path.is_dir() else override_path.parent
+            )
         environment["PATH"] = os.pathsep.join(
-            (
+            str(path)
+            for path in (
                 str(package_root / "bin"),
+                override_directory,
                 str(binary_dir()),
                 environment.get("PATH", ""),
             )
+            if path
         )
     return path.resolve(), config.resolve(), environment
 
@@ -325,11 +335,7 @@ def _test_model(
                 for turn_number, (raw, turn) in enumerate(
                     zip(raw_outputs, turns), start=1
                 ):
-                    if not re.search(r"[A-Za-z]{4,}", raw):
-                        semantic_error = (
-                            f"FastFlowLM turn {turn_number} has no visible text"
-                        )
-                    elif turn.get("expected") and not smoke_phrase_matches(
+                    if turn.get("expected") and not smoke_phrase_matches(
                         raw, turn["expected"]
                     ):
                         semantic_error = f"FastFlowLM turn {turn_number} did not match"
@@ -340,6 +346,10 @@ def _test_model(
                     ):
                         semantic_error = (
                             f"FastFlowLM turn {turn_number} did not match regex"
+                        )
+                    elif not re.search(r"[A-Za-z]{4,}", raw):
+                        semantic_error = (
+                            f"FastFlowLM turn {turn_number} has no visible text"
                         )
                     if semantic_error:
                         break
@@ -357,7 +367,10 @@ def _test_model(
                     "turn_count": len(turns),
                     "process_iteration": iteration,
                     "soak_iterations": test["process_iterations"],
-                    "metrics": {"responses": len(raw_outputs)},
+                    "metrics": {
+                        "responses": len(raw_outputs),
+                        "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
+                    },
                     "artifacts": [],
                     **(
                         {}

@@ -3,6 +3,7 @@
 
 import argparse
 import importlib.util
+import io
 import os
 import sys
 import types
@@ -66,6 +67,7 @@ class TestFastFlowLMSmoke:
         with mock.patch.dict(os.environ, {}, clear=True):
             assert smoke.smoke_setup_commands() == [
                 "/set topk 1",
+                "/set temp 0",
                 "/set gen-lim 16",
             ]
 
@@ -220,6 +222,25 @@ class TestFastFlowLMSmoke:
         assert output == "ready\nhello\n"
         assert log.read_text(encoding="utf-8") == output
         assert output in capsys.readouterr().out
+
+    def test_configure_standard_streams_accepts_non_ascii_output(self):
+        stdout_bytes = io.BytesIO()
+        stderr_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="cp1252")
+        stderr = io.TextIOWrapper(stderr_bytes, encoding="cp1252")
+        with (
+            mock.patch.object(smoke.sys, "stdout", stdout),
+            mock.patch.object(smoke.sys, "stderr", stderr),
+        ):
+            smoke.configure_standard_streams()
+            print("\u5728 UTF-8 transcript", file=smoke.sys.stdout, flush=True)
+            print("\u5728 UTF-8 error", file=smoke.sys.stderr, flush=True)
+        assert stdout_bytes.getvalue().decode("utf-8") == (
+            f"\u5728 UTF-8 transcript{os.linesep}"
+        )
+        assert stderr_bytes.getvalue().decode("utf-8") == (
+            f"\u5728 UTF-8 error{os.linesep}"
+        )
 
     def test_run_tee_can_drive_prompt_paced_input(self, tmp_path):
         child = (

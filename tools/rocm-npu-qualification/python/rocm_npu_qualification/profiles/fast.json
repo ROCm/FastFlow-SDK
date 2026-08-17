@@ -29,7 +29,7 @@
             {"prompt": "Repeat exactly: HRX runtime smoke test one.", "expected": "HRX runtime smoke test one."},
             {"prompt": "Repeat exactly: HRX runtime smoke test two.", "expected": "HRX runtime smoke test two."}
           ],
-          "setup_commands": ["/set topk 1", "/set gen-lim 16"],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 16"],
           "process_iterations": 5,
           "timeout_seconds": 300,
           "ctx_len": 1024
