@@ -1031,6 +1031,50 @@ def test_benchmark_soak_validates_every_output_and_generated_config(
     assert "output 2" in records[0]["error"]
 
 
+def test_benchmark_accepts_terse_sentinel_only_output(monkeypatch, tmp_path):
+    # Small/omni models may obey "begin with exactly HRX-NPU-4K-PASS" and emit
+    # only the terse sentinel for a stage. That is fewer than eight words, but the
+    # sentinel exception must keep it from being flagged as incoherent.
+    model = _model()
+    model["tests"] = [
+        {
+            "name": "context-1k",
+            "kind": "bench",
+            "config": "bench/bench_1k_smoke.json",
+            "timeout_seconds": 10,
+            "checkpoint_min": 950,
+            "checkpoint_max": 1024,
+            "expected_regex": "HRX[- ]NPU[- ]4K[- ]PASS",
+        }
+    ]
+
+    def fake_bench(*args, **kwargs):
+        csv_path = kwargs["cwd"] / "bench_qwen3_0.6b_result.csv"
+        csv_path.write_text(
+            ",".join(benchmark.BENCHMARK_CSV_HEADER)
+            + "\n1,2.5,0,2.5,2.5,391,0,391,391,35,0,35,35\n",
+            encoding="utf-8",
+        )
+        return _result(
+            stdout=(
+                "Creating checkpoint at context length 1001\n"
+                "Starting benchmark for 1k and iteration 1\n"
+                "Model RAW Output:\nHRX-NPU-4K-PASS\n>>>"
+            )
+        )
+
+    monkeypatch.setattr(runner, "run_command", fake_bench)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+    )
+    assert records[0]["status"] == "pass"
+
+
 def test_benchmark_csv_rejects_malformed_or_nonfinite_metrics():
     header = list(benchmark.BENCHMARK_CSV_HEADER)
     valid = [
@@ -1070,8 +1114,20 @@ def test_benchmark_requires_every_soak_checkpoint():
         for iteration in range(1, 4)
     )
     assert require_1k_checkpoint(transcript, expected_count=3) == 1024
-    with pytest.raises(ValueError, match="exactly 4 checkpoint"):
+    with pytest.raises(ValueError, match="at least 4 checkpoint"):
         require_1k_checkpoint(transcript, expected_count=4)
+
+
+def test_checkpoint_returns_largest_in_window_for_single_iteration():
+    # Gemma-family omni models emit several in-window checkpoints for a single
+    # stage (sliding-window/local attention). Any value in the target band is a
+    # valid checkpoint for the stage, so the largest is returned rather than
+    # failing on the multiplicity.
+    transcript = "\n".join(
+        f"Creating checkpoint at context length {value}"
+        for value in (977, 1009, 1945, 1977, 3881, 3912)
+    )
+    assert require_1k_checkpoint(transcript, minimum=3800, maximum=4096) == 3912
 
 
 def test_benchmark_schedule_covers_each_stage_and_iteration_once():

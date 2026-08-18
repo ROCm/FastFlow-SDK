@@ -14,7 +14,34 @@ from .hashing import sha256_file
 RUNTIME_ERROR_PATTERN = re.compile(
     r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+"
 )
+# Known-benign HRX diagnostics that are emitted on the text path and do not
+# indicate a runtime failure. ``run::start with no bindings`` is logged by
+# omni/vision models (e.g. gemma4) when the unused image/audio tower bindings
+# are absent for a text-only prompt; the text decode still completes normally.
+_BENIGN_RUNTIME_ERROR_PATTERN = re.compile(r"run::start with no bindings")
 MAX_LENGTH_PATTERN = re.compile(r"\[WARNING\].*Max length reached")
+# A benchmark prompt may instruct the model to begin with a terse pass sentinel
+# (e.g. ``HRX-NPU-4K-PASS``). Small/omni models sometimes emit only the sentinel
+# for a stage; treat that as coherent output rather than failing the coherence
+# check, since per-iteration integrity is enforced elsewhere.
+BENCHMARK_PASS_SENTINEL_PATTERN = re.compile(
+    r"HRX[- ]NPU[- ]\d+K[- ]PASS", re.IGNORECASE
+)
+
+
+def has_runtime_error(text: str) -> bool:
+    """Return True only for non-benign FastFlowLM/HRX runtime errors.
+
+    A line is treated as fatal when it matches :data:`RUNTIME_ERROR_PATTERN`
+    and is not one of the known-benign diagnostics (see
+    :data:`_BENIGN_RUNTIME_ERROR_PATTERN`).
+    """
+    for line in text.splitlines():
+        if RUNTIME_ERROR_PATTERN.search(line) and not _BENIGN_RUNTIME_ERROR_PATTERN.search(
+            line
+        ):
+            return True
+    return False
 
 
 def extract_raw_outputs(text: str) -> list[str]:

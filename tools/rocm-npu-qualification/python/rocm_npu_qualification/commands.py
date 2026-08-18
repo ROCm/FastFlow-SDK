@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -167,7 +168,44 @@ def run_command(
     )
 
 
-_SERVE_PORT_PATTERN = re.compile(r"WebServer started on port (\d+)")
+# Require a trailing non-digit so a char-by-char reader cannot latch onto a
+# partial port (e.g. matching "5" before the rest of "52625" has streamed in),
+# while still tolerating a trailing suffix such as " with 10 I/O threads".
+_SERVE_PORT_PATTERN = re.compile(r"WebServer started on port (\d+)(?=\D)")
+
+
+def _post_audio_transcription(
+    base_url: str, audio_path: Path, model: str, timeout: float
+) -> str:
+    """POST an audio file to the OpenAI-compatible transcription endpoint.
+
+    Returns the transcribed ``text`` field. Raises on transport/protocol
+    errors or a malformed response so the caller can record a probe error.
+    """
+    boundary = "----rocmNpuQualification" + uuid.uuid4().hex
+    audio_bytes = audio_path.read_bytes()
+    preamble = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="model"\r\n\r\n'
+        f"{model}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; '
+        f'filename="{audio_path.name}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode("utf-8")
+    closing = f"\r\n--{boundary}--\r\n".encode("utf-8")
+    body = preamble + audio_bytes + closing
+    request = urllib.request.Request(
+        f"{base_url}/v1/audio/transcriptions",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+        return payload["text"]
+    raise ValueError("transcription response did not contain a 'text' field")
 
 
 def serve_probe(
@@ -179,14 +217,17 @@ def serve_probe(
     model: str,
     boot_timeout: float,
     http_timeout: float = 120.0,
+    audio_sample: Path | None = None,
     echo: bool = False,
 ) -> tuple[CommandResult, dict[str, Any]]:
     """Start ``flm serve`` for an embed/ASR model and probe the HTTP endpoint.
 
     For ``embed`` models a ``/v1/embeddings`` request must return a non-empty
-    vector; for ``asr`` models (no bundled audio sample) a healthy server that
-    loaded the model on the NPU is treated as a partial pass. Returns the
-    captured :class:`CommandResult` plus a probe detail dict.
+    vector. For ``asr`` models, when an ``audio_sample`` is supplied the audio
+    is transcribed via ``/v1/audio/transcriptions`` and the returned text must
+    be non-empty; without a sample a healthy server that loaded the model on the
+    NPU is treated as a partial pass. Returns the captured
+    :class:`CommandResult` plus a probe detail dict.
     """
     normalized = tuple(os.fspath(item) for item in argv)
     started = time.monotonic()
@@ -262,7 +303,25 @@ def serve_probe(
                         detail = f"embedding dim={len(vector)}"
                     else:
                         detail = "embeddings endpoint returned no vector"
-                else:  # asr: no bundled audio sample, confirm the server is healthy
+                elif audio_sample is not None and Path(audio_sample).is_file():
+                    # asr: transcribe a real audio sample end to end.
+                    sample = Path(audio_sample)
+                    transcript_text = _post_audio_transcription(
+                        base, sample, model, http_timeout
+                    )
+                    words = re.findall(r"[A-Za-z]{2,}", transcript_text)
+                    if len(words) >= 2:
+                        ok = True
+                        detail = (
+                            f"transcribed {len(words)} words from {sample.name}: "
+                            f"{transcript_text.strip()[:160]!r}"
+                        )
+                    else:
+                        detail = (
+                            "transcription returned insufficient text: "
+                            f"{transcript_text.strip()[:160]!r}"
+                        )
+                else:  # asr without a bundled sample: confirm the server is healthy
                     try:
                         urllib.request.urlopen(
                             f"{base}/v1/models", timeout=min(30.0, http_timeout)

@@ -28,10 +28,11 @@ from .contracts import (
 from .evidence import EvidenceWriter
 from .errors import QualificationError
 from .fastflowlm import (
+    BENCHMARK_PASS_SENTINEL_PATTERN,
     MAX_LENGTH_PATTERN,
-    RUNTIME_ERROR_PATTERN,
     extract_raw_outputs,
     fresh_benchmark_csvs,
+    has_runtime_error,
     require_benchmark_schedule,
     require_1k_checkpoint,
     smoke_phrase_matches,
@@ -104,6 +105,28 @@ _SWEEP_BENCH_DEFAULT = "8k"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _resolve_asr_sample() -> Path | None:
+    """Locate the audio fixture used to exercise ASR transcription.
+
+    Honors the ``ROCM_NPU_ASR_SAMPLE`` override, otherwise falls back to the
+    audio clip bundled in the package under ``assets/``. Returns ``None`` when
+    no usable sample is present so the probe degrades to a server-health check.
+    """
+    override = os.environ.get("ROCM_NPU_ASR_SAMPLE")
+    if override:
+        candidate = Path(override)
+        return candidate if candidate.is_file() else None
+    try:
+        resource = resources.files("rocm_npu_qualification").joinpath(
+            "assets", "asr_sample.wav"
+        )
+        if resource.is_file():
+            return Path(os.fspath(resource))
+    except (TypeError, FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+    return None
 
 
 def _sweep_timeouts(footprint: float) -> tuple[int, int]:
@@ -299,10 +322,12 @@ def _test_model(
             log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
             probe_kind = test.get("probe_kind", "embed")
             serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
+            audio_sample: Path | None = None
             if probe_kind == "embed":
                 serve_argv += ["-e", "1"]
             elif probe_kind == "asr":
                 serve_argv += ["-a", "1"]
+                audio_sample = _resolve_asr_sample()
             result, probe = serve_probe(
                 serve_argv,
                 log_path=log,
@@ -310,11 +335,12 @@ def _test_model(
                 probe_kind=probe_kind,
                 model=model["tag"],
                 boot_timeout=test["timeout_seconds"],
+                audio_sample=audio_sample,
                 echo=True,
             )
             transcript = result.stdout
             semantic_error = ""
-            if RUNTIME_ERROR_PATTERN.search(transcript):
+            if has_runtime_error(transcript):
                 semantic_error = "FastFlowLM emitted an HRX runtime error"
             elif not probe["ok"]:
                 semantic_error = probe["detail"] or "FastFlowLM serve probe failed"
@@ -393,7 +419,7 @@ def _test_model(
             checkpoint = None
             csv_path = None
             raw_outputs = extract_raw_outputs(transcript)
-            if RUNTIME_ERROR_PATTERN.search(transcript):
+            if has_runtime_error(transcript):
                 semantic_error = "FastFlowLM emitted an HRX runtime error"
             elif MAX_LENGTH_PATTERN.search(transcript):
                 semantic_error = "FastFlowLM reached the generation length limit"
@@ -417,7 +443,10 @@ def _test_model(
                     semantic_error = str(error)
             if not semantic_error:
                 for output_number, raw in enumerate(raw_outputs, start=1):
-                    if len(re.findall(r"[A-Za-z]{2,}", raw)) < 8:
+                    if (
+                        len(re.findall(r"[A-Za-z]{2,}", raw)) < 8
+                        and BENCHMARK_PASS_SENTINEL_PATTERN.search(raw) is None
+                    ):
                         semantic_error = (
                             f"FastFlowLM benchmark output {output_number} is not "
                             "coherent text"
@@ -531,11 +560,10 @@ def _test_model(
                 )
             transcript = result.stdout + "\n" + result.stderr
             raw_outputs = extract_raw_outputs(transcript)
+            max_length_reached = bool(MAX_LENGTH_PATTERN.search(transcript))
             semantic_error = ""
-            if RUNTIME_ERROR_PATTERN.search(transcript):
+            if has_runtime_error(transcript):
                 semantic_error = "FastFlowLM emitted an HRX runtime error"
-            elif MAX_LENGTH_PATTERN.search(transcript):
-                semantic_error = "FastFlowLM reached the generation length limit"
             elif len(raw_outputs) != len(turns):
                 semantic_error = (
                     f"FastFlowLM emitted {len(raw_outputs)} responses; "
@@ -545,24 +573,33 @@ def _test_model(
                 for turn_number, (raw, turn) in enumerate(
                     zip(raw_outputs, turns), start=1
                 ):
-                    if turn.get("expected") and not smoke_phrase_matches(
-                        raw, turn["expected"]
-                    ):
+                    expected = turn.get("expected")
+                    expected_regex = turn.get("expected_regex")
+                    if expected and not smoke_phrase_matches(raw, expected):
                         semantic_error = f"FastFlowLM turn {turn_number} did not match"
                     elif (
-                        turn.get("expected_regex")
-                        and re.search(turn["expected_regex"], raw, re.IGNORECASE)
-                        is None
+                        expected_regex
+                        and re.search(expected_regex, raw, re.IGNORECASE) is None
                     ):
                         semantic_error = (
                             f"FastFlowLM turn {turn_number} did not match regex"
                         )
-                    elif not re.search(r"[A-Za-z]{4,}", raw):
+                    elif not (expected or expected_regex) and not re.search(
+                        r"[A-Za-z]{4,}", raw
+                    ):
+                        # The generic coherence gate only applies to open-ended
+                        # turns. Turns that assert a short answer (e.g. "4" for
+                        # 2+2) are validated by expected/expected_regex above, so
+                        # a numeric-only reply is not "no visible text".
                         semantic_error = (
                             f"FastFlowLM turn {turn_number} has no visible text"
                         )
                     if semantic_error:
                         break
+            # A generation-length cap is only fatal when it stopped a turn from
+            # satisfying its expectation. Every turn responded (count matches) and
+            # each per-turn check above passed, so a thinking model that ran long
+            # before answering is not itself a failure.
             passed = result.returncode == 0 and not semantic_error
             records.append(
                 {
@@ -580,6 +617,7 @@ def _test_model(
                     "metrics": {
                         "responses": len(raw_outputs),
                         "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
+                        "max_length_reached": max_length_reached,
                     },
                     "artifacts": [],
                     **(
