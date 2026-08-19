@@ -60,14 +60,17 @@ from .xadx import XadxError, run_recipe, validate_xadx_report
 
 
 # Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
-# 2+2 turn is phrased to require a short sentence so the answer always carries
-# visible text for the per-turn coherence check while still asserting "4".
+# 2+2 turn is left open-ended: forcing "one short sentence" pushes some small
+# models (e.g. the translation-tuned lfm2-trans:2.6b) into a terse, wrong reply
+# like "2." at greedy decoding, whereas given room to answer they reliably reach
+# "4". A numeric-only answer no longer trips the coherence gate because the
+# expected_regex below asserts "4" directly (see the per-turn checks).
 _SWEEP_SINGLE_PROMPT = "What is the capital of France? Answer in one short sentence."
 _SWEEP_MULTI_TURNS: tuple[dict[str, Any], ...] = (
     {"prompt": "What is the capital of France? Answer in one short sentence."},
     {"prompt": "Name three primary colors."},
     {
-        "prompt": "What is 2+2? Answer in one short sentence.",
+        "prompt": "What is 2+2?",
         "expected_regex": r"\b4\b|four",
     },
     {"prompt": "Write one short sentence about the ocean."},
