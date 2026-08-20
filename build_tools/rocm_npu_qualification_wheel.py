@@ -37,7 +37,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # package and never via ``flm pull`` -- so a qualification host cannot fetch it,
 # but the wheel-build host (the FastFlowLM HRX jobs) already has the checkout.
 # The byte hash is pinned so an upstream clip change fails the build loudly
-# instead of silently drifting the paired reference transcript.
+# instead of silently drifting the paired reference transcript. Provenance:
+# FastFlowLM's testbench input src/tb_files/Recording.wav (PCM 16-bit, 2ch,
+# 48 kHz, ~3.24 s), MIT-licensed with FastFlowLM (packaged license is copied
+# into the wheel's licenses/ directory above); transcript pinned in
+# assets/asr_sample.reference.txt.
 FASTFLOWLM_ASR_SAMPLE = Path("projects/FastFlowLM/src/tb_files/Recording.wav")
 ASR_SAMPLE_SHA256 = (
     "c0f16ef6b0a9053d9abccb603d1aa1445c62b2b35bbbb4eaa3996422c68df97a"
