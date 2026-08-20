@@ -68,7 +68,11 @@ def verify_xclbin_inventory(
 
 
 def require_1k_checkpoint(
-    text: str, *, minimum: int = 950, maximum: int = 1024
+    text: str,
+    *,
+    minimum: int = 950,
+    maximum: int = 1024,
+    expected_count: int = 1,
 ) -> int:
     values = [
         int(value)
@@ -84,12 +88,37 @@ def require_1k_checkpoint(
             )
         ]
     matching = [value for value in values if minimum <= value <= maximum]
-    if len(matching) != 1:
+    if len(matching) != expected_count:
         raise ValueError(
-            f"benchmark must report exactly one checkpoint in {minimum}..{maximum}; "
+            f"benchmark must report exactly {expected_count} checkpoint(s) in "
+            f"{minimum}..{maximum}; "
             f"got {values or 'none'}"
         )
     return matching[0]
+
+
+def require_benchmark_schedule(text: str, *, iterations: int) -> int:
+    """Return the scheduled case count after validating FLM's iteration matrix."""
+    cases = [
+        (int(context), int(iteration))
+        for context, iteration in re.findall(
+            r"Starting benchmark for\s+(\d+)k and iteration\s+(\d+)", text
+        )
+    ]
+    if not cases:
+        raise ValueError("FastFlowLM benchmark did not report a scheduled case")
+    contexts = {context for context, _ in cases}
+    expected = {
+        (context, iteration)
+        for context in contexts
+        for iteration in range(1, iterations + 1)
+    }
+    if set(cases) != expected or len(cases) != len(expected):
+        raise ValueError(
+            "FastFlowLM benchmark schedule is incomplete or duplicated: "
+            f"expected {len(expected)} unique case(s), got {len(cases)}"
+        )
+    return len(expected)
 
 
 def fresh_benchmark_csvs(

@@ -1,8 +1,25 @@
 {
   "schema_version": 1,
   "name": "extended",
-  "description": "Opt-in default-suite superset with revision-pinned Llama 3.1 8B multi-turn, soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
+  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak plus revision-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
   "extends": "default",
+  "test_extensions": [
+    {
+      "model": "lfm2:1.2b",
+      "tests": [
+        {
+          "name": "long-lived-context-1k",
+          "kind": "bench",
+          "config": "bench/bench_1k_smoke.json",
+          "iterations": 100,
+          "timeout_seconds": 1200,
+          "checkpoint_min": 950,
+          "checkpoint_max": 1024,
+          "expected_regex": ""
+        }
+      ]
+    }
+  ],
   "models": [
     {
       "tag": "llama3.1:8b",

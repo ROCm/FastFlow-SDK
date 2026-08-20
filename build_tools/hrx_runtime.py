@@ -34,6 +34,13 @@ HRX_AMDXDNA_HOST_TESTS = (
     "semaphore_test",
 )
 HRX_AMDXDNA_HOST_TESTS_WINDOWS = ("native_windows_mcdm_test",)
+# Nested MCDM shim tests: (CMake target, CTest name relative to amdxdna/).
+HRX_AMDXDNA_MCDM_HOST_TESTS = (
+    (
+        "iree_hal_drivers_amdxdna_shim_windows_mcdm_kmt_api_test",
+        "shim/windows/mcdm/kmt_api_test",
+    ),
+)
 
 
 def hrx_amdxdna_host_tests():
@@ -45,15 +52,21 @@ def hrx_amdxdna_host_tests():
 
 def hrx_amdxdna_host_test_targets():
     """Returns the CMake target names generated for the host tests."""
-    return tuple(
+    targets = [
         f"iree_hal_drivers_amdxdna_{name}" for name in hrx_amdxdna_host_tests()
-    )
+    ]
+    if paths.is_windows():
+        targets.extend(target for target, _ in HRX_AMDXDNA_MCDM_HOST_TESTS)
+    return tuple(targets)
 
 
 def hrx_amdxdna_host_test_regex():
     """Returns a ctest regex matching only the selected amdxdna host tests."""
-    names = "|".join(re.escape(name) for name in hrx_amdxdna_host_tests())
-    return rf"^iree/hal/drivers/amdxdna/({names})$"
+    names = list(hrx_amdxdna_host_tests())
+    if paths.is_windows():
+        names.extend(relative_name for _, relative_name in HRX_AMDXDNA_MCDM_HOST_TESTS)
+    escaped = "|".join(re.escape(name) for name in names)
+    return rf"^iree/hal/drivers/amdxdna/({escaped})$"
 
 
 def _numpy():
