@@ -1803,6 +1803,31 @@ def test_resolve_model_dynamic_reports_missing_required_file(monkeypatch, tmp_pa
         )
 
 
+def test_resolve_model_dynamic_rejects_unexpected_cache_files(tmp_path):
+    config = _sweep_config(tmp_path)
+    cache = tmp_path / "cache"
+    model_directory = cache / "models" / "Qwen3-0.6B-NPU2"
+    model_directory.mkdir(parents=True)
+    (model_directory / "model.q4nx").write_bytes(b"weights")
+    (model_directory / "smuggled.bin").write_bytes(b"noise")
+    model = next(
+        entry
+        for entry in models.enumerate_registry_models(config)
+        if entry["tag"] == "qwen3:0.6b"
+    )
+    with pytest.raises(models.ModelError, match="unexpected files"):
+        models.resolve_model_dynamic(
+            model,
+            flm=tmp_path / "flm",
+            config_path=config,
+            model_cache=cache,
+            pull_log=tmp_path / "pull.log",
+            offline=False,
+            no_pull=False,
+            environment={},
+        )
+
+
 def test_default_tests_for_scopes_by_kind():
     chat = runner._default_tests_for({"kind": "chat", "footprint": 0.6})
     assert [test["kind"] for test in chat] == ["run", "run", "bench"]
@@ -1810,6 +1835,12 @@ def test_default_tests_for_scopes_by_kind():
     assert [turn["prompt"] for turn in single["turns"]] == [runner._SWEEP_SINGLE_PROMPT]
     assert len(multi["turns"]) == 5
     assert multi["turns"][2]["expected_regex"] == r"\b4\b|four"
+    # Terse single-prompt keeps the tight cap; the open multi-turn prompts get
+    # more generation headroom so they are not truncated mid-answer.
+    assert tuple(single["setup_commands"]) == runner._SWEEP_GREEDY_SETUP
+    assert tuple(multi["setup_commands"]) == runner._SWEEP_GREEDY_SETUP_MULTI
+    assert "/set gen-lim 16" in single["setup_commands"]
+    assert "/set gen-lim 64" in multi["setup_commands"]
     # 8k is the default complete-sweep benchmark stage.
     assert runner._SWEEP_BENCH_DEFAULT == "8k"
     assert bench["name"] == "context-8k"

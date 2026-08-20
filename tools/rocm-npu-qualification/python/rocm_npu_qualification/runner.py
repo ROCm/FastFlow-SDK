@@ -79,14 +79,23 @@ _SWEEP_MULTI_TURNS: tuple[dict[str, Any], ...] = (
     {"prompt": "What is the largest planet in our solar system?"},
 )
 # Greedy chat setup shared with the curated profiles: pin top-k and temperature
-# to make decoding deterministic and cap generation so the short factual turns
-# (e.g. the 2+2 check) do not ramble. The sweep previously set only topk, which
-# left temperature and generation length model-default and made the multi-turn
-# arithmetic turn more flake-prone.
+# to make decoding deterministic. The sweep previously set only topk, which left
+# temperature and generation length model-default and made the arithmetic turn
+# more flake-prone. The single-prompt/arithmetic turns are terse, so they keep a
+# tight generation cap; the open multi-turn prompts (naming three colors,
+# describing the ocean, largest planet) need room for a full answer, so they use
+# a larger cap -- gen-lim 16 truncated them mid-sentence. This mirrors the
+# curated profiles, which likewise raise gen-lim for their less-constrained
+# turns.
 _SWEEP_GREEDY_SETUP: tuple[str, ...] = (
     "/set topk 1",
     "/set temp 0",
     "/set gen-lim 16",
+)
+_SWEEP_GREEDY_SETUP_MULTI: tuple[str, ...] = (
+    "/set topk 1",
+    "/set temp 0",
+    "/set gen-lim 64",
 )
 # Complete-sweep benchmark stages, selectable via ``--bench-context``. Each entry
 # fixes the packaged config, the evidence test name, the transcript checkpoint
@@ -226,7 +235,7 @@ def _default_tests_for(
             "name": "multi-turn",
             "kind": "run",
             "turns": [dict(turn) for turn in _SWEEP_MULTI_TURNS],
-            "setup_commands": _SWEEP_GREEDY_SETUP,
+            "setup_commands": _SWEEP_GREEDY_SETUP_MULTI,
             "process_iterations": 1,
             "timeout_seconds": multi_timeout,
             "ctx_len": 2048,

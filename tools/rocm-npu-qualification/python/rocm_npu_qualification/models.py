@@ -387,10 +387,17 @@ def resolve_model_dynamic(
     if not inventory:
         raise ModelError(f"{model['tag']}: model cache contains no files")
     present = {entry["path"] for entry in inventory}
-    missing = sorted(set(required_files) - present)
-    if missing:
+    required = set(required_files)
+    missing = sorted(required - present)
+    # Discovery has no per-file digests to pin, but the registry still declares
+    # the complete file set for the model. Mirror resolve_model and require the
+    # cache to match it exactly: extra files mean the cache is not the model FLM
+    # published, so record neither them nor a "pass".
+    unexpected = sorted(present - required)
+    if missing or unexpected:
         raise ModelError(
-            f"{model['tag']}: model cache is missing required files {missing}"
+            f"{model['tag']}: model cache does not match the registry file set; "
+            f"missing required files {missing}, unexpected files {unexpected}"
         )
     return (
         {

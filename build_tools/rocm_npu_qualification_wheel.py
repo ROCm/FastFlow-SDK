@@ -38,11 +38,13 @@ ROOT = Path(__file__).resolve().parents[1]
 # but the wheel-build host (the FastFlowLM HRX jobs) already has the checkout.
 # The byte hash is pinned so an upstream clip change fails the build loudly
 # instead of silently drifting the paired reference transcript. Provenance:
-# FastFlowLM's testbench input src/tb_files/Recording.wav (PCM 16-bit, 2ch,
-# 48 kHz, ~3.24 s), MIT-licensed with FastFlowLM (packaged license is copied
-# into the wheel's licenses/ directory above); transcript pinned in
-# assets/asr_sample.reference.txt.
+# AMD FastFlowLM test audio, src/tb_files/Recording.wav; the paired transcript
+# is pinned in assets/asr_sample.reference.txt.
 FASTFLOWLM_ASR_SAMPLE = Path("projects/FastFlowLM/src/tb_files/Recording.wav")
+# Presence of the FastFlowLM source tree distinguishes "submodule not checked
+# out" (presubmit builds skip submodules) from "checked out but the pinned clip
+# is gone" (a pin bump that dropped or moved the file).
+FASTFLOWLM_SOURCE_MARKER = Path("projects/FastFlowLM/src")
 ASR_SAMPLE_SHA256 = (
     "c0f16ef6b0a9053d9abccb603d1aa1445c62b2b35bbbb4eaa3996422c68df97a"
 )
@@ -55,10 +57,20 @@ def _stage_asr_sample(root: Path, package_root: Path) -> None:
     submodules) the fixture is omitted; the ASR serve-probe then fails closed at
     runtime rather than pretending to transcribe. Released wheels are built in
     the FastFlowLM HRX jobs, where the submodule is always present, so they
-    always carry the clip.
+    always carry the clip. When the submodule *is* present but the pinned clip
+    is missing -- e.g. a pin bump dropped or moved it -- the build fails loudly
+    rather than silently shipping a wheel whose ASR probe can never pass.
     """
     upstream = root / FASTFLOWLM_ASR_SAMPLE
     if not upstream.is_file():
+        if (root / FASTFLOWLM_SOURCE_MARKER).is_dir():
+            raise RuntimeError(
+                "FastFlowLM is checked out but its pinned ASR fixture "
+                f"{FASTFLOWLM_ASR_SAMPLE.as_posix()} is missing. A pin bump must "
+                "not silently drop the clip; restore it, or repoint "
+                "FASTFLOWLM_ASR_SAMPLE and update ASR_SAMPLE_SHA256 and "
+                "assets/asr_sample.reference.txt together."
+            )
         print(
             "package-qualification-wheel: FastFlowLM checkout absent; omitting "
             "assets/asr_sample.wav (ASR probe will fail closed at runtime)",
