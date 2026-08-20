@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -22,6 +23,7 @@ from .commands import run_command, run_interactive_command, serve_probe
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
+    PROFILE_SCHEMA_VERSION,
     XADX_REPORT_SCHEMA_VERSION,
     xadx_rounds,
 )
@@ -76,6 +78,16 @@ _SWEEP_MULTI_TURNS: tuple[dict[str, Any], ...] = (
     {"prompt": "Write one short sentence about the ocean."},
     {"prompt": "What is the largest planet in our solar system?"},
 )
+# Greedy chat setup shared with the curated profiles: pin top-k and temperature
+# to make decoding deterministic and cap generation so the short factual turns
+# (e.g. the 2+2 check) do not ramble. The sweep previously set only topk, which
+# left temperature and generation length model-default and made the multi-turn
+# arithmetic turn more flake-prone.
+_SWEEP_GREEDY_SETUP: tuple[str, ...] = (
+    "/set topk 1",
+    "/set temp 0",
+    "/set gen-lim 16",
+)
 # Complete-sweep benchmark stages, selectable via ``--bench-context``. Each entry
 # fixes the packaged config, the evidence test name, the transcript checkpoint
 # band that isolates the target stage (FLM runs 1k, 2k, 4k, ... stages up to
@@ -110,12 +122,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _resolve_asr_sample() -> Path | None:
-    """Locate the audio fixture used to exercise ASR transcription.
+def _resolve_asr_sample(stack: ExitStack) -> Path | None:
+    """Materialize the audio fixture used to exercise ASR transcription.
 
-    Honors the ``ROCM_NPU_ASR_SAMPLE`` override, otherwise falls back to the
-    audio clip bundled in the package under ``assets/``. Returns ``None`` when
-    no usable sample is present so the probe degrades to a server-health check.
+    Honors the ``ROCM_NPU_ASR_SAMPLE`` override (a real filesystem path),
+    otherwise resolves the clip bundled in the package under ``assets/`` via
+    :func:`importlib.resources.as_file` so it works whether the wheel is
+    installed unzipped or imported from a zip. The extracted path stays valid
+    for the lifetime of ``stack``. Returns ``None`` when no usable sample is
+    present; the caller then fails the ASR probe closed.
     """
     override = os.environ.get("ROCM_NPU_ASR_SAMPLE")
     if override:
@@ -126,7 +141,7 @@ def _resolve_asr_sample() -> Path | None:
             "assets", "asr_sample.wav"
         )
         if resource.is_file():
-            return Path(os.fspath(resource))
+            return stack.enter_context(resources.as_file(resource))
     except (TypeError, FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     return None
@@ -201,7 +216,7 @@ def _default_tests_for(
             "name": "single-prompt",
             "kind": "run",
             "turns": [{"prompt": _SWEEP_SINGLE_PROMPT}],
-            "setup_commands": ["/set topk 1"],
+            "setup_commands": _SWEEP_GREEDY_SETUP,
             "process_iterations": 1,
             "timeout_seconds": single_timeout,
             "ctx_len": 1024,
@@ -210,7 +225,7 @@ def _default_tests_for(
             "name": "multi-turn",
             "kind": "run",
             "turns": [dict(turn) for turn in _SWEEP_MULTI_TURNS],
-            "setup_commands": ["/set topk 1"],
+            "setup_commands": _SWEEP_GREEDY_SETUP,
             "process_iterations": 1,
             "timeout_seconds": multi_timeout,
             "ctx_len": 2048,
@@ -353,25 +368,26 @@ def _test_model(
             log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
             probe_kind = test.get("probe_kind", "embed")
             serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
-            audio_sample: Path | None = None
-            reference_text: str | None = None
-            if probe_kind == "embed":
-                serve_argv += ["-e", "1"]
-            elif probe_kind == "asr":
-                serve_argv += ["-a", "1"]
-                audio_sample = _resolve_asr_sample()
-                reference_text = _resolve_asr_reference()
-            result, probe = serve_probe(
-                serve_argv,
-                log_path=log,
-                env=environment,
-                probe_kind=probe_kind,
-                model=model["tag"],
-                boot_timeout=test["timeout_seconds"],
-                audio_sample=audio_sample,
-                reference_text=reference_text,
-                echo=True,
-            )
+            with ExitStack() as sample_stack:
+                audio_sample: Path | None = None
+                reference_text: str | None = None
+                if probe_kind == "embed":
+                    serve_argv += ["-e", "1"]
+                elif probe_kind == "asr":
+                    serve_argv += ["-a", "1"]
+                    audio_sample = _resolve_asr_sample(sample_stack)
+                    reference_text = _resolve_asr_reference()
+                result, probe = serve_probe(
+                    serve_argv,
+                    log_path=log,
+                    env=environment,
+                    probe_kind=probe_kind,
+                    model=model["tag"],
+                    boot_timeout=test["timeout_seconds"],
+                    audio_sample=audio_sample,
+                    reference_text=reference_text,
+                    echo=True,
+                )
             transcript = result.stdout
             semantic_error = ""
             if has_runtime_error(transcript):
@@ -861,7 +877,13 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     keep_going = bool(getattr(args, "keep_going", False) or all_models)
     if all_models:
         bench_choice = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+        # The sweep is not a packaged profile-v1: it discovers whatever the
+        # installed FLM registry exposes, so it cannot pin files/XCLBINs and is
+        # not a named contract. Describe it honestly as a diagnostic-sweep
+        # descriptor. The concrete tags/tests are filled in after discovery.
         profile = {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "kind": "diagnostic-sweep",
             "name": "all-models",
             "description": (
                 "Dynamic complete sweep of every model in the installed "
@@ -869,6 +891,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 f"{bench_choice} benchmark for chat models; serve-probe for "
                 "embed/ASR models."
             ),
+            "bench_context": bench_choice,
             "models": [],
         }
     else:
@@ -884,10 +907,18 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             raise QualificationError("candidate manifest must be an object")
         candidate = _normalize_candidate_manifest(candidate)
 
+    # Version/wheel validation still runs against a supplied candidate even for
+    # the sweep, so a mismatched install is rejected up front.
     _validate_versions(installed, core_version, candidate, args.candidate_manifest)
+    # candidate_bound means "execution equals a sealed wheel profile," not merely
+    # "a candidate manifest was passed." The diagnostic sweep is never a sealed
+    # wheel profile, so it is always ad-hoc even with --candidate-manifest; intake
+    # then refuses it. Non-sweep runs bind when a candidate is present.
+    candidate_bound = candidate is not None and not all_models
+    bound_candidate = candidate if candidate_bound else None
     numeric_runtime = _numeric_runtime_identities()
     writer = EvidenceWriter(args.output)
-    writer.write_candidate_manifest(candidate)
+    writer.write_candidate_manifest(bound_candidate)
     writer.write_json("profile.json", profile)
     started = _now()
     evidence: dict[str, Any] = {
@@ -896,13 +927,15 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "subject": {
             "version": core_version,
             "source_revision": (
-                candidate["source_revision"] if candidate is not None else ""
+                bound_candidate["source_revision"]
+                if bound_candidate is not None
+                else ""
             ),
             "candidate_binding": {
-                "present": candidate is not None,
+                "present": candidate_bound,
                 "manifest_sha256": (
                     sha256_file(writer.path("candidate-manifest.json"))
-                    if candidate is not None
+                    if candidate_bound
                     else None
                 ),
             },
@@ -913,7 +946,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "profile": {
             "name": profile["name"],
             "description": profile["description"],
-            "candidate_bound": candidate is not None,
+            "candidate_bound": candidate_bound,
         },
         "models": [],
         "tests": [],
@@ -1042,13 +1075,25 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
     writer.write_json("evidence.json", evidence)
 
+    execution_models = profile["models"]
     if all_models:
         bench_context = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
         discovered = enumerate_registry_models(flm_config)
         for base in discovered:
             base["tests"] = _default_tests_for(base, bench_context=bench_context)
-        profile["models"] = discovered
+        # The descriptor records what actually ran (tag, kind, test names) rather
+        # than a profile-v1 model+test config: the sweep pins nothing, so the
+        # full test specs live only in the execution list below.
+        profile["models"] = [
+            {
+                "tag": base["tag"],
+                "kind": base.get("kind", "chat"),
+                "tests": [test["name"] for test in base["tests"]],
+            }
+            for base in discovered
+        ]
         writer.write_json("profile.json", profile)
+        execution_models = discovered
         print(
             f"qualify: complete sweep discovered {len(discovered)} models from the "
             "installed FLM registry",
@@ -1057,7 +1102,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         )
 
     resolve = resolve_model_dynamic if all_models else resolve_model
-    for model in profile["models"]:
+    for model in execution_models:
         safe_tag = "".join(
             character if character.isalnum() else "-" for character in model["tag"]
         )

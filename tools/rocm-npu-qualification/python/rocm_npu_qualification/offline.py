@@ -56,6 +56,10 @@ ROOT_FILES = {
     "models.json",
     "probe.json",
     "profile.json",
+    # Optional human-readable HRX overlay (diagnostic sweeps write it). Hashed by
+    # SHA256SUMS like every other member, but not schema-validated and carries no
+    # intake semantics.
+    "report.md",
     "self-test.json",
     "tests.json",
     "xadx-report.json",

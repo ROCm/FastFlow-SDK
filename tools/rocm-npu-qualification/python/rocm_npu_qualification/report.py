@@ -11,7 +11,6 @@ numbers are available here, so no XRT columns are rendered.
 
 from __future__ import annotations
 
-import platform
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,7 +22,6 @@ _ENV_ORDER = (
     "npu_firmware",
     "target_family",
     "flm_version",
-    "python",
     "rocm-npu-runtime",
     "rocm-npu-fastflowlm",
     "rocm-npu-qualification",
@@ -99,7 +97,6 @@ def _environment(evidence: dict[str, Any]) -> dict[str, str]:
     flm = subject.get("flm", {})
     if flm.get("version_output"):
         env["flm_version"] = str(flm["version_output"])
-    env["python"] = platform.python_version()
     for name, version in subject.get("packages", {}).items():
         env[name] = str(version)
     if subject.get("source_revision"):
@@ -135,8 +132,10 @@ def _results_table(
     lines = [
         "## HRX per-model results (run/verify)",
         "",
-        "| Model | Kind | Single-prompt | Multi-turn (5) | 2+2=4 | Detail |",
-        "|-------|------|---------------|----------------|-------|--------|",
+        "| Model | Kind | Single-prompt | Multi-turn (5) | Multi-turn passed | "
+        "Detail |",
+        "|-------|------|---------------|----------------|-------------------|"
+        "--------|",
     ]
     for model in evidence.get("models", []):
         tag = str(model.get("tag", ""))

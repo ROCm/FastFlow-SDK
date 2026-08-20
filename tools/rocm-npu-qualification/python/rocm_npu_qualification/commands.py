@@ -227,6 +227,25 @@ def _word_error_rate(reference: str, hypothesis: str) -> float | None:
     return previous[-1] / len(ref)
 
 
+def _transcript_contains_phrase(transcript: str, phrase: str) -> bool:
+    """Whether ``phrase`` appears as a contiguous run of words in ``transcript``.
+
+    Matching is case- and punctuation-insensitive over word tokens. This is the
+    ASR pass gate: a real transcription must reproduce the pinned reference
+    phrase, not merely emit any two alphabetic words. Returns ``False`` when the
+    phrase has no word tokens, so an empty pin can never vacuously pass.
+    """
+    expected = _WORD_TOKEN_PATTERN.findall(phrase.lower())
+    if not expected:
+        return False
+    observed = _WORD_TOKEN_PATTERN.findall(transcript.lower())
+    span = len(expected)
+    return any(
+        observed[start : start + span] == expected
+        for start in range(0, len(observed) - span + 1)
+    )
+
+
 def _post_audio_transcription(
     base_url: str, audio_path: Path, model: str, timeout: float
 ) -> str:
@@ -278,15 +297,15 @@ def serve_probe(
 
     For ``embed`` models a ``/v1/embeddings`` request must return a non-empty
     vector; the probe records the embedding dimension, request latency, and
-    (when the server reports token usage) encode throughput. For ``asr`` models,
-    when an ``audio_sample`` is supplied the audio is transcribed via
-    ``/v1/audio/transcriptions`` and the returned text must be non-empty; the
-    probe records request latency, the real-time factor (latency / audio
-    duration), the transcript word count, and, when ``reference_text`` is
-    provided, the word error rate against it. Without a sample a healthy server
-    that loaded the model on the NPU is treated as a partial pass. Returns the
-    captured :class:`CommandResult` plus a probe detail dict whose ``metrics``
-    entry carries the modality-specific measurements above.
+    (when the server reports token usage) encode throughput. For ``asr`` models
+    the audio is transcribed via ``/v1/audio/transcriptions`` and the transcript
+    must contain the pinned ``reference_text`` phrase (case/punctuation
+    insensitive); the probe records request latency, the real-time factor
+    (latency / audio duration), and the word error rate against the reference.
+    The ASR probe fails closed: a missing sample, a missing reference, or a
+    transcript that omits the pinned phrase is a failure, never a partial pass.
+    Returns the captured :class:`CommandResult` plus a probe detail dict whose
+    ``metrics`` entry carries the modality-specific measurements above.
     """
     normalized = tuple(os.fspath(item) for item in argv)
     started = time.monotonic()
@@ -391,7 +410,8 @@ def serve_probe(
                     else:
                         detail = "embeddings endpoint returned no vector"
                 elif audio_sample is not None and Path(audio_sample).is_file():
-                    # asr: transcribe a real audio sample end to end.
+                    # asr: transcribe a real audio sample end to end and require
+                    # the pinned reference phrase to appear in the transcript.
                     sample = Path(audio_sample)
                     audio_seconds = _wav_duration_seconds(sample)
                     request_started = time.monotonic()
@@ -399,8 +419,11 @@ def serve_probe(
                         base, sample, model, http_timeout
                     )
                     request_latency = time.monotonic() - request_started
-                    words = re.findall(r"[A-Za-z]{2,}", transcript_text)
-                    if len(words) >= 2:
+                    words = _WORD_TOKEN_PATTERN.findall(transcript_text)
+                    phrase_ok = reference_text is not None and (
+                        _transcript_contains_phrase(transcript_text, reference_text)
+                    )
+                    if phrase_ok:
                         ok = True
                         # Latency, real-time factor, and WER can all shift with
                         # the execution backend (HRX vs XRT). Audio duration and
@@ -418,28 +441,33 @@ def serve_probe(
                                 f", RTF={real_time_factor:.3f} "
                                 f"({audio_seconds:.1f}s audio)"
                             )
-                        if reference_text:
-                            wer = _word_error_rate(reference_text, transcript_text)
-                            if wer is not None:
-                                probe_metrics["word_error_rate"] = wer
-                                summary += f", WER={wer * 100:.1f}%"
+                        wer = _word_error_rate(reference_text, transcript_text)
+                        if wer is not None:
+                            probe_metrics["word_error_rate"] = wer
+                            summary += f", WER={wer * 100:.1f}%"
                         detail = f"{summary}: {transcript_text.strip()[:120]!r}"
-                    else:
+                    elif reference_text is None:
+                        # No pin: we cannot assert the audio was really
+                        # transcribed, so fail closed rather than accept any text.
                         detail = (
-                            "transcription returned insufficient text: "
+                            "ASR probe has no reference transcript to verify "
+                            "against; failing closed. Transcript was "
                             f"{transcript_text.strip()[:160]!r}"
                         )
-                else:  # asr without a bundled sample: confirm the server is healthy
-                    try:
-                        urllib.request.urlopen(
-                            f"{base}/v1/models", timeout=min(30.0, http_timeout)
-                        ).close()
-                    except (urllib.error.URLError, OSError):
-                        pass
-                    ok = True
+                    else:
+                        detail = (
+                            "transcription did not contain the expected phrase "
+                            f"{reference_text.strip()[:80]!r}: "
+                            f"{transcript_text.strip()[:160]!r}"
+                        )
+                else:
+                    # asr but the bundled sample could not be resolved. A
+                    # listening port is not evidence that transcription works, so
+                    # fail closed instead of treating a health check as success.
                     detail = (
-                        "served: model loaded on NPU; transcription not exercised "
-                        "(no bundled audio sample)"
+                        "ASR sample unavailable; failing closed (bundled "
+                        "asr_sample.wav is missing or ROCM_NPU_ASR_SAMPLE points "
+                        "at no readable file)"
                     )
             except (urllib.error.URLError, OSError, ValueError) as error:
                 detail = f"probe error: {error}"

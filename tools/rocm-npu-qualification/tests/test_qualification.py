@@ -32,13 +32,16 @@ from rocm_npu_qualification import (  # noqa: E402
 )
 from rocm_npu_qualification.commands import (  # noqa: E402
     CommandResult,
+    _transcript_contains_phrase,
     _wav_duration_seconds,
     _word_error_rate,
     redact,
     run_command,
+    serve_probe,
 )
 from rocm_npu_qualification.hashing import canonical_json_sha256  # noqa: E402
-from rocm_npu_qualification.offline import pack_evidence  # noqa: E402
+from rocm_npu_qualification import offline  # noqa: E402
+from rocm_npu_qualification.offline import EvidenceError, pack_evidence  # noqa: E402
 from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
 from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     require_1k_checkpoint,
@@ -1987,6 +1990,155 @@ def test_wav_duration_seconds_reads_pcm_header(tmp_path):
     assert _wav_duration_seconds(bogus) is None
 
 
+def test_transcript_contains_phrase_is_content_specific():
+    # Case- and punctuation-insensitive contiguous phrase match.
+    assert _transcript_contains_phrase("- This is something.", "this is something")
+    assert _transcript_contains_phrase("Well, this is something!", "this is something")
+    # A different transcript with the same word count must not pass.
+    assert not _transcript_contains_phrase("that was nothing", "this is something")
+    # "Any two alphabetic words" must not vacuously satisfy the pin.
+    assert not _transcript_contains_phrase("hello world", "this is something")
+    # An empty pin can never pass, so a missing reference fails closed.
+    assert not _transcript_contains_phrase("this is something", "")
+
+
+# A minimal OpenAI-compatible stand-in for `flm serve`: it prints the port line
+# serve_probe scans for, then answers the embeddings / transcription endpoints.
+_FAKE_SERVE_SERVER = r'''
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"data": []}')
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        if self.path == "/v1/embeddings":
+            payload = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}],
+                "usage": {"prompt_tokens": 12},
+            }
+        else:
+            content_type = self.headers.get("Content-Type", "")
+            multipart_ok = (
+                "multipart/form-data" in content_type
+                and b'name="model"' in body
+                and b'filename=' in body
+            )
+            text = "This is something." if multipart_ok else "malformed request"
+            payload = {"text": text}
+        raw = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(raw)
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+print("WebServer started on port %d ready" % server.server_address[1], flush=True)
+server.serve_forever()
+'''
+
+
+def _fake_serve_argv(tmp_path):
+    script = tmp_path / "fake_serve.py"
+    script.write_text(_FAKE_SERVE_SERVER, encoding="utf-8")
+    return [sys.executable, str(script)]
+
+
+def test_serve_probe_embed_parses_port_and_reports_throughput(tmp_path):
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="embed",
+        model="embed-gemma:300m",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+    )
+    assert probe["ok"] is True
+    assert isinstance(probe["port"], int) and probe["port"] > 0
+    assert result.returncode == 0
+    assert probe["metrics"]["encode_toks_per_s"] > 0
+    assert "embedding dim=4" in probe["detail"]
+
+
+def test_serve_probe_asr_transcribes_multipart_and_matches_phrase(tmp_path):
+    import wave
+
+    sample = tmp_path / "clip.wav"
+    with wave.open(str(sample), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)  # 1.0s
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="asr",
+        model="whisper-v3:turbo",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+        audio_sample=sample,
+        reference_text="This is something.",
+    )
+    assert probe["ok"] is True
+    assert result.returncode == 0
+    assert probe["metrics"]["word_error_rate"] == 0.0
+    assert probe["metrics"]["real_time_factor"] > 0
+
+
+def test_serve_probe_asr_fails_closed_without_a_sample(tmp_path):
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="asr",
+        model="whisper-v3:turbo",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+        audio_sample=None,
+        reference_text="This is something.",
+    )
+    # A listening port is not evidence that transcription works.
+    assert probe["ok"] is False
+    assert result.returncode == 1
+    assert "failing closed" in probe["detail"]
+
+
+def test_serve_probe_asr_fails_closed_when_phrase_missing(tmp_path):
+    import wave
+
+    sample = tmp_path / "clip.wav"
+    with wave.open(str(sample), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="asr",
+        model="whisper-v3:turbo",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+        audio_sample=sample,
+        reference_text="a completely different sentence",
+    )
+    assert probe["ok"] is False
+    assert result.returncode == 1
+    assert "expected phrase" in probe["detail"]
+
+
 def test_build_markdown_report_renders_asr_probe_metrics():
     evidence = {
         "status": "pass",
@@ -2125,7 +2277,7 @@ def _all_models_args(tmp_path):
     )
 
 
-def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
+def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
     _patch_qualification(monkeypatch, tmp_path, doctor_exit=0)
 
     def core_report(core, command, **kwargs):
@@ -2174,6 +2326,9 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "resolve_model_dynamic", fake_resolve)
 
     def fake_test_model(model, **kwargs):
+        kwargs["writer"].path("logs/tests/x.log").write_text(
+            "ok\n", encoding="utf-8"
+        )
         records = []
         for test in model["tests"]:
             record = {
@@ -2215,15 +2370,38 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
 
     monkeypatch.setattr(runner, "_test_model", fake_test_model)
 
-    exit_code, summary = runner.run_qualification(_all_models_args(tmp_path))
+    args = _all_models_args(tmp_path)
+    if candidate_manifest is not None:
+        args.candidate_manifest = candidate_manifest
+    exit_code, summary = runner.run_qualification(args)
+    evidence = json.loads(
+        (tmp_path / "evidence" / "evidence.json").read_text(encoding="utf-8")
+    )
+    return exit_code, summary, evidence
+
+
+def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_all_models_sweep(monkeypatch, tmp_path)
     assert exit_code == 0
     assert summary["status"] == "pass"
     assert summary["profile"] == "all-models"
     assert summary["models"] == 3
-    evidence = json.loads(
-        (tmp_path / "evidence" / "evidence.json").read_text(encoding="utf-8")
-    )
     assert evidence["profile"]["name"] == "all-models"
+    # The sweep is a diagnostic-sweep descriptor, not a packaged profile-v1: it
+    # records what ran (tag/kind/test names) and pins nothing.
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["kind"] == "diagnostic-sweep"
+    assert profile["name"] == "all-models"
+    assert profile["bench_context"] == "8k"
+    assert all(
+        set(model) == {"tag", "kind", "tests"} for model in profile["models"]
+    )
+    assert all(
+        all(isinstance(name, str) for name in model["tests"])
+        for model in profile["models"]
+    )
     kinds = {test["kind"] for test in evidence["tests"]}
     assert {"run", "bench", "serve", "native"} <= kinds
     # the default complete sweep benchmarks at 8k context
@@ -2245,6 +2423,72 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
         ).read_text(encoding="utf-8")
     )
     Draft202012Validator(schema).validate(evidence)
+
+
+def test_all_models_with_candidate_manifest_stays_ad_hoc(monkeypatch, tmp_path):
+    # Passing --candidate-manifest to the sweep must not bind it: candidate_bound
+    # tracks "execution equals a sealed wheel profile," which the sweep never is.
+    # Version validation still runs; the embedded manifest stays the ad-hoc
+    # placeholder so intake refuses the sweep.
+    validated: list[dict | None] = []
+    monkeypatch.setattr(
+        runner,
+        "_validate_versions",
+        lambda installed, core_version, candidate, *a, **k: validated.append(
+            candidate
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "_normalize_candidate_manifest", lambda candidate: candidate
+    )
+    # The sweep's native core reports source_revision "a" * 40 (see the helper),
+    # and the candidate is still validated against the core, so it must agree.
+    manifest_path = tmp_path / "candidate.json"
+    manifest_path.write_text(
+        json.dumps({"source_revision": "a" * 40, "packages": {}}),
+        encoding="utf-8",
+    )
+
+    exit_code, summary, evidence = _run_all_models_sweep(
+        monkeypatch, tmp_path, candidate_manifest=manifest_path
+    )
+
+    assert exit_code == 0
+    # The candidate was still handed to version validation.
+    assert {"source_revision": "a" * 40, "packages": {}} in validated
+    # ...but the run is ad-hoc, not candidate-bound.
+    assert evidence["profile"]["candidate_bound"] is False
+    assert evidence["subject"]["candidate_binding"]["present"] is False
+    assert evidence["subject"]["candidate_binding"]["manifest_sha256"] is None
+    embedded = json.loads(
+        (tmp_path / "evidence" / "candidate-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # The embedded manifest is the ad-hoc placeholder, so candidate-bound intake
+    # refuses this bundle (it never claims to equal a sealed wheel profile).
+    assert embedded == {
+        "schema_version": embedded["schema_version"],
+        "kind": "ad-hoc",
+        "candidate_bound": False,
+    }
+
+
+def test_validate_layout_allows_optional_report_overlay():
+    required = {
+        "SHA256SUMS": b"",
+        "candidate-manifest.json": b"{}",
+        "evidence.json": b"{}",
+        "junit.xml": b"<x/>",
+        "models.json": b"[]",
+        "profile.json": b"{}",
+        "tests.json": b"[]",
+    }
+    # report.md is an accepted optional overlay: no unexpected-nesting error.
+    offline._validate_layout({**required, "report.md": b"# report"})
+    # An unknown top-level file is still rejected.
+    with pytest.raises(EvidenceError, match="unexpected nesting"):
+        offline._validate_layout({**required, "surprise.md": b"nope"})
 
 
 def test_all_models_is_mutually_exclusive_with_profile():
