@@ -121,16 +121,23 @@ class TestFastFlowLMSmoke:
         "text",
         [
             "benchmark completed without a checkpoint",
-            (
-                "Creating checkpoint at context length 981\n"
-                "Creating checkpoint at context length 982"
-            ),
             "Creating checkpoint at context length unknown",
         ],
     )
-    def test_require_1k_checkpoint_rejects_missing_or_duplicate_report(self, text):
+    def test_require_1k_checkpoint_rejects_missing_report(self, text):
         with pytest.raises(smoke.SmokeFailure):
             smoke.require_1k_checkpoint(text)
+
+    def test_require_1k_checkpoint_accepts_multiple_in_window_reports(self):
+        # Gemma-family (sliding-window/local attention) models legitimately emit
+        # several in-window checkpoints for a single stage; the largest is a valid
+        # checkpoint for the requested context and must be accepted rather than
+        # rejected as a duplicate.
+        text = (
+            "Creating checkpoint at context length 981\n"
+            "Creating checkpoint at context length 982"
+        )
+        assert smoke.require_1k_checkpoint(text) == 982
 
     @pytest.mark.parametrize("value", [949, 1025])
     def test_require_1k_checkpoint_rejects_out_of_range_report(self, value):
