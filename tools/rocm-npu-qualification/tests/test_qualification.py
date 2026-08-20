@@ -25,6 +25,7 @@ from rocm_npu_qualification import (  # noqa: E402
     cli,
     installation,
     models,
+    power,
     prompts,
     runner,
 )
@@ -38,6 +39,7 @@ from rocm_npu_qualification.offline import pack_evidence  # noqa: E402
 from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
 from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     require_1k_checkpoint,
+    require_benchmark_schedule,
     verify_xclbin_inventory,
 )
 from rocm_npu_qualification.hashing import file_inventory  # noqa: E402
@@ -49,6 +51,53 @@ from rocm_npu_qualification.profiles import (  # noqa: E402
 )
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
+
+
+def test_inhibit_system_sleep_is_noop_off_windows(monkeypatch):
+    calls = []
+    monkeypatch.setattr(power.os, "name", "posix")
+    monkeypatch.setattr(
+        power, "_set_thread_execution_state", lambda flags: calls.append(flags)
+    )
+
+    with power.inhibit_system_sleep():
+        pass
+
+    assert calls == []
+
+
+def test_inhibit_system_sleep_restores_windows_execution_state(monkeypatch):
+    calls = []
+    monkeypatch.setattr(power.os, "name", "nt")
+    monkeypatch.setattr(
+        power,
+        "_set_thread_execution_state",
+        lambda flags: calls.append(flags) or 1,
+    )
+
+    with power.inhibit_system_sleep():
+        assert calls == [power._ES_CONTINUOUS | power._ES_SYSTEM_REQUIRED]
+
+    assert calls == [
+        power._ES_CONTINUOUS | power._ES_SYSTEM_REQUIRED,
+        power._ES_CONTINUOUS,
+    ]
+
+
+def test_inhibit_system_sleep_restores_after_failure(monkeypatch):
+    calls = []
+    monkeypatch.setattr(power.os, "name", "nt")
+    monkeypatch.setattr(
+        power,
+        "_set_thread_execution_state",
+        lambda flags: calls.append(flags) or 1,
+    )
+
+    with pytest.raises(RuntimeError, match="qualification failed"):
+        with power.inhibit_system_sleep():
+            raise RuntimeError("qualification failed")
+
+    assert calls[-1] == power._ES_CONTINUOUS
 
 
 def _result(returncode=0, stdout="ok\n"):
@@ -141,7 +190,15 @@ def test_profile_schema_rejection_and_packaged_profiles():
         "qwen3.5:0.8b",
         "lfm2:1.2b",
     ]
-    assert load_profile("extended")["models"][-1]["tag"] == "llama3.1:8b"
+    extended = load_profile("extended")
+    assert extended["models"][-1]["tag"] == "llama3.1:8b"
+    lfm_tests = {
+        test["name"]: test
+        for model in extended["models"]
+        if model["tag"] == "lfm2:1.2b"
+        for test in model["tests"]
+    }
+    assert lfm_tests["long-lived-context-1k"]["iterations"] == 100
 
 
 def test_profile_selection_and_fast_parity_contract():
@@ -284,6 +341,20 @@ def test_profile_rejects_unbounded_soak_and_bad_regex():
     }
     with pytest.raises(ProfileError, match="turn is invalid"):
         validate_profile(profile)
+
+    bench = next(
+        test
+        for test in load_profile("fast")["models"][0]["tests"]
+        if test["kind"] == "bench"
+    )
+    profile = copy.deepcopy(load_profile("fast"))
+    profile_bench = next(
+        test for test in profile["models"][0]["tests"] if test["kind"] == "bench"
+    )
+    profile_bench["iterations"] = 101
+    with pytest.raises(ProfileError, match="benchmark iterations"):
+        validate_profile(profile)
+    assert "iterations" not in bench
 
 
 def test_xclbin_inventory_uses_installed_package_layout(tmp_path):
@@ -843,6 +914,7 @@ def test_benchmark_records_checkpoint_and_fresh_csv(monkeypatch, tmp_path):
         return _result(
             stdout=(
                 "Creating checkpoint at context length 1001\n"
+                "Starting benchmark for 1k and iteration 1\n"
                 "Model RAW Output:\nHRX-NPU-4K-PASS. This response contains enough "
                 "coherent words to validate model output safely.\n>>>"
             )
@@ -873,6 +945,89 @@ def test_benchmark_records_checkpoint_and_fresh_csv(monkeypatch, tmp_path):
         "completed-native-check",
         "context-1k",
     ]
+
+
+def test_benchmark_soak_validates_every_output_and_generated_config(
+    monkeypatch, tmp_path
+):
+    model = _model()
+    model["tests"] = [
+        {
+            "name": "long-lived-context-1k",
+            "kind": "bench",
+            "config": "bench/bench_1k_smoke.json",
+            "iterations": 2,
+            "timeout_seconds": 10,
+            "checkpoint_min": 950,
+            "checkpoint_max": 1024,
+            "expected_regex": "validated",
+        }
+    ]
+    captured_config = {}
+
+    def fake_bench(*args, **kwargs):
+        config = Path(args[0][-1])
+        assert config.is_absolute()
+        captured_config.update(json.loads(config.read_text(encoding="utf-8")))
+        csv_path = kwargs["cwd"] / "bench_qwen3_0.6b_result.csv"
+        csv_path.write_text(
+            ",".join(benchmark.BENCHMARK_CSV_HEADER)
+            + "\n1,2.5,0,2.5,2.5,391,0,391,391,35,0,35,35\n",
+            encoding="utf-8",
+        )
+        return _result(
+            stdout=(
+                "Creating checkpoint at context length 1001\n"
+                "Starting benchmark for 1k and iteration 1\n"
+                "Model RAW Output:\nThe first validated response contains enough "
+                "coherent words for the qualification oracle.\n>>>\n"
+                "Creating checkpoint at context length 1002\n"
+                "Starting benchmark for 1k and iteration 2\n"
+                "Model RAW Output:\nThe second validated response contains enough "
+                "coherent words for the qualification oracle.\n>>>"
+            )
+        )
+
+    monkeypatch.setattr(runner, "run_command", fake_bench)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+    )
+
+    assert records[0]["status"] == "pass"
+    assert records[0]["turn_count"] == 2
+    assert records[0]["metrics"]["benchmark_iterations"] == 2
+    assert records[0]["metrics"]["responses"] == 2
+    assert captured_config["iterations"] == 2
+    assert records[0]["artifacts"][0].endswith("benchmark-config.json")
+    assert (tmp_path / "evidence" / records[0]["artifacts"][0]).is_file()
+
+    bad_output = (
+        "Creating checkpoint at context length 1001\n"
+        "Starting benchmark for 1k and iteration 1\n"
+        "Model RAW Output:\nThe first validated response contains enough coherent "
+        "words for the qualification oracle.\n>>>\n"
+        "Creating checkpoint at context length 1002\n"
+        "Starting benchmark for 1k and iteration 2\n"
+        "Model RAW Output:\nbad\n>>>"
+    )
+    monkeypatch.setattr(
+        runner, "run_command", lambda *args, **kwargs: _result(stdout=bad_output)
+    )
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "bad-evidence"),
+        environment={},
+    )
+    assert records[0]["status"] == "fail"
+    assert "output 2" in records[0]["error"]
 
 
 def test_benchmark_csv_rejects_malformed_or_nonfinite_metrics():
@@ -906,6 +1061,27 @@ def test_benchmark_csv_rejects_malformed_or_nonfinite_metrics():
 
 def test_benchmark_accepts_explicit_1k_stage_without_checkpoint_log():
     assert require_1k_checkpoint("Starting benchmark for 1k and iteration 1") == 1024
+
+
+def test_benchmark_requires_every_soak_checkpoint():
+    transcript = "\n".join(
+        f"Starting benchmark for 1k and iteration {iteration}"
+        for iteration in range(1, 4)
+    )
+    assert require_1k_checkpoint(transcript, expected_count=3) == 1024
+    with pytest.raises(ValueError, match="exactly 4 checkpoint"):
+        require_1k_checkpoint(transcript, expected_count=4)
+
+
+def test_benchmark_schedule_covers_each_stage_and_iteration_once():
+    transcript = "\n".join(
+        f"Starting benchmark for {context}k and iteration {iteration}"
+        for iteration in (1, 2)
+        for context in (4, 2, 1)
+    )
+    assert require_benchmark_schedule(transcript, iterations=2) == 6
+    with pytest.raises(ValueError, match="incomplete or duplicated"):
+        require_benchmark_schedule(transcript.rsplit("\n", 1)[0], iterations=2)
 
 
 def test_benchmark_selects_target_from_multi_stage_run():

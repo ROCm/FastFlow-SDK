@@ -32,6 +32,7 @@ from .fastflowlm import (
     RUNTIME_ERROR_PATTERN,
     extract_raw_outputs,
     fresh_benchmark_csvs,
+    require_benchmark_schedule,
     require_1k_checkpoint,
     smoke_phrase_matches,
     verify_xclbin_inventory,
@@ -188,9 +189,28 @@ def _test_model(
                 raise QualificationError(
                     f"benchmark configuration is missing: {test['config']}"
                 )
-            with resources.as_file(config_resource) as config:
+            benchmark_iterations = test.get("iterations", 1)
+            with resources.as_file(config_resource) as packaged_config:
+                try:
+                    benchmark_config = json.loads(
+                        packaged_config.read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError) as error:
+                    raise QualificationError(
+                        f"benchmark configuration is invalid: {test['config']}"
+                    ) from error
+                if not isinstance(benchmark_config, dict):
+                    raise QualificationError(
+                        f"benchmark configuration is invalid: {test['config']}"
+                    )
+                benchmark_config["iterations"] = benchmark_iterations
+                config = work / "benchmark-config.json"
+                config.write_text(
+                    json.dumps(benchmark_config, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
                 result = run_command(
-                    [flm, "bench", model["tag"], "-i", config],
+                    [flm, "bench", model["tag"], "-i", config.resolve()],
                     log_path=log,
                     env=environment,
                     timeout=test["timeout_seconds"],
@@ -202,29 +222,43 @@ def _test_model(
             checkpoint = None
             csv_path = None
             raw_outputs = extract_raw_outputs(transcript)
-            raw = raw_outputs[0] if raw_outputs else ""
             if RUNTIME_ERROR_PATTERN.search(transcript):
                 semantic_error = "FastFlowLM emitted an HRX runtime error"
             elif MAX_LENGTH_PATTERN.search(transcript):
                 semantic_error = "FastFlowLM reached the generation length limit"
             else:
                 try:
+                    expected_outputs = require_benchmark_schedule(
+                        transcript, iterations=benchmark_iterations
+                    )
+                    if len(raw_outputs) != expected_outputs:
+                        raise ValueError(
+                            f"FastFlowLM emitted {len(raw_outputs)} benchmark "
+                            f"responses; expected {expected_outputs}"
+                        )
                     checkpoint = require_1k_checkpoint(
                         transcript,
                         minimum=test["checkpoint_min"],
                         maximum=test["checkpoint_max"],
+                        expected_count=benchmark_iterations,
                     )
                 except ValueError as error:
                     semantic_error = str(error)
-            if not semantic_error and len(re.findall(r"[A-Za-z]{2,}", raw)) < 8:
-                semantic_error = "FastFlowLM benchmark output is not coherent text"
-            if (
-                not semantic_error
-                and test["expected_regex"]
-                and re.search(test["expected_regex"], raw, re.IGNORECASE | re.DOTALL)
-                is None
-            ):
-                semantic_error = "FastFlowLM benchmark output did not match"
+            if not semantic_error:
+                for output_number, raw in enumerate(raw_outputs, start=1):
+                    if len(re.findall(r"[A-Za-z]{2,}", raw)) < 8:
+                        semantic_error = (
+                            f"FastFlowLM benchmark output {output_number} is not "
+                            "coherent text"
+                        )
+                    elif test["expected_regex"] and re.search(
+                        test["expected_regex"], raw, re.IGNORECASE | re.DOTALL
+                    ) is None:
+                        semantic_error = (
+                            f"FastFlowLM benchmark output {output_number} did not match"
+                        )
+                    if semantic_error:
+                        break
             csvs = fresh_benchmark_csvs(work, model["tag"], started_ns=started_ns)
             if not semantic_error and not csvs:
                 semantic_error = "FastFlowLM benchmark did not write a fresh CSV"
@@ -254,15 +288,19 @@ def _test_model(
                     "timed_out": result.timed_out,
                     "duration_seconds": result.duration_seconds,
                     "log": writer.relative(log),
-                    "turn_count": 1,
+                    "turn_count": benchmark_iterations,
                     "process_iteration": 1,
                     "metrics": {
                         "checkpoint_tokens": checkpoint,
+                        "benchmark_iterations": benchmark_iterations,
+                        "responses": len(raw_outputs),
+                        "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
                         "csv_checkpoint_row": csv_row,
                         "csv_checkpoint_metrics": csv_metrics,
                     },
                     "artifacts": (
-                        [] if csv_path is None else [writer.relative(csv_path)]
+                        [writer.relative(config)]
+                        + ([] if csv_path is None else [writer.relative(csv_path)])
                     ),
                     **(
                         {}

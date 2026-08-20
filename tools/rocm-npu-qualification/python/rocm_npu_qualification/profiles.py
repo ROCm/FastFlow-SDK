@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from importlib import resources
 from pathlib import PurePosixPath
 from typing import Any
@@ -221,17 +222,17 @@ def validate_profile(profile: Any) -> dict[str, Any]:
                     f"{tag}/{name}: context length is invalid",
                 )
             else:
+                allowed_properties = {
+                    "name",
+                    "kind",
+                    "config",
+                    "timeout_seconds",
+                    "checkpoint_min",
+                    "checkpoint_max",
+                    "expected_regex",
+                }
                 _require(
-                    set(test)
-                    == {
-                        "name",
-                        "kind",
-                        "config",
-                        "timeout_seconds",
-                        "checkpoint_min",
-                        "checkpoint_max",
-                        "expected_regex",
-                    },
+                    set(test) in (allowed_properties, allowed_properties | {"iterations"}),
                     f"{tag}/{name}: bench properties are invalid",
                 )
                 _require(
@@ -255,6 +256,11 @@ def validate_profile(profile: Any) -> dict[str, Any]:
                         raise ProfileError(
                             f"{tag}/{name}: expected regex is invalid"
                         ) from error
+                _require(
+                    type(test.get("iterations", 1)) is int
+                    and 1 <= test.get("iterations", 1) <= 100,
+                    f"{tag}/{name}: benchmark iterations are invalid",
+                )
             _require(
                 isinstance(test.get("timeout_seconds"), int)
                 and 1 <= test["timeout_seconds"] <= 7200,
@@ -281,9 +287,16 @@ def _load_profile(name: str, loading: set[str]) -> dict[str, Any]:
         raise ProfileError(f"unknown qualification profile: {name}")
     value = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(value, dict) and "extends" in value:
+        allowed_properties = {
+            "schema_version",
+            "name",
+            "description",
+            "extends",
+            "models",
+        }
         _require(
             set(value)
-            == {"schema_version", "name", "description", "extends", "models"},
+            in (allowed_properties, allowed_properties | {"test_extensions"}),
             "inherited profile properties are invalid",
         )
         _require(
@@ -296,13 +309,42 @@ def _load_profile(name: str, loading: set[str]) -> dict[str, Any]:
             isinstance(parent_name, str) and parent_name != name,
             "profile parent is invalid",
         )
-        parent = _load_profile(parent_name, loading | {name})
+        parent = deepcopy(_load_profile(parent_name, loading | {name}))
         merged = {
             "schema_version": PROFILE_SCHEMA_VERSION,
             "name": value["name"],
             "description": value["description"],
             "models": [*parent["models"], *value["models"]],
         }
+        models_by_tag = {model["tag"]: model for model in merged["models"]}
+        test_extensions = value.get("test_extensions", [])
+        _require(
+            isinstance(test_extensions, list),
+            "inherited profile test extensions must be an array",
+        )
+        extended_models: set[str] = set()
+        for extension in test_extensions:
+            _require(
+                isinstance(extension, dict)
+                and set(extension) == {"model", "tests"},
+                "inherited profile test extension is invalid",
+            )
+            model_tag = extension.get("model")
+            _require(
+                isinstance(model_tag, str) and model_tag in models_by_tag,
+                "inherited profile test extension references an unknown model",
+            )
+            _require(
+                model_tag not in extended_models,
+                "inherited profile contains duplicate model test extensions",
+            )
+            extended_models.add(model_tag)
+            tests = extension.get("tests")
+            _require(
+                isinstance(tests, list) and tests,
+                "inherited profile test extension must contain tests",
+            )
+            models_by_tag[model_tag]["tests"].extend(tests)
         return validate_profile(merged)
     profile = validate_profile(value)
     _require(profile["name"] == name, "profile name does not match filename")

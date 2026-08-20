@@ -378,7 +378,7 @@ def _validate_complete_execution(
         for test in model["tests"]:
             if test["kind"] == "bench":
                 expected[("bench", model["tag"], test["name"])] = {
-                    "turn_count": 1,
+                    "turn_count": test.get("iterations", 1),
                     "process_iteration": 1,
                 }
                 continue

@@ -26,6 +26,7 @@ from .offline import (
     verify_archive,
 )
 from .profiles import ProfileError, profile_names
+from .power import inhibit_system_sleep
 from .runner import finalize_partial_evidence, run_qualification
 
 
@@ -248,7 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     for signal_number in termination_signals:
         signal.signal(signal_number, terminate)
     try:
-        exit_code, summary = run_qualification(args)
+        with inhibit_system_sleep():
+            exit_code, summary = run_qualification(args)
     except QualificationTerminated as terminated:
         exit_code = 128 + int(terminated.args[0])
         summary = finalize_partial_evidence(
