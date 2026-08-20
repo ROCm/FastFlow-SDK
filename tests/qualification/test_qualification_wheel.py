@@ -510,3 +510,25 @@ def test_qualification_license_snapshots_match_fastflowlm():
     assert normalized(snapshots / "FastFlowLM-TERMS.md") == normalized(
         upstream / "TERMS.md"
     )
+
+
+@pytest.mark.skipif(
+    not (ROOT / "projects/FastFlowLM/src/tb_files/Recording.wav").is_file(),
+    reason="FastFlowLM submodule is not checked out",
+)
+def test_qualification_wheel_vendors_pinned_asr_sample(tmp_path):
+    from build_tools.rocm_npu_qualification_wheel import ASR_SAMPLE_SHA256
+
+    assets = _fake_xadx_assets(tmp_path / "xadx")
+    wheel = build_qualification_wheel(
+        ROOT,
+        output_directory=tmp_path,
+        xadx_assets=assets,
+        version="1.2.3",
+    )
+    member = "rocm_npu_qualification/assets/asr_sample.wav"
+    with zipfile.ZipFile(wheel) as archive:
+        assert member in set(archive.namelist())
+        digest = hashlib.sha256(archive.read(member)).hexdigest()
+    # The clip is copied from the pinned FastFlowLM submodule, hash-verified.
+    assert digest == ASR_SAMPLE_SHA256

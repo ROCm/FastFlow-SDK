@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -28,6 +30,46 @@ from build_tools.wheel_payload import write_package_manifest as _write_package_m
 
 QUALIFICATION_WHEEL_TAG = "py3-none-any"
 ROOT = Path(__file__).resolve().parents[1]
+
+# The ASR probe's audio fixture is copied from the pinned FastFlowLM submodule
+# (see manifests/versions.toml) at build time rather than vendored in git.
+# FastFlowLM ships this clip only in its source tree -- never in an installed
+# package and never via ``flm pull`` -- so a qualification host cannot fetch it,
+# but the wheel-build host (the FastFlowLM HRX jobs) already has the checkout.
+# The byte hash is pinned so an upstream clip change fails the build loudly
+# instead of silently drifting the paired reference transcript.
+FASTFLOWLM_ASR_SAMPLE = Path("projects/FastFlowLM/src/tb_files/Recording.wav")
+ASR_SAMPLE_SHA256 = (
+    "c0f16ef6b0a9053d9abccb603d1aa1445c62b2b35bbbb4eaa3996422c68df97a"
+)
+
+
+def _stage_asr_sample(root: Path, package_root: Path) -> None:
+    """Vendor the ASR fixture from the pinned FastFlowLM checkout into the wheel.
+
+    When FastFlowLM is not checked out (e.g. presubmit builds that skip
+    submodules) the fixture is omitted; the ASR serve-probe then fails closed at
+    runtime rather than pretending to transcribe. Released wheels are built in
+    the FastFlowLM HRX jobs, where the submodule is always present, so they
+    always carry the clip.
+    """
+    upstream = root / FASTFLOWLM_ASR_SAMPLE
+    if not upstream.is_file():
+        print(
+            "package-qualification-wheel: FastFlowLM checkout absent; omitting "
+            "assets/asr_sample.wav (ASR probe will fail closed at runtime)",
+            file=sys.stderr,
+        )
+        return
+    digest = hashlib.sha256(upstream.read_bytes()).hexdigest()
+    if digest != ASR_SAMPLE_SHA256:
+        raise RuntimeError(
+            "FastFlowLM ASR fixture Recording.wav does not match the pinned "
+            f"hash: expected {ASR_SAMPLE_SHA256}, got {digest}. If the upstream "
+            "clip changed intentionally, update ASR_SAMPLE_SHA256 and the "
+            "assets/asr_sample.reference.txt transcript together."
+        )
+    shutil.copy2(upstream, package_root / "assets" / "asr_sample.wav")
 
 # The package computes its own qualification buffers and BF16 oracles rather
 # than shipping them. Keep these exact: qualification evidence must mean the
@@ -95,6 +137,7 @@ def stage_qualification_tree(
                 f"qualification license snapshot differs from FastFlowLM: {source_name}"
             )
         shutil.copy2(source, licenses / packaged_name)
+    _stage_asr_sample(root, package_root)
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=root,
