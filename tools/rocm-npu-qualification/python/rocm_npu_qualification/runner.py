@@ -152,8 +152,9 @@ def _resolve_asr_reference() -> str | None:
 
     Honors the ``ROCM_NPU_ASR_REFERENCE`` override (inline text or a file path),
     otherwise falls back to the reference bundled alongside the audio fixture.
-    The reference anchors the word-error-rate metric as a transcription-drift
-    signal; when absent the probe simply omits WER.
+    The reference is the pinned phrase the transcript must contain and the
+    ground truth for the word-error-rate metric; when it is absent the ASR probe
+    fails closed rather than accepting an unverified transcript.
     """
     override = os.environ.get("ROCM_NPU_ASR_REFERENCE")
     if override:

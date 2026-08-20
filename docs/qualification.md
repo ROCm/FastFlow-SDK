@@ -58,7 +58,8 @@ In addition to the machine-readable bundle, `--all-models` writes a
 human-readable `report.md` into the output directory. It contains an environment
 header (OS, NPU device/driver/firmware candidates, target family, FLM and
 package versions), a per-model functional matrix (single-prompt, five-turn
-multi-turn, and the 2+2 check), and an on-NPU benchmark table with the
+multi-turn, and whether the multi-turn run passed), and an on-NPU benchmark
+table with the
 FLM-averaged TTFT, prefill, and decode throughput for each model. Only HRX
 numbers are reported (no XRT columns). The context stage and the iteration count
 the averages span (for example `HRX, 8k, averaged over 3 iterations`) are stated
