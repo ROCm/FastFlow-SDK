@@ -211,6 +211,11 @@ def _benchmark_table(
     for model in evidence.get("models", []):
         tag = str(model.get("tag", ""))
         tests = grouped.get(tag, [])
+        # Embedding/ASR models run a serve-probe, not the decode benchmark; their
+        # measurements are rendered in dedicated modality tables below, so keep
+        # them out of the decode table instead of emitting meaningless N/A rows.
+        if _model_kind(tag, tests, kinds) in ("embed", "asr"):
+            continue
         bench = _first(tests, lambda test: test.get("kind") == "bench")
         metrics = (bench or {}).get("metrics", {})
         csv_metrics = metrics.get("csv_checkpoint_metrics") or {}
@@ -222,6 +227,73 @@ def _benchmark_table(
             f"{_fmt(csv_metrics.get('ttft_avg_s'))} | "
             f"{_fmt(csv_metrics.get('prefill_avg_toks_per_s'))} | "
             f"{_fmt(csv_metrics.get('decoding_avg_toks_per_s'))} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _fmt_pct(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return "N/A"
+    return f"{value * 100:.1f}"
+
+
+def _serve_metrics(
+    evidence: dict[str, Any], kinds: dict[str, str] | None, wanted: str
+) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """Return (tag, test, metrics) triples for models of the wanted serve kind."""
+    grouped = _tests_by_model(evidence)
+    rows: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for model in evidence.get("models", []):
+        tag = str(model.get("tag", ""))
+        tests = grouped.get(tag, [])
+        if _model_kind(tag, tests, kinds) != wanted:
+            continue
+        serve = _first(tests, lambda test: test.get("kind") == "serve")
+        if serve is None:
+            continue
+        rows.append((tag, serve, serve.get("metrics", {}) or {}))
+    return rows
+
+
+def _embedding_table(
+    evidence: dict[str, Any], kinds: dict[str, str] | None
+) -> list[str]:
+    rows = _serve_metrics(evidence, kinds, "embed")
+    if not rows:
+        return []
+    lines = [
+        "## Embedding probe (HRX)",
+        "",
+        "| Model | Status | Encode tok/s |",
+        "|-------|--------|--------------|",
+    ]
+    for tag, serve, metrics in rows:
+        lines.append(
+            f"| `{tag}` | {_status_label(serve)} | "
+            f"{_fmt(metrics.get('encode_toks_per_s'))} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _asr_table(
+    evidence: dict[str, Any], kinds: dict[str, str] | None
+) -> list[str]:
+    rows = _serve_metrics(evidence, kinds, "asr")
+    if not rows:
+        return []
+    lines = [
+        "## ASR probe (HRX)",
+        "",
+        "| Model | Status | RTF | WER % |",
+        "|-------|--------|-----|-------|",
+    ]
+    for tag, serve, metrics in rows:
+        lines.append(
+            f"| `{tag}` | {_status_label(serve)} | "
+            f"{_fmt(metrics.get('real_time_factor'))} | "
+            f"{_fmt_pct(metrics.get('word_error_rate'))} |"
         )
     lines.append("")
     return lines
@@ -261,5 +333,7 @@ def build_markdown_report(
     lines += _environment_table(evidence)
     lines += _results_table(evidence, kinds)
     lines += _benchmark_table(evidence, kinds)
+    lines += _embedding_table(evidence, kinds)
+    lines += _asr_table(evidence, kinds)
     lines += _notes(evidence)
     return "\n".join(lines) + "\n"

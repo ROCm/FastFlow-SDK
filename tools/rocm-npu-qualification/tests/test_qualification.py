@@ -32,6 +32,8 @@ from rocm_npu_qualification import (  # noqa: E402
 )
 from rocm_npu_qualification.commands import (  # noqa: E402
     CommandResult,
+    _wav_duration_seconds,
+    _word_error_rate,
     redact,
     run_command,
 )
@@ -1917,7 +1919,14 @@ def test_build_markdown_report_renders_env_and_hrx_benchmark():
                 "name": "serve-probe",
                 "kind": "serve",
                 "status": "pass",
-                "metrics": {"probe_kind": "embed", "detail": "embedding dim=768"},
+                "metrics": {
+                    "probe_kind": "embed",
+                    "detail": "embedding dim=768",
+                    "embedding_dim": 768,
+                    "request_latency_s": 0.05,
+                    "input_tokens": 30,
+                    "encode_toks_per_s": 600.0,
+                },
             },
         ],
     }
@@ -1938,9 +1947,82 @@ def test_build_markdown_report_renders_env_and_hrx_benchmark():
     # chat functional row and averaged HRX benchmark row
     assert "| `qwen3:0.6b` | chat | PASS | PASS | yes |" in text
     assert "| `qwen3:0.6b` | 0.922 | 1075.370 | 52.150 |" in text
-    # embed model: serve-backed single, multi N/A, benchmark N/A
+    # embed model: serve-backed single, multi N/A in the functional matrix
     assert "| `embed-gemma:300m` | embed | PASS | N/A | — |" in text
-    assert "| `embed-gemma:300m` | N/A | N/A | N/A |" in text
+    # embed models are not in the decode benchmark table; they get their own
+    # modality table with dim / latency / encode throughput.
+    assert "| `embed-gemma:300m` | N/A | N/A | N/A |" not in text
+    assert "## Embedding probe (HRX)" in text
+    # collapsed to the single backend-sensitive throughput metric
+    assert "| Model | Status | Encode tok/s |" in text
+    assert "| `embed-gemma:300m` | PASS | 600.000 |" in text
+
+
+def test_word_error_rate_is_case_and_punctuation_insensitive():
+    # Identical up to punctuation/case -> zero WER.
+    assert _word_error_rate("This is something.", "- This is something.") == 0.0
+    # One substitution out of three reference words.
+    assert _word_error_rate("this is something", "this is nothing") == pytest.approx(
+        1 / 3
+    )
+    # One deletion out of three reference words.
+    assert _word_error_rate("this is something", "this is") == pytest.approx(1 / 3)
+    # Empty reference is undefined.
+    assert _word_error_rate("", "anything") is None
+
+
+def test_wav_duration_seconds_reads_pcm_header(tmp_path):
+    import wave
+
+    path = tmp_path / "clip.wav"
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)  # exactly 1.0s of silence
+    assert _wav_duration_seconds(path) == pytest.approx(1.0)
+    # A non-WAV file degrades to None instead of raising.
+    bogus = tmp_path / "not.wav"
+    bogus.write_text("nope", encoding="utf-8")
+    assert _wav_duration_seconds(bogus) is None
+
+
+def test_build_markdown_report_renders_asr_probe_metrics():
+    evidence = {
+        "status": "pass",
+        "profile": {"name": "all-models"},
+        "subject": {"packages": {}},
+        "observed_platform": {},
+        "models": [{"tag": "whisper-v3:turbo", "status": "pass"}],
+        "tests": [
+            {
+                "model": "whisper-v3:turbo",
+                "name": "serve-probe",
+                "kind": "serve",
+                "status": "pass",
+                "metrics": {
+                    "probe_kind": "asr",
+                    "detail": "transcribed 3 words",
+                    "request_latency_s": 1.5,
+                    "transcript_words": 3,
+                    "audio_seconds": 3.0,
+                    "real_time_factor": 0.5,
+                    "word_error_rate": 0.0,
+                },
+            }
+        ],
+    }
+    text = report.build_markdown_report(
+        evidence,
+        kinds={"whisper-v3:turbo": "asr"},
+        generated_at="2026-08-07T00:00:00Z",
+    )
+    assert "## ASR probe (HRX)" in text
+    # collapsed to speed (RTF) plus the independent quality axis (WER)
+    assert "| Model | Status | RTF | WER % |" in text
+    assert "| `whisper-v3:turbo` | PASS | 0.500 | 0.0 |" in text
+    # ASR models stay out of the decode benchmark table.
+    assert "| `whisper-v3:turbo` | N/A | N/A | N/A |" not in text
 
 
 def test_multi_iteration_checkpoint_collapses_repeated_stages():

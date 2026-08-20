@@ -132,6 +132,34 @@ def _resolve_asr_sample() -> Path | None:
     return None
 
 
+def _resolve_asr_reference() -> str | None:
+    """Return the accepted transcript for the ASR sample, or ``None``.
+
+    Honors the ``ROCM_NPU_ASR_REFERENCE`` override (inline text or a file path),
+    otherwise falls back to the reference bundled alongside the audio fixture.
+    The reference anchors the word-error-rate metric as a transcription-drift
+    signal; when absent the probe simply omits WER.
+    """
+    override = os.environ.get("ROCM_NPU_ASR_REFERENCE")
+    if override:
+        candidate = Path(override)
+        try:
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+        return override.strip() or None
+    try:
+        resource = resources.files("rocm_npu_qualification").joinpath(
+            "assets", "asr_sample.reference.txt"
+        )
+        if resource.is_file():
+            return resource.read_text(encoding="utf-8").strip() or None
+    except (TypeError, FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+    return None
+
+
 def _sweep_timeouts(footprint: float) -> tuple[int, int]:
     """Scale (boot, per-turn) seconds by model footprint in GB."""
     fp = max(0.5, footprint)
@@ -326,11 +354,13 @@ def _test_model(
             probe_kind = test.get("probe_kind", "embed")
             serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
             audio_sample: Path | None = None
+            reference_text: str | None = None
             if probe_kind == "embed":
                 serve_argv += ["-e", "1"]
             elif probe_kind == "asr":
                 serve_argv += ["-a", "1"]
                 audio_sample = _resolve_asr_sample()
+                reference_text = _resolve_asr_reference()
             result, probe = serve_probe(
                 serve_argv,
                 log_path=log,
@@ -339,6 +369,7 @@ def _test_model(
                 model=model["tag"],
                 boot_timeout=test["timeout_seconds"],
                 audio_sample=audio_sample,
+                reference_text=reference_text,
                 echo=True,
             )
             transcript = result.stdout
@@ -362,6 +393,7 @@ def _test_model(
                         "probe_kind": probe_kind,
                         "port": probe["port"],
                         "detail": probe["detail"],
+                        **(probe.get("metrics") or {}),
                     },
                     "artifacts": [],
                     **(

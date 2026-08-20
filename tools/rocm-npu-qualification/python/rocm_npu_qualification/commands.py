@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -173,6 +174,58 @@ def run_command(
 # while still tolerating a trailing suffix such as " with 10 I/O threads".
 _SERVE_PORT_PATTERN = re.compile(r"WebServer started on port (\d+)(?=\D)")
 
+# A fixed, multi-clause input for the embedding probe. A longer prompt makes the
+# encode-throughput measurement (tokens / request latency) less noisy than a
+# three-word string while staying deterministic across runs.
+_EMBED_PROBE_INPUT = (
+    "The quick brown fox jumps over the lazy dog while the sun sets slowly "
+    "over the distant hills and a gentle breeze moves across the quiet valley."
+)
+
+# Tokenize on words/numbers for word error rate; punctuation and case are
+# normalized away so a leading "- " or trailing period does not inflate WER.
+_WORD_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9']+")
+
+
+def _wav_duration_seconds(path: Path) -> float | None:
+    """Return the duration of a PCM WAV file in seconds, or ``None``.
+
+    Used to normalize ASR latency into a real-time factor. Any malformed or
+    non-WAV input degrades to ``None`` so the probe still records latency.
+    """
+    try:
+        with wave.open(os.fspath(path), "rb") as handle:
+            frames = handle.getnframes()
+            rate = handle.getframerate()
+    except (wave.Error, OSError, EOFError):
+        return None
+    if not rate:
+        return None
+    return frames / float(rate)
+
+
+def _word_error_rate(reference: str, hypothesis: str) -> float | None:
+    """Word error rate of ``hypothesis`` against ``reference`` in [0, inf).
+
+    Case- and punctuation-insensitive Levenshtein distance over word tokens,
+    divided by the reference word count. Returns ``None`` when the reference has
+    no word tokens (WER would be undefined).
+    """
+    ref = _WORD_TOKEN_PATTERN.findall(reference.lower())
+    hyp = _WORD_TOKEN_PATTERN.findall(hypothesis.lower())
+    if not ref:
+        return None
+    previous = list(range(len(hyp) + 1))
+    for i, ref_word in enumerate(ref, start=1):
+        current = [i]
+        for j, hyp_word in enumerate(hyp, start=1):
+            substitution = previous[j - 1] + (0 if ref_word == hyp_word else 1)
+            current.append(
+                min(previous[j] + 1, current[j - 1] + 1, substitution)
+            )
+        previous = current
+    return previous[-1] / len(ref)
+
 
 def _post_audio_transcription(
     base_url: str, audio_path: Path, model: str, timeout: float
@@ -218,16 +271,22 @@ def serve_probe(
     boot_timeout: float,
     http_timeout: float = 120.0,
     audio_sample: Path | None = None,
+    reference_text: str | None = None,
     echo: bool = False,
 ) -> tuple[CommandResult, dict[str, Any]]:
     """Start ``flm serve`` for an embed/ASR model and probe the HTTP endpoint.
 
     For ``embed`` models a ``/v1/embeddings`` request must return a non-empty
-    vector. For ``asr`` models, when an ``audio_sample`` is supplied the audio
-    is transcribed via ``/v1/audio/transcriptions`` and the returned text must
-    be non-empty; without a sample a healthy server that loaded the model on the
-    NPU is treated as a partial pass. Returns the captured
-    :class:`CommandResult` plus a probe detail dict.
+    vector; the probe records the embedding dimension, request latency, and
+    (when the server reports token usage) encode throughput. For ``asr`` models,
+    when an ``audio_sample`` is supplied the audio is transcribed via
+    ``/v1/audio/transcriptions`` and the returned text must be non-empty; the
+    probe records request latency, the real-time factor (latency / audio
+    duration), the transcript word count, and, when ``reference_text`` is
+    provided, the word error rate against it. Without a sample a healthy server
+    that loaded the model on the NPU is treated as a partial pass. Returns the
+    captured :class:`CommandResult` plus a probe detail dict whose ``metrics``
+    entry carries the modality-specific measurements above.
     """
     normalized = tuple(os.fspath(item) for item in argv)
     started = time.monotonic()
@@ -261,6 +320,7 @@ def serve_probe(
     port: int | None = None
     detail = ""
     ok = False
+    probe_metrics: dict[str, Any] = {}
     timed_out = False
     deadline = started + boot_timeout
     try:
@@ -288,34 +348,82 @@ def serve_probe(
                     request = urllib.request.Request(
                         f"{base}/v1/embeddings",
                         data=json.dumps(
-                            {"model": model, "input": "The quick brown fox."}
+                            {"model": model, "input": _EMBED_PROBE_INPUT}
                         ).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
+                    request_started = time.monotonic()
                     with urllib.request.urlopen(
                         request, timeout=http_timeout
                     ) as response:
                         payload = json.loads(response.read().decode("utf-8"))
+                    request_latency = time.monotonic() - request_started
                     vector = (payload.get("data") or [{}])[0].get("embedding")
                     if isinstance(vector, list) and vector:
                         ok = True
-                        detail = f"embedding dim={len(vector)}"
+                        dimension = len(vector)
+                        # Only latency/throughput move with the execution
+                        # backend (HRX vs XRT). The embedding dimension and the
+                        # input token count are fixed by the model and probe
+                        # input, so they stay in the human-readable detail but
+                        # out of the backend-comparison metrics.
+                        probe_metrics = {"request_latency_s": request_latency}
+                        summary = (
+                            f"embedding dim={dimension}, "
+                            f"latency={request_latency * 1000:.1f}ms"
+                        )
+                        usage = payload.get("usage")
+                        prompt_tokens = (
+                            usage.get("prompt_tokens")
+                            if isinstance(usage, dict)
+                            else None
+                        )
+                        if (
+                            isinstance(prompt_tokens, int)
+                            and prompt_tokens > 0
+                            and request_latency > 0
+                        ):
+                            toks_per_s = prompt_tokens / request_latency
+                            probe_metrics["encode_toks_per_s"] = toks_per_s
+                            summary += f", {toks_per_s:.1f} tok/s"
+                        detail = summary
                     else:
                         detail = "embeddings endpoint returned no vector"
                 elif audio_sample is not None and Path(audio_sample).is_file():
                     # asr: transcribe a real audio sample end to end.
                     sample = Path(audio_sample)
+                    audio_seconds = _wav_duration_seconds(sample)
+                    request_started = time.monotonic()
                     transcript_text = _post_audio_transcription(
                         base, sample, model, http_timeout
                     )
+                    request_latency = time.monotonic() - request_started
                     words = re.findall(r"[A-Za-z]{2,}", transcript_text)
                     if len(words) >= 2:
                         ok = True
-                        detail = (
-                            f"transcribed {len(words)} words from {sample.name}: "
-                            f"{transcript_text.strip()[:160]!r}"
+                        # Latency, real-time factor, and WER can all shift with
+                        # the execution backend (HRX vs XRT). Audio duration and
+                        # transcript word count are fixed by the fixture, so they
+                        # remain in the detail text but not in the metrics.
+                        probe_metrics = {"request_latency_s": request_latency}
+                        summary = (
+                            f"transcribed {len(words)} words from {sample.name}, "
+                            f"latency={request_latency * 1000:.1f}ms"
                         )
+                        if audio_seconds and audio_seconds > 0:
+                            real_time_factor = request_latency / audio_seconds
+                            probe_metrics["real_time_factor"] = real_time_factor
+                            summary += (
+                                f", RTF={real_time_factor:.3f} "
+                                f"({audio_seconds:.1f}s audio)"
+                            )
+                        if reference_text:
+                            wer = _word_error_rate(reference_text, transcript_text)
+                            if wer is not None:
+                                probe_metrics["word_error_rate"] = wer
+                                summary += f", WER={wer * 100:.1f}%"
+                        detail = f"{summary}: {transcript_text.strip()[:120]!r}"
                     else:
                         detail = (
                             "transcription returned insufficient text: "
@@ -366,7 +474,13 @@ def serve_probe(
         timed_out=timed_out,
         log=log_path.as_posix(),
     )
-    return result, {"probe_kind": probe_kind, "port": port, "detail": detail, "ok": ok}
+    return result, {
+        "probe_kind": probe_kind,
+        "port": port,
+        "detail": detail,
+        "ok": ok,
+        "metrics": probe_metrics,
+    }
 
 
 def run_interactive_command(
