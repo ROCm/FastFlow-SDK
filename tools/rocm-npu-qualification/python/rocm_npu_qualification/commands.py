@@ -372,12 +372,12 @@ def serve_probe(
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    request_started = time.monotonic()
+                    request_started = time.perf_counter()
                     with urllib.request.urlopen(
                         request, timeout=http_timeout
                     ) as response:
                         payload = json.loads(response.read().decode("utf-8"))
-                    request_latency = time.monotonic() - request_started
+                    request_latency = time.perf_counter() - request_started
                     vector = (payload.get("data") or [{}])[0].get("embedding")
                     if isinstance(vector, list) and vector:
                         ok = True
@@ -414,11 +414,11 @@ def serve_probe(
                     # the pinned reference phrase to appear in the transcript.
                     sample = Path(audio_sample)
                     audio_seconds = _wav_duration_seconds(sample)
-                    request_started = time.monotonic()
+                    request_started = time.perf_counter()
                     transcript_text = _post_audio_transcription(
                         base, sample, model, http_timeout
                     )
-                    request_latency = time.monotonic() - request_started
+                    request_latency = time.perf_counter() - request_started
                     words = _WORD_TOKEN_PATTERN.findall(transcript_text)
                     phrase_ok = reference_text is not None and (
                         _transcript_contains_phrase(transcript_text, reference_text)
