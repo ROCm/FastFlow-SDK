@@ -8,3 +8,4 @@
 
 # Binary fixtures must never be line-ending converted.
 *.xadx binary -eol
+*.wav binary -eol

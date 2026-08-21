@@ -27,15 +27,21 @@ from rocm_npu_qualification import (  # noqa: E402
     models,
     power,
     prompts,
+    report,
     runner,
 )
 from rocm_npu_qualification.commands import (  # noqa: E402
     CommandResult,
+    _transcript_contains_phrase,
+    _wav_duration_seconds,
+    _word_error_rate,
     redact,
     run_command,
+    serve_probe,
 )
 from rocm_npu_qualification.hashing import canonical_json_sha256  # noqa: E402
-from rocm_npu_qualification.offline import pack_evidence  # noqa: E402
+from rocm_npu_qualification import offline  # noqa: E402
+from rocm_npu_qualification.offline import EvidenceError, pack_evidence  # noqa: E402
 from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
 from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     require_1k_checkpoint,
@@ -1030,6 +1036,50 @@ def test_benchmark_soak_validates_every_output_and_generated_config(
     assert "output 2" in records[0]["error"]
 
 
+def test_benchmark_accepts_terse_sentinel_only_output(monkeypatch, tmp_path):
+    # Small/omni models may obey "begin with exactly HRX-NPU-4K-PASS" and emit
+    # only the terse sentinel for a stage. That is fewer than eight words, but the
+    # sentinel exception must keep it from being flagged as incoherent.
+    model = _model()
+    model["tests"] = [
+        {
+            "name": "context-1k",
+            "kind": "bench",
+            "config": "bench/bench_1k_smoke.json",
+            "timeout_seconds": 10,
+            "checkpoint_min": 950,
+            "checkpoint_max": 1024,
+            "expected_regex": "HRX[- ]NPU[- ]4K[- ]PASS",
+        }
+    ]
+
+    def fake_bench(*args, **kwargs):
+        csv_path = kwargs["cwd"] / "bench_qwen3_0.6b_result.csv"
+        csv_path.write_text(
+            ",".join(benchmark.BENCHMARK_CSV_HEADER)
+            + "\n1,2.5,0,2.5,2.5,391,0,391,391,35,0,35,35\n",
+            encoding="utf-8",
+        )
+        return _result(
+            stdout=(
+                "Creating checkpoint at context length 1001\n"
+                "Starting benchmark for 1k and iteration 1\n"
+                "Model RAW Output:\nHRX-NPU-4K-PASS\n>>>"
+            )
+        )
+
+    monkeypatch.setattr(runner, "run_command", fake_bench)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+    )
+    assert records[0]["status"] == "pass"
+
+
 def test_benchmark_csv_rejects_malformed_or_nonfinite_metrics():
     header = list(benchmark.BENCHMARK_CSV_HEADER)
     valid = [
@@ -1069,8 +1119,20 @@ def test_benchmark_requires_every_soak_checkpoint():
         for iteration in range(1, 4)
     )
     assert require_1k_checkpoint(transcript, expected_count=3) == 1024
-    with pytest.raises(ValueError, match="exactly 4 checkpoint"):
+    with pytest.raises(ValueError, match="at least 4 checkpoint"):
         require_1k_checkpoint(transcript, expected_count=4)
+
+
+def test_checkpoint_returns_largest_in_window_for_single_iteration():
+    # Gemma-family omni models emit several in-window checkpoints for a single
+    # stage (sliding-window/local attention). Any value in the target band is a
+    # valid checkpoint for the stage, so the largest is returned rather than
+    # failing on the multiplicity.
+    transcript = "\n".join(
+        f"Creating checkpoint at context length {value}"
+        for value in (977, 1009, 1945, 1977, 3881, 3912)
+    )
+    assert require_1k_checkpoint(transcript, minimum=3800, maximum=4096) == 3912
 
 
 def test_benchmark_schedule_covers_each_stage_and_iteration_once():
@@ -1600,3 +1662,874 @@ def test_runner_writes_schema_valid_package_validation_report(
         "package-validation"
     )
     assert records[0]["status"] == "fail"
+
+
+def _sweep_config(root: Path) -> Path:
+    path = root / "model_list.json"
+    path.write_text(
+        json.dumps(
+            {
+                "model_path": "models",
+                "models": {
+                    "qwen3": {
+                        "0.6b": {
+                            "name": "Qwen3-0.6B-NPU2",
+                            "url": "https://hf.example/Qwen3-0.6B-NPU2/resolve/rev1",
+                            "files": ["model.q4nx"],
+                            "footprint": 0.6,
+                            "details": {"family": "qwen3", "think": True},
+                        }
+                    },
+                    "embed-gemma": {
+                        "300m": {
+                            "name": "Embedding-Gemma-300M-NPU2",
+                            "url": "https://hf.example/Embedding-Gemma-300M-NPU2",
+                            "files": ["model.q4nx"],
+                            "footprint": 0.62,
+                            "details": {"family": "embed-gemma"},
+                            "label": ["embeddings"],
+                        }
+                    },
+                    "whisper-v3": {
+                        "turbo": {
+                            "name": "Whisper-V3-Turbo-NPU2",
+                            "url": "https://hf.example/Whisper-V3-Turbo-NPU2",
+                            "files": ["model.q4nx"],
+                            "footprint": 1.0,
+                            "details": {"family": "whisper-v3"},
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_enumerate_registry_models_classifies_and_pins_identity(tmp_path):
+    config = _sweep_config(tmp_path)
+    discovered = {model["tag"]: model for model in models.enumerate_registry_models(config)}
+    assert set(discovered) == {"qwen3:0.6b", "embed-gemma:300m", "whisper-v3:turbo"}
+    assert discovered["qwen3:0.6b"]["kind"] == "chat"
+    assert discovered["qwen3:0.6b"]["identity_policy"] == "revision-sha256"
+    assert discovered["qwen3:0.6b"]["source"] == "https://hf.example/Qwen3-0.6B-NPU2"
+    assert discovered["qwen3:0.6b"]["revision"] == "rev1"
+    assert discovered["qwen3:0.6b"]["think"] is True
+    assert discovered["embed-gemma:300m"]["kind"] == "embed"
+    assert discovered["embed-gemma:300m"]["identity_policy"] == "content-sha256"
+    assert discovered["embed-gemma:300m"]["revision"] is None
+    assert discovered["whisper-v3:turbo"]["kind"] == "asr"
+    digest = canonical_json_sha256(json.loads(config.read_text(encoding="utf-8")))
+    assert all(
+        model["registry_sha256"] == digest and model["xclbins"] == []
+        for model in discovered.values()
+    )
+
+
+def test_enumerate_registry_models_skips_entries_without_url(tmp_path):
+    path = tmp_path / "model_list.json"
+    path.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "good": {"1b": {"name": "Good", "url": "https://hf.example/Good"}},
+                    "bad": {"1b": {"name": "Bad"}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    discovered = models.enumerate_registry_models(path)
+    assert [model["tag"] for model in discovered] == ["good:1b"]
+
+
+def test_resolve_model_dynamic_builds_inventory_without_pins(tmp_path):
+    config = _sweep_config(tmp_path)
+    cache = tmp_path / "cache"
+    model_directory = cache / "models" / "Qwen3-0.6B-NPU2"
+    model_directory.mkdir(parents=True)
+    (model_directory / "model.q4nx").write_bytes(b"weights")
+    model = next(
+        entry
+        for entry in models.enumerate_registry_models(config)
+        if entry["tag"] == "qwen3:0.6b"
+    )
+    record, commands = models.resolve_model_dynamic(
+        model,
+        flm=tmp_path / "flm",
+        config_path=config,
+        model_cache=cache,
+        pull_log=tmp_path / "pull.log",
+        offline=False,
+        no_pull=False,
+        environment={},
+    )
+    assert commands == []  # already cached: no pull/check
+    assert record["status"] == "pass"
+    assert record["pulled"] is False
+    assert record["cache_directory"] == "models/Qwen3-0.6B-NPU2"
+    assert [entry["path"] for entry in record["files"]] == ["model.q4nx"]
+    assert record["files"][0]["sha256"] == hashlib.sha256(b"weights").hexdigest()
+
+
+def test_resolve_model_dynamic_reports_missing_required_file(monkeypatch, tmp_path):
+    config = _sweep_config(tmp_path)
+    cache = tmp_path / "cache"
+    model_directory = cache / "models" / "Qwen3-0.6B-NPU2"
+    model = next(
+        entry
+        for entry in models.enumerate_registry_models(config)
+        if entry["tag"] == "qwen3:0.6b"
+    )
+
+    def fake_run(argv, **kwargs):
+        # simulate a pull that produces the wrong file set
+        model_directory.mkdir(parents=True, exist_ok=True)
+        (model_directory / "unexpected.txt").write_bytes(b"noise")
+        return _result(returncode=0)
+
+    monkeypatch.setattr(models, "run_command", fake_run)
+    with pytest.raises(models.ModelError, match="missing required files"):
+        models.resolve_model_dynamic(
+            model,
+            flm=tmp_path / "flm",
+            config_path=config,
+            model_cache=cache,
+            pull_log=tmp_path / "pull.log",
+            offline=False,
+            no_pull=False,
+            environment={},
+        )
+
+
+def test_resolve_model_dynamic_rejects_unexpected_cache_files(tmp_path):
+    config = _sweep_config(tmp_path)
+    cache = tmp_path / "cache"
+    model_directory = cache / "models" / "Qwen3-0.6B-NPU2"
+    model_directory.mkdir(parents=True)
+    (model_directory / "model.q4nx").write_bytes(b"weights")
+    (model_directory / "smuggled.bin").write_bytes(b"noise")
+    model = next(
+        entry
+        for entry in models.enumerate_registry_models(config)
+        if entry["tag"] == "qwen3:0.6b"
+    )
+    with pytest.raises(models.ModelError, match="unexpected files"):
+        models.resolve_model_dynamic(
+            model,
+            flm=tmp_path / "flm",
+            config_path=config,
+            model_cache=cache,
+            pull_log=tmp_path / "pull.log",
+            offline=False,
+            no_pull=False,
+            environment={},
+        )
+
+
+def test_default_tests_for_scopes_by_kind():
+    chat = runner._default_tests_for({"kind": "chat", "footprint": 0.6})
+    assert [test["kind"] for test in chat] == ["run", "run", "bench"]
+    single, multi, bench = chat
+    assert [turn["prompt"] for turn in single["turns"]] == [runner._SWEEP_SINGLE_PROMPT]
+    assert len(multi["turns"]) == 5
+    assert multi["turns"][2]["expected_regex"] == r"\b4\b|four"
+    # Terse single-prompt keeps the tight cap; the open multi-turn prompts get
+    # more generation headroom so they are not truncated mid-answer.
+    assert tuple(single["setup_commands"]) == runner._SWEEP_GREEDY_SETUP
+    assert tuple(multi["setup_commands"]) == runner._SWEEP_GREEDY_SETUP_MULTI
+    assert "/set gen-lim 16" in single["setup_commands"]
+    assert "/set gen-lim 64" in multi["setup_commands"]
+    # 8k is the default complete-sweep benchmark stage.
+    assert runner._SWEEP_BENCH_DEFAULT == "8k"
+    assert bench["name"] == "context-8k"
+    assert bench["config"] == "bench/bench_8k_smoke.json"
+    assert bench["checkpoint_min"] == 7600 and bench["checkpoint_max"] == 8192
+    for kind in ("embed", "asr"):
+        serve = runner._default_tests_for({"kind": kind, "footprint": 6.0})
+        assert len(serve) == 1
+        assert serve[0]["kind"] == "serve"
+        assert serve[0]["probe_kind"] == kind
+    # timeouts scale with footprint
+    small = runner._default_tests_for({"kind": "chat", "footprint": 0.6})[0]
+    large = runner._default_tests_for({"kind": "chat", "footprint": 22.0})[0]
+    assert large["timeout_seconds"] > small["timeout_seconds"]
+
+
+def test_default_tests_for_selects_benchmark_context():
+    expected = {
+        "1k": ("context-1k", "bench/bench_1k_smoke.json", 950, 1024),
+        "4k": ("context-4k", "bench/bench_4k_smoke.json", 3800, 4096),
+        "8k": ("context-8k", "bench/bench_8k_smoke.json", 7600, 8192),
+    }
+    for context, (name, config, cmin, cmax) in expected.items():
+        tests = runner._default_tests_for(
+            {"kind": "chat", "footprint": 1.0}, bench_context=context
+        )
+        bench = next(test for test in tests if test["kind"] == "bench")
+        assert (bench["name"], bench["config"]) == (name, config)
+        assert (bench["checkpoint_min"], bench["checkpoint_max"]) == (cmin, cmax)
+    # larger context stages get proportionally larger benchmark timeouts
+    model = {"kind": "chat", "footprint": 1.0}
+    timeouts = {
+        context: next(
+            test
+            for test in runner._default_tests_for(model, bench_context=context)
+            if test["kind"] == "bench"
+        )["timeout_seconds"]
+        for context in ("1k", "4k", "8k")
+    }
+    assert timeouts["1k"] < timeouts["4k"] < timeouts["8k"]
+
+
+def test_eight_k_benchmark_config_runs_three_iterations():
+    config = json.loads(
+        (
+            QUALIFICATION_PYTHON
+            / "rocm_npu_qualification"
+            / "bench"
+            / "bench_8k_smoke.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert config["max_length"] == 8192
+    assert config["iterations"] == 3
+    assert len(set(config["input_text"].split())) > 100
+
+
+def test_build_markdown_report_renders_env_and_hrx_benchmark():
+    evidence = {
+        "status": "pass",
+        "profile": {"name": "all-models"},
+        "subject": {
+            "source_revision": "a" * 40,
+            "packages": {
+                "rocm-npu-runtime": "1.2.3",
+                "rocm-npu-fastflowlm": "1.2.3",
+                "rocm-npu-qualification": "1.2.3",
+            },
+            "flm": {"version_output": "FLM v0.9.45"},
+        },
+        "observed_platform": {
+            "os": "Windows 11",
+            "architecture": "x86_64",
+            "target_family": "npu2",
+            "devices": [
+                {
+                    "device_name": "NPU Compute Accelerator Device",
+                    "driver_version": "32.0.203.314",
+                    "healthy": True,
+                    "firmware_candidates": [
+                        {"release": "1.0.21.43"},
+                        {"release": "1.5.5.391"},
+                    ],
+                }
+            ],
+        },
+        "models": [
+            {"tag": "qwen3:0.6b", "status": "pass"},
+            {"tag": "embed-gemma:300m", "status": "pass"},
+        ],
+        "tests": [
+            {"model": "qwen3:0.6b", "name": "single-prompt", "kind": "run", "status": "pass"},
+            {"model": "qwen3:0.6b", "name": "multi-turn", "kind": "run", "status": "pass"},
+            {
+                "model": "qwen3:0.6b",
+                "name": "context-8k",
+                "kind": "bench",
+                "status": "pass",
+                "metrics": {
+                    "iterations": 3,
+                    "csv_checkpoint_metrics": {
+                        "context_length_k": 8,
+                        "ttft_avg_s": 0.922,
+                        "prefill_avg_toks_per_s": 1075.37,
+                        "decoding_avg_toks_per_s": 52.15,
+                    },
+                },
+            },
+            {
+                "model": "embed-gemma:300m",
+                "name": "serve-probe",
+                "kind": "serve",
+                "status": "pass",
+                "metrics": {
+                    "probe_kind": "embed",
+                    "detail": "embedding dim=768",
+                    "embedding_dim": 768,
+                    "request_latency_s": 0.05,
+                    "input_tokens": 30,
+                    "encode_toks_per_s": 600.0,
+                },
+            },
+        ],
+    }
+    text = report.build_markdown_report(
+        evidence,
+        kinds={"qwen3:0.6b": "chat", "embed-gemma:300m": "embed"},
+        generated_at="2026-08-07T00:00:00Z",
+    )
+    assert "## Environment" in text
+    assert "| os | Windows 11 |" in text
+    assert "| npu_driver | 32.0.203.314 |" in text
+    assert "candidates 1.0.21.43, 1.5.5.391 (KMD-loaded not exposed by PnP)" in text
+    assert "| flm_version | FLM v0.9.45 |" in text
+    # context and iteration count live in the heading, not a column
+    assert "## Benchmark (HRX, 8k, averaged over 3 iterations)" in text
+    # no XRT columns
+    assert "XRT" not in text
+    # chat functional row and averaged HRX benchmark row
+    assert "| `qwen3:0.6b` | chat | PASS | PASS | yes |" in text
+    assert "| `qwen3:0.6b` | 0.922 | 1075.370 | 52.150 |" in text
+    # embed model: serve-backed single, multi N/A in the functional matrix
+    assert "| `embed-gemma:300m` | embed | PASS | N/A | — |" in text
+    # embed models are not in the decode benchmark table; they get their own
+    # modality table with dim / latency / encode throughput.
+    assert "| `embed-gemma:300m` | N/A | N/A | N/A |" not in text
+    assert "## Embedding probe (HRX)" in text
+    # collapsed to the single backend-sensitive throughput metric
+    assert "| Model | Status | Encode tok/s |" in text
+    assert "| `embed-gemma:300m` | PASS | 600.000 |" in text
+
+
+def test_word_error_rate_is_case_and_punctuation_insensitive():
+    # Identical up to punctuation/case -> zero WER.
+    assert _word_error_rate("This is something.", "- This is something.") == 0.0
+    # One substitution out of three reference words.
+    assert _word_error_rate("this is something", "this is nothing") == pytest.approx(
+        1 / 3
+    )
+    # One deletion out of three reference words.
+    assert _word_error_rate("this is something", "this is") == pytest.approx(1 / 3)
+    # Empty reference is undefined.
+    assert _word_error_rate("", "anything") is None
+
+
+def test_wav_duration_seconds_reads_pcm_header(tmp_path):
+    import wave
+
+    path = tmp_path / "clip.wav"
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)  # exactly 1.0s of silence
+    assert _wav_duration_seconds(path) == pytest.approx(1.0)
+    # A non-WAV file degrades to None instead of raising.
+    bogus = tmp_path / "not.wav"
+    bogus.write_text("nope", encoding="utf-8")
+    assert _wav_duration_seconds(bogus) is None
+
+
+def test_transcript_contains_phrase_is_content_specific():
+    # Case- and punctuation-insensitive contiguous phrase match.
+    assert _transcript_contains_phrase("- This is something.", "this is something")
+    assert _transcript_contains_phrase("Well, this is something!", "this is something")
+    # A different transcript with the same word count must not pass.
+    assert not _transcript_contains_phrase("that was nothing", "this is something")
+    # "Any two alphabetic words" must not vacuously satisfy the pin.
+    assert not _transcript_contains_phrase("hello world", "this is something")
+    # An empty pin can never pass, so a missing reference fails closed.
+    assert not _transcript_contains_phrase("this is something", "")
+
+
+# A minimal OpenAI-compatible stand-in for `flm serve`: it prints the port line
+# serve_probe scans for, then answers the embeddings / transcription endpoints.
+_FAKE_SERVE_SERVER = r'''
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"data": []}')
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        if self.path == "/v1/embeddings":
+            payload = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}],
+                "usage": {"prompt_tokens": 12},
+            }
+        else:
+            content_type = self.headers.get("Content-Type", "")
+            multipart_ok = (
+                "multipart/form-data" in content_type
+                and b'name="model"' in body
+                and b'filename=' in body
+            )
+            text = "This is something." if multipart_ok else "malformed request"
+            payload = {"text": text}
+        raw = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(raw)
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+print("WebServer started on port %d ready" % server.server_address[1], flush=True)
+server.serve_forever()
+'''
+
+
+def _fake_serve_argv(tmp_path):
+    script = tmp_path / "fake_serve.py"
+    script.write_text(_FAKE_SERVE_SERVER, encoding="utf-8")
+    return [sys.executable, str(script)]
+
+
+def test_serve_probe_embed_parses_port_and_reports_throughput(tmp_path):
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="embed",
+        model="embed-gemma:300m",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+    )
+    assert probe["ok"] is True
+    assert isinstance(probe["port"], int) and probe["port"] > 0
+    assert result.returncode == 0
+    assert probe["metrics"]["encode_toks_per_s"] > 0
+    assert "embedding dim=4" in probe["detail"]
+
+
+def test_serve_probe_asr_transcribes_multipart_and_matches_phrase(tmp_path):
+    import wave
+
+    sample = tmp_path / "clip.wav"
+    with wave.open(str(sample), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)  # 1.0s
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="asr",
+        model="whisper-v3:turbo",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+        audio_sample=sample,
+        reference_text="This is something.",
+    )
+    assert probe["ok"] is True
+    assert result.returncode == 0
+    assert probe["metrics"]["word_error_rate"] == 0.0
+    assert probe["metrics"]["real_time_factor"] > 0
+
+
+def test_serve_probe_asr_fails_closed_without_a_sample(tmp_path):
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="asr",
+        model="whisper-v3:turbo",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+        audio_sample=None,
+        reference_text="This is something.",
+    )
+    # A listening port is not evidence that transcription works.
+    assert probe["ok"] is False
+    assert result.returncode == 1
+    assert "failing closed" in probe["detail"]
+
+
+def test_serve_probe_asr_fails_closed_when_phrase_missing(tmp_path):
+    import wave
+
+    sample = tmp_path / "clip.wav"
+    with wave.open(str(sample), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+    result, probe = serve_probe(
+        _fake_serve_argv(tmp_path),
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="asr",
+        model="whisper-v3:turbo",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+        audio_sample=sample,
+        reference_text="a completely different sentence",
+    )
+    assert probe["ok"] is False
+    assert result.returncode == 1
+    assert "expected phrase" in probe["detail"]
+
+
+def test_build_markdown_report_renders_asr_probe_metrics():
+    evidence = {
+        "status": "pass",
+        "profile": {"name": "all-models"},
+        "subject": {"packages": {}},
+        "observed_platform": {},
+        "models": [{"tag": "whisper-v3:turbo", "status": "pass"}],
+        "tests": [
+            {
+                "model": "whisper-v3:turbo",
+                "name": "serve-probe",
+                "kind": "serve",
+                "status": "pass",
+                "metrics": {
+                    "probe_kind": "asr",
+                    "detail": "transcribed 3 words",
+                    "request_latency_s": 1.5,
+                    "transcript_words": 3,
+                    "audio_seconds": 3.0,
+                    "real_time_factor": 0.5,
+                    "word_error_rate": 0.0,
+                },
+            }
+        ],
+    }
+    text = report.build_markdown_report(
+        evidence,
+        kinds={"whisper-v3:turbo": "asr"},
+        generated_at="2026-08-07T00:00:00Z",
+    )
+    assert "## ASR probe (HRX)" in text
+    # collapsed to speed (RTF) plus the independent quality axis (WER)
+    assert "| Model | Status | RTF | WER % |" in text
+    assert "| `whisper-v3:turbo` | PASS | 0.500 | 0.0 |" in text
+    # ASR models stay out of the decode benchmark table.
+    assert "| `whisper-v3:turbo` | N/A | N/A | N/A |" not in text
+
+
+def test_multi_iteration_checkpoint_collapses_repeated_stages():
+    # FLM prints one checkpoint line per stage per iteration; a 3-iteration 8k
+    # run repeats the 8k stage three times and must still resolve one target.
+    transcript = "\n".join(
+        f"Creating checkpoint at context length {value}"
+        for _ in range(3)
+        for value in (968, 1936, 3872, 7744)
+    )
+    assert require_1k_checkpoint(transcript, minimum=7600, maximum=8192) == 7744
+
+
+def test_serve_branch_records_embed_probe(monkeypatch, tmp_path):
+    model = {
+        "tag": "embed-gemma:300m",
+        "xclbins": [],
+        "tests": [
+            {
+                "name": "serve-probe",
+                "kind": "serve",
+                "probe_kind": "embed",
+                "timeout_seconds": 300,
+            }
+        ],
+    }
+
+    def fake_serve_probe(argv, **kwargs):
+        assert "serve" in [str(item) for item in argv]
+        assert "-e" in [str(item) for item in argv]
+        Path(kwargs["log_path"]).write_text("served\n", encoding="utf-8")
+        return (
+            _result(returncode=0, stdout="WebServer started on port 11434\n"),
+            {"probe_kind": "embed", "port": 11434, "detail": "embedding dim=768", "ok": True},
+        )
+
+    monkeypatch.setattr(runner, "serve_probe", fake_serve_probe)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+    )
+    assert len(records) == 1
+    assert records[0]["kind"] == "serve"
+    assert records[0]["status"] == "pass"
+    assert records[0]["metrics"]["port"] == 11434
+
+
+def test_serve_branch_fails_on_probe_error(monkeypatch, tmp_path):
+    model = {
+        "tag": "whisper-v3:turbo",
+        "xclbins": [],
+        "tests": [
+            {
+                "name": "serve-probe",
+                "kind": "serve",
+                "probe_kind": "asr",
+                "timeout_seconds": 300,
+            }
+        ],
+    }
+
+    def fake_serve_probe(argv, **kwargs):
+        Path(kwargs["log_path"]).write_text("no port\n", encoding="utf-8")
+        return (
+            _result(returncode=1, stdout=""),
+            {"probe_kind": "asr", "port": None, "detail": "server did not report a listening port", "ok": False},
+        )
+
+    monkeypatch.setattr(runner, "serve_probe", fake_serve_probe)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+    )
+    assert records[0]["status"] == "fail"
+    assert "did not report a listening port" in records[0]["error"]
+
+
+def _all_models_args(tmp_path):
+    return SimpleNamespace(
+        profile=None,
+        fast=False,
+        all_models=True,
+        output=tmp_path / "evidence",
+        model_cache=tmp_path / "models",
+        offline=False,
+        no_pull=False,
+        json=True,
+        candidate_manifest=None,
+        keep_going=False,
+        list_profiles=False,
+        bench_context="8k",
+    )
+
+
+def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
+    _patch_qualification(monkeypatch, tmp_path, doctor_exit=0)
+
+    def core_report(core, command, **kwargs):
+        kwargs["writer"].path(f"logs/tests/core-{command}.log").write_text(
+            f"{command}\n", encoding="utf-8"
+        )
+        report = {
+            "schema_version": 1,
+            "command": command,
+            "status": "pass",
+            # passing evidence requires a hex source_revision (40-64 chars)
+            "product": {"version": "1.2.3", "source_revision": "a" * 40},
+            "data": {
+                "os": "Windows 11",
+                "architecture": "x86_64",
+                "target_family": "npu2",
+            },
+        }
+        return report, 0
+
+    monkeypatch.setattr(runner, "_run_core_report", core_report)
+    flm = tmp_path / "flm"
+    flm.write_bytes(b"flm")
+    config = _sweep_config(tmp_path)
+    monkeypatch.setattr(runner, "_resolve_flm", lambda: (flm, config, {"FLM_ENV": "x"}))
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: _result(stdout="FLM v1.2.3\n")
+    )
+
+    def fake_resolve(model, **kwargs):
+        return (
+            {
+                "tag": model["tag"],
+                "identity_policy": model["identity_policy"],
+                "source": model["source"],
+                "revision": model["revision"],
+                "status": "pass",
+                "cache_directory": "models/x",
+                "registry_sha256": "b" * 64,
+                "pulled": False,
+                "files": [{"path": "model.q4nx", "size": 1, "sha256": "c" * 64}],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(runner, "resolve_model_dynamic", fake_resolve)
+
+    def fake_test_model(model, **kwargs):
+        kwargs["writer"].path("logs/tests/x.log").write_text(
+            "ok\n", encoding="utf-8"
+        )
+        records = []
+        for test in model["tests"]:
+            record = {
+                "model": model["tag"],
+                "name": test["name"],
+                "kind": test["kind"],
+                "status": "pass",
+                "duration_seconds": 0.1,
+                "log": "logs/tests/x.log",
+            }
+            if test["kind"] == "run":
+                record.update(
+                    turn_count=len(test["turns"]),
+                    process_iteration=1,
+                    metrics={"responses": len(test["turns"])},
+                    artifacts=[],
+                )
+            elif test["kind"] == "bench":
+                record.update(
+                    metrics={
+                        "checkpoint_tokens": 7744,
+                        "iterations": 3,
+                        "csv_checkpoint_metrics": {
+                            "context_length_k": 8,
+                            "ttft_avg_s": 0.922,
+                            "prefill_avg_toks_per_s": 1075.37,
+                            "decoding_avg_toks_per_s": 52.15,
+                        },
+                    },
+                    artifacts=[],
+                )
+            elif test["kind"] == "serve":
+                record.update(
+                    metrics={"probe_kind": test["probe_kind"], "port": 11434},
+                    artifacts=[],
+                )
+            records.append(record)
+        return records
+
+    monkeypatch.setattr(runner, "_test_model", fake_test_model)
+
+    args = _all_models_args(tmp_path)
+    if candidate_manifest is not None:
+        args.candidate_manifest = candidate_manifest
+    exit_code, summary = runner.run_qualification(args)
+    evidence = json.loads(
+        (tmp_path / "evidence" / "evidence.json").read_text(encoding="utf-8")
+    )
+    return exit_code, summary, evidence
+
+
+def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_all_models_sweep(monkeypatch, tmp_path)
+    assert exit_code == 0
+    assert summary["status"] == "pass"
+    assert summary["profile"] == "all-models"
+    assert summary["models"] == 3
+    assert evidence["profile"]["name"] == "all-models"
+    # The sweep is a diagnostic-sweep descriptor, not a packaged profile-v1: it
+    # records what ran (tag/kind/test names) and pins nothing.
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["kind"] == "diagnostic-sweep"
+    assert profile["name"] == "all-models"
+    assert profile["bench_context"] == "8k"
+    assert all(
+        set(model) == {"tag", "kind", "tests"} for model in profile["models"]
+    )
+    assert all(
+        all(isinstance(name, str) for name in model["tests"])
+        for model in profile["models"]
+    )
+    kinds = {test["kind"] for test in evidence["tests"]}
+    assert {"run", "bench", "serve", "native"} <= kinds
+    # the default complete sweep benchmarks at 8k context
+    bench_names = {
+        test["name"] for test in evidence["tests"] if test["kind"] == "bench"
+    }
+    assert bench_names == {"context-8k"}
+    # a single command also emits the human-readable report with the HRX tables
+    report_text = (tmp_path / "evidence" / "report.md").read_text(encoding="utf-8")
+    assert "## Environment" in report_text
+    assert "## Benchmark (HRX, 8k, averaged over 3 iterations)" in report_text
+    assert "| 0.922 | 1075.370 | 52.150 |" in report_text
+    assert "XRT" not in report_text
+    schema = json.loads(
+        (
+            ROOT
+            / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+            / "schemas/evidence-v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    Draft202012Validator(schema).validate(evidence)
+
+
+def test_all_models_with_candidate_manifest_stays_ad_hoc(monkeypatch, tmp_path):
+    # Passing --candidate-manifest to the sweep must not bind it: candidate_bound
+    # tracks "execution equals a sealed wheel profile," which the sweep never is.
+    # Version validation still runs; the embedded manifest stays the ad-hoc
+    # placeholder so intake refuses the sweep.
+    validated: list[dict | None] = []
+    monkeypatch.setattr(
+        runner,
+        "_validate_versions",
+        lambda installed, core_version, candidate, *a, **k: validated.append(
+            candidate
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "_normalize_candidate_manifest", lambda candidate: candidate
+    )
+    # The sweep's native core reports source_revision "a" * 40 (see the helper),
+    # and the candidate is still validated against the core, so it must agree.
+    manifest_path = tmp_path / "candidate.json"
+    manifest_path.write_text(
+        json.dumps({"source_revision": "a" * 40, "packages": {}}),
+        encoding="utf-8",
+    )
+
+    exit_code, summary, evidence = _run_all_models_sweep(
+        monkeypatch, tmp_path, candidate_manifest=manifest_path
+    )
+
+    assert exit_code == 0
+    # The candidate was still handed to version validation.
+    assert {"source_revision": "a" * 40, "packages": {}} in validated
+    # ...but the run is ad-hoc, not candidate-bound.
+    assert evidence["profile"]["candidate_bound"] is False
+    assert evidence["subject"]["candidate_binding"]["present"] is False
+    assert evidence["subject"]["candidate_binding"]["manifest_sha256"] is None
+    embedded = json.loads(
+        (tmp_path / "evidence" / "candidate-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # The embedded manifest is the ad-hoc placeholder, so candidate-bound intake
+    # refuses this bundle (it never claims to equal a sealed wheel profile).
+    assert embedded == {
+        "schema_version": embedded["schema_version"],
+        "kind": "ad-hoc",
+        "candidate_bound": False,
+    }
+
+
+def test_validate_layout_allows_optional_report_overlay():
+    required = {
+        "SHA256SUMS": b"",
+        "candidate-manifest.json": b"{}",
+        "evidence.json": b"{}",
+        "junit.xml": b"<x/>",
+        "models.json": b"[]",
+        "profile.json": b"{}",
+        "tests.json": b"[]",
+    }
+    # report.md is an accepted optional overlay: no unexpected-nesting error.
+    offline._validate_layout({**required, "report.md": b"# report"})
+    # An unknown top-level file is still rejected.
+    with pytest.raises(EvidenceError, match="unexpected nesting"):
+        offline._validate_layout({**required, "surprise.md": b"nope"})
+
+
+def test_all_models_is_mutually_exclusive_with_profile():
+    parser = cli.create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--all-models", "--profile", "fast"])
+    args = parser.parse_args(["--all-models"])
+    assert args.all_models is True
+    # 8k is the default benchmark stage; 1k/4k/8k are selectable
+    assert args.bench_context == "8k"
+    assert parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context == "4k"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--all-models", "--bench-context", "16k"])

@@ -153,10 +153,13 @@ def test_generator_preflight_rejects_unsafe_shapes_before_allocation():
 
 def test_every_packaged_profile_declares_an_xadx_round_policy():
     packaged = {path.stem for path in (PACKAGE_ROOT / "profiles").glob("*.json")}
-    assert packaged == set(XADX_ROUNDS), (
-        "each profile needs its own XADX round policy, since a profile that falls "
-        "back to the default is silently qualified at a depth it did not ask for"
-    )
+    # Every packaged profile needs its own XADX round policy, since a profile
+    # that falls back to the default is silently qualified at a depth it did not
+    # ask for. The "all-models" diagnostic sweep is not a packaged profile (it
+    # ships no profiles/all-models.json), but it still declares its policy
+    # explicitly rather than falling through to the default.
+    assert set(XADX_ROUNDS) == packaged | {"all-models"}
+    assert "all-models" not in packaged
 
 
 def test_every_profile_preserves_the_approved_stress_contract():

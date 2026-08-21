@@ -9,9 +9,17 @@ A qualification run writes a portable directory containing:
   native CLI reports
 - `xadx-report.json`: schema-v2 XADX identity, per-case metrics, and structured
   phase/round failures
-- `profile.json`: the exact versioned profile
+- `profile.json`: either the exact versioned `profile-v1` executed (curated
+  `fast` / `default` / `extended` runs) or a `diagnostic-sweep` descriptor
+  (`kind: "diagnostic-sweep"`) recording what the `--all-models` sweep actually
+  ran (name, bench context, and the discovered tags with their test names). A
+  diagnostic-sweep descriptor is never a packaged contract: it pins no files or
+  XCLBINs and is always ad-hoc (`candidate_bound: false`), so intake refuses it.
 - `models.json`: model source, revision, pull state, and content hashes
 - `junit.xml`: CI-compatible passed and failed test cases
+- `report.md`: optional human-readable HRX overlay written for sweeps. It is
+  covered by `SHA256SUMS` but is not schema-validated and carries no intake
+  semantics; profile runs omit it.
 - `logs/pull/` and `logs/tests/`: redacted subprocess transcripts
 - `SHA256SUMS`: every other evidence file in deterministic path order
 

@@ -274,8 +274,16 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "rocm_npu_qualification/schemas/xadx-report-v1.schema.json" in names
     assert "rocm_npu_qualification/bench/bench_1k_smoke.json" in names
     assert "rocm_npu_qualification/bench/bench_4k_smoke.json" in names
+    assert "rocm_npu_qualification/bench/bench_8k_smoke.json" in names
     assert "rocm_npu_qualification/licenses/FastFlowLM-LICENSE_RUNTIME.txt" in names
     assert "rocm_npu_qualification/licenses/FastFlowLM-TERMS.md" in names
+    # The reference transcript is vendored in git, so every wheel must carry it;
+    # the paired audio clip is copied from the FastFlowLM checkout, so it must be
+    # present whenever the submodule is (a pin bump that drops it fails the build
+    # via _stage_asr_sample).
+    assert "rocm_npu_qualification/assets/asr_sample.reference.txt" in names
+    if (ROOT / "projects/FastFlowLM/src").is_dir():
+        assert "rocm_npu_qualification/assets/asr_sample.wav" in names
     provenance = package_manifest["embedded_binaries"]["fastflowlm_xadx"]
     assert provenance["target"] == "npu2"
     assert provenance["recipe_sha256"] == hashlib.sha256(
@@ -403,6 +411,7 @@ class Runtime:
 package = resources.files("rocm_npu_qualification")
 assert package.joinpath("bench", "bench_1k_smoke.json").is_file()
 assert package.joinpath("bench", "bench_4k_smoke.json").is_file()
+assert package.joinpath("bench", "bench_8k_smoke.json").is_file()
 with resources.as_file(package.joinpath("xadx_assets")) as root:
     recipe = json.loads((root / "recipe.json").read_text())
     report = xadx.run_recipe(
@@ -508,3 +517,46 @@ def test_qualification_license_snapshots_match_fastflowlm():
     assert normalized(snapshots / "FastFlowLM-TERMS.md") == normalized(
         upstream / "TERMS.md"
     )
+
+
+def test_stage_asr_sample_fails_when_checkout_present_but_clip_missing(tmp_path):
+    from build_tools.rocm_npu_qualification_wheel import _stage_asr_sample
+
+    root = tmp_path / "root"
+    (root / "projects/FastFlowLM/src").mkdir(parents=True)
+    package_root = root / "package"
+    (package_root / "assets").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="pinned ASR fixture"):
+        _stage_asr_sample(root, package_root)
+
+
+def test_stage_asr_sample_omits_clip_when_checkout_absent(tmp_path):
+    from build_tools.rocm_npu_qualification_wheel import _stage_asr_sample
+
+    root = tmp_path / "root"
+    package_root = root / "package"
+    (package_root / "assets").mkdir(parents=True)
+    _stage_asr_sample(root, package_root)
+    assert not (package_root / "assets" / "asr_sample.wav").exists()
+
+
+@pytest.mark.skipif(
+    not (ROOT / "projects/FastFlowLM/src/tb_files/Recording.wav").is_file(),
+    reason="FastFlowLM submodule is not checked out",
+)
+def test_qualification_wheel_vendors_pinned_asr_sample(tmp_path):
+    from build_tools.rocm_npu_qualification_wheel import ASR_SAMPLE_SHA256
+
+    assets = _fake_xadx_assets(tmp_path / "xadx")
+    wheel = build_qualification_wheel(
+        ROOT,
+        output_directory=tmp_path,
+        xadx_assets=assets,
+        version="1.2.3",
+    )
+    member = "rocm_npu_qualification/assets/asr_sample.wav"
+    with zipfile.ZipFile(wheel) as archive:
+        assert member in set(archive.namelist())
+        digest = hashlib.sha256(archive.read(member)).hexdigest()
+    # The clip is copied from the pinned FastFlowLM submodule, hash-verified.
+    assert digest == ASR_SAMPLE_SHA256

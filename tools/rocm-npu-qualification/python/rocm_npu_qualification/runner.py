@@ -12,26 +12,29 @@ import os
 import re
 import sys
 import time
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from .benchmark import benchmark_csv_checkpoint as _benchmark_csv_checkpoint
-from .commands import run_command, run_interactive_command
+from .commands import run_command, run_interactive_command, serve_probe
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
+    PROFILE_SCHEMA_VERSION,
     XADX_REPORT_SCHEMA_VERSION,
     xadx_rounds,
 )
 from .evidence import EvidenceWriter
 from .errors import QualificationError
 from .fastflowlm import (
+    BENCHMARK_PASS_SENTINEL_PATTERN,
     MAX_LENGTH_PATTERN,
-    RUNTIME_ERROR_PATTERN,
     extract_raw_outputs,
     fresh_benchmark_csvs,
+    has_runtime_error,
     require_benchmark_schedule,
     require_1k_checkpoint,
     smoke_phrase_matches,
@@ -45,14 +48,208 @@ from .installation import (
     validate_protocol as _validate_protocol,
     validate_versions as _validate_versions,
 )
-from .models import ModelError, fastflow_environment, resolve_model
+from .models import (
+    ModelError,
+    enumerate_registry_models,
+    fastflow_environment,
+    resolve_model,
+    resolve_model_dynamic,
+)
 from .profiles import load_profile, profile_names
 from .prompts import materialize_turn
+from .report import build_markdown_report
 from .xadx import XadxError, run_recipe, validate_xadx_report
+
+
+# Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
+# 2+2 turn is left open-ended: forcing "one short sentence" pushes some small
+# models (e.g. the translation-tuned lfm2-trans:2.6b) into a terse, wrong reply
+# like "2." at greedy decoding, whereas given room to answer they reliably reach
+# "4". A numeric-only answer no longer trips the coherence gate because the
+# expected_regex below asserts "4" directly (see the per-turn checks).
+_SWEEP_SINGLE_PROMPT = "What is the capital of France? Answer in one short sentence."
+_SWEEP_MULTI_TURNS: tuple[dict[str, Any], ...] = (
+    {"prompt": "What is the capital of France? Answer in one short sentence."},
+    {"prompt": "Name three primary colors."},
+    {
+        "prompt": "What is 2+2?",
+        "expected_regex": r"\b4\b|four",
+    },
+    {"prompt": "Write one short sentence about the ocean."},
+    {"prompt": "What is the largest planet in our solar system?"},
+)
+# Greedy chat setup shared with the curated profiles: pin top-k and temperature
+# to make decoding deterministic. The sweep previously set only topk, which left
+# temperature and generation length model-default and made the arithmetic turn
+# more flake-prone. The single-prompt/arithmetic turns are terse, so they keep a
+# tight generation cap; the open multi-turn prompts (naming three colors,
+# describing the ocean, largest planet) need room for a full answer, so they use
+# a larger cap -- gen-lim 16 truncated them mid-sentence. This mirrors the
+# curated profiles, which likewise raise gen-lim for their less-constrained
+# turns.
+_SWEEP_GREEDY_SETUP: tuple[str, ...] = (
+    "/set topk 1",
+    "/set temp 0",
+    "/set gen-lim 16",
+)
+_SWEEP_GREEDY_SETUP_MULTI: tuple[str, ...] = (
+    "/set topk 1",
+    "/set temp 0",
+    "/set gen-lim 64",
+)
+# Complete-sweep benchmark stages, selectable via ``--bench-context``. Each entry
+# fixes the packaged config, the evidence test name, the transcript checkpoint
+# band that isolates the target stage (FLM runs 1k, 2k, 4k, ... stages up to
+# ``max_length``), and a per-turn timeout multiplier that grows with context.
+_SWEEP_BENCH_CONFIGS: dict[str, dict[str, Any]] = {
+    "1k": {
+        "config": "bench/bench_1k_smoke.json",
+        "name": "context-1k",
+        "checkpoint_min": 950,
+        "checkpoint_max": 1024,
+        "timeout_factor": 4,
+    },
+    "4k": {
+        "config": "bench/bench_4k_smoke.json",
+        "name": "context-4k",
+        "checkpoint_min": 3800,
+        "checkpoint_max": 4096,
+        "timeout_factor": 6,
+    },
+    "8k": {
+        "config": "bench/bench_8k_smoke.json",
+        "name": "context-8k",
+        "checkpoint_min": 7600,
+        "checkpoint_max": 8192,
+        "timeout_factor": 8,
+    },
+}
+_SWEEP_BENCH_DEFAULT = "8k"
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _resolve_asr_sample(stack: ExitStack) -> Path | None:
+    """Materialize the audio fixture used to exercise ASR transcription.
+
+    Honors the ``ROCM_NPU_ASR_SAMPLE`` override (a real filesystem path),
+    otherwise resolves the clip bundled in the package under ``assets/`` via
+    :func:`importlib.resources.as_file` so it works whether the wheel is
+    installed unzipped or imported from a zip. The extracted path stays valid
+    for the lifetime of ``stack``. Returns ``None`` when no usable sample is
+    present; the caller then fails the ASR probe closed.
+    """
+    override = os.environ.get("ROCM_NPU_ASR_SAMPLE")
+    if override:
+        candidate = Path(override)
+        return candidate if candidate.is_file() else None
+    try:
+        resource = resources.files("rocm_npu_qualification").joinpath(
+            "assets", "asr_sample.wav"
+        )
+        if resource.is_file():
+            return stack.enter_context(resources.as_file(resource))
+    except (TypeError, FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+    return None
+
+
+def _resolve_asr_reference() -> str | None:
+    """Return the accepted transcript for the ASR sample, or ``None``.
+
+    Honors the ``ROCM_NPU_ASR_REFERENCE`` override (inline text or a file path),
+    otherwise falls back to the reference bundled alongside the audio fixture.
+    The reference is the pinned phrase the transcript must contain and the
+    ground truth for the word-error-rate metric; when it is absent the ASR probe
+    fails closed rather than accepting an unverified transcript.
+    """
+    override = os.environ.get("ROCM_NPU_ASR_REFERENCE")
+    if override:
+        candidate = Path(override)
+        try:
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+        return override.strip() or None
+    try:
+        resource = resources.files("rocm_npu_qualification").joinpath(
+            "assets", "asr_sample.reference.txt"
+        )
+        if resource.is_file():
+            return resource.read_text(encoding="utf-8").strip() or None
+    except (TypeError, FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+    return None
+
+
+def _sweep_timeouts(footprint: float) -> tuple[int, int]:
+    """Scale (boot, per-turn) seconds by model footprint in GB."""
+    fp = max(0.5, footprint)
+    boot = int(120 + fp * 40)
+    turn = int(180 + fp * 60)
+    return boot, turn
+
+
+def _default_tests_for(
+    model: dict[str, Any], *, bench_context: str = _SWEEP_BENCH_DEFAULT
+) -> list[dict[str, Any]]:
+    """Synthesize the complete-sweep test set for a discovered registry model.
+
+    chat -> single-prompt run + 5-turn multi-turn run + a context benchmark
+    (8k by default, selectable via ``bench_context``); embed/asr -> a single
+    serve-probe. Timeouts scale with footprint so large MoE models do not
+    spuriously time out, and with the benchmark context length.
+    """
+    kind = model.get("kind", "chat")
+    footprint = float(model.get("footprint", 0) or 0)
+    boot, turn = _sweep_timeouts(footprint)
+    if kind in ("embed", "asr"):
+        return [
+            {
+                "name": "serve-probe",
+                "kind": "serve",
+                "probe_kind": kind,
+                "timeout_seconds": min(7200, max(300, boot)),
+            }
+        ]
+    bench = _SWEEP_BENCH_CONFIGS.get(
+        bench_context, _SWEEP_BENCH_CONFIGS[_SWEEP_BENCH_DEFAULT]
+    )
+    single_timeout = min(7200, max(180, turn))
+    multi_timeout = min(7200, max(300, turn * 2))
+    bench_timeout = min(7200, max(300, turn * bench["timeout_factor"]))
+    return [
+        {
+            "name": "single-prompt",
+            "kind": "run",
+            "turns": [{"prompt": _SWEEP_SINGLE_PROMPT}],
+            "setup_commands": _SWEEP_GREEDY_SETUP,
+            "process_iterations": 1,
+            "timeout_seconds": single_timeout,
+            "ctx_len": 1024,
+        },
+        {
+            "name": "multi-turn",
+            "kind": "run",
+            "turns": [dict(turn) for turn in _SWEEP_MULTI_TURNS],
+            "setup_commands": _SWEEP_GREEDY_SETUP_MULTI,
+            "process_iterations": 1,
+            "timeout_seconds": multi_timeout,
+            "ctx_len": 2048,
+        },
+        {
+            "name": bench["name"],
+            "kind": "bench",
+            "config": bench["config"],
+            "timeout_seconds": bench_timeout,
+            "checkpoint_min": bench["checkpoint_min"],
+            "checkpoint_max": bench["checkpoint_max"],
+            "expected_regex": "",
+        },
+    ]
 
 
 def _run_core_report(
@@ -174,6 +371,67 @@ def _test_model(
             return records
 
     for test in model["tests"]:
+        if test["kind"] == "serve":
+            safe_tag = "".join(
+                character if character.isalnum() else "-" for character in model["tag"]
+            )
+            log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
+            probe_kind = test.get("probe_kind", "embed")
+            serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
+            with ExitStack() as sample_stack:
+                audio_sample: Path | None = None
+                reference_text: str | None = None
+                if probe_kind == "embed":
+                    serve_argv += ["-e", "1"]
+                elif probe_kind == "asr":
+                    serve_argv += ["-a", "1"]
+                    audio_sample = _resolve_asr_sample(sample_stack)
+                    reference_text = _resolve_asr_reference()
+                result, probe = serve_probe(
+                    serve_argv,
+                    log_path=log,
+                    env=environment,
+                    probe_kind=probe_kind,
+                    model=model["tag"],
+                    boot_timeout=test["timeout_seconds"],
+                    audio_sample=audio_sample,
+                    reference_text=reference_text,
+                    echo=True,
+                )
+            transcript = result.stdout
+            semantic_error = ""
+            if has_runtime_error(transcript):
+                semantic_error = "FastFlowLM emitted an HRX runtime error"
+            elif not probe["ok"]:
+                semantic_error = probe["detail"] or "FastFlowLM serve probe failed"
+            passed = result.returncode == 0 and not semantic_error
+            records.append(
+                {
+                    "model": model["tag"],
+                    "name": test["name"],
+                    "kind": "serve",
+                    "status": "pass" if passed else "fail",
+                    "returncode": result.returncode,
+                    "timed_out": result.timed_out,
+                    "duration_seconds": result.duration_seconds,
+                    "log": writer.relative(log),
+                    "metrics": {
+                        "probe_kind": probe_kind,
+                        "port": probe["port"],
+                        "detail": probe["detail"],
+                        **(probe.get("metrics") or {}),
+                    },
+                    "artifacts": [],
+                    **(
+                        {}
+                        if passed
+                        else {"error": semantic_error or "FastFlowLM serve probe failed"}
+                    ),
+                }
+            )
+            write_progress()
+            continue
+
         if test["kind"] == "bench":
             safe_tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", model["tag"])
             work = writer.path(f"bench/{safe_tag}/{test['name']}")
@@ -222,7 +480,7 @@ def _test_model(
             checkpoint = None
             csv_path = None
             raw_outputs = extract_raw_outputs(transcript)
-            if RUNTIME_ERROR_PATTERN.search(transcript):
+            if has_runtime_error(transcript):
                 semantic_error = "FastFlowLM emitted an HRX runtime error"
             elif MAX_LENGTH_PATTERN.search(transcript):
                 semantic_error = "FastFlowLM reached the generation length limit"
@@ -246,7 +504,10 @@ def _test_model(
                     semantic_error = str(error)
             if not semantic_error:
                 for output_number, raw in enumerate(raw_outputs, start=1):
-                    if len(re.findall(r"[A-Za-z]{2,}", raw)) < 8:
+                    if (
+                        len(re.findall(r"[A-Za-z]{2,}", raw)) < 8
+                        and BENCHMARK_PASS_SENTINEL_PATTERN.search(raw) is None
+                    ):
                         semantic_error = (
                             f"FastFlowLM benchmark output {output_number} is not "
                             "coherent text"
@@ -293,6 +554,7 @@ def _test_model(
                     "metrics": {
                         "checkpoint_tokens": checkpoint,
                         "benchmark_iterations": benchmark_iterations,
+                        "iterations": benchmark_iterations,
                         "responses": len(raw_outputs),
                         "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
                         "csv_checkpoint_row": csv_row,
@@ -359,11 +621,10 @@ def _test_model(
                 )
             transcript = result.stdout + "\n" + result.stderr
             raw_outputs = extract_raw_outputs(transcript)
+            max_length_reached = bool(MAX_LENGTH_PATTERN.search(transcript))
             semantic_error = ""
-            if RUNTIME_ERROR_PATTERN.search(transcript):
+            if has_runtime_error(transcript):
                 semantic_error = "FastFlowLM emitted an HRX runtime error"
-            elif MAX_LENGTH_PATTERN.search(transcript):
-                semantic_error = "FastFlowLM reached the generation length limit"
             elif len(raw_outputs) != len(turns):
                 semantic_error = (
                     f"FastFlowLM emitted {len(raw_outputs)} responses; "
@@ -373,24 +634,33 @@ def _test_model(
                 for turn_number, (raw, turn) in enumerate(
                     zip(raw_outputs, turns), start=1
                 ):
-                    if turn.get("expected") and not smoke_phrase_matches(
-                        raw, turn["expected"]
-                    ):
+                    expected = turn.get("expected")
+                    expected_regex = turn.get("expected_regex")
+                    if expected and not smoke_phrase_matches(raw, expected):
                         semantic_error = f"FastFlowLM turn {turn_number} did not match"
                     elif (
-                        turn.get("expected_regex")
-                        and re.search(turn["expected_regex"], raw, re.IGNORECASE)
-                        is None
+                        expected_regex
+                        and re.search(expected_regex, raw, re.IGNORECASE) is None
                     ):
                         semantic_error = (
                             f"FastFlowLM turn {turn_number} did not match regex"
                         )
-                    elif not re.search(r"[A-Za-z]{4,}", raw):
+                    elif not (expected or expected_regex) and not re.search(
+                        r"[A-Za-z]{4,}", raw
+                    ):
+                        # The generic coherence gate only applies to open-ended
+                        # turns. Turns that assert a short answer (e.g. "4" for
+                        # 2+2) are validated by expected/expected_regex above, so
+                        # a numeric-only reply is not "no visible text".
                         semantic_error = (
                             f"FastFlowLM turn {turn_number} has no visible text"
                         )
                     if semantic_error:
                         break
+            # A generation-length cap is only fatal when it stopped a turn from
+            # satisfying its expectation. Every turn responded (count matches) and
+            # each per-turn check above passed, so a thinking model that ran long
+            # before answering is not itself a failure.
             passed = result.returncode == 0 and not semantic_error
             records.append(
                 {
@@ -408,6 +678,7 @@ def _test_model(
                     "metrics": {
                         "responses": len(raw_outputs),
                         "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
+                        "max_length_reached": max_length_reached,
                     },
                     "artifacts": [],
                     **(
@@ -610,8 +881,32 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "packages": installed,
         }
 
-    profile_name = _selected_profile_name(args)
-    profile = load_profile(profile_name)
+    all_models = bool(getattr(args, "all_models", False))
+    # A complete sweep should surface every model's result, so one failing model
+    # must not abort the run; keep-going is implied (still overridable upward).
+    keep_going = bool(getattr(args, "keep_going", False) or all_models)
+    if all_models:
+        bench_choice = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+        # The sweep is not a packaged profile-v1: it discovers whatever the
+        # installed FLM registry exposes, so it cannot pin files/XCLBINs and is
+        # not a named contract. Describe it honestly as a diagnostic-sweep
+        # descriptor. The concrete tags/tests are filled in after discovery.
+        profile = {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "kind": "diagnostic-sweep",
+            "name": "all-models",
+            "description": (
+                "Dynamic complete sweep of every model in the installed "
+                "FastFlowLM registry: single-prompt run, multi-turn, and a "
+                f"{bench_choice} benchmark for chat models; serve-probe for "
+                "embed/ASR models."
+            ),
+            "bench_context": bench_choice,
+            "models": [],
+        }
+    else:
+        profile_name = _selected_profile_name(args)
+        profile = load_profile(profile_name)
     candidate = None
     if args.candidate_manifest is not None:
         try:
@@ -622,10 +917,18 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             raise QualificationError("candidate manifest must be an object")
         candidate = _normalize_candidate_manifest(candidate)
 
+    # Version/wheel validation still runs against a supplied candidate even for
+    # the sweep, so a mismatched install is rejected up front.
     _validate_versions(installed, core_version, candidate, args.candidate_manifest)
+    # candidate_bound means "execution equals a sealed wheel profile," not merely
+    # "a candidate manifest was passed." The diagnostic sweep is never a sealed
+    # wheel profile, so it is always ad-hoc even with --candidate-manifest; intake
+    # then refuses it. Non-sweep runs bind when a candidate is present.
+    candidate_bound = candidate is not None and not all_models
+    bound_candidate = candidate if candidate_bound else None
     numeric_runtime = _numeric_runtime_identities()
     writer = EvidenceWriter(args.output)
-    writer.write_candidate_manifest(candidate)
+    writer.write_candidate_manifest(bound_candidate)
     writer.write_json("profile.json", profile)
     started = _now()
     evidence: dict[str, Any] = {
@@ -634,13 +937,15 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "subject": {
             "version": core_version,
             "source_revision": (
-                candidate["source_revision"] if candidate is not None else ""
+                bound_candidate["source_revision"]
+                if bound_candidate is not None
+                else ""
             ),
             "candidate_binding": {
-                "present": candidate is not None,
+                "present": candidate_bound,
                 "manifest_sha256": (
                     sha256_file(writer.path("candidate-manifest.json"))
-                    if candidate is not None
+                    if candidate_bound
                     else None
                 ),
             },
@@ -651,7 +956,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "profile": {
             "name": profile["name"],
             "description": profile["description"],
-            "candidate_bound": candidate is not None,
+            "candidate_bound": candidate_bound,
         },
         "models": [],
         "tests": [],
@@ -727,7 +1032,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         returncode != 0 or report["status"] != "pass"
         for _, report, returncode in native_results
     ):
-        if not args.keep_going:
+        if not keep_going:
             evidence["status"] = "fail"
             evidence["finished_at"] = _now()
             writer.write_json("models.json", evidence["models"])
@@ -746,7 +1051,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     _report_test_results(xadx_tests)
     writer.write_json("tests.json", evidence["tests"])
     writer.write_json("evidence.json", evidence)
-    if any(test["status"] != "pass" for test in xadx_tests) and not args.keep_going:
+    if any(test["status"] != "pass" for test in xadx_tests) and not keep_going:
         evidence["status"] = "fail"
         evidence["finished_at"] = _now()
         writer.write_json("models.json", evidence["models"])
@@ -780,7 +1085,34 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
     writer.write_json("evidence.json", evidence)
 
-    for model in profile["models"]:
+    execution_models = profile["models"]
+    if all_models:
+        bench_context = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+        discovered = enumerate_registry_models(flm_config)
+        for base in discovered:
+            base["tests"] = _default_tests_for(base, bench_context=bench_context)
+        # The descriptor records what actually ran (tag, kind, test names) rather
+        # than a profile-v1 model+test config: the sweep pins nothing, so the
+        # full test specs live only in the execution list below.
+        profile["models"] = [
+            {
+                "tag": base["tag"],
+                "kind": base.get("kind", "chat"),
+                "tests": [test["name"] for test in base["tests"]],
+            }
+            for base in discovered
+        ]
+        writer.write_json("profile.json", profile)
+        execution_models = discovered
+        print(
+            f"qualify: complete sweep discovered {len(discovered)} models from the "
+            "installed FLM registry",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    resolve = resolve_model_dynamic if all_models else resolve_model
+    for model in execution_models:
         safe_tag = "".join(
             character if character.isalnum() else "-" for character in model["tag"]
         )
@@ -792,7 +1124,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             flush=True,
         )
         try:
-            model_record, _ = resolve_model(
+            model_record, _ = resolve(
                 model,
                 flm=flm,
                 config_path=flm_config,
@@ -878,7 +1210,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         writer.write_json("models.json", evidence["models"])
         writer.write_json("tests.json", evidence["tests"])
         writer.write_json("evidence.json", evidence)
-        if failed and not args.keep_going:
+        if failed and not keep_going:
             break
 
     evidence["status"] = (
@@ -892,6 +1224,20 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     writer.write_json("tests.json", evidence["tests"])
     writer.write_junit(evidence["tests"])
     writer.write_json("evidence.json", evidence)
+    if all_models:
+        kinds = {
+            model["tag"]: model.get("kind", "chat")
+            for model in profile["models"]
+        }
+        report_path = writer.path("report.md")
+        report_path.write_text(
+            build_markdown_report(evidence, kinds=kinds), encoding="utf-8"
+        )
+        print(
+            f"qualify: wrote complete-sweep report {report_path}",
+            file=sys.stderr,
+            flush=True,
+        )
     writer.finalize()
     return (0 if evidence["status"] == "pass" else 1), _summary(evidence, args.output)
 

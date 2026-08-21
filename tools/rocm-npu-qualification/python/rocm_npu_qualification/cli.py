@@ -66,6 +66,26 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         choices=profile_names(),
         help="select a packaged profile (default: default)",
     )
+    profile_selection.add_argument(
+        "--all-models",
+        action="store_true",
+        help=(
+            "run a complete sweep over every model in the installed FastFlowLM "
+            "registry (dynamic discovery, no per-file pinning): single-prompt "
+            "run, multi-turn, and a benchmark (8k by default, see "
+            "--bench-context) for chat models; serve-probe for embed/ASR "
+            "models. Implies --keep-going."
+        ),
+    )
+    parser.add_argument(
+        "--bench-context",
+        choices=("1k", "4k", "8k"),
+        default="8k",
+        help=(
+            "context length for the --all-models benchmark stage "
+            "(default: 8k; ignored without --all-models)"
+        ),
+    )
     parser.add_argument(
         "--output",
         "--output-dir",
