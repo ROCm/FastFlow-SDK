@@ -11,10 +11,12 @@ A qualification run writes a portable directory containing:
   phase/round failures
 - `profile.json`: either the exact versioned `profile-v1` executed (curated
   `fast` / `default` / `extended` runs) or a `diagnostic-sweep` descriptor
-  (`kind: "diagnostic-sweep"`) recording what the `--all-models` sweep actually
-  ran (name, bench context, and the discovered tags with their test names). A
-  diagnostic-sweep descriptor is never a packaged contract: it pins no files or
-  XCLBINs and is always ad-hoc (`candidate_bound: false`), so intake refuses it.
+  (`kind: "diagnostic-sweep"`) recording what a sweep actually ran (name, bench
+  context, and the selected tags with their test names). The `--all-models`
+  sweep records `name: "all-models"`; the measurement-only `--benchmark` sweep
+  records `name: "benchmark"` and its `benchmark_iterations`. A diagnostic-sweep
+  descriptor is never a packaged contract: it pins no files or XCLBINs and is
+  always ad-hoc (`candidate_bound: false`), so intake refuses it.
 - `models.json`: model source, revision, pull state, and content hashes
 - `junit.xml`: CI-compatible passed and failed test cases
 - `report.md`: optional human-readable HRX overlay written for sweeps. It is

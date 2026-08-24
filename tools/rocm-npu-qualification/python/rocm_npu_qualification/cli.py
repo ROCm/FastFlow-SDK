@@ -77,13 +77,51 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
             "models. Implies --keep-going."
         ),
     )
+    profile_selection.add_argument(
+        "--bench",
+        nargs="?",
+        const="all",
+        default=None,
+        choices=("all",),
+        metavar="MODE",
+        help=(
+            "run a measurement-only benchmark sweep: the on-NPU decode benchmark "
+            "for chat models and the serve-probe for embed/ASR models (no "
+            "single-prompt or multi-turn stages). MODE selects the coverage; "
+            "'all' (the default when the flag is given bare) sweeps every model "
+            "in the installed FastFlowLM registry. Tune the run with "
+            "--bench-context and --bench-iterations, and narrow the set with "
+            "--models. Implies --keep-going."
+        ),
+    )
+    parser.add_argument(
+        "--models",
+        default=None,
+        metavar="TAG[,TAG...]",
+        help=(
+            "comma-separated FastFlowLM registry tags to restrict a --bench "
+            "sweep to (for example --models=llama3.2:1b,qwen3:0.6b). Tags absent "
+            "from the installed registry are skipped with a warning; has no "
+            "effect without --bench."
+        ),
+    )
     parser.add_argument(
         "--bench-context",
         choices=("1k", "4k", "8k"),
-        default="8k",
+        default=None,
         help=(
-            "context length for the --all-models benchmark stage "
-            "(default: 8k; ignored without --all-models)"
+            "context length for the benchmark stage of --bench or --all-models "
+            "(default: 1k for --bench, 8k for --all-models; ignored otherwise)"
+        ),
+    )
+    parser.add_argument(
+        "--bench-iterations",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "number of decode-benchmark iterations per chat model for a --bench "
+            "sweep (a positive integer, default 5; ignored without --bench)"
         ),
     )
     parser.add_argument(

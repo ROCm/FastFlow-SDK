@@ -54,18 +54,32 @@ not abort the run. Because it is a dynamic diagnostic sweep rather than a pinned
 profile, `--all-models` is meant for broad local coverage and is not a
 candidate-bound release path.
 
-In addition to the machine-readable bundle, `--all-models` writes a
-human-readable `report.md` into the output directory. It contains an environment
-header (OS, NPU device/driver/firmware candidates, target family, FLM and
-package versions), a per-model functional matrix (single-prompt, five-turn
-multi-turn, and whether the multi-turn run passed), and an on-NPU benchmark
-table with the
-FLM-averaged TTFT, prefill, and decode throughput for each model. Only HRX
-numbers are reported (no XRT columns). The context stage and the iteration count
-the averages span (for example `HRX, 8k, averaged over 3 iterations`) are stated
-in the benchmark section heading rather than repeated per row. Profile runs
-(`--fast`, `--profile`) do not emit `report.md`; they produce only the evidence
-bundle (`evidence.json`, `tests.json`, `junit.xml`, and the summary).
+`--bench` runs a measurement-only variant of the sweep. `MODE` selects the
+coverage; `--bench all` (the mode used when the flag is given bare) covers
+*every* model in the installed registry, but drops the correctness stages: chat
+models run *only* the on-NPU decode benchmark (no single-prompt or multi-turn
+turns), and embed/ASR models run *only* their serve-probe (the same
+encode-tok/s, RTF, and WER measurements the complete sweep records). It defaults
+to a `1k` context benchmark of five iterations; tune the context with
+`--bench-context <1k|4k|8k>` and the iteration count with `--bench-iterations
+<N>` (a positive integer). Pass `--models=<tag>[,<tag>...]` to narrow the
+sweep to an explicit subset of registry tags (tags absent from the installed
+registry are skipped with a warning); it has no effect without `--bench`.
+Like `--all-models`, `--bench` is a dynamic diagnostic sweep (not pinned,
+not candidate-bound) and implies `--keep-going`.
+
+In addition to the machine-readable bundle, the `--all-models` and `--bench`
+sweeps write a human-readable `report.md` into the output directory. It contains
+an environment header (OS, NPU device/driver/firmware candidates, target family,
+FLM and package versions), a per-model functional matrix (single-prompt,
+five-turn multi-turn, and whether the multi-turn run passed) where those turns
+ran, and an on-NPU benchmark table with the FLM-averaged TTFT, prefill, and
+decode throughput for each model. Only HRX numbers are reported (no XRT
+columns). The context stage and the iteration count the averages span (for
+example `HRX, 8k, averaged over 3 iterations`) are stated in the benchmark
+section heading rather than repeated per row. Profile runs (`--fast`,
+`--profile`) do not emit `report.md`; they produce only the evidence bundle
+(`evidence.json`, `tests.json`, `junit.xml`, and the summary).
 
 Qualification first validates plugin protocol and exact package versions, then
 runs native `version`, `probe`, `doctor`, and `self-test` through the absolute executable
@@ -90,7 +104,13 @@ Useful options include:
 - `--model-cache <path>`
 - `--candidate-manifest <path>`
 - `--keep-going`
-- `--bench-context <1k|4k|8k>` (with `--all-models`; default `8k`)
+- `--bench-context <1k|4k|8k>` (with `--bench` or `--all-models`; default `1k`
+  for `--bench`, `8k` for `--all-models`)
+- `--bench [all]` (measurement-only sweep; `all` covers the whole registry)
+- `--bench-iterations <N>` (decode-benchmark iterations per chat model for
+  `--bench`; a positive integer, default `5`)
+- `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit
+  registry tags; ignored without `--bench`)
 - `--json`
 
 Profiles support ad-hoc diagnostics and candidate-bound release runs. Packaged
@@ -204,6 +224,8 @@ rocm-npu qualify --model-cache $cache --output qualification-evidence
 rocm-npu qualify --profile extended --model-cache $cache --output extended-evidence
 rocm-npu qualify --all-models --model-cache $cache --output all-models-evidence
 rocm-npu qualify --all-models --bench-context 1k --model-cache $cache --output all-models-1k-evidence
+rocm-npu qualify --bench all --model-cache $cache --output benchmark-evidence
+rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output benchmark-4k-evidence
 rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```
 

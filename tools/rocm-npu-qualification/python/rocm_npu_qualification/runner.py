@@ -106,7 +106,10 @@ _SWEEP_BENCH_CONFIGS: dict[str, dict[str, Any]] = {
         "config": "bench/bench_1k_smoke.json",
         "name": "context-1k",
         "checkpoint_min": 950,
-        "checkpoint_max": 1024,
+        # A model's chat template can add non-trivial overhead on top of the raw
+        # 1k prompt (gpt-oss's harmony template checkpoints at ~1035), so the
+        # upper band is widened past 1024 to admit that legitimate inflation.
+        "checkpoint_max": 1152,
         "timeout_factor": 4,
     },
     "4k": {
@@ -125,6 +128,87 @@ _SWEEP_BENCH_CONFIGS: dict[str, dict[str, Any]] = {
     },
 }
 _SWEEP_BENCH_DEFAULT = "8k"
+
+# --bench is a measurement-only sweep: chat models run the on-NPU decode
+# benchmark, embed/ASR models run the serve-probe (their encode-tok/s / RTF / WER
+# measurements). Unlike --all-models it omits the single-prompt and multi-turn
+# correctness stages. MODE selects coverage ('all' sweeps the whole installed
+# registry); --bench-context / --bench-iterations tune the run and an optional
+# --models filter narrows the set to explicit tags.
+_BENCHMARK_MODES: tuple[str, ...] = ("all",)
+_BENCHMARK_DEFAULT_CONTEXT = "1k"
+_BENCHMARK_DEFAULT_ITERATIONS = 5
+
+
+def _benchmark_tests_for(
+    model: dict[str, Any], *, bench_context: str, iterations: int
+) -> list[dict[str, Any]]:
+    """Synthesize the measurement stage for a --bench model.
+
+    Chat models run only the on-NPU decode benchmark (no single-prompt or
+    multi-turn correctness stages): the per-turn timeout scales with model
+    footprint, the benchmark context length, and the iteration count so a large
+    MoE running many iterations does not spuriously time out. Embed/ASR models
+    run the serve-probe instead, since the decode benchmark does not apply to
+    them; their backend-comparable measurements (encode tok/s, RTF, WER) are
+    recorded from that probe.
+    """
+    kind = model.get("kind", "chat")
+    footprint = float(model.get("footprint", 0) or 0)
+    boot, turn = _sweep_timeouts(footprint)
+    if kind in ("embed", "asr"):
+        return [
+            {
+                "name": "serve-probe",
+                "kind": "serve",
+                "probe_kind": kind,
+                "timeout_seconds": min(7200, max(300, boot)),
+            }
+        ]
+    bench = _SWEEP_BENCH_CONFIGS.get(
+        bench_context, _SWEEP_BENCH_CONFIGS[_SWEEP_BENCH_DEFAULT]
+    )
+    bench_timeout = min(
+        7200, max(300, turn * bench["timeout_factor"] * iterations)
+    )
+    return [
+        {
+            "name": bench["name"],
+            "kind": "bench",
+            "config": bench["config"],
+            "iterations": iterations,
+            "timeout_seconds": bench_timeout,
+            "checkpoint_min": bench["checkpoint_min"],
+            "checkpoint_max": bench["checkpoint_max"],
+            "expected_regex": "",
+        }
+    ]
+
+
+def _filter_models_by_tags(
+    discovered: list[dict[str, Any]], tags: list[str]
+) -> list[dict[str, Any]]:
+    """Restrict the discovered registry set to an explicit ``--models`` list.
+
+    Preserves the requested order and warns (rather than fails) about any tag
+    missing from the installed registry, so a stale tag still benchmarks the
+    rest. Raises when none of the requested tags are present.
+    """
+    by_tag = {model["tag"]: model for model in discovered}
+    selected = [by_tag[tag] for tag in tags if tag in by_tag]
+    missing = [tag for tag in tags if tag not in by_tag]
+    if missing:
+        print(
+            "qualify: --models skipping tags absent from the installed FLM "
+            f"registry: {', '.join(missing)}",
+            file=sys.stderr,
+            flush=True,
+        )
+    if not selected:
+        raise QualificationError(
+            "none of the --models tags are present in the installed FLM registry"
+        )
+    return selected
 
 
 def _now() -> str:
@@ -505,7 +589,12 @@ def _test_model(
             if not semantic_error:
                 for output_number, raw in enumerate(raw_outputs, start=1):
                     if (
-                        len(re.findall(r"[A-Za-z]{2,}", raw)) < 8
+                        # Minimum multi-letter word count for the output to read
+                        # as text. Kept low so a short but valid response (e.g. a
+                        # coherent refusal like "I can't provide a meaningful
+                        # response to your request.") is not misflagged;
+                        # empty/garbage output still trips this.
+                        len(re.findall(r"[A-Za-z]{2,}", raw)) < 4
                         and BENCHMARK_PASS_SENTINEL_PATTERN.search(raw) is None
                     ):
                         semantic_error = (
@@ -882,11 +971,50 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         }
 
     all_models = bool(getattr(args, "all_models", False))
-    # A complete sweep should surface every model's result, so one failing model
-    # must not abort the run; keep-going is implied (still overridable upward).
-    keep_going = bool(getattr(args, "keep_going", False) or all_models)
+    # --bench MODE selects a measurement-only sweep; the mode ('all') chooses
+    # coverage. Context/iterations come from the dedicated --bench-context /
+    # --bench-iterations flags rather than a packed value.
+    bench_mode = getattr(args, "bench", None)
+    benchmark = bench_mode is not None
+    if benchmark:
+        benchmark_context = (
+            getattr(args, "bench_context", None) or _BENCHMARK_DEFAULT_CONTEXT
+        )
+        benchmark_iterations = (
+            getattr(args, "bench_iterations", None) or _BENCHMARK_DEFAULT_ITERATIONS
+        )
+        if benchmark_iterations < 1:
+            raise QualificationError(
+                "--bench-iterations must be a positive integer, got "
+                f"{benchmark_iterations}"
+            )
+    # --models narrows a benchmark sweep to an explicit tag subset. It only has
+    # meaning for a benchmark mode; anywhere else it is warned about and ignored.
+    models_arg = getattr(args, "models", None)
+    model_filter: list[str] | None = None
+    if models_arg:
+        model_filter = [tag.strip() for tag in models_arg.split(",") if tag.strip()]
+        if not model_filter:
+            model_filter = None
+    if model_filter and not benchmark:
+        print(
+            "qualify: --models has no effect without --bench; ignoring it",
+            file=sys.stderr,
+            flush=True,
+        )
+        model_filter = None
+    if getattr(args, "bench_iterations", None) is not None and not benchmark:
+        print(
+            "qualify: --bench-iterations has no effect without --bench; ignoring it",
+            file=sys.stderr,
+            flush=True,
+        )
+    # A sweep should surface every model's result, so one failing model must not
+    # abort the run; keep-going is implied (still overridable upward).
+    is_sweep = all_models or benchmark
+    keep_going = bool(getattr(args, "keep_going", False) or is_sweep)
     if all_models:
-        bench_choice = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+        bench_choice = getattr(args, "bench_context", None) or _SWEEP_BENCH_DEFAULT
         # The sweep is not a packaged profile-v1: it discovers whatever the
         # installed FLM registry exposes, so it cannot pin files/XCLBINs and is
         # not a named contract. Describe it honestly as a diagnostic-sweep
@@ -902,6 +1030,28 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 "embed/ASR models."
             ),
             "bench_context": bench_choice,
+            "models": [],
+        }
+    elif benchmark:
+        # Also a diagnostic-sweep descriptor: a measurement-only sweep over every
+        # model in the installed registry (optionally narrowed by --models). The
+        # concrete tags/tests are filled in after discovery.
+        scope = (
+            f"the {len(model_filter)} model(s) selected via --models"
+            if model_filter
+            else "every model in the installed FastFlowLM registry"
+        )
+        profile = {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "kind": "diagnostic-sweep",
+            "name": "bench-all",
+            "description": (
+                f"Measurement-only sweep over {scope}: a {benchmark_context} "
+                f"decode benchmark of {benchmark_iterations} iteration(s) for "
+                "chat models; serve-probe for embed/ASR models."
+            ),
+            "bench_context": benchmark_context,
+            "benchmark_iterations": benchmark_iterations,
             "models": [],
         }
     else:
@@ -924,7 +1074,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     # "a candidate manifest was passed." The diagnostic sweep is never a sealed
     # wheel profile, so it is always ad-hoc even with --candidate-manifest; intake
     # then refuses it. Non-sweep runs bind when a candidate is present.
-    candidate_bound = candidate is not None and not all_models
+    candidate_bound = candidate is not None and not is_sweep
     bound_candidate = candidate if candidate_bound else None
     numeric_runtime = _numeric_runtime_identities()
     writer = EvidenceWriter(args.output)
@@ -1086,32 +1236,51 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     writer.write_json("evidence.json", evidence)
 
     execution_models = profile["models"]
-    if all_models:
-        bench_context = getattr(args, "bench_context", _SWEEP_BENCH_DEFAULT)
+    if is_sweep:
         discovered = enumerate_registry_models(flm_config)
-        for base in discovered:
-            base["tests"] = _default_tests_for(base, bench_context=bench_context)
+        if benchmark:
+            execution_models = (
+                _filter_models_by_tags(discovered, model_filter)
+                if model_filter
+                else discovered
+            )
+            for base in execution_models:
+                base["tests"] = _benchmark_tests_for(
+                    base,
+                    bench_context=benchmark_context,
+                    iterations=benchmark_iterations,
+                )
+            selection = "selected" if model_filter else "discovered"
+            summary_note = (
+                f"benchmark sweep {selection} {len(execution_models)} models "
+                "from the installed FLM registry"
+            )
+        else:
+            bench_context = getattr(args, "bench_context", None) or _SWEEP_BENCH_DEFAULT
+            for base in discovered:
+                base["tests"] = _default_tests_for(
+                    base, bench_context=bench_context
+                )
+            execution_models = discovered
+            summary_note = (
+                f"complete sweep discovered {len(discovered)} models from the "
+                "installed FLM registry"
+            )
         # The descriptor records what actually ran (tag, kind, test names) rather
-        # than a profile-v1 model+test config: the sweep pins nothing, so the
-        # full test specs live only in the execution list below.
+        # than a profile-v1 model+test config: a sweep pins nothing, so the full
+        # test specs live only in the execution list below.
         profile["models"] = [
             {
                 "tag": base["tag"],
                 "kind": base.get("kind", "chat"),
                 "tests": [test["name"] for test in base["tests"]],
             }
-            for base in discovered
+            for base in execution_models
         ]
         writer.write_json("profile.json", profile)
-        execution_models = discovered
-        print(
-            f"qualify: complete sweep discovered {len(discovered)} models from the "
-            "installed FLM registry",
-            file=sys.stderr,
-            flush=True,
-        )
+        print(f"qualify: {summary_note}", file=sys.stderr, flush=True)
 
-    resolve = resolve_model_dynamic if all_models else resolve_model
+    resolve = resolve_model_dynamic if is_sweep else resolve_model
     for model in execution_models:
         safe_tag = "".join(
             character if character.isalnum() else "-" for character in model["tag"]
@@ -1224,7 +1393,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     writer.write_json("tests.json", evidence["tests"])
     writer.write_junit(evidence["tests"])
     writer.write_json("evidence.json", evidence)
-    if all_models:
+    if is_sweep:
         kinds = {
             model["tag"]: model.get("kind", "chat")
             for model in profile["models"]
@@ -1234,7 +1403,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             build_markdown_report(evidence, kinds=kinds), encoding="utf-8"
         )
         print(
-            f"qualify: wrote complete-sweep report {report_path}",
+            f"qualify: wrote {profile['name']} sweep report {report_path}",
             file=sys.stderr,
             flush=True,
         )

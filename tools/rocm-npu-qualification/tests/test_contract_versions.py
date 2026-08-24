@@ -155,11 +155,12 @@ def test_every_packaged_profile_declares_an_xadx_round_policy():
     packaged = {path.stem for path in (PACKAGE_ROOT / "profiles").glob("*.json")}
     # Every packaged profile needs its own XADX round policy, since a profile
     # that falls back to the default is silently qualified at a depth it did not
-    # ask for. The "all-models" diagnostic sweep is not a packaged profile (it
-    # ships no profiles/all-models.json), but it still declares its policy
-    # explicitly rather than falling through to the default.
-    assert set(XADX_ROUNDS) == packaged | {"all-models"}
-    assert "all-models" not in packaged
+    # ask for. The "all-models" and "bench-all" diagnostic sweeps are not
+    # packaged profiles (they ship no profiles/*.json), but they still declare
+    # their policy explicitly rather than falling through to the default.
+    sweeps = {"all-models", "bench-all"}
+    assert set(XADX_ROUNDS) == packaged | sweeps
+    assert not (sweeps & packaged)
 
 
 def test_every_profile_preserves_the_approved_stress_contract():
