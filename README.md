@@ -1,59 +1,154 @@
-# ROCm-NPU[^1]
+# ROCm-NPU
 
+ROCm-NPU is a software stack for running and developing applications on
+AMD XDNA Neural Processing Engines (NPUs).
 
-## A Complete Software Stack for AMD Neural Processing Engines
+> [!IMPORTANT]
+> **This is an early release.** Interfaces, packages, models, and supported
+> hardware or driver combinations can change between snapshots. Use a
+> [GitHub Release](https://github.com/ROCm/rocm-npu/releases) for
+> installable artifacts and for the driver versions validated with that
+> build. These packages are not published to PyPI.
 
-ROCm-NPU is a bundle of software components that allow you to run and develop 
-applications on AMD XDNA Neural Processing Engines (NPUs). It consists of:
+It consists of:
 
-- **FastFlowLM**[^2]: A set of optimized machine learning models
-- **HRX**[^3]: A runtime that executes NPU applications
-- **iron-tools**: A programming framework and compiler (formerly MLIR-AIE[^4])
-- **iron-ops**: A set of common machine learning operator implementation 
-   examples built using *iron-tools*
+- **FastFlowLM** (Fast Flow Language Models): NPU-optimized language-model
+  inference
+- **HRX** (HIP Runtime Extended): a runtime that executes NPU applications
+- **iron-tools**: a programming framework and compiler for the AI Engine
+  (AIE) array, formerly MLIR-AIE
+- **iron-ops**: example machine-learning operators built with *iron-tools*
 
-Note that these top-level components will recursively pull in additional 
-requirements; each sub-project has more information on these.
+The native `rocm-npu` CLI ships with the runtime and reports device, driver,
+and runtime health. Building from this repository also pulls additional
+subproject requirements; each subproject has more detail. See
+[CONTRIBUTING.md](CONTRIBUTING.md) if you want to change the stack.
 
-[^1]: ROCm-NPU: ROCm for Neural Processing Units
-[^2]: FastFlowLM: Fast Flow Language Models
-[^3]: HRX: HIP Runtime Extended, HIP: Heterogeneous-compute Interface for Portability
-[^4]: MLIR-AIE: Multi-Level Intermediate Representation for AI Engines
+## Supported platforms
 
-## Getting Started
+This early snapshot targets **Linux and Windows** on **x86_64**, with
+**AMD Ryzen AI NPUs that implement XDNA2 (NPU2)**. Windows instructions are
+native PowerShell; WSL is not the supported Windows path.
 
-What is your goal? Click to jump to the appropriate section.
+Validated NPU driver versions are listed in each GitHub release. After
+installing or changing a driver, run `rocm-npu self-test`. If that fails,
+reboot and retry; a hot package switch can occasionally leave the device
+unhealthy even when the OS reports the new driver as installed.
+`rocm-npu probe` and `rocm-npu doctor` report the active driver, firmware,
+and runtime health.
 
-- [I want to **run fast models** on my NPU-enabled device.](#run-fastflowlm-models-using-hrx)
+Runtime and FastFlowLM Python wheels require Python 3.11 or newer. Compiler
+wheels require Python 3.12, 3.13, or 3.14. The standalone FastFlowLM/HRX
+archives do not require Python.
+
+## Getting started
+
+- [I want to **install a release** and run models.](#install-a-release-and-run-models)
 - [I want to **develop my own models** and applications.](#develop-your-own-models-and-applications-using-iron-tools)
+- [I want to **build ROCm-NPU from source**.](#build-rocm-npu-from-source)
 
+## Install a release and run models
 
-## Run *FastFlowLM* models using *HRX*
+Download a [GitHub Release](https://github.com/ROCm/rocm-npu/releases).
+The release description lists the driver versions validated for that build.
 
-*FastFlowLM* provides a set of hand-optimized, blazingly fast large language 
-models that run natively on your AMD NPU. Follow below instructions to run 
-these.
+### Standalone archive
 
-> [!WARNING]
-> **Current MoE xclbins can hang or produce invalid output**
->
-> Current ROCm-NPU packages contain prebuilt AIE xclbins with incorrect address
-> carry handling when an MoE weight buffer straddles a 4 GiB-aligned GPU virtual
-> address boundary. The affected NPU2 models are:
->
-> - `qwen3.6-moe:35b-a3b` (`Qwen3.6-35B-A3B-NPU2`)
-> - `gpt-oss:20b` (`GPT-OSS-20B-NPU2`)
-> - `gpt-oss-sg:20b` (`GPT-OSS-Safeguard-20b-NPU2`)
->
-> This was observed on Windows, but the faulty address arithmetic is in the
-> xclbin and can be triggered on any platform whose allocator places a weight
-> buffer across such a boundary. The source fix has landed, but existing
-> packages remain affected until these xclbins are regenerated and released.
-> Retrying may change buffer placement, but it is not a reliable workaround.
+Each release includes a relocatable FastFlowLM + HRX archive:
 
-This is the entry point for NPU runtime validation. It builds only minimal HRX
-with the `amdxdna` HAL and the pinned FastFlowLM app, then pulls `qwen3:0.6b`,
-runs an inference smoke test, and runs a 1k benchmark through HRX.
+- Windows: `fastflowlm-hrx-windows-x86_64.zip`
+- Linux: `fastflowlm-hrx-linux-x86_64.tar.zst`
+
+Extract it and run the binaries from the archive root (`bin/flm` and
+`bin/rocm-npu`):
+
+```powershell
+Expand-Archive .\fastflowlm-hrx-windows-x86_64.zip -DestinationPath .
+cd .\fastflowlm-hrx-windows-x86_64
+.\bin\rocm-npu.exe doctor
+.\bin\flm.exe list
+.\bin\flm.exe run qwen3:0.6b
+```
+
+```bash
+tar --zstd -xf fastflowlm-hrx-linux-x86_64.tar.zst
+cd fastflowlm-hrx-linux-x86_64
+./bin/rocm-npu doctor
+./bin/flm list
+./bin/flm run qwen3:0.6b
+```
+
+`rocm-npu self-test` also dispatches a packaged NPU2 fixture. The first
+`flm run` downloads model assets and needs Hugging Face access. `flm list`
+shows the models included in that build.
+
+### Python wheels
+
+Wheels ship on the same GitHub release, not on PyPI. Installing
+`rocm-npu-fastflowlm` pulls the matching `rocm-npu-runtime` wheel. Replace
+`<tag>` and `<version>` with values from the release (tags look like
+`rocm-npu-v<version>`):
+
+```powershell
+py -m pip install --only-binary=:all: `
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
+  "rocm-npu-fastflowlm==<version>"
+rocm-npu doctor
+flm run qwen3:0.6b
+```
+
+```bash
+python3 -m pip install --only-binary=:all: \
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
+  "rocm-npu-fastflowlm==<version>"
+rocm-npu doctor
+flm run qwen3:0.6b
+```
+
+To install the compiler from the same release (use `py -m pip` on Windows):
+
+```bash
+python3 -m pip install --only-binary=:all: \
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
+  "rocm-npu-compiler==<version>"
+```
+
+See [native runtime CLI](docs/runtime-cli.md) for `rocm-npu` commands.
+
+## Develop your own Models and Applications Using *iron-tools*
+
+*iron-tools* provides programming abstractions and a compiler toolchain that
+target the AI Engine (AIE) array in the AMD NPU. A guide and programming
+examples document how to build your own applications.
+*FastFlowLM* was built using *iron-tools*.
+
+If you installed a release, install `rocm-npu-compiler` from the same tag
+(see above) and follow the iron-tools documentation:
+
+- The **[MLIR-AIE documentation](https://xilinx.github.io/mlir-aie/dev/)**
+  contains the latest instructions for getting started with iron-tools,
+  formerly known as MLIR-AIE.
+
+> [!NOTE]
+> *iron-tools* is currently undergoing renaming from its old name, MLIR-AIE,
+> so you might see references to both of these terms. They mean the same
+> thing.
+
+To build the compiler toolchain from this checkout instead of the release
+wheel, see [Build ROCm-NPU from source](#build-rocm-npu-from-source).
+
+## Build ROCm-NPU from source
+
+Use this path to build ROCm-NPU from this checkout instead of installing a
+release. The steps below build the runtime (HRX and FastFlowLM): a minimal HRX
+with the `amdxdna` HAL and the pinned FastFlowLM app, which can pull
+`qwen3:0.6b` and run a smoke test. Building the compiler toolchain from source
+is in the details at the end of this section.
+
+```bash
+git clone https://github.com/ROCm/rocm-npu.git
+cd rocm-npu
+```
 
 Ubuntu prerequisites:
 
@@ -94,10 +189,10 @@ Python environment manifests live under `requirements/`. Each editable `.txt`
 source has a generated, hash-pinned `.lock` companion; setup profiles select
 the smallest environment that supports their build or test responsibility.
 
-FastFlowLM's tokenizer build uses Cargo and currently needs `rustc >= 1.80`.
-HRX is installed to a clean prefix and FastFlowLM consumes its exported
-`hrx::hrx` CMake target. No HRX source or build-tree paths are part of the FLM
-build contract.
+This checkout pins Rust 1.97.0 for the FastFlowLM tokenizer build. HRX is
+installed to a clean prefix and FastFlowLM consumes its exported `hrx::hrx`
+CMake target. No HRX source or build-tree paths are part of the FLM build
+contract.
 
 Run the same workflow on both platforms. Use `python3` on Ubuntu and `python`
 on Windows:
@@ -128,56 +223,13 @@ To recheck the extracted archive later, run:
 python3 dev.py verify-fastflowlm
 ```
 
-CI uses the same archive to hand off from CPU build runners to separate NPU test
-runners.
-
 The smoke test requires the amdxdna driver and an NPU. It prints the FastFlowLM
 transcript, rejects HRX runtime errors, requires the exact raw smoke phrase and
 a coherent benchmark summary, and validates the benchmark CSV under
 `build/FastFlowLM-smoke/`.
 
-### Windows driver compatibility
-
-The following Windows MCDM packages have been validated on Strix
-(`PCI\VEN_1022&DEV_17F0`, Windows build `26200`) and Krackan Point
-(BirmanPlus-KRK, Ryzen AI 7 350, `PCI\VEN_1022&DEV_17F0`, Windows build
-`26100`). A passing row means Qwen3 0.6B FastFlowLM-to-HRX execution passed
-(Strix: full smoke/CTS; Krackan: 20-iteration soak + 1k benchmark).
-
-| AMD XDNA driver | Firmware evidence | FLM Qwen3 0.6B |
-| --- | --- | --- |
-| `32.0.203.314` | loaded `1.0.21.43` (`xrt-smi`) | Pass (Strix) |
-| `32.0.203.329` | loaded `1.0.21.43` (`xrt-smi`) | Pass (Strix + Krackan) |
-| `32.0.20101.3760` | loaded `1.1.2.64` (`xrt-smi`) | Pass (Strix + Krackan) |
-| `32.0.20102.3930` | package candidates `1.1.2.64`, `1.1.2.65`, `1.1.2.73`, `1.5.5.391` (`npu-probe`); loaded `1.1.2.64` on Krackan (`xrt-smi`) | Pass (Strix + Krackan) |
-
-Reboot after changing the driver before validating the NPU. A hot package
-switch can leave device execution unhealthy even when Windows reports the new
-driver and a healthy PnP status. Run `python dev.py npu-probe` after reboot to
-record the active driver and the packaged firmware hashes before issuing NPU
-work. This probe deliberately has no XRT dependency, so on Windows it reports
-the firmware candidates found beside the active KMD. When available, the
-package's `xrt-smi examine` performs a live XRT device query and reports the
-loaded firmware version; that value comes from the XRT/KMD device interface,
-not from Windows PnP metadata.
-
-## Develop your own Models and Applications Using *iron-tools*
-
-*iron-tools* provides programming abstractions and a compiler toolchain that 
-target the AI Engine (AIE) array in the AMD NPU. A guide and programming 
-examples document how to build your own applications. 
-*FastFlowLM* was built using *iron-tools*. 
-
-- The **[MLIR-AIE documentation](https://xilinx.github.io/mlir-aie/dev/)**
-  contains the latest instructions for getting started with iron-tools,
-  formerly known as MLIR-AIE.
-
-> Note: *iron-tools* is currently undergoing renaming from its old name, 
-> MLIR-AIE, so you might see references to both of these terms. They mean the
-> same thing!
-
 <details>
-<summary>Click to expand instructions on <b>building iron-tools from source</b></summary>
+<summary>Click to expand instructions on <b>building the compiler from source</b></summary>
 
 Use this path when you also need the source-built LLVM/IRON toolchain and the
 IRON end-to-end artifact checks.
@@ -194,15 +246,15 @@ Peano (llvm-aie wheel, AIE codegen) ─────┘                         �
 hrx-xclbinutil (xclbin packaging; vendored in mlir-aie) ───────────┘  ─ HRX amdxdna HAL extracts PDI
 ```
 
-`hrx-xclbinutil` is no longer a standalone submodule: it lives inside mlir-aie at
-`projects/iron-tools/third_party/hrx-xclbinutil` and is pulled in by the recursive
-`iron-tools` submodule init. `dev.py build hrx-xclbinutil` builds that nested checkout.
+`hrx-xclbinutil` lives inside iron-tools at
+`projects/iron-tools/third_party/hrx-xclbinutil` and is pulled in by the
+recursive `iron-tools` submodule init. `dev.py build hrx-xclbinutil` builds
+that nested checkout.
 
 System prerequisites for the compiler-stack flow (apt; cmake/ninja come from
 the uv-managed environment after setup): `sudo apt-get install -y gcc g++ python3-dev git make
-libssl-dev`. The canonical build toolchain is **gcc** (matching TheRock's
-pinned manylinux gcc-toolset). To build with clang locally instead, install
-`clang lld` and set `CC=clang CXX=clang++`.
+libssl-dev`. The canonical Linux compiler is **gcc**. To build with clang
+locally instead, install `clang lld` and set `CC=clang CXX=clang++`.
 
 ```bash
 python3 dev.py doctor compiler-stack # quick post-setup check: prereqs, pins, patches, prefetch
@@ -245,5 +297,21 @@ their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
 
 ## Additional documentation
 
-- [ROCm NPU wheel releases](docs/wheel-releases.md): wheel versioning,
-  validation, and publication policy.
+- [Native runtime CLI](docs/runtime-cli.md): `rocm-npu version`, `probe`,
+  `doctor`, and `self-test`
+- [Model qualification](docs/qualification.md): optional qualification
+  profiles and evidence
+- [Third-party notices](docs/third-party-notices.md)
+- [Contributing](CONTRIBUTING.md)
+
+## License
+
+This repository is licensed under the [MIT License](LICENSE).
+
+FastFlowLM NPU kernel binaries shipped in releases are not open source and
+are subject to additional terms. Those terms are included with the packages
+as `licenses/FastFlowLM-TERMS.md`.
+
+Please file issues in this repository. See [SECURITY.md](SECURITY.md) to
+report a vulnerability. This is an early snapshot, so expect breaking
+changes between releases.
