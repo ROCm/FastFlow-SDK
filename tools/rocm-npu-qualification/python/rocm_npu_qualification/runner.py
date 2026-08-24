@@ -418,6 +418,336 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     return path.resolve(), config.resolve(), environment
 
 
+def _resolve_xrt_flm(
+    xrt_flm: Path,
+) -> tuple[Path, dict[str, str]] | None:
+    """Resolve a user-supplied XRT FastFlowLM build for best-effort comparison.
+
+    ``xrt_flm`` may point at the portable ``flm`` entrypoint itself or at its
+    install root (as produced by ``dev.py build fastflowlm-xrt``). Returns the
+    resolved entrypoint plus a base environment with the XRT build's own
+    registry/xclbin/model-info paths, or ``None`` (with a stderr warning) when a
+    usable build cannot be located. XRT is a diagnostic add-on, so a missing or
+    malformed build must never raise: the caller renders the XRT columns as N/A.
+    """
+    executable = paths_executable = "flm.exe" if os.name == "nt" else "flm"
+    candidate = xrt_flm.expanduser()
+    if candidate.is_file():
+        entrypoint = candidate
+    elif candidate.is_dir():
+        entrypoint = next(
+            (
+                option
+                for option in (candidate / executable, candidate / "bin" / executable)
+                if option.is_file()
+            ),
+            None,
+        )
+    else:
+        entrypoint = None
+    if entrypoint is None:
+        print(
+            f"qualify: --xrt-flm path does not contain an '{paths_executable}' "
+            f"executable ({xrt_flm}); skipping XRT comparison",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    # The portable tree keeps metadata flat next to the binary; an FHS tree keeps
+    # it under share/flm. Accept whichever layout the supplied build uses.
+    root = entrypoint.parent
+    metadata_roots = [root, root / "share" / "flm", root.parent / "share" / "flm"]
+    config = model_info = xclbin_root = None
+    for base in metadata_roots:
+        if config is None and (base / "model_list.json").is_file():
+            config = base / "model_list.json"
+        if model_info is None and (base / "model_info.json").is_file():
+            model_info = base / "model_info.json"
+        if xclbin_root is None and (base / "xclbins").is_dir():
+            xclbin_root = base
+    missing = [
+        name
+        for name, value in (
+            ("model_list.json", config),
+            ("model_info.json", model_info),
+            ("xclbins/", xclbin_root),
+        )
+        if value is None
+    ]
+    if missing:
+        print(
+            "qualify: XRT FastFlowLM build is missing "
+            f"{', '.join(missing)} near {entrypoint}; skipping XRT comparison",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    environment = dict(os.environ)
+    environment["FLM_CONFIG_PATH"] = str(config.resolve())
+    environment["FLM_XCLBIN_PATH"] = str(xclbin_root.resolve())
+    environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
+    # The portable wrapper exports XILINX_XRT/LD_LIBRARY_PATH itself; still make
+    # the bundled lib/ discoverable in case the real binary is invoked directly.
+    bundle_lib = root / "lib"
+    if bundle_lib.is_dir() and os.name != "nt":
+        environment["LD_LIBRARY_PATH"] = os.pathsep.join(
+            entry
+            for entry in (str(bundle_lib.resolve()), environment.get("LD_LIBRARY_PATH", ""))
+            if entry
+        )
+    return entrypoint.resolve(), environment
+
+
+def _run_flm_bench(
+    *,
+    flm: Path,
+    model_tag: str,
+    test: dict[str, Any],
+    environment: dict[str, str],
+    writer: EvidenceWriter,
+    work: Path,
+    log: Path,
+    benchmark_iterations: int,
+) -> dict[str, Any]:
+    """Run a single ``flm bench`` and parse it into a backend-agnostic result.
+
+    Shared by the HRX benchmark and the optional XRT comparison so both backends
+    are measured and validated identically. Returns the parsed outcome (pass
+    state, checkpoint, CSV metrics, artifact-relative paths); it never appends to
+    evidence so callers decide how to record it.
+    """
+    work.mkdir(parents=True, exist_ok=True)
+    stamp = work / ".started"
+    stamp.write_text("", encoding="utf-8")
+    started_ns = stamp.stat().st_mtime_ns
+    config_resource = resources.files("rocm_npu_qualification").joinpath(
+        test["config"]
+    )
+    if not config_resource.is_file():
+        raise QualificationError(
+            f"benchmark configuration is missing: {test['config']}"
+        )
+    with resources.as_file(config_resource) as packaged_config:
+        try:
+            benchmark_config = json.loads(packaged_config.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise QualificationError(
+                f"benchmark configuration is invalid: {test['config']}"
+            ) from error
+        if not isinstance(benchmark_config, dict):
+            raise QualificationError(
+                f"benchmark configuration is invalid: {test['config']}"
+            )
+        benchmark_config["iterations"] = benchmark_iterations
+        config = work / "benchmark-config.json"
+        config.write_text(
+            json.dumps(benchmark_config, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        result = run_command(
+            [flm, "bench", model_tag, "-i", config.resolve()],
+            log_path=log,
+            env=environment,
+            timeout=test["timeout_seconds"],
+            cwd=work,
+            echo=True,
+        )
+    transcript = result.stdout + "\n" + result.stderr
+    semantic_error = ""
+    checkpoint = None
+    csv_path = None
+    raw_outputs = extract_raw_outputs(transcript)
+    if has_runtime_error(transcript):
+        semantic_error = "FastFlowLM emitted an HRX runtime error"
+    elif MAX_LENGTH_PATTERN.search(transcript):
+        semantic_error = "FastFlowLM reached the generation length limit"
+    else:
+        try:
+            expected_outputs = require_benchmark_schedule(
+                transcript, iterations=benchmark_iterations
+            )
+            if len(raw_outputs) != expected_outputs:
+                raise ValueError(
+                    f"FastFlowLM emitted {len(raw_outputs)} benchmark "
+                    f"responses; expected {expected_outputs}"
+                )
+            checkpoint = require_1k_checkpoint(
+                transcript,
+                minimum=test["checkpoint_min"],
+                maximum=test["checkpoint_max"],
+                expected_count=benchmark_iterations,
+            )
+        except ValueError as error:
+            semantic_error = str(error)
+    if not semantic_error:
+        for output_number, raw in enumerate(raw_outputs, start=1):
+            if (
+                # Minimum multi-letter word count for the output to read as text.
+                # Kept low so a short but valid response (e.g. a coherent refusal
+                # like "I can't provide a meaningful response to your request.")
+                # is not misflagged; empty/garbage output still trips this.
+                len(re.findall(r"[A-Za-z]{2,}", raw)) < 4
+                and BENCHMARK_PASS_SENTINEL_PATTERN.search(raw) is None
+            ):
+                semantic_error = (
+                    f"FastFlowLM benchmark output {output_number} is not "
+                    "coherent text"
+                )
+            elif test["expected_regex"] and re.search(
+                test["expected_regex"], raw, re.IGNORECASE | re.DOTALL
+            ) is None:
+                semantic_error = (
+                    f"FastFlowLM benchmark output {output_number} did not match"
+                )
+            if semantic_error:
+                break
+    csvs = fresh_benchmark_csvs(work, model_tag, started_ns=started_ns)
+    if not semantic_error and not csvs:
+        semantic_error = "FastFlowLM benchmark did not write a fresh CSV"
+    csv_row: list[str] = []
+    csv_metrics: dict[str, int | float] = {}
+    if csvs:
+        csv_path = csvs[-1]
+        with csv_path.open(newline="", encoding="utf-8", errors="replace") as stream:
+            csv_rows = list(csv.reader(stream))
+        if not semantic_error and checkpoint is not None:
+            try:
+                csv_row, csv_metrics = _benchmark_csv_checkpoint(
+                    csv_rows, max(1, round(checkpoint / 1024))
+                )
+            except ValueError as error:
+                semantic_error = str(error)
+    passed = result.returncode == 0 and not semantic_error
+    return {
+        "passed": passed,
+        "semantic_error": semantic_error,
+        "checkpoint": checkpoint,
+        "raw_outputs": raw_outputs,
+        "csv_row": csv_row,
+        "csv_metrics": csv_metrics,
+        "returncode": result.returncode,
+        "timed_out": result.timed_out,
+        "duration_seconds": result.duration_seconds,
+        "log": writer.relative(log),
+        "config": writer.relative(config),
+        "csv": None if csv_path is None else writer.relative(csv_path),
+    }
+
+
+def _run_xrt_comparison(
+    *,
+    xrt_flm: Path,
+    model_tag: str,
+    test: dict[str, Any],
+    environment: dict[str, str],
+    writer: EvidenceWriter,
+    safe_tag: str,
+    benchmark_iterations: int,
+) -> tuple[dict[str, Any], list[str]]:
+    """Benchmark one model through the XRT build, tolerating any failure.
+
+    Returns ``(metrics, artifacts)`` to fold into the HRX bench record's
+    ``metrics.xrt``. Any error resolving or running the XRT build yields a
+    ``status: "unavailable"`` marker rather than raising, keeping XRT strictly
+    informational.
+    """
+    log = writer.path(f"logs/tests/{safe_tag}-{test['name']}-xrt.log")
+    work = writer.path(f"bench/{safe_tag}/{test['name']}-xrt")
+    try:
+        result = _run_flm_bench(
+            flm=xrt_flm,
+            model_tag=model_tag,
+            test=test,
+            environment=environment,
+            writer=writer,
+            work=work,
+            log=log,
+            benchmark_iterations=benchmark_iterations,
+        )
+    except (QualificationError, OSError) as error:
+        return {"status": "unavailable", "error": str(error)}, []
+    metrics: dict[str, Any] = {
+        "status": "pass" if result["passed"] else "fail",
+        "checkpoint_tokens": result["checkpoint"],
+        "responses": len(result["raw_outputs"]),
+        "csv_checkpoint_row": result["csv_row"],
+        "csv_checkpoint_metrics": result["csv_metrics"],
+        "log": result["log"],
+        "returncode": result["returncode"],
+        "timed_out": result["timed_out"],
+        "duration_seconds": result["duration_seconds"],
+    }
+    if not result["passed"]:
+        metrics["error"] = (
+            result["semantic_error"] or "FastFlowLM XRT benchmark failed"
+        )
+    artifacts = [result["config"]] + (
+        [] if result["csv"] is None else [result["csv"]]
+    )
+    return metrics, artifacts
+
+
+def _run_xrt_serve_comparison(
+    *,
+    xrt_flm: Path,
+    model_tag: str,
+    test: dict[str, Any],
+    environment: dict[str, str],
+    writer: EvidenceWriter,
+    safe_tag: str,
+    probe_kind: str,
+    audio_sample: Path | None,
+    reference_text: str | None,
+) -> dict[str, Any]:
+    """Serve-probe one embed/ASR model through the XRT build, tolerating failure.
+
+    Returns metrics to fold into the HRX serve record's ``metrics.xrt`` (the
+    same encode-tok/s / RTF / WER measurements the HRX probe records). Any error
+    resolving or running the XRT build yields a ``status: "unavailable"`` marker
+    rather than raising, keeping XRT strictly informational.
+    """
+    log = writer.path(f"logs/tests/{safe_tag}-{test['name']}-xrt.log")
+    serve_argv: list[str | os.PathLike[str]] = [xrt_flm, "serve", model_tag]
+    if probe_kind == "embed":
+        serve_argv += ["-e", "1"]
+    elif probe_kind == "asr":
+        serve_argv += ["-a", "1"]
+    try:
+        result, probe = serve_probe(
+            serve_argv,
+            log_path=log,
+            env=environment,
+            probe_kind=probe_kind,
+            model=model_tag,
+            boot_timeout=test["timeout_seconds"],
+            audio_sample=audio_sample,
+            reference_text=reference_text,
+            echo=True,
+        )
+    except (QualificationError, OSError) as error:
+        return {"status": "unavailable", "error": str(error)}
+    transcript = result.stdout
+    semantic_error = ""
+    if has_runtime_error(transcript):
+        semantic_error = "FastFlowLM emitted an XRT runtime error"
+    elif not probe["ok"]:
+        semantic_error = probe["detail"] or "FastFlowLM XRT serve probe failed"
+    passed = result.returncode == 0 and not semantic_error
+    metrics: dict[str, Any] = {
+        "status": "pass" if passed else "fail",
+        "port": probe["port"],
+        "detail": probe["detail"],
+        "log": writer.relative(log),
+        "returncode": result.returncode,
+        "timed_out": result.timed_out,
+        "duration_seconds": result.duration_seconds,
+        **(probe.get("metrics") or {}),
+    }
+    if not passed:
+        metrics["error"] = semantic_error or "FastFlowLM XRT serve probe failed"
+    return metrics
+
+
 def _test_model(
     model: dict[str, Any],
     *,
@@ -427,9 +757,18 @@ def _test_model(
     writer: EvidenceWriter,
     environment: dict[str, str],
     prior_tests: list[dict[str, Any]] | None = None,
+    xrt_flm: Path | None = None,
+    xrt_environment: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     environment = fastflow_environment(
         model_cache, offline=offline, base_environment=environment
+    )
+    xrt_bench_environment = (
+        fastflow_environment(
+            model_cache, offline=offline, base_environment=xrt_environment
+        )
+        if xrt_flm is not None and xrt_environment is not None
+        else None
     )
     records: list[dict[str, Any]] = []
     prior_tests = [] if prior_tests is None else prior_tests
@@ -483,6 +822,24 @@ def _test_model(
                     reference_text=reference_text,
                     echo=True,
                 )
+                # XRT comparison mirrors the bench path: strictly best-effort and
+                # folded into this HRX record's free-form metrics.xrt (never a
+                # separate test), so an unavailable or failing XRT build reports
+                # as N/A and can never flip the run's pass/fail. Run it inside the
+                # ExitStack so the ASR sample stays valid.
+                xrt_serve_metrics: dict[str, Any] | None = None
+                if xrt_flm is not None and xrt_bench_environment is not None:
+                    xrt_serve_metrics = _run_xrt_serve_comparison(
+                        xrt_flm=xrt_flm,
+                        model_tag=model["tag"],
+                        test=test,
+                        environment=xrt_bench_environment,
+                        writer=writer,
+                        safe_tag=safe_tag,
+                        probe_kind=probe_kind,
+                        audio_sample=audio_sample,
+                        reference_text=reference_text,
+                    )
             transcript = result.stdout
             semantic_error = ""
             if has_runtime_error(transcript):
@@ -490,6 +847,14 @@ def _test_model(
             elif not probe["ok"]:
                 semantic_error = probe["detail"] or "FastFlowLM serve probe failed"
             passed = result.returncode == 0 and not semantic_error
+            serve_metrics: dict[str, Any] = {
+                "probe_kind": probe_kind,
+                "port": probe["port"],
+                "detail": probe["detail"],
+                **(probe.get("metrics") or {}),
+            }
+            if xrt_serve_metrics is not None:
+                serve_metrics["xrt"] = xrt_serve_metrics
             records.append(
                 {
                     "model": model["tag"],
@@ -500,12 +865,7 @@ def _test_model(
                     "timed_out": result.timed_out,
                     "duration_seconds": result.duration_seconds,
                     "log": writer.relative(log),
-                    "metrics": {
-                        "probe_kind": probe_kind,
-                        "port": probe["port"],
-                        "detail": probe["detail"],
-                        **(probe.get("metrics") or {}),
-                    },
+                    "metrics": serve_metrics,
                     "artifacts": [],
                     **(
                         {}
@@ -519,145 +879,67 @@ def _test_model(
 
         if test["kind"] == "bench":
             safe_tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", model["tag"])
-            work = writer.path(f"bench/{safe_tag}/{test['name']}")
-            work.mkdir(parents=True, exist_ok=True)
-            stamp = work / ".started"
-            stamp.write_text("", encoding="utf-8")
-            started_ns = stamp.stat().st_mtime_ns
-            log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
-            config_resource = resources.files("rocm_npu_qualification").joinpath(
-                test["config"]
-            )
-            if not config_resource.is_file():
-                raise QualificationError(
-                    f"benchmark configuration is missing: {test['config']}"
-                )
             benchmark_iterations = test.get("iterations", 1)
-            with resources.as_file(config_resource) as packaged_config:
-                try:
-                    benchmark_config = json.loads(
-                        packaged_config.read_text(encoding="utf-8")
-                    )
-                except (OSError, json.JSONDecodeError) as error:
-                    raise QualificationError(
-                        f"benchmark configuration is invalid: {test['config']}"
-                    ) from error
-                if not isinstance(benchmark_config, dict):
-                    raise QualificationError(
-                        f"benchmark configuration is invalid: {test['config']}"
-                    )
-                benchmark_config["iterations"] = benchmark_iterations
-                config = work / "benchmark-config.json"
-                config.write_text(
-                    json.dumps(benchmark_config, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
+            hrx = _run_flm_bench(
+                flm=flm,
+                model_tag=model["tag"],
+                test=test,
+                environment=environment,
+                writer=writer,
+                work=writer.path(f"bench/{safe_tag}/{test['name']}"),
+                log=writer.path(f"logs/tests/{safe_tag}-{test['name']}.log"),
+                benchmark_iterations=benchmark_iterations,
+            )
+            metrics: dict[str, Any] = {
+                "checkpoint_tokens": hrx["checkpoint"],
+                "benchmark_iterations": benchmark_iterations,
+                "iterations": benchmark_iterations,
+                "responses": len(hrx["raw_outputs"]),
+                "raw_outputs_sha256": canonical_json_sha256(hrx["raw_outputs"]),
+                "csv_checkpoint_row": hrx["csv_row"],
+                "csv_checkpoint_metrics": hrx["csv_metrics"],
+                "backend": "hrx",
+            }
+            artifacts = [hrx["config"]] + (
+                [] if hrx["csv"] is None else [hrx["csv"]]
+            )
+            # XRT comparison is strictly best-effort: it is folded into this HRX
+            # record's free-form metrics (never a separate test), so an
+            # unavailable or failing XRT build reports as N/A and can never flip
+            # the run's pass/fail or add JUnit noise.
+            if xrt_flm is not None and xrt_bench_environment is not None:
+                xrt_metrics, xrt_artifacts = _run_xrt_comparison(
+                    xrt_flm=xrt_flm,
+                    model_tag=model["tag"],
+                    test=test,
+                    environment=xrt_bench_environment,
+                    writer=writer,
+                    safe_tag=safe_tag,
+                    benchmark_iterations=benchmark_iterations,
                 )
-                result = run_command(
-                    [flm, "bench", model["tag"], "-i", config.resolve()],
-                    log_path=log,
-                    env=environment,
-                    timeout=test["timeout_seconds"],
-                    cwd=work,
-                    echo=True,
-                )
-            transcript = result.stdout + "\n" + result.stderr
-            semantic_error = ""
-            checkpoint = None
-            csv_path = None
-            raw_outputs = extract_raw_outputs(transcript)
-            if has_runtime_error(transcript):
-                semantic_error = "FastFlowLM emitted an HRX runtime error"
-            elif MAX_LENGTH_PATTERN.search(transcript):
-                semantic_error = "FastFlowLM reached the generation length limit"
-            else:
-                try:
-                    expected_outputs = require_benchmark_schedule(
-                        transcript, iterations=benchmark_iterations
-                    )
-                    if len(raw_outputs) != expected_outputs:
-                        raise ValueError(
-                            f"FastFlowLM emitted {len(raw_outputs)} benchmark "
-                            f"responses; expected {expected_outputs}"
-                        )
-                    checkpoint = require_1k_checkpoint(
-                        transcript,
-                        minimum=test["checkpoint_min"],
-                        maximum=test["checkpoint_max"],
-                        expected_count=benchmark_iterations,
-                    )
-                except ValueError as error:
-                    semantic_error = str(error)
-            if not semantic_error:
-                for output_number, raw in enumerate(raw_outputs, start=1):
-                    if (
-                        # Minimum multi-letter word count for the output to read
-                        # as text. Kept low so a short but valid response (e.g. a
-                        # coherent refusal like "I can't provide a meaningful
-                        # response to your request.") is not misflagged;
-                        # empty/garbage output still trips this.
-                        len(re.findall(r"[A-Za-z]{2,}", raw)) < 4
-                        and BENCHMARK_PASS_SENTINEL_PATTERN.search(raw) is None
-                    ):
-                        semantic_error = (
-                            f"FastFlowLM benchmark output {output_number} is not "
-                            "coherent text"
-                        )
-                    elif test["expected_regex"] and re.search(
-                        test["expected_regex"], raw, re.IGNORECASE | re.DOTALL
-                    ) is None:
-                        semantic_error = (
-                            f"FastFlowLM benchmark output {output_number} did not match"
-                        )
-                    if semantic_error:
-                        break
-            csvs = fresh_benchmark_csvs(work, model["tag"], started_ns=started_ns)
-            if not semantic_error and not csvs:
-                semantic_error = "FastFlowLM benchmark did not write a fresh CSV"
-            csv_row: list[str] = []
-            csv_metrics: dict[str, int | float] = {}
-            if csvs:
-                csv_path = csvs[-1]
-                with csv_path.open(
-                    newline="", encoding="utf-8", errors="replace"
-                ) as stream:
-                    csv_rows = list(csv.reader(stream))
-                if not semantic_error and checkpoint is not None:
-                    try:
-                        csv_row, csv_metrics = _benchmark_csv_checkpoint(
-                            csv_rows, max(1, round(checkpoint / 1024))
-                        )
-                    except ValueError as error:
-                        semantic_error = str(error)
-            passed = result.returncode == 0 and not semantic_error
+                metrics["xrt"] = xrt_metrics
+                artifacts += xrt_artifacts
             records.append(
                 {
                     "model": model["tag"],
                     "name": test["name"],
                     "kind": "bench",
-                    "status": "pass" if passed else "fail",
-                    "returncode": result.returncode,
-                    "timed_out": result.timed_out,
-                    "duration_seconds": result.duration_seconds,
-                    "log": writer.relative(log),
+                    "status": "pass" if hrx["passed"] else "fail",
+                    "returncode": hrx["returncode"],
+                    "timed_out": hrx["timed_out"],
+                    "duration_seconds": hrx["duration_seconds"],
+                    "log": hrx["log"],
                     "turn_count": benchmark_iterations,
                     "process_iteration": 1,
-                    "metrics": {
-                        "checkpoint_tokens": checkpoint,
-                        "benchmark_iterations": benchmark_iterations,
-                        "iterations": benchmark_iterations,
-                        "responses": len(raw_outputs),
-                        "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
-                        "csv_checkpoint_row": csv_row,
-                        "csv_checkpoint_metrics": csv_metrics,
-                    },
-                    "artifacts": (
-                        [writer.relative(config)]
-                        + ([] if csv_path is None else [writer.relative(csv_path)])
-                    ),
+                    "metrics": metrics,
+                    "artifacts": artifacts,
                     **(
                         {}
-                        if passed
-                        else {"error": semantic_error or "FastFlowLM benchmark failed"}
+                        if hrx["passed"]
+                        else {
+                            "error": hrx["semantic_error"]
+                            or "FastFlowLM benchmark failed"
+                        }
                     ),
                 }
             )
@@ -1014,6 +1296,18 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             file=sys.stderr,
             flush=True,
         )
+    # Supplying --xrt-flm is what opts into the XRT comparison; there is no
+    # separate enable flag.
+    xrt_flm_arg = getattr(args, "xrt_flm", None)
+    with_xrt = xrt_flm_arg is not None
+    if with_xrt and not benchmark:
+        print(
+            "qualify: --xrt-flm has no effect without --bench; "
+            "ignoring the XRT comparison",
+            file=sys.stderr,
+            flush=True,
+        )
+        with_xrt = False
     # A sweep should surface every model's result, so one failing model must not
     # abort the run; keep-going is implied (still overridable upward).
     is_sweep = all_models or benchmark
@@ -1240,6 +1534,20 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
     writer.write_json("evidence.json", evidence)
 
+    # Optional XRT comparison build (best-effort; never gates the run). Resolved
+    # once up front so an obviously missing build warns before any model runs.
+    xrt_flm: Path | None = None
+    xrt_environment: dict[str, str] | None = None
+    if with_xrt:
+        resolved = _resolve_xrt_flm(Path(xrt_flm_arg))
+        if resolved is not None:
+            xrt_flm, xrt_environment = resolved
+            print(
+                f"qualify: XRT comparison enabled using {xrt_flm}",
+                file=sys.stderr,
+                flush=True,
+            )
+
     execution_models = profile["models"]
     if is_sweep:
         discovered = enumerate_registry_models(flm_config)
@@ -1364,6 +1672,8 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     writer=writer,
                     environment=flm_environment,
                     prior_tests=evidence["tests"],
+                    xrt_flm=xrt_flm,
+                    xrt_environment=xrt_environment,
                 )
             except OSError as error:
                 tests = [

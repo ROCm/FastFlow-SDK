@@ -68,16 +68,34 @@ registry are skipped with a warning); it has no effect without `--bench`.
 Like `--all-models`, `--bench` is a dynamic diagnostic sweep (not pinned,
 not candidate-bound) and implies `--keep-going`.
 
+`--xrt-flm <path>` (only meaningful with `--bench`) additionally exercises
+each model through an XRT-backed FastFlowLM build and widens the report to a
+side-by-side HRX-vs-XRT comparison. For chat models the benchmark table gains
+XRT columns (`Model | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | HRX prefill
+tok/s | XRT decode tok/s | HRX decode tok/s`); for embed/ASR models the
+Embedding and ASR probe tables gain XRT columns for the same measurements the
+HRX probe records (encode tok/s; RTF and WER). It is off by default -- simply
+supplying the path is what enables the comparison (there is no separate enable
+flag). Because the shipped wheel only bundles the HRX runtime, point `--xrt-flm`
+at a separately built XRT entrypoint (the portable `flm` wrapper, or its install
+root) produced by `python dev.py build fastflowlm-xrt`, which stages a
+self-contained tree (bundled XRT libraries, the vcpkg runtime closure, and --
+when discoverable -- the XRT XDNA driver plugin). XRT is strictly best-effort: a
+missing/malformed XRT build or a failing XRT run is recorded as `N/A` and folded
+into the HRX record's metrics -- it never emits a separate test and never
+changes the run's pass/fail (so a fully passing HRX sweep still passes even when
+XRT is unavailable).
+
 In addition to the machine-readable bundle, the `--all-models` and `--bench`
 sweeps write a human-readable `report.md` into the output directory. It contains
 an environment header (OS, NPU device/driver/firmware candidates, target family,
 FLM and package versions), a per-model functional matrix (single-prompt,
 five-turn multi-turn, and whether the multi-turn run passed) where those turns
 ran, and an on-NPU benchmark table with the FLM-averaged TTFT, prefill, and
-decode throughput for each model. Only HRX numbers are reported (no XRT
-columns). The context stage and the iteration count the averages span (for
-example `HRX, 8k, averaged over 3 iterations`) are stated in the benchmark
-section heading rather than repeated per row. Profile runs (`--fast`,
+decode throughput for each model. By default only HRX numbers are reported. The
+context stage and the iteration count the averages span (for example
+`HRX, 8k, averaged over 3 iterations`) are stated in the benchmark section
+heading rather than repeated per row. Profile runs (`--fast`,
 `--profile`) do not emit `report.md`; they produce only the evidence bundle
 (`evidence.json`, `tests.json`, `junit.xml`, and the summary).
 
@@ -111,6 +129,8 @@ Useful options include:
   `--bench`; a positive integer, default `5`)
 - `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit
   registry tags; ignored without `--bench`)
+- `--xrt-flm <path>` (with `--bench`; add a best-effort HRX-vs-XRT
+  comparison using a separately built XRT FastFlowLM, off by default)
 - `--json`
 
 Profiles support ad-hoc diagnostics and candidate-bound release runs. Packaged
@@ -226,6 +246,7 @@ rocm-npu qualify --all-models --model-cache $cache --output all-models-evidence
 rocm-npu qualify --all-models --bench-context 1k --model-cache $cache --output all-models-1k-evidence
 rocm-npu qualify --bench all --model-cache $cache --output bench-all-evidence
 rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
+rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --xrt-flm C:\path\to\FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
 rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```
 

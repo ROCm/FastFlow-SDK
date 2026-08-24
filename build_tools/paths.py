@@ -28,6 +28,12 @@ ROCM_NPU_CLI_BUILD = BUILD / "rocm-npu-cli"
 ROCM_NPU_CLI_INSTALL = BUILD / "rocm-npu-cli-install"
 FASTFLOWLM_BUILD = BUILD / "FastFlowLM"
 FASTFLOWLM_INSTALL = BUILD / "FastFlowLM-install"
+# The XRT-backed FastFlowLM build is kept fully separate from the default HRX
+# build so the two never share CMake state or install trees (see
+# fastflowlm_build.py); it exists only as a diagnostic comparison target and is
+# never packaged into the shipped HRX wheels.
+FASTFLOWLM_XRT_BUILD = BUILD / "FastFlowLM-xrt"
+FASTFLOWLM_XRT_INSTALL = BUILD / "FastFlowLM-xrt-install"
 FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
 
 

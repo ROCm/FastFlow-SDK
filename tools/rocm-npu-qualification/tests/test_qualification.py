@@ -2039,6 +2039,210 @@ def test_build_markdown_report_renders_env_and_hrx_benchmark():
     assert "| `embed-gemma:300m` | PASS | 600.000 |" in text
 
 
+def test_build_markdown_report_renders_hrx_vs_xrt_benchmark():
+    # A bench record carrying metrics.xrt (from --bench --xrt-flm) widens
+    # the table to the side-by-side comparison. XRT is best-effort, so a model
+    # whose XRT run did not pass shows N/A only in its XRT cells.
+    evidence = {
+        "status": "pass",
+        "profile": {"name": "bench-all"},
+        "subject": {
+            "source_revision": "a" * 40,
+            "packages": {
+                "rocm-npu-runtime": "1.2.3",
+                "rocm-npu-fastflowlm": "1.2.3",
+                "rocm-npu-qualification": "1.2.3",
+            },
+            "flm": {"version_output": "FLM v0.9.45"},
+        },
+        "observed_platform": {"os": "Ubuntu 24.04", "architecture": "x86_64"},
+        "models": [
+            {"tag": "qwen3:0.6b", "status": "pass"},
+            {"tag": "gpt-oss:20b", "status": "pass"},
+        ],
+        "tests": [
+            {
+                "model": "qwen3:0.6b",
+                "name": "context-1k",
+                "kind": "bench",
+                "status": "pass",
+                "metrics": {
+                    "iterations": 5,
+                    "backend": "hrx",
+                    "csv_checkpoint_metrics": {
+                        "context_length_k": 1,
+                        "ttft_avg_s": 0.20,
+                        "prefill_avg_toks_per_s": 1200.0,
+                        "decoding_avg_toks_per_s": 60.0,
+                    },
+                    "xrt": {
+                        "status": "pass",
+                        "csv_checkpoint_metrics": {
+                            "context_length_k": 1,
+                            "ttft_avg_s": 0.35,
+                            "prefill_avg_toks_per_s": 800.0,
+                            "decoding_avg_toks_per_s": 40.0,
+                        },
+                    },
+                },
+            },
+            {
+                "model": "gpt-oss:20b",
+                "name": "context-1k",
+                "kind": "bench",
+                "status": "pass",
+                "metrics": {
+                    "iterations": 5,
+                    "backend": "hrx",
+                    "csv_checkpoint_metrics": {
+                        "context_length_k": 1,
+                        "ttft_avg_s": 0.90,
+                        "prefill_avg_toks_per_s": 500.0,
+                        "decoding_avg_toks_per_s": 25.0,
+                    },
+                    "xrt": {"status": "unavailable", "error": "no XDNA plugin"},
+                },
+            },
+        ],
+    }
+    text = report.build_markdown_report(
+        evidence,
+        kinds={"qwen3:0.6b": "chat", "gpt-oss:20b": "chat"},
+        generated_at="2026-08-07T00:00:00Z",
+    )
+    assert "## Benchmark (HRX vs XRT, 1k, averaged over 5 iterations)" in text
+    assert (
+        "| Model | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | "
+        "HRX prefill tok/s | XRT decode tok/s | HRX decode tok/s |" in text
+    )
+    # Model with a passing XRT run: both backends populated, XRT columns first.
+    assert (
+        "| `qwen3:0.6b` | 0.350 | 0.200 | 800.000 | 1200.000 | 40.000 | 60.000 |"
+        in text
+    )
+    # Model whose XRT run was unavailable: HRX populated, XRT cells N/A.
+    assert (
+        "| `gpt-oss:20b` | N/A | 0.900 | N/A | 500.000 | N/A | 25.000 |" in text
+    )
+
+
+def test_build_markdown_report_renders_hrx_vs_xrt_embedding_and_asr_probes():
+    # Serve records carrying metrics.xrt (from --bench --xrt-flm) widen the
+    # embedding and ASR probe tables to the side-by-side comparison. XRT is
+    # best-effort, so an unavailable XRT run shows N/A only in its XRT cells.
+    evidence = {
+        "status": "pass",
+        "profile": {"name": "bench-all"},
+        "subject": {
+            "source_revision": "a" * 40,
+            "packages": {
+                "rocm-npu-runtime": "1.2.3",
+                "rocm-npu-fastflowlm": "1.2.3",
+                "rocm-npu-qualification": "1.2.3",
+            },
+            "flm": {"version_output": "FLM v0.9.45"},
+        },
+        "observed_platform": {"os": "Ubuntu 24.04", "architecture": "x86_64"},
+        "models": [
+            {"tag": "embed-gemma:300m", "status": "pass"},
+            {"tag": "whisper:base", "status": "pass"},
+        ],
+        "tests": [
+            {
+                "model": "embed-gemma:300m",
+                "name": "serve-probe",
+                "kind": "serve",
+                "status": "pass",
+                "metrics": {
+                    "probe_kind": "embed",
+                    "port": 9000,
+                    "detail": "served",
+                    "encode_toks_per_s": 120.0,
+                    "xrt": {"status": "pass", "encode_toks_per_s": 90.0},
+                },
+            },
+            {
+                "model": "whisper:base",
+                "name": "serve-probe",
+                "kind": "serve",
+                "status": "pass",
+                "metrics": {
+                    "probe_kind": "asr",
+                    "port": 9001,
+                    "detail": "served",
+                    "real_time_factor": 0.25,
+                    "word_error_rate": 0.04,
+                    "xrt": {"status": "unavailable", "error": "no XDNA plugin"},
+                },
+            },
+        ],
+    }
+    text = report.build_markdown_report(
+        evidence,
+        kinds={"embed-gemma:300m": "embed", "whisper:base": "asr"},
+        generated_at="2026-08-07T00:00:00Z",
+    )
+    assert "## Embedding probe (HRX vs XRT)" in text
+    assert (
+        "| Model | XRT Status | HRX Status | XRT Encode tok/s | HRX Encode tok/s |"
+        in text
+    )
+    assert "| `embed-gemma:300m` | PASS | PASS | 90.000 | 120.000 |" in text
+    assert "## ASR probe (HRX vs XRT)" in text
+    assert (
+        "| Model | XRT Status | HRX Status | XRT RTF | HRX RTF | "
+        "XRT WER % | HRX WER % |" in text
+    )
+    # ASR XRT run unavailable: HRX metrics populated, XRT status/cells fold to N/A.
+    assert "| `whisper:base` | N/A | PASS | N/A | 0.250 | N/A | 4.0 |" in text
+
+
+def test_run_xrt_serve_comparison_is_best_effort(monkeypatch, tmp_path):
+    writer = runner.EvidenceWriter(tmp_path / "evidence")
+    test = {"name": "serve-probe", "timeout_seconds": 300}
+
+    # A passing XRT serve probe folds its measurements into metrics.xrt.
+    def ok_probe(*args, **kwargs):
+        return (
+            _result(stdout="served", returncode=0),
+            {"ok": True, "port": 9100, "detail": "served",
+             "metrics": {"encode_toks_per_s": 88.0}},
+        )
+
+    monkeypatch.setattr(runner, "serve_probe", ok_probe)
+    metrics = runner._run_xrt_serve_comparison(
+        xrt_flm=tmp_path / "flm",
+        model_tag="embed-gemma:300m",
+        test=test,
+        environment={},
+        writer=writer,
+        safe_tag="embed-gemma-300m",
+        probe_kind="embed",
+        audio_sample=None,
+        reference_text=None,
+    )
+    assert metrics["status"] == "pass"
+    assert metrics["encode_toks_per_s"] == 88.0
+
+    # Any failure to run the XRT build yields an "unavailable" marker, not a raise.
+    def boom(*args, **kwargs):
+        raise OSError("no XRT flm")
+
+    monkeypatch.setattr(runner, "serve_probe", boom)
+    unavailable = runner._run_xrt_serve_comparison(
+        xrt_flm=tmp_path / "flm",
+        model_tag="embed-gemma:300m",
+        test=test,
+        environment={},
+        writer=writer,
+        safe_tag="embed-gemma-300m",
+        probe_kind="embed",
+        audio_sample=None,
+        reference_text=None,
+    )
+    assert unavailable["status"] == "unavailable"
+
+
 def test_word_error_rate_is_case_and_punctuation_insensitive():
     # Identical up to punctuation/case -> zero WER.
     assert _word_error_rate("This is something.", "- This is something.") == 0.0
@@ -2691,6 +2895,71 @@ def test_models_flag_parsing():
         parser.parse_args(["--bench", "--models=llama3.2:1b,qwen3:0.6b"]).models
         == "llama3.2:1b,qwen3:0.6b"
     )
+
+
+def test_xrt_flm_flag_parsing():
+    parser = cli.create_parser()
+    # Off by default; supplying --xrt-flm is the single opt-in for the
+    # comparison (no separate enable flag).
+    assert parser.parse_args([]).xrt_flm is None
+    parsed = parser.parse_args(
+        ["--bench", "all", "--bench-context", "1k", "--xrt-flm", "/opt/flm-xrt"]
+    )
+    assert parsed.xrt_flm == Path("/opt/flm-xrt")
+    # It is a modifier, not part of the run-mode exclusion group.
+    assert parser.parse_args(["--xrt-flm", "/opt/flm-xrt"]).xrt_flm == Path(
+        "/opt/flm-xrt"
+    )
+
+
+_XRT_FLM_EXE = "flm.exe" if os.name == "nt" else "flm"
+
+
+def _make_portable_xrt_build(root):
+    """Lay out a minimal portable XRT FastFlowLM tree (flat metadata)."""
+    root.mkdir(parents=True, exist_ok=True)
+    flm = root / _XRT_FLM_EXE
+    flm.write_text("#!/bin/sh\n", encoding="utf-8")
+    flm.chmod(0o755)
+    (root / "model_list.json").write_text("{}", encoding="utf-8")
+    (root / "model_info.json").write_text("{}", encoding="utf-8")
+    (root / "xclbins").mkdir(exist_ok=True)
+    (root / "lib").mkdir(exist_ok=True)
+    return flm
+
+
+def test_resolve_xrt_flm_accepts_portable_root_and_binary(tmp_path):
+    root = tmp_path / "flm-xrt-install"
+    flm = _make_portable_xrt_build(root)
+    # A directory root resolves the flat entrypoint + metadata.
+    resolved = runner._resolve_xrt_flm(root)
+    assert resolved is not None
+    entrypoint, environment = resolved
+    assert entrypoint == flm.resolve()
+    assert environment["FLM_CONFIG_PATH"] == str((root / "model_list.json").resolve())
+    assert environment["FLM_MODELINFO_PATH"] == str(
+        (root / "model_info.json").resolve()
+    )
+    assert environment["FLM_XCLBIN_PATH"] == str(root.resolve())
+    if os.name != "nt":
+        assert str((root / "lib").resolve()) in environment["LD_LIBRARY_PATH"]
+    # Pointing directly at the binary resolves identically.
+    assert runner._resolve_xrt_flm(flm)[0] == flm.resolve()
+
+
+def test_resolve_xrt_flm_is_best_effort_on_missing_pieces(tmp_path, capsys):
+    # No executable at all -> None with a warning, never raises.
+    assert runner._resolve_xrt_flm(tmp_path / "nope") is None
+    assert "does not contain" in capsys.readouterr().err
+    # Executable present but registry/xclbins missing -> None with a warning.
+    root = tmp_path / "partial"
+    root.mkdir()
+    (root / _XRT_FLM_EXE).write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / _XRT_FLM_EXE).chmod(0o755)
+    assert runner._resolve_xrt_flm(root) is None
+    warning = capsys.readouterr().err
+    assert "missing" in warning
+    assert "model_list.json" in warning
 
 
 def test_benchmark_tests_for_chat_is_bench_only():

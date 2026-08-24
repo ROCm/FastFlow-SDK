@@ -14,6 +14,9 @@ BUILD_HANDLERS = {
     "hrx-xclbinutil": compiler_build.cmd_build_hrx_xclbinutil,
     "hrx": runtime_build.cmd_build_hrx,
     "fastflowlm": fastflowlm_build.cmd_build_fastflowlm,
+    # Diagnostic-only XRT-backed FastFlowLM build for HRX-vs-XRT benchmark
+    # comparisons (qualify --bench --xrt-flm). Never packaged into wheels.
+    "fastflowlm-xrt": fastflowlm_build.cmd_build_fastflowlm_xrt,
     "rocm-npu-cli": runtime_build.cmd_build_rocm_npu_cli,
 }
 

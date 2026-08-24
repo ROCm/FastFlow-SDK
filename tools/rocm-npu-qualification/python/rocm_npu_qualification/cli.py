@@ -144,6 +144,22 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--xrt-flm",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "additionally benchmark each model through an XRT-backed FastFlowLM "
+            "build and emit an HRX-vs-XRT comparison table (only with "
+            "--bench; off by default). PATH is the XRT FastFlowLM entrypoint "
+            "(the portable `flm` wrapper) or its install root, produced by "
+            "`dev.py build fastflowlm-xrt`. Supplying it is what enables the "
+            "comparison. XRT results are best-effort: an unavailable XRT build or "
+            "a failing XRT run is reported as N/A and never changes the overall "
+            "pass/fail."
+        ),
+    )
+    parser.add_argument(
         "--output",
         "--output-dir",
         dest="output",
