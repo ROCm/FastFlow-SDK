@@ -1,5 +1,11 @@
 # ROCm NPU wheel releases
 
+> [!NOTE]
+> This document is the **release-operator** policy for versioning, validating,
+> and publishing wheels. To *install* a published build, use
+> [GitHub Releases](https://github.com/ROCm/rocm-npu/releases) and the
+> [README install section](../README.md#install-a-release-and-run-models).
+
 ROCm NPU compiler, runtime, and FastFlowLM wheels use
 [PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/)
 versions. The release train targets one stable version while development and
@@ -173,11 +179,11 @@ from clean Linux and Windows environments:
 
 ```powershell
 py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" `
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
   "rocm-npu-fastflowlm==<version>"
 py -m pip check
 py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" `
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
   "rocm-npu-compiler==<version>"
 py -m pip check
 aie-opt --version
@@ -186,11 +192,11 @@ aiecc --help
 
 ```bash
 python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" \
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
   "rocm-npu-fastflowlm==<version>"
 python3 -m pip check
 python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>" \
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
   "rocm-npu-compiler==<version>"
 python3 -m pip check
 aie-opt --version
