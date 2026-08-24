@@ -3441,3 +3441,72 @@ def test_bench_iterations_zero_is_rejected_by_runner(monkeypatch, tmp_path):
     # type= hook) still cannot treat 0 as "use the default".
     with pytest.raises(runner.QualificationError, match="positive integer"):
         _run_benchmark_sweep(monkeypatch, tmp_path, bench_iterations=0)
+
+
+def test_bench_dev_mode_parsing_and_mutual_exclusion():
+    parser = cli.create_parser()
+    # 'dev' is a valid mode of the single --bench flag.
+    assert parser.parse_args(["--bench", "dev"]).bench == "dev"
+    assert parser.parse_args(["--bench=dev"]).bench == "dev"
+    # Mutually exclusive with the other run-mode selectors.
+    for other in (["--all-models"], ["--fast"], ["--profile", "fast"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--bench", "dev", *other])
+    # --xrt-flm and --models remain valid modifiers of the dev sweep.
+    parsed = parser.parse_args(
+        ["--bench", "dev", "--xrt-flm", "/opt/flm-xrt", "--models", "gpt-oss:20b"]
+    )
+    assert parsed.xrt_flm == Path("/opt/flm-xrt")
+    assert parsed.models == "gpt-oss:20b"
+
+
+def test_select_benchmark_models_keeps_curated_order_and_warns(capsys):
+    discovered = [
+        {"tag": "embed-gemma:300m", "kind": "embed"},
+        {"tag": "gpt-oss:20b", "kind": "chat"},
+        {"tag": "qwen3:0.6b", "kind": "chat"},
+        {"tag": "lfm2:1.2b", "kind": "chat"},
+    ]
+    selected = runner._select_benchmark_models(discovered)
+    # Curated order (not discovery order); non-curated embed model excluded.
+    assert [model["tag"] for model in selected] == [
+        "qwen3:0.6b",
+        "lfm2:1.2b",
+        "gpt-oss:20b",
+    ]
+    warning = capsys.readouterr().err
+    assert "--bench dev skipping curated models absent" in warning
+    assert "qwen3.6-moe:35b-a3b" in warning
+
+
+def test_bench_dev_sweep_selects_curated_chat_models(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_benchmark_sweep(
+        monkeypatch, tmp_path, bench="dev"
+    )
+    assert exit_code == 0
+    assert summary["status"] == "pass"
+    assert summary["profile"] == "bench-dev"
+    # Curated chat models only (curated order); the registry embed model is
+    # excluded from the development sweep.
+    tags = [model["tag"] for model in evidence["models"]]
+    assert tags == ["qwen3:0.6b", "lfm2:1.2b", "gpt-oss:20b"]
+    assert "embed-gemma:300m" not in tags
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["name"] == "bench-dev"
+    assert all(model["tests"] == ["context-1k"] for model in profile["models"])
+    kinds = {
+        test["kind"] for test in evidence["tests"] if test["model"] != "native-core"
+    }
+    assert kinds == {"bench"}
+
+
+def test_bench_dev_honors_models_filter(monkeypatch, tmp_path):
+    # --models narrows the curated set further (and drops non-curated tags).
+    exit_code, _, evidence = _run_benchmark_sweep(
+        monkeypatch, tmp_path, bench="dev", models="gpt-oss:20b,qwen3:0.6b"
+    )
+    assert exit_code == 0
+    tags = [model["tag"] for model in evidence["models"]]
+    assert tags == ["gpt-oss:20b", "qwen3:0.6b"]

@@ -68,6 +68,14 @@ registry are skipped with a warning); it has no effect without `--bench`.
 Like `--all-models`, `--bench` is a dynamic diagnostic sweep (not pinned,
 not candidate-bound) and implies `--keep-going`.
 
+`--bench dev` is the fast development variant of `--bench all`. It runs the
+same measurement stages with the same `--bench-context`/`--bench-iterations`
+tuning and the same `--models` and `--xrt-flm` modifiers, but over a curated set
+of representative chat models (one per variant, always including the large
+`gpt-oss` and `qwen3.6-moe` MoE, never the embed/ASR models) instead of the
+whole registry -- trading coverage for a much faster inner loop. Curated tags
+absent from the installed registry are skipped with a warning.
+
 `--xrt-flm <path>` (only meaningful with `--bench`; Linux, requires a host XRT
 install) additionally exercises each model through an XRT-backed FastFlowLM
 build and widens the report to a side-by-side HRX-vs-XRT comparison. For chat
@@ -126,7 +134,8 @@ Useful options include:
 - `--keep-going`
 - `--bench-context <1k|4k|8k>` (with `--bench` or `--all-models`; default `1k`
   for `--bench`, `8k` for `--all-models`)
-- `--bench [all]` (measurement-only sweep; `all` covers the whole registry)
+- `--bench [all|dev]` (measurement-only sweep; `all` covers the whole registry,
+  `dev` a curated set of representative chat models)
 - `--bench-iterations <N>` (decode-benchmark iterations per chat model for
   `--bench`; a positive integer, default `5`)
 - `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit
@@ -250,6 +259,7 @@ rocm-npu qualify --bench all --model-cache $cache --output bench-all-evidence
 rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
 # Linux only: HRX-vs-XRT comparison against a host XRT install
 # rocm-npu qualify --bench all --xrt-flm /path/to/build/FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
+rocm-npu qualify --bench dev --model-cache $cache --output bench-dev-evidence
 rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```
 

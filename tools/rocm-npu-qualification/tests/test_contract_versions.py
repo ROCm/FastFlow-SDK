@@ -155,10 +155,11 @@ def test_every_packaged_profile_declares_an_xadx_round_policy():
     packaged = {path.stem for path in (PACKAGE_ROOT / "profiles").glob("*.json")}
     # Every packaged profile needs its own XADX round policy, since a profile
     # that falls back to the default is silently qualified at a depth it did not
-    # ask for. The "all-models" and "bench-all" diagnostic sweeps are not
-    # packaged profiles (they ship no profiles/*.json), but they still declare
-    # their policy explicitly rather than falling through to the default.
-    sweeps = {"all-models", "bench-all"}
+    # ask for. The "all-models", "bench-all", and "bench-dev" diagnostic
+    # sweeps are not packaged profiles (they ship no profiles/*.json), but they
+    # still declare their policy explicitly rather than falling through to the
+    # default.
+    sweeps = {"all-models", "bench-all", "bench-dev"}
     assert set(XADX_ROUNDS) == packaged | sweeps
     assert not (sweeps & packaged)
 

@@ -108,9 +108,11 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
             "for chat models and the serve-probe for embed/ASR models (no "
             "single-prompt or multi-turn stages). MODE selects the coverage; "
             "'all' (the default when the flag is given bare) sweeps every model "
-            "in the installed FastFlowLM registry. Tune the run with "
-            "--bench-context and --bench-iterations, and narrow the set with "
-            "--models. Implies --keep-going."
+            "in the installed FastFlowLM registry, while 'dev' is the fast "
+            "development variant that runs the same stages over a curated set of "
+            "representative chat models. Tune the run with --bench-context and "
+            "--bench-iterations, and narrow the set with --models. Implies "
+            "--keep-going."
         ),
     )
     parser.add_argument(

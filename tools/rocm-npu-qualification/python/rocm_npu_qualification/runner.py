@@ -136,10 +136,31 @@ _SWEEP_BENCH_DEFAULT = "8k"
 # correctness stages. MODE selects coverage ('all' sweeps the whole installed
 # registry); --bench-context / --bench-iterations tune the run and an optional
 # --models filter narrows the set to explicit tags.
-BENCHMARK_MODES: tuple[str, ...] = ("all",)
+BENCHMARK_MODES: tuple[str, ...] = ("all", "dev")
 _BENCHMARK_MODES = BENCHMARK_MODES
 _BENCHMARK_DEFAULT_CONTEXT = "1k"
 _BENCHMARK_DEFAULT_ITERATIONS = 5
+
+# --bench dev is the fast development variant of --bench all: instead of the
+# whole registry it runs a curated, hand-picked set of representative chat models
+# (one per variant, always including the large gpt-oss and qwen3.6-moe MoE, never
+# the embed/ASR models). It shares --bench's test synthesis, tuning flags, XRT
+# comparison, and --models filter -- it only trades registry coverage for speed.
+_BENCHMARK_MODEL_TAGS: tuple[str, ...] = (
+    "llama3.2:1b",
+    "qwen3:0.6b",
+    "qwen3.5:0.8b",
+    "qwen3vl-it:4b",
+    "gemma3:1b",
+    "gemma4-it:e2b",
+    "lfm2:1.2b",
+    "phi4-mini-it:4b",
+    "nanbeige4.1:3b",
+    "qwen2.5-it:3b",
+    "qwen2.5vl-it:3b",
+    "gpt-oss:20b",
+    "qwen3.6-moe:35b-a3b",
+)
 
 
 def _benchmark_tests_for(
@@ -209,6 +230,33 @@ def _filter_models_by_tags(
     if not selected:
         raise QualificationError(
             "none of the --models tags are present in the installed FLM registry"
+        )
+    return selected
+
+
+def _select_benchmark_models(
+    discovered: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Pick the curated --bench dev models from the discovered registry set.
+
+    Preserves the curated order and warns (rather than fails) about any curated
+    tag missing from the installed registry, so a registry that has dropped or
+    renamed a model still benchmarks the rest.
+    """
+    by_tag = {model["tag"]: model for model in discovered}
+    selected = [by_tag[tag] for tag in _BENCHMARK_MODEL_TAGS if tag in by_tag]
+    missing = [tag for tag in _BENCHMARK_MODEL_TAGS if tag not in by_tag]
+    if missing:
+        print(
+            "qualify: --bench dev skipping curated models absent from the "
+            f"installed FLM registry: {', '.join(missing)}",
+            file=sys.stderr,
+            flush=True,
+        )
+    if not selected:
+        raise QualificationError(
+            "no curated --bench dev models are present in the installed FLM "
+            "registry"
         )
     return selected
 
@@ -1332,12 +1380,15 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         }
 
     all_models = bool(getattr(args, "all_models", False))
-    # --bench MODE selects a measurement-only sweep; the mode ('all') chooses
-    # coverage. Context/iterations come from the dedicated --bench-context /
+    # --bench MODE selects a measurement-only sweep; the mode chooses coverage
+    # ('all' sweeps the whole registry, 'dev' the curated chat subset).
+    # Context/iterations come from the dedicated --bench-context /
     # --bench-iterations flags rather than a packed value.
     bench_mode = getattr(args, "bench", None)
-    benchmark = bench_mode is not None
-    if benchmark:
+    any_benchmark = bench_mode is not None
+    benchmark = bench_mode == "all"
+    benchmark_dev = bench_mode == "dev"
+    if any_benchmark:
         benchmark_context = (
             getattr(args, "bench_context", None) or _BENCHMARK_DEFAULT_CONTEXT
         )
@@ -1361,14 +1412,14 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         model_filter = [tag.strip() for tag in models_arg.split(",") if tag.strip()]
         if not model_filter:
             raise QualificationError("--models requires at least one tag")
-    if model_filter and not benchmark:
+    if model_filter and not any_benchmark:
         print(
             "qualify: --models has no effect without --bench; ignoring it",
             file=sys.stderr,
             flush=True,
         )
         model_filter = None
-    if getattr(args, "bench_iterations", None) is not None and not benchmark:
+    if getattr(args, "bench_iterations", None) is not None and not any_benchmark:
         print(
             "qualify: --bench-iterations has no effect without --bench; ignoring it",
             file=sys.stderr,
@@ -1378,7 +1429,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     # separate enable flag.
     xrt_flm_arg = getattr(args, "xrt_flm", None)
     with_xrt = xrt_flm_arg is not None
-    if with_xrt and not benchmark:
+    if with_xrt and not any_benchmark:
         print(
             "qualify: --xrt-flm has no effect without --bench; "
             "ignoring the XRT comparison",
@@ -1388,7 +1439,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         with_xrt = False
     # A sweep should surface every model's result, so one failing model must not
     # abort the run; keep-going is implied (still overridable upward).
-    is_sweep = all_models or benchmark
+    is_sweep = all_models or any_benchmark
     keep_going = bool(getattr(args, "keep_going", False) or is_sweep)
     if all_models:
         bench_choice = getattr(args, "bench_context", None) or _SWEEP_BENCH_DEFAULT
@@ -1426,6 +1477,28 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 f"Measurement-only sweep over {scope}: a {benchmark_context} "
                 f"decode benchmark of {benchmark_iterations} iteration(s) for "
                 "chat models; serve-probe for embed/ASR models."
+            ),
+            "bench_context": benchmark_context,
+            "bench_iterations": benchmark_iterations,
+            "models": [],
+        }
+    elif benchmark_dev:
+        # The fast development variant: same measurement stages, but over the
+        # curated chat subset (optionally narrowed further by --models). The
+        # concrete tags/tests are filled in after discovery.
+        scope = (
+            f"the {len(model_filter)} model(s) selected via --models"
+            if model_filter
+            else "a curated set of representative chat models"
+        )
+        profile = {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "kind": "diagnostic-sweep",
+            "name": "bench-dev",
+            "description": (
+                f"Development benchmark sweep over {scope}: a {benchmark_context} "
+                f"decode benchmark of {benchmark_iterations} iteration(s) per "
+                "model."
             ),
             "bench_context": benchmark_context,
             "bench_iterations": benchmark_iterations,
@@ -1640,11 +1713,16 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     execution_models = profile["models"]
     if is_sweep:
         discovered = enumerate_registry_models(flm_config)
-        if benchmark:
+        if any_benchmark:
+            # --bench dev starts from the curated subset; --bench all from the
+            # whole registry. --models then narrows whichever base set was chosen.
+            base_models = (
+                _select_benchmark_models(discovered) if benchmark_dev else discovered
+            )
             execution_models = (
-                _filter_models_by_tags(discovered, model_filter)
+                _filter_models_by_tags(base_models, model_filter)
                 if model_filter
-                else discovered
+                else base_models
             )
             for base in execution_models:
                 base["tests"] = _benchmark_tests_for(
@@ -1652,9 +1730,12 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     bench_context=benchmark_context,
                     iterations=benchmark_iterations,
                 )
-            selection = "selected" if model_filter else "discovered"
+            mode = "bench-dev" if benchmark_dev else "bench-all"
+            selection = "selected" if model_filter else (
+                "curated" if benchmark_dev else "discovered"
+            )
             summary_note = (
-                f"benchmark sweep {selection} {len(execution_models)} models "
+                f"{mode} sweep {selection} {len(execution_models)} models "
                 "from the installed FLM registry"
             )
         else:
