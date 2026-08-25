@@ -22,6 +22,7 @@ from build_tools.artifact import (
 )
 from build_tools.fastflowlm_artifact import (
     _copy_windows_redistributable_closure,
+    _strip_windows_system_dlls,
     _is_linux_system_runtime,
     _linux_dependencies_and_licenses,
     _linux_package_owner_candidates,
@@ -424,6 +425,22 @@ class TestFastFlowLMArtifact:
             _copy_windows_redistributable_closure(bundle)
 
         assert (bundle / "bin" / "vcomp140.dll").read_bytes() == b"MZruntime"
+
+    def test_strip_windows_system_dlls_keeps_private_runtime(self, tmp_path):
+        bundle = tmp_path / "bundle"
+        bin_dir = bundle / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "qwen3_npu.dll").write_bytes(b"private")
+        (bin_dir / "shell32.dll").write_bytes(b"os-copy")
+        system32 = tmp_path / "System32"
+        system32.mkdir()
+        (system32 / "shell32.dll").write_bytes(b"os")
+
+        with mock.patch.dict(os.environ, {"SystemRoot": str(tmp_path)}):
+            _strip_windows_system_dlls(bundle)
+
+        assert (bin_dir / "qwen3_npu.dll").read_bytes() == b"private"
+        assert not (bin_dir / "shell32.dll").exists()
 
     def test_source_policy_enforces_component_pins_and_clean_staging(self):
         root = Path(__file__).resolve().parents[2]

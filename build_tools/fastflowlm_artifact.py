@@ -229,6 +229,24 @@ _MSVC_REDISTRIBUTABLE_RE = re.compile(
 )
 
 
+def _strip_windows_system_dlls(bundle: Path) -> None:
+    """Drops OS DLLs that CMake RUNTIME_DEPENDENCY_SET copied from System32.
+
+    FastFlowLM's Windows install follows delay-load imports into the OS tree.
+    POST_EXCLUDE_REGEXES on that path does not always match, so bin/ can contain
+    shell32.dll and friends. Once those copies are bundled, their optional
+    delay-loads (Print Support, Azure attestation, HVSI) fail the PE closure
+    check on hosts that do not ship those feature-on-demand DLLs. The process
+    should load OS components from System32 at runtime, not from the wheel.
+    """
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    if not system32.is_dir():
+        return
+    for path in sorted((bundle / "bin").glob("*.dll")):
+        if (system32 / path.name).is_file():
+            path.unlink()
+
+
 def _copy_windows_redistributable_closure(bundle: Path) -> None:
     """Copies imported MSVC/OpenMP runtimes from the VS redistributable tree."""
     redist_root_value = os.environ.get("VCToolsRedistDir")
@@ -873,6 +891,7 @@ def stage_runtime_bundle(
     )
     if os.name == "nt":
         # Include imports introduced uniquely by the native CLI.
+        _strip_windows_system_dlls(bundle)
         _copy_windows_redistributable_closure(bundle)
         binary_dependencies = _windows_pe_dependency_graph(bundle)
     else:
