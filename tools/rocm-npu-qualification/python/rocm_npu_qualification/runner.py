@@ -1699,7 +1699,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         echo=True,
     )
     version_output = (version_result.stdout or version_result.stderr).strip()
-    # FastFlowLM 0.9.45 reports its version correctly but returns 1 on Windows.
+    # FastFlowLM reports its version correctly but returns 1 on Windows.
     # Validate the installed-product output instead of accepting/rejecting its
     # nonstandard status code in isolation.
     if re.fullmatch(r"FLM v[0-9]+(?:\.[0-9]+)+", version_output) is None:
