@@ -3186,6 +3186,8 @@ def test_unresolved_xrt_flm_is_recorded_on_sweep_profile(monkeypatch, tmp_path):
 
 
 def test_resolved_xrt_flm_is_recorded_on_sweep_profile(monkeypatch, tmp_path):
+    xrt_flm = Path("/opt/flm-xrt")
+
     def fake_resolve(path):
         return {
             "status": "resolved",
@@ -3197,14 +3199,14 @@ def test_resolved_xrt_flm_is_recorded_on_sweep_profile(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "_resolve_xrt_flm", fake_resolve)
     exit_code, summary, evidence = _run_benchmark_sweep(
-        monkeypatch, tmp_path, xrt_flm=Path("/opt/flm-xrt")
+        monkeypatch, tmp_path, xrt_flm=xrt_flm
     )
     assert exit_code == 0
     profile = json.loads(
         (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
     )
     assert profile["xrt"] == {
-        "requested": "/opt/flm-xrt",
+        "requested": str(xrt_flm),
         "command": "/opt/flm-xrt/bin/flm",
         "xilinx_xrt": "/opt/xilinx/xrt",
         "status": "resolved",
