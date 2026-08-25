@@ -69,10 +69,12 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert (
             "python -m build_tools.verify_qualification_dependencies" in section
         )
+        assert "--no-cache-dir" in section
         assert "--no-index" in section
         assert "--no-deps" in section
         assert '"${numeric_requirements[@]}"' in section
         assert "numeric-runtime.json" in section
+        assert 'rm -rf "${target}"' in section
         assert "ROCM_NPU_INSTALL_TARGET" not in section
 
     def test_release_platform_jobs_validate_their_own_qualification_wheels(self):
@@ -146,8 +148,11 @@ class TestRocmNpuReleaseWheelWorkflow:
             "Resolve qualification dependencies for every supported target"
             in collector
         )
+        assert "--no-cache-dir" in collector
         assert "--no-index" in collector
         assert '"${numeric_requirements[@]}"' in collector
+        assert 'rm -rf "${target}"' in collector
+        assert "rm -rf wheelhouse archives qualification-parity" in collector
         assert "numeric-runtime-cp312.lock" not in collector
 
     def test_release_is_dispatch_only_and_reuses_both_npu_validations(self):
@@ -219,12 +224,15 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "--platform manylinux_2_28_x86_64" in workflow
         assert "python -m build_tools.verify_qualification_dependencies" in workflow
         assert '"rocm-npu-compiler-bindings": version' in workflow
+        assert "rm -rf wheelhouse archives qualification-parity" in workflow
         compiler_resolution = workflow.split(
             "- name: Resolve compiler core and bindings", 1
         )[1].split("- name: Upload release payload", 1)[0]
         assert "--no-index" not in compiler_resolution
+        assert "--no-cache-dir" in compiler_resolution
         assert '--abi "${python_tag}"' in compiler_resolution
         assert '"${compiler_meta}"' in compiler_resolution
+        assert 'rm -rf "${target}"' in compiler_resolution
         assert "COMPILER_BINDINGS_RUNTIME_REQUIREMENTS" in compiler_resolution
         assert (
             "ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd"
