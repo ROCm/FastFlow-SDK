@@ -68,23 +68,25 @@ registry are skipped with a warning); it has no effect without `--bench`.
 Like `--all-models`, `--bench` is a dynamic diagnostic sweep (not pinned,
 not candidate-bound) and implies `--keep-going`.
 
-`--xrt-flm <path>` (only meaningful with `--bench`) additionally exercises
-each model through an XRT-backed FastFlowLM build and widens the report to a
-side-by-side HRX-vs-XRT comparison. For chat models the benchmark table gains
-XRT columns (`Model | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | HRX prefill
+`--xrt-flm <path>` (only meaningful with `--bench`; Linux, requires a host XRT
+install) additionally exercises each model through an XRT-backed FastFlowLM
+build and widens the report to a side-by-side HRX-vs-XRT comparison. For chat
+models the benchmark table gains an XRT Status column plus XRT metric columns
+(`Model | XRT Status | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | HRX prefill
 tok/s | XRT decode tok/s | HRX decode tok/s`); for embed/ASR models the
-Embedding and ASR probe tables gain XRT columns for the same measurements the
-HRX probe records (encode tok/s; RTF and WER). It is off by default -- simply
-supplying the path is what enables the comparison (there is no separate enable
-flag). Because the shipped wheel only bundles the HRX runtime, point `--xrt-flm`
-at a separately built XRT entrypoint (the portable `flm` wrapper, or its install
-root) produced by `python dev.py build fastflowlm-xrt`, which stages a
-self-contained tree (bundled XRT libraries, the vcpkg runtime closure, and --
-when discoverable -- the XRT XDNA driver plugin). XRT is strictly best-effort: a
-missing/malformed XRT build or a failing XRT run is recorded as `N/A` and folded
-into the HRX record's metrics -- it never emits a separate test and never
-changes the run's pass/fail (so a fully passing HRX sweep still passes even when
-XRT is unavailable).
+Embedding and ASR probe tables gain XRT status and measurement columns (encode
+tok/s; RTF and WER). It is off by default -- simply supplying the path is what
+enables the comparison (there is no separate enable flag). Because the shipped
+wheel only bundles the HRX runtime, point `--xrt-flm` at a separately built XRT
+entrypoint (`bin/flm`, or its FHS install root) produced by
+`python dev.py build fastflowlm-xrt`, which links the host XRT install
+(`$XILINX_XRT` or `/opt/xilinx/xrt`). Qualification sets `XILINX_XRT` and
+`LD_LIBRARY_PATH` only on that comparison child. XRT is strictly best-effort:
+the status column is `PASS`, `FAIL`, or `N/A` (unavailable build or host XRT);
+metric cells are `N/A` unless the comparison passed. XRT never emits a separate
+test and never changes the run's pass/fail (so a fully passing HRX sweep still
+passes even when XRT is unavailable or fails). An unresolved `--xrt-flm` still
+stamps `unavailable` on every model so the XRT columns remain.
 
 In addition to the machine-readable bundle, the `--all-models` and `--bench`
 sweeps write a human-readable `report.md` into the output directory. It contains
@@ -129,8 +131,8 @@ Useful options include:
   `--bench`; a positive integer, default `5`)
 - `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit
   registry tags; ignored without `--bench`)
-- `--xrt-flm <path>` (with `--bench`; add a best-effort HRX-vs-XRT
-  comparison using a separately built XRT FastFlowLM, off by default)
+- `--xrt-flm <path>` (with `--bench`; Linux; add a best-effort HRX-vs-XRT
+  comparison against a host XRT install, off by default)
 - `--json`
 
 Profiles support ad-hoc diagnostics and candidate-bound release runs. Packaged
@@ -246,7 +248,8 @@ rocm-npu qualify --all-models --model-cache $cache --output all-models-evidence
 rocm-npu qualify --all-models --bench-context 1k --model-cache $cache --output all-models-1k-evidence
 rocm-npu qualify --bench all --model-cache $cache --output bench-all-evidence
 rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
-rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --xrt-flm C:\path\to\FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
+# Linux only: HRX-vs-XRT comparison against a host XRT install
+# rocm-npu qualify --bench all --xrt-flm /path/to/build/FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
 rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```
 

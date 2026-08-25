@@ -10,7 +10,8 @@ that matrix because it does not run those stages. Those tables report HRX
 numbers by default; when a run additionally exercises an XRT-backed FastFlowLM
 build (``qualify --bench --xrt-flm <path>``), each widens to a side-by-side
 HRX-vs-XRT comparison (decode metrics for chat, encode-tok/s / RTF / WER for
-the probes).
+the probes). XRT metric cells are N/A unless that comparison passed; an XRT
+Status column distinguishes PASS, FAIL, and N/A (unavailable).
 """
 
 from __future__ import annotations
@@ -211,8 +212,10 @@ def _benchmark_table(
     }
     contexts.discard(None)
     # A single bench record carrying metrics.xrt means --xrt-flm was supplied, so
-    # render the wide HRX-vs-XRT comparison. XRT is best-effort, so its cells are
-    # independently N/A when a model's XRT run was unavailable or did not pass.
+    # render the wide HRX-vs-XRT comparison. Metric cells are N/A unless that
+    # backend passed; the XRT Status column distinguishes pass / fail /
+    # unavailable so a failing comparison is not indistinguishable from a missing
+    # build.
     with_xrt = any(
         isinstance(test.get("metrics", {}).get("xrt"), dict) for test in bench_tests
     )
@@ -225,11 +228,13 @@ def _benchmark_table(
         facets.append("averaged over configured iterations")
     if with_xrt:
         header = (
-            "| Model | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | "
+            "| Model | XRT Status | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | "
             "HRX prefill tok/s | XRT decode tok/s | HRX decode tok/s |"
         )
-        divider = "|-------|-----------|-----------|-------------------|" \
+        divider = (
+            "|-------|-----------|-----------|-----------|-------------------|"
             "-------------------|------------------|------------------|"
+        )
     else:
         header = "| Model | TTFT s | Prefill tok/s | Decode tok/s |"
         divider = "|-------|--------|---------------|--------------|"
@@ -268,7 +273,7 @@ def _benchmark_table(
         xrt_csv = xrt.get("csv_checkpoint_metrics") or {}
         xrt_ok = xrt.get("status") == "pass" and bool(xrt_csv)
         lines.append(
-            f"| `{tag}` | "
+            f"| `{tag}` | {_xrt_status_label(xrt)} | "
             f"{_bench_cell(xrt_csv, 'ttft_avg_s', xrt_ok)} | "
             f"{_bench_cell(csv_metrics, 'ttft_avg_s', hrx_ok)} | "
             f"{_bench_cell(xrt_csv, 'prefill_avg_toks_per_s', xrt_ok)} | "
@@ -305,7 +310,7 @@ def _serve_metrics(
 
 
 def _xrt_status_label(xrt: dict[str, Any]) -> str:
-    """Render a best-effort XRT serve status: unavailable folds to N/A."""
+    """Render XRT status: pass, fail, or N/A when the comparison was unavailable."""
     status = xrt.get("status")
     if status == "pass":
         return "PASS"

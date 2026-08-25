@@ -136,7 +136,8 @@ _SWEEP_BENCH_DEFAULT = "8k"
 # correctness stages. MODE selects coverage ('all' sweeps the whole installed
 # registry); --bench-context / --bench-iterations tune the run and an optional
 # --models filter narrows the set to explicit tags.
-_BENCHMARK_MODES: tuple[str, ...] = ("all",)
+BENCHMARK_MODES: tuple[str, ...] = ("all",)
+_BENCHMARK_MODES = BENCHMARK_MODES
 _BENCHMARK_DEFAULT_CONTEXT = "1k"
 _BENCHMARK_DEFAULT_ITERATIONS = 5
 
@@ -418,19 +419,53 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     return path.resolve(), config.resolve(), environment
 
 
-def _resolve_xrt_flm(
-    xrt_flm: Path,
-) -> tuple[Path, dict[str, str]] | None:
+def _host_xrt_prefix() -> Path | None:
+    """Return the host XRT install prefix, or ``None`` if it is not present."""
+    candidates: list[Path] = []
+    env_root = os.environ.get("XILINX_XRT")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    if os.name != "nt":
+        candidates.append(Path("/opt/xilinx/xrt"))
+    seen: set[Path] = set()
+    for prefix in candidates:
+        try:
+            resolved = prefix.resolve()
+        except OSError:
+            resolved = prefix
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if prefix.is_dir() and (
+            (prefix / "lib").is_dir() or (prefix / "include").is_dir()
+        ):
+            return resolved
+    return None
+
+
+def _host_xrt_library_dirs(prefix: Path) -> list[str]:
+    """Loader directories under a host XRT prefix, if they exist."""
+    directories = []
+    for relative in ("lib", os.path.join("lib", "x86_64-linux-gnu")):
+        path = prefix / relative
+        if path.is_dir():
+            directories.append(str(path.resolve()))
+    return directories
+
+
+def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     """Resolve a user-supplied XRT FastFlowLM build for best-effort comparison.
 
-    ``xrt_flm`` may point at the portable ``flm`` entrypoint itself or at its
-    install root (as produced by ``dev.py build fastflowlm-xrt``). Returns the
-    resolved entrypoint plus a base environment with the XRT build's own
-    registry/xclbin/model-info paths, or ``None`` (with a stderr warning) when a
-    usable build cannot be located. XRT is a diagnostic add-on, so a missing or
-    malformed build must never raise: the caller renders the XRT columns as N/A.
+    ``xrt_flm`` may point at the ``flm`` entrypoint itself or at its FHS
+    install root (as produced by ``dev.py build fastflowlm-xrt``). Always
+    returns a dict: ``status: "resolved"`` with ``command``, ``environment``,
+    and ``xilinx_xrt`` on success, or ``status: "unavailable"`` with ``error``
+    when a usable build or host XRT cannot be located. Never raises: XRT is a
+    diagnostic add-on, and the caller stamps ``unavailable`` on every model so
+    the report still widens to N/A columns.
     """
-    executable = paths_executable = "flm.exe" if os.name == "nt" else "flm"
+    requested = str(xrt_flm)
+    executable = "flm.exe" if os.name == "nt" else "flm"
     candidate = xrt_flm.expanduser()
     if candidate.is_file():
         entrypoint = candidate
@@ -438,7 +473,7 @@ def _resolve_xrt_flm(
         entrypoint = next(
             (
                 option
-                for option in (candidate / executable, candidate / "bin" / executable)
+                for option in (candidate / "bin" / executable, candidate / executable)
                 if option.is_file()
             ),
             None,
@@ -446,15 +481,14 @@ def _resolve_xrt_flm(
     else:
         entrypoint = None
     if entrypoint is None:
-        print(
-            f"qualify: --xrt-flm path does not contain an '{paths_executable}' "
-            f"executable ({xrt_flm}); skipping XRT comparison",
-            file=sys.stderr,
-            flush=True,
+        error = (
+            f"--xrt-flm path does not contain an '{executable}' "
+            f"executable ({xrt_flm})"
         )
-        return None
-    # The portable tree keeps metadata flat next to the binary; an FHS tree keeps
-    # it under share/flm. Accept whichever layout the supplied build uses.
+        print(f"qualify: {error}; recording XRT as unavailable", file=sys.stderr, flush=True)
+        return {"status": "unavailable", "requested": requested, "error": error}
+    # FHS trees keep metadata under share/flm; a flat tree keeps it next to the
+    # binary. Accept whichever layout the supplied build uses.
     root = entrypoint.parent
     metadata_roots = [root, root / "share" / "flm", root.parent / "share" / "flm"]
     config = model_info = xclbin_root = None
@@ -475,27 +509,60 @@ def _resolve_xrt_flm(
         if value is None
     ]
     if missing:
-        print(
-            "qualify: XRT FastFlowLM build is missing "
-            f"{', '.join(missing)} near {entrypoint}; skipping XRT comparison",
-            file=sys.stderr,
-            flush=True,
+        error = (
+            "XRT FastFlowLM build is missing "
+            f"{', '.join(missing)} near {entrypoint}"
         )
-        return None
+        print(f"qualify: {error}; recording XRT as unavailable", file=sys.stderr, flush=True)
+        return {"status": "unavailable", "requested": requested, "error": error}
+    host_xrt = _host_xrt_prefix()
+    if host_xrt is None:
+        error = (
+            "host XRT runtime is not installed (set XILINX_XRT or install to "
+            "/opt/xilinx/xrt); the XRT comparison uses the host install rather "
+            "than a bundled prefix"
+        )
+        print(f"qualify: {error}; recording XRT as unavailable", file=sys.stderr, flush=True)
+        return {"status": "unavailable", "requested": requested, "error": error}
     environment = dict(os.environ)
     environment["FLM_CONFIG_PATH"] = str(config.resolve())
     environment["FLM_XCLBIN_PATH"] = str(xclbin_root.resolve())
     environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
-    # The portable wrapper exports XILINX_XRT/LD_LIBRARY_PATH itself; still make
-    # the bundled lib/ discoverable in case the real binary is invoked directly.
-    bundle_lib = root / "lib"
-    if bundle_lib.is_dir() and os.name != "nt":
+    # Isolate host XRT to this child only; never rewrite the parent process.
+    environment["XILINX_XRT"] = str(host_xrt)
+    if os.name != "nt":
         environment["LD_LIBRARY_PATH"] = os.pathsep.join(
             entry
-            for entry in (str(bundle_lib.resolve()), environment.get("LD_LIBRARY_PATH", ""))
+            for entry in (
+                *_host_xrt_library_dirs(host_xrt),
+                environment.get("LD_LIBRARY_PATH", ""),
+            )
             if entry
         )
-    return entrypoint.resolve(), environment
+    return {
+        "status": "resolved",
+        "requested": requested,
+        "command": str(entrypoint.resolve()),
+        "xilinx_xrt": str(host_xrt),
+        "environment": environment,
+    }
+
+
+def _xrt_unavailable_metrics(error: str) -> dict[str, Any]:
+    return {"status": "unavailable", "error": error}
+
+
+def _xrt_descriptor(resolved: dict[str, Any]) -> dict[str, Any]:
+    """Identity projection recorded on a diagnostic-sweep ``profile.json``."""
+    descriptor = {
+        "requested": resolved.get("requested"),
+        "command": resolved.get("command"),
+        "xilinx_xrt": resolved.get("xilinx_xrt"),
+        "status": resolved["status"],
+    }
+    if resolved["status"] != "resolved":
+        descriptor["error"] = resolved.get("error") or "XRT comparison unavailable"
+    return descriptor
 
 
 def _run_flm_bench(
@@ -508,11 +575,13 @@ def _run_flm_bench(
     work: Path,
     log: Path,
     benchmark_iterations: int,
+    runtime_label: str = "HRX",
 ) -> dict[str, Any]:
     """Run a single ``flm bench`` and parse it into a backend-agnostic result.
 
     Shared by the HRX benchmark and the optional XRT comparison so both backends
-    are measured and validated identically. Returns the parsed outcome (pass
+    are measured and validated identically. ``runtime_label`` only affects the
+    runtime-error wording (``HRX`` vs ``XRT``). Returns the parsed outcome (pass
     state, checkpoint, CSV metrics, artifact-relative paths); it never appends to
     evidence so callers decide how to record it.
     """
@@ -558,7 +627,7 @@ def _run_flm_bench(
     csv_path = None
     raw_outputs = extract_raw_outputs(transcript)
     if has_runtime_error(transcript):
-        semantic_error = "FastFlowLM emitted an HRX runtime error"
+        semantic_error = f"FastFlowLM emitted an {runtime_label} runtime error"
     elif MAX_LENGTH_PATTERN.search(transcript):
         semantic_error = "FastFlowLM reached the generation length limit"
     else:
@@ -663,6 +732,7 @@ def _run_xrt_comparison(
             work=work,
             log=log,
             benchmark_iterations=benchmark_iterations,
+            runtime_label="XRT",
         )
     except (QualificationError, OSError) as error:
         return {"status": "unavailable", "error": str(error)}, []
@@ -759,6 +829,7 @@ def _test_model(
     prior_tests: list[dict[str, Any]] | None = None,
     xrt_flm: Path | None = None,
     xrt_environment: dict[str, str] | None = None,
+    xrt_unavailable: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     environment = fastflow_environment(
         model_cache, offline=offline, base_environment=environment
@@ -828,7 +899,9 @@ def _test_model(
                 # as N/A and can never flip the run's pass/fail. Run it inside the
                 # ExitStack so the ASR sample stays valid.
                 xrt_serve_metrics: dict[str, Any] | None = None
-                if xrt_flm is not None and xrt_bench_environment is not None:
+                if xrt_unavailable is not None:
+                    xrt_serve_metrics = dict(xrt_unavailable)
+                elif xrt_flm is not None and xrt_bench_environment is not None:
                     xrt_serve_metrics = _run_xrt_serve_comparison(
                         xrt_flm=xrt_flm,
                         model_tag=model["tag"],
@@ -898,16 +971,21 @@ def _test_model(
                 "raw_outputs_sha256": canonical_json_sha256(hrx["raw_outputs"]),
                 "csv_checkpoint_row": hrx["csv_row"],
                 "csv_checkpoint_metrics": hrx["csv_metrics"],
-                "backend": "hrx",
             }
+            if xrt_flm is not None or xrt_unavailable is not None:
+                metrics["backend"] = "hrx"
             artifacts = [hrx["config"]] + (
                 [] if hrx["csv"] is None else [hrx["csv"]]
             )
             # XRT comparison is strictly best-effort: it is folded into this HRX
             # record's free-form metrics (never a separate test), so an
             # unavailable or failing XRT build reports as N/A and can never flip
-            # the run's pass/fail or add JUnit noise.
-            if xrt_flm is not None and xrt_bench_environment is not None:
+            # the run's pass/fail or add JUnit noise. Stamp unavailable when the
+            # flag was given but the build could not be resolved, so the report
+            # still widens to XRT columns.
+            if xrt_unavailable is not None:
+                metrics["xrt"] = dict(xrt_unavailable)
+            elif xrt_flm is not None and xrt_bench_environment is not None:
                 xrt_metrics, xrt_artifacts = _run_xrt_comparison(
                     xrt_flm=xrt_flm,
                     model_tag=model["tag"],
@@ -1356,6 +1434,31 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     else:
         profile_name = _selected_profile_name(args)
         profile = load_profile(profile_name)
+    xrt_flm: Path | None = None
+    xrt_environment: dict[str, str] | None = None
+    xrt_unavailable: dict[str, Any] | None = None
+    if with_xrt:
+        resolved = _resolve_xrt_flm(Path(xrt_flm_arg))
+        profile["xrt"] = _xrt_descriptor(resolved)
+        if resolved["status"] == "resolved":
+            xrt_flm = Path(resolved["command"])
+            xrt_environment = resolved["environment"]
+            print(
+                f"qualify: XRT comparison enabled using {xrt_flm} "
+                f"(host XRT {resolved['xilinx_xrt']})",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            xrt_unavailable = _xrt_unavailable_metrics(
+                resolved.get("error") or "XRT comparison unavailable"
+            )
+            print(
+                "qualify: XRT comparison unavailable "
+                f"({xrt_unavailable['error']}); recording N/A for every model",
+                file=sys.stderr,
+                flush=True,
+            )
     candidate = None
     if args.candidate_manifest is not None:
         try:
@@ -1534,20 +1637,6 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
     writer.write_json("evidence.json", evidence)
 
-    # Optional XRT comparison build (best-effort; never gates the run). Resolved
-    # once up front so an obviously missing build warns before any model runs.
-    xrt_flm: Path | None = None
-    xrt_environment: dict[str, str] | None = None
-    if with_xrt:
-        resolved = _resolve_xrt_flm(Path(xrt_flm_arg))
-        if resolved is not None:
-            xrt_flm, xrt_environment = resolved
-            print(
-                f"qualify: XRT comparison enabled using {xrt_flm}",
-                file=sys.stderr,
-                flush=True,
-            )
-
     execution_models = profile["models"]
     if is_sweep:
         discovered = enumerate_registry_models(flm_config)
@@ -1674,6 +1763,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     prior_tests=evidence["tests"],
                     xrt_flm=xrt_flm,
                     xrt_environment=xrt_environment,
+                    xrt_unavailable=xrt_unavailable,
                 )
             except OSError as error:
                 tests = [

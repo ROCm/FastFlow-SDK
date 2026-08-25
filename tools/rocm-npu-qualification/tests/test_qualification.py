@@ -2041,8 +2041,8 @@ def test_build_markdown_report_renders_env_and_hrx_benchmark():
 
 def test_build_markdown_report_renders_hrx_vs_xrt_benchmark():
     # A bench record carrying metrics.xrt (from --bench --xrt-flm) widens
-    # the table to the side-by-side comparison. XRT is best-effort, so a model
-    # whose XRT run did not pass shows N/A only in its XRT cells.
+    # the table to the side-by-side comparison. Metric cells are N/A unless
+    # that backend passed; XRT Status distinguishes PASS, FAIL, and N/A.
     evidence = {
         "status": "pass",
         "profile": {"name": "bench-all"},
@@ -2059,6 +2059,7 @@ def test_build_markdown_report_renders_hrx_vs_xrt_benchmark():
         "models": [
             {"tag": "qwen3:0.6b", "status": "pass"},
             {"tag": "gpt-oss:20b", "status": "pass"},
+            {"tag": "llama3.2:1b", "status": "pass"},
         ],
         "tests": [
             {
@@ -2103,26 +2104,53 @@ def test_build_markdown_report_renders_hrx_vs_xrt_benchmark():
                     "xrt": {"status": "unavailable", "error": "no XDNA plugin"},
                 },
             },
+            {
+                "model": "llama3.2:1b",
+                "name": "context-1k",
+                "kind": "bench",
+                "status": "pass",
+                "metrics": {
+                    "iterations": 5,
+                    "backend": "hrx",
+                    "csv_checkpoint_metrics": {
+                        "context_length_k": 1,
+                        "ttft_avg_s": 0.40,
+                        "prefill_avg_toks_per_s": 900.0,
+                        "decoding_avg_toks_per_s": 45.0,
+                    },
+                    "xrt": {"status": "fail", "error": "XRT runtime error"},
+                },
+            },
         ],
     }
     text = report.build_markdown_report(
         evidence,
-        kinds={"qwen3:0.6b": "chat", "gpt-oss:20b": "chat"},
+        kinds={
+            "qwen3:0.6b": "chat",
+            "gpt-oss:20b": "chat",
+            "llama3.2:1b": "chat",
+        },
         generated_at="2026-08-07T00:00:00Z",
     )
     assert "## Benchmark (HRX vs XRT, 1k, averaged over 5 iterations)" in text
     assert (
-        "| Model | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | "
+        "| Model | XRT Status | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | "
         "HRX prefill tok/s | XRT decode tok/s | HRX decode tok/s |" in text
     )
     # Model with a passing XRT run: both backends populated, XRT columns first.
     assert (
-        "| `qwen3:0.6b` | 0.350 | 0.200 | 800.000 | 1200.000 | 40.000 | 60.000 |"
+        "| `qwen3:0.6b` | PASS | 0.350 | 0.200 | 800.000 | 1200.000 | 40.000 | 60.000 |"
         in text
     )
-    # Model whose XRT run was unavailable: HRX populated, XRT cells N/A.
+    # Unavailable XRT: status N/A, metric cells N/A, HRX populated.
     assert (
-        "| `gpt-oss:20b` | N/A | 0.900 | N/A | 500.000 | N/A | 25.000 |" in text
+        "| `gpt-oss:20b` | N/A | N/A | 0.900 | N/A | 500.000 | N/A | 25.000 |"
+        in text
+    )
+    # Failing XRT: status FAIL, metric cells still N/A (does not flip the run).
+    assert (
+        "| `llama3.2:1b` | FAIL | N/A | 0.400 | N/A | 900.000 | N/A | 45.000 |"
+        in text
     )
 
 
@@ -2550,6 +2578,7 @@ def _sweep_args(
     bench_context=None,
     bench_iterations=None,
     models=None,
+    xrt_flm=None,
 ):
     return SimpleNamespace(
         profile=None,
@@ -2567,6 +2596,7 @@ def _sweep_args(
         list_profiles=False,
         bench_context=bench_context,
         bench_iterations=bench_iterations,
+        xrt_flm=xrt_flm,
     )
 
 
@@ -2585,6 +2615,7 @@ def _run_sweep(
     bench_context=None,
     bench_iterations=None,
     models=None,
+    xrt_flm=None,
 ):
     _patch_qualification(monkeypatch, tmp_path, doctor_exit=0)
 
@@ -2708,6 +2739,7 @@ def _run_sweep(
         ),
         bench_iterations=bench_iterations,
         models=models,
+        xrt_flm=xrt_flm,
     )
     if candidate_manifest is not None:
         args.candidate_manifest = candidate_manifest
@@ -2915,52 +2947,268 @@ def test_xrt_flm_flag_parsing():
 _XRT_FLM_EXE = "flm.exe" if os.name == "nt" else "flm"
 
 
-def _make_portable_xrt_build(root):
-    """Lay out a minimal portable XRT FastFlowLM tree (flat metadata)."""
+def _make_xrt_build(root, *, layout="fhs"):
+    """Lay out a minimal XRT FastFlowLM tree (FHS by default; flat still accepted)."""
     root.mkdir(parents=True, exist_ok=True)
+    if layout == "fhs":
+        bindir = root / "bin"
+        share = root / "share" / "flm"
+        bindir.mkdir(parents=True, exist_ok=True)
+        share.mkdir(parents=True, exist_ok=True)
+        flm = bindir / _XRT_FLM_EXE
+        flm.write_text("#!/bin/sh\n", encoding="utf-8")
+        flm.chmod(0o755)
+        (share / "model_list.json").write_text("{}", encoding="utf-8")
+        (share / "model_info.json").write_text("{}", encoding="utf-8")
+        (share / "xclbins").mkdir(exist_ok=True)
+        return flm
     flm = root / _XRT_FLM_EXE
     flm.write_text("#!/bin/sh\n", encoding="utf-8")
     flm.chmod(0o755)
     (root / "model_list.json").write_text("{}", encoding="utf-8")
     (root / "model_info.json").write_text("{}", encoding="utf-8")
     (root / "xclbins").mkdir(exist_ok=True)
-    (root / "lib").mkdir(exist_ok=True)
     return flm
 
 
-def test_resolve_xrt_flm_accepts_portable_root_and_binary(tmp_path):
+def _fake_host_xrt(tmp_path):
+    prefix = tmp_path / "host-xrt"
+    (prefix / "lib").mkdir(parents=True)
+    (prefix / "include").mkdir()
+    return prefix.resolve()
+
+
+def test_resolve_xrt_flm_accepts_fhs_root_and_binary(tmp_path, monkeypatch):
+    host = _fake_host_xrt(tmp_path)
+    monkeypatch.setattr(runner, "_host_xrt_prefix", lambda: host)
     root = tmp_path / "flm-xrt-install"
-    flm = _make_portable_xrt_build(root)
-    # A directory root resolves the flat entrypoint + metadata.
+    flm = _make_xrt_build(root)
     resolved = runner._resolve_xrt_flm(root)
-    assert resolved is not None
-    entrypoint, environment = resolved
-    assert entrypoint == flm.resolve()
-    assert environment["FLM_CONFIG_PATH"] == str((root / "model_list.json").resolve())
-    assert environment["FLM_MODELINFO_PATH"] == str(
-        (root / "model_info.json").resolve()
+    assert resolved["status"] == "resolved"
+    assert resolved["command"] == str(flm.resolve())
+    assert resolved["xilinx_xrt"] == str(host)
+    environment = resolved["environment"]
+    assert environment["FLM_CONFIG_PATH"] == str(
+        (root / "share" / "flm" / "model_list.json").resolve()
     )
-    assert environment["FLM_XCLBIN_PATH"] == str(root.resolve())
+    assert environment["FLM_MODELINFO_PATH"] == str(
+        (root / "share" / "flm" / "model_info.json").resolve()
+    )
+    assert environment["FLM_XCLBIN_PATH"] == str(
+        (root / "share" / "flm").resolve()
+    )
+    assert environment["XILINX_XRT"] == str(host)
     if os.name != "nt":
-        assert str((root / "lib").resolve()) in environment["LD_LIBRARY_PATH"]
-    # Pointing directly at the binary resolves identically.
-    assert runner._resolve_xrt_flm(flm)[0] == flm.resolve()
+        assert str(host / "lib") in environment["LD_LIBRARY_PATH"]
+        assert "flm-xrt-install/lib" not in environment["LD_LIBRARY_PATH"]
+    assert runner._resolve_xrt_flm(flm)["command"] == str(flm.resolve())
+    # A flat tree is still accepted (legacy layout).
+    flat = tmp_path / "flat-xrt"
+    flat_flm = _make_xrt_build(flat, layout="flat")
+    assert runner._resolve_xrt_flm(flat)["command"] == str(flat_flm.resolve())
 
 
 def test_resolve_xrt_flm_is_best_effort_on_missing_pieces(tmp_path, capsys):
-    # No executable at all -> None with a warning, never raises.
-    assert runner._resolve_xrt_flm(tmp_path / "nope") is None
+    resolved = runner._resolve_xrt_flm(tmp_path / "nope")
+    assert resolved["status"] == "unavailable"
+    assert "does not contain" in resolved["error"]
     assert "does not contain" in capsys.readouterr().err
-    # Executable present but registry/xclbins missing -> None with a warning.
     root = tmp_path / "partial"
     root.mkdir()
     (root / _XRT_FLM_EXE).write_text("#!/bin/sh\n", encoding="utf-8")
     (root / _XRT_FLM_EXE).chmod(0o755)
-    assert runner._resolve_xrt_flm(root) is None
+    resolved = runner._resolve_xrt_flm(root)
+    assert resolved["status"] == "unavailable"
     warning = capsys.readouterr().err
-    assert "missing" in warning
+    assert "missing" in resolved["error"]
     assert "model_list.json" in warning
 
+
+def test_resolve_xrt_flm_requires_host_xrt(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(runner, "_host_xrt_prefix", lambda: None)
+    root = tmp_path / "flm-xrt-install"
+    _make_xrt_build(root)
+    resolved = runner._resolve_xrt_flm(root)
+    assert resolved["status"] == "unavailable"
+    assert "host XRT" in resolved["error"]
+    assert "host XRT" in capsys.readouterr().err
+
+
+def test_test_model_stamps_unavailable_xrt(monkeypatch, tmp_path):
+    model = {
+        "tag": "qwen3:0.6b",
+        "xclbins": [],
+        "tests": [
+            {
+                "name": "context-1k",
+                "kind": "bench",
+                "config": "bench/bench_1k_smoke.json",
+                "timeout_seconds": 30,
+                "checkpoint_min": 900,
+                "checkpoint_max": 1152,
+                "iterations": 1,
+                "expected_regex": None,
+            }
+        ],
+    }
+
+    def fake_bench(**kwargs):
+        return {
+            "passed": True,
+            "semantic_error": "",
+            "checkpoint": 1024,
+            "raw_outputs": ["ok"],
+            "csv_row": [],
+            "csv_metrics": {"ttft_avg_s": 0.1},
+            "returncode": 0,
+            "timed_out": False,
+            "duration_seconds": 0.1,
+            "log": "logs/tests/x.log",
+            "config": "bench/x/benchmark-config.json",
+            "csv": None,
+        }
+
+    monkeypatch.setattr(runner, "_run_flm_bench", fake_bench)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=runner.EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+        xrt_unavailable={"status": "unavailable", "error": "missing XRT build"},
+    )
+    assert records[0]["status"] == "pass"
+    assert records[0]["metrics"]["xrt"] == {
+        "status": "unavailable",
+        "error": "missing XRT build",
+    }
+    assert records[0]["metrics"]["backend"] == "hrx"
+
+
+def test_test_model_stamps_unavailable_xrt_on_serve(monkeypatch, tmp_path):
+    model = {
+        "tag": "embed-gemma:300m",
+        "xclbins": [],
+        "tests": [
+            {
+                "name": "serve-probe",
+                "kind": "serve",
+                "probe_kind": "embed",
+                "timeout_seconds": 300,
+            }
+        ],
+    }
+
+    def fake_serve_probe(argv, **kwargs):
+        Path(kwargs["log_path"]).write_text("served\n", encoding="utf-8")
+        return (
+            _result(returncode=0, stdout="WebServer started on port 11434\n"),
+            {
+                "probe_kind": "embed",
+                "port": 11434,
+                "detail": "served",
+                "ok": True,
+                "metrics": {"encode_toks_per_s": 120.0},
+            },
+        )
+
+    monkeypatch.setattr(runner, "serve_probe", fake_serve_probe)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=runner.EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+        xrt_unavailable={"status": "unavailable", "error": "missing XRT build"},
+    )
+    assert records[0]["status"] == "pass"
+    assert records[0]["metrics"]["xrt"] == {
+        "status": "unavailable",
+        "error": "missing XRT build",
+    }
+
+
+def test_run_flm_bench_labels_xrt_runtime_errors(monkeypatch, tmp_path):
+    def boom(*args, **kwargs):
+        Path(kwargs["log_path"]).write_text("err\n", encoding="utf-8")
+        return _result(returncode=1, stdout="[hrx][ERROR] device failed\n")
+
+    monkeypatch.setattr(runner, "run_command", boom)
+    writer = runner.EvidenceWriter(tmp_path / "evidence")
+    test = {
+        "name": "context-1k",
+        "config": "bench/bench_1k_smoke.json",
+        "timeout_seconds": 30,
+        "checkpoint_min": 900,
+        "checkpoint_max": 1152,
+        "expected_regex": None,
+    }
+    common = dict(
+        flm=tmp_path / "flm",
+        model_tag="qwen3:0.6b",
+        test=test,
+        environment={},
+        writer=writer,
+        benchmark_iterations=1,
+    )
+    hrx = runner._run_flm_bench(
+        **common,
+        work=writer.path("bench/hrx"),
+        log=writer.path("logs/tests/hrx.log"),
+        runtime_label="HRX",
+    )
+    xrt = runner._run_flm_bench(
+        **common,
+        work=writer.path("bench/xrt"),
+        log=writer.path("logs/tests/xrt.log"),
+        runtime_label="XRT",
+    )
+    assert "HRX runtime error" in hrx["semantic_error"]
+    assert "XRT runtime error" in xrt["semantic_error"]
+
+
+def test_unresolved_xrt_flm_is_recorded_on_sweep_profile(monkeypatch, tmp_path):
+    missing = tmp_path / "missing-xrt-install"
+    exit_code, summary, evidence = _run_benchmark_sweep(
+        monkeypatch, tmp_path, xrt_flm=missing
+    )
+    assert exit_code == 0
+    assert summary["status"] == "pass"
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["xrt"]["status"] == "unavailable"
+    assert profile["xrt"]["requested"] == str(missing)
+    assert "error" in profile["xrt"]
+    assert profile["xrt"]["command"] is None
+
+
+def test_resolved_xrt_flm_is_recorded_on_sweep_profile(monkeypatch, tmp_path):
+    def fake_resolve(path):
+        return {
+            "status": "resolved",
+            "requested": str(path),
+            "command": "/opt/flm-xrt/bin/flm",
+            "xilinx_xrt": "/opt/xilinx/xrt",
+            "environment": {"XILINX_XRT": "/opt/xilinx/xrt"},
+        }
+
+    monkeypatch.setattr(runner, "_resolve_xrt_flm", fake_resolve)
+    exit_code, summary, evidence = _run_benchmark_sweep(
+        monkeypatch, tmp_path, xrt_flm=Path("/opt/flm-xrt")
+    )
+    assert exit_code == 0
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["xrt"] == {
+        "requested": "/opt/flm-xrt",
+        "command": "/opt/flm-xrt/bin/flm",
+        "xilinx_xrt": "/opt/xilinx/xrt",
+        "status": "resolved",
+    }
 
 def test_benchmark_tests_for_chat_is_bench_only():
     tests = runner._benchmark_tests_for(
@@ -3073,6 +3321,7 @@ def _run_benchmark_sweep(
     bench_context=None,
     bench_iterations=None,
     models=None,
+    xrt_flm=None,
 ):
     return _run_sweep(
         monkeypatch,
@@ -3082,6 +3331,7 @@ def _run_benchmark_sweep(
         bench_context=bench_context,
         bench_iterations=bench_iterations,
         models=models,
+        xrt_flm=xrt_flm,
     )
 
 

@@ -28,7 +28,7 @@ from .offline import (
 from .profiles import ProfileError, profile_names
 from .power import inhibit_system_sleep
 from .runner import (
-    _BENCHMARK_MODES,
+    BENCHMARK_MODES,
     finalize_partial_evidence,
     run_qualification,
 )
@@ -101,7 +101,7 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         nargs="?",
         const="all",
         default=None,
-        choices=_BENCHMARK_MODES,
+        choices=BENCHMARK_MODES,
         metavar="MODE",
         help=(
             "run a measurement-only benchmark sweep: the on-NPU decode benchmark "
@@ -151,12 +151,14 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         help=(
             "additionally benchmark each model through an XRT-backed FastFlowLM "
             "build and emit an HRX-vs-XRT comparison table (only with "
-            "--bench; off by default). PATH is the XRT FastFlowLM entrypoint "
-            "(the portable `flm` wrapper) or its install root, produced by "
-            "`dev.py build fastflowlm-xrt`. Supplying it is what enables the "
-            "comparison. XRT results are best-effort: an unavailable XRT build or "
-            "a failing XRT run is reported as N/A and never changes the overall "
-            "pass/fail."
+            "--bench; off by default; Linux, requires a host XRT install). "
+            "PATH is the XRT FastFlowLM entrypoint (bin/flm) or its FHS "
+            "install root, produced by `dev.py build fastflowlm-xrt`. "
+            "Supplying it is what enables the comparison. The comparison "
+            "child is pointed at the host XRT prefix via XILINX_XRT / "
+            "LD_LIBRARY_PATH; XRT results are best-effort. Status is "
+            "PASS, FAIL, or N/A (unavailable); metric cells are N/A unless "
+            "the comparison passed. XRT never changes the overall pass/fail."
         ),
     )
     parser.add_argument(
