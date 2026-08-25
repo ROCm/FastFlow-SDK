@@ -82,14 +82,24 @@ def _catalogue():
             "families": ["Embedding-Gemma-300M-NPU2"],
         },
         {
-            "id": "mm-54f58500d5722654",
+            "id": "mm-2bbc1cbf355661de",
             "kernel": "mm",
-            "families": ["Qwen3.6-35B-A3B-NPU2"],
+            "families": ["Qwen3.5-0.8B-NPU2", "Qwen3.6-35B-A3B-NPU2"],
         },
         {
-            "id": "mm-bb9e9ce498358d9d",
+            "id": "mm-3ea0dff6e4318f0f",
             "kernel": "mm",
-            "families": ["Qwen3.5-0.8B-NPU2"],
+            "families": ["Qwen3.5-OMNI-NPU2"],
+        },
+        {
+            "id": "mm-6f1e5507b84d4545",
+            "kernel": "mm",
+            "families": ["Gemma3-4B-NPU2", "Qwen3-VL-4B-Instruct-NPU2"],
+        },
+        {
+            "id": "dequant-c64cce52830381a3",
+            "kernel": "dequant",
+            "families": ["Gemma3-4B-NPU2", "Qwen3-VL-4B-Instruct-NPU2"],
         },
         {"id": "mm-6c7ef8716b6c744d", "kernel": "mm", "families": gpt_oss},
         {"id": "mm-eb616bbe2a08405e", "kernel": "mm", "families": gemma},
@@ -174,13 +184,14 @@ def test_unreachable_implementations_are_declared_rather_than_dropped():
     dispatched = {entry["id"] for entry in recipe["implementations"]}
     limited = {
         "mm-8d5bc2adebe8c362",
-        "mm-54f58500d5722654",
-        "mm-bb9e9ce498358d9d",
+        "mm-2bbc1cbf355661de",
+        "mm-3ea0dff6e4318f0f",
+        "mm-6f1e5507b84d4545",
+        "dequant-c64cce52830381a3",
         "mm-6c7ef8716b6c744d",
     }
     assert limited.isdisjoint(dispatched)
     limits = {limit["representative"] for limit in recipe["coverage_limits"]}
-    assert "Qwen3.6-35B-A3B-NPU2" in limits
     assert "Qwen3.5-0.8B-NPU2" in limits
     assert "Embedding-Gemma-300M-NPU2" in limits
     numeric = {
