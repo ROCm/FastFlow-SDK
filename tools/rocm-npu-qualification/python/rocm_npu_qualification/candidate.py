@@ -16,14 +16,13 @@ from typing import Any
 from .contracts import (
     CANDIDATE_SCHEMA_VERSION,
     KERNEL_RECIPE_SCHEMA_VERSION,
-    PROFILE_SCHEMA_VERSION,
     QUALIFICATION_CONTRACT_SCHEMA_VERSION,
     xadx_rounds,
 )
 from .hashing import sha256_file
 from .numeric_runtime import NUMERIC_RUNTIME
 from .policy import PolicyValidationError, normalize_policy
-from .profiles import ProfileError, validate_profile
+from .profiles import ProfileError, materialize_profiles, validate_profile
 from .recipe_contract import recipe_materialization_requests
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
@@ -443,32 +442,12 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
         for name in archive.namelist()
         if name.startswith(prefix) and name.endswith(".json")
     }
-    loading: set[str] = set()
-
-    def resolve(name: str) -> dict[str, Any]:
-        if name in loading or name not in raw_profiles:
-            raise CandidateError(
-                f"qualification profile inheritance is invalid: {name}"
-            )
-        value = raw_profiles[name]
-        if isinstance(value, dict) and "extends" in value:
-            loading.add(name)
-            parent = resolve(value["extends"])
-            loading.remove(name)
-            value = {
-                "schema_version": PROFILE_SCHEMA_VERSION,
-                "name": value.get("name"),
-                "description": value.get("description"),
-                "models": [*parent["models"], *value.get("models", [])],
-            }
-        try:
-            return validate_profile(value)
-        except ProfileError as error:
-            raise CandidateError(
-                f"qualification wheel profile is invalid: {name}: {error}"
-            ) from error
-
-    profiles = {name: resolve(name) for name in sorted(raw_profiles)}
+    try:
+        profiles = materialize_profiles(raw_profiles)
+    except ProfileError as error:
+        raise CandidateError(
+            f"qualification wheel profile is invalid: {error}"
+        ) from error
     policy_prefix = "rocm_npu_qualification/policies/"
     policies = {
         Path(name).stem: json.loads(archive.read(name))
