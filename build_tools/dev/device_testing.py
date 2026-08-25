@@ -172,7 +172,10 @@ def cmd_test_npu(args):
         sys.exit(f"{design}: no such design under programming_examples/basic")
     _require_hrx_runtime(getattr(args, "compiler_prefix", None))
     env = iron.iron_env(getattr(args, "compiler_prefix", None))
+    # NPU_RUNTIME is the name current iron-tools reads; IRON_RUNTIME is the
+    # pre-upstreaming name, kept for older checkouts.
     env["IRON_RUNTIME"] = "hrx"
+    env["NPU_RUNTIME"] = "hrx"
     hrx_runtime.add_hrx_install_env(env)
     target = getattr(args, "device", None) or "npu2"
     try:
@@ -209,6 +212,32 @@ def cmd_test_npu(args):
     print(f"test-npu: ok ({design} ran on the NPU via hrx)")
 
 
+def cmd_test_npu_jit(args):
+    """Compile the IRON JIT smoke design, and dispatch it unless --build-only."""
+    build_only = getattr(args, "build_only", False)
+    compiler_prefix = getattr(args, "compiler_prefix", None)
+    if not build_only:
+        _require_hrx_runtime(compiler_prefix)
+    env = iron.iron_env(compiler_prefix)
+    command = [
+        environment.venv_py(),
+        paths.ROOT / "tests" / "npu" / "jit_smoke.py",
+    ]
+    if build_only:
+        command.append("--build-only")
+    else:
+        # NPU_RUNTIME is the name current iron-tools reads; IRON_RUNTIME is the
+        # pre-upstreaming name, kept for older checkouts.
+        env["IRON_RUNTIME"] = "hrx"
+        env["NPU_RUNTIME"] = "hrx"
+        hrx_runtime.add_hrx_install_env(env)
+    environment.sh(command, env=env)
+    print(
+        "test-npu-jit: ok "
+        + ("(compiler + JIT, no dispatch)" if build_only else "(ran on the NPU via hrx)")
+    )
+
+
 def cmd_test_npu_iron_ops(args):
     try:
         operators = iron.select(getattr(args, "operator", None))
@@ -233,6 +262,7 @@ def cmd_test_npu_iron_ops(args):
         test_dirs.append(str(test_dir))
     env = iron.iron_ops_env(compiler_prefix)
     env["IRON_RUNTIME"] = "hrx"
+    env["NPU_RUNTIME"] = "hrx"
     hrx_runtime.add_hrx_install_env(env)
     filters = [
         operator.hrx_pytest_filter

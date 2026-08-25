@@ -162,6 +162,13 @@ jobs:
       - name: Verify compiler product relocation
         run: .venv/bin/python dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted --relocate
 
+      # The JIT entry point users actually call (@iron.jit), rather than the
+      # Makefile/aiecc path `dev.py test` covers. --build-only stops at the
+      # xclbin so this gates the compiler and the JIT on a CPU runner; the
+      # dispatch half needs an NPU and runs from `dev.py test-npu-jit`.
+      - name: IRON JIT smoke (compile only)
+        run: .venv/bin/python dev.py test-npu-jit --build-only --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-linux-x86_64
+
       # The same toolchain, driven by the iron-ops OPERATOR library instead of an iron-tools
       # example: MLIR -> Peano (incl. the operator's own aie_kernels/*.cc) -> xclbin + insts.
       # iron-ops is developed against the mlir_aie WHEEL, so this is where its drift from our

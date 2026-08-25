@@ -49,10 +49,12 @@ archives do not require Python.
 
 ## Install a release and run models
 
-Download a [GitHub Release](https://github.com/ROCm/rocm-npu/releases).
-The release description lists the driver versions validated for that build.
+You can either download and unpack binaries from a
+[GitHub Release](https://github.com/ROCm/rocm-npu/releases) directly,
+or install everything into a Python virtual environment. The latter path is
+required if you plan to develop your own applications.
 
-### Standalone archive
+### Option A: Standalone archive
 
 Each release includes a relocatable FastFlowLM + HRX archive:
 
@@ -63,6 +65,7 @@ Extract it and run the binaries from the archive root (`bin/flm` and
 `bin/rocm-npu`):
 
 ```powershell
+# Windows
 Expand-Archive .\rocm-npu-windows-x86_64.zip -DestinationPath .
 cd .\rocm-npu-windows-x86_64
 .\bin\rocm-npu.exe doctor
@@ -71,6 +74,7 @@ cd .\rocm-npu-windows-x86_64
 ```
 
 ```bash
+# Linux
 tar --zstd -xf rocm-npu-linux-x86_64.tar.zst
 cd rocm-npu-linux-x86_64
 ./bin/rocm-npu doctor
@@ -82,15 +86,38 @@ cd rocm-npu-linux-x86_64
 `flm run` downloads model assets and needs Hugging Face access. `flm list`
 shows the models included in that build.
 
-### Python wheels
+The archive cannot compile NPU programs; use the wheels for that.
+
+### Option B: Python wheels
 
 Wheels ship on the same GitHub release, not on PyPI. Installing
-`rocm-npu-fastflowlm` pulls the matching `rocm-npu-runtime` wheel. Replace
-`<tag>` and `<version>` with values from the release (tags look like
-`rocm-npu-v<version>`):
+`rocm-npu-fastflowlm` pulls the matching `rocm-npu-runtime` wheel.
+
+Install Python and create a virtual environment. Activate the environment
+before every command below:
 
 ```powershell
-py -m pip install --only-binary=:all: `
+# Windows
+winget install --exact --id Python.Python.3.12
+py -3.12 -m venv $HOME\rocm-npu
+& $HOME\rocm-npu\Scripts\Activate.ps1
+```
+
+```bash
+# Linux
+sudo apt-get install -y python3.12 python3.12-venv
+python3.12 -m venv ~/rocm-npu
+source ~/rocm-npu/bin/activate
+```
+
+Replace `<tag>` and `<version>` with values from the release (tags look like
+`rocm-npu-v<version>`); for example,
+`https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029`
+is a valid `--find-links` path:
+
+```powershell
+# Windows
+python -m pip install --only-binary=:all: `
   --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
   "rocm-npu-fastflowlm==<version>"
 rocm-npu doctor
@@ -98,41 +125,82 @@ flm run qwen3:0.6b
 ```
 
 ```bash
-python3 -m pip install --only-binary=:all: \
+# Linux
+python -m pip install --only-binary=:all: \
   --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
   "rocm-npu-fastflowlm==<version>"
 rocm-npu doctor
 flm run qwen3:0.6b
 ```
 
-To install the compiler from the same release (use `py -m pip` on Windows):
-
-```bash
-python3 -m pip install --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
-  "rocm-npu-compiler==<version>"
-```
+To also compile your own NPU programs, see
+[Develop your own Models and Applications](#develop-your-own-models-and-applications-using-iron-tools).
 
 See [native runtime CLI](docs/runtime-cli.md) for `rocm-npu` commands.
 
 ## Develop your own Models and Applications Using *iron-tools*
 
 *iron-tools* provides programming abstractions and a compiler toolchain that
-target the AI Engine (AIE) array in the AMD NPU. A guide and programming
-examples document how to build your own applications.
-*FastFlowLM* was built using *iron-tools*.
-
-If you installed a release, install `rocm-npu-compiler` from the same tag
-(see above) and follow the iron-tools documentation:
-
-- The **[MLIR-AIE documentation](https://xilinx.github.io/mlir-aie/dev/)**
-  contains the latest instructions for getting started with iron-tools,
-  formerly known as MLIR-AIE.
+target the AI Engine (AIE) array in the AMD NPU. *FastFlowLM* was built using
+*iron-tools*.
 
 > [!NOTE]
 > *iron-tools* is currently undergoing renaming from its old name, MLIR-AIE,
 > so you might see references to both of these terms. They mean the same
 > thing.
+
+`iron-tools` ships as a vendored part of ROCm-NPU in the `rocm-npu-compiler`
+package. It needs a Python 3.12, 3.13, or 3.14 virtual environment. 
+Set up and activate the environment before each of the commands below; 
+instructions for this are the same as in the previous section.
+
+Install `rocm-npu-compiler` and `rocm-npu-runtime` from a
+[GitHub Release](https://github.com/ROCm/rocm-npu/releases): the compiler builds
+the design, the runtime dispatches it on the NPU. Replace `<tag>` and
+`<version>` with values from that release (tags look like
+`rocm-npu-v<version>`):
+
+```bash
+# Linux
+python -m pip install --only-binary=:all: \
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
+  "rocm-npu-compiler==<version>" "rocm-npu-runtime==<version>"
+```
+
+For example:
+```bash
+# Linux
+python -m pip install --only-binary=:all: \
+  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029" \
+  "rocm-npu-compiler==0.1.0.dev202608250029" "rocm-npu-runtime==0.1.0.dev202608250029"
+```
+
+If you need bleeding-edge `iron-tools` features, you may also choose to install
+directly from the [upstream repository](https://github.com/Xilinx/mlir-aie)
+instead of the vendored `rocm-npu-compiler` package; see instructions there.
+
+### Hello world example
+
+[tests/npu/jit_smoke.py](tests/npu/jit_smoke.py) contains a simple example
+program that we can compile for the NPU using `iron-tools`. It copies a buffer
+DDR → MemTile → DDR: pure DMA, no compute kernel. Clone or download it from this
+repository, then run:
+
+```bash
+python jit_smoke.py
+# PASS: 4096 int32 elements copied through the NPU
+```
+
+### Learn the programming model
+
+- **[MLIR-AIE programming guide](https://xilinx.github.io/mlir-aie/dev/)** —
+  the iron-tools tutorial series.
+- **[MLIR-AIE programming examples](https://github.com/Xilinx/mlir-aie/tree/main/programming_examples)** —
+  designs from `passthrough_kernel` up to matrix multiplication.
+
+Both assume an MLIR-AIE source checkout with Makefiles and XRT. The
+`rocm-npu-compiler` wheel already gives you the toolchain, and the runtime here
+is HRX, so read the IRON design code and skip their setup steps.
 
 To build the compiler toolchain from this checkout instead of the release
 wheel, see [Build ROCm-NPU from source](#build-rocm-npu-from-source).
@@ -145,16 +213,11 @@ with the `amdxdna` HAL and the pinned FastFlowLM app, which can pull
 `qwen3:0.6b` and run a smoke test. Building the compiler toolchain from source
 is in the details at the end of this section.
 
-```bash
-git clone https://github.com/ROCm/rocm-npu.git
-cd rocm-npu
-```
-
 Ubuntu prerequisites:
 
 ```bash
 sudo apt-get install -y \
-  bash build-essential ca-certificates curl git libdrm-dev libipc-cmd-perl \
+  bash build-essential ca-certificates curl git libdrm-dev \
   linux-libc-dev make nasm perl pkg-config python3 python3-venv unzip zip
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
   sh -s -- -y --profile minimal --default-toolchain 1.97.0
@@ -198,6 +261,9 @@ Run the same workflow on both platforms. Use `python3` on Ubuntu and `python`
 on Windows:
 
 ```bash
+git clone https://github.com/ROCm/rocm-npu.git
+cd rocm-npu
+
 git submodule update --init projects/hrx
 git submodule update --init --recursive projects/FastFlowLM
 
@@ -268,6 +334,7 @@ libssl-dev`. The canonical Linux compiler is **gcc**. To build with clang
 locally instead, install `clang lld` and set `CC=clang CXX=clang++`.
 
 ```bash
+git submodule update --init --recursive projects/iron-tools
 python3 dev.py doctor compiler-stack # quick post-setup check: prereqs, pins, patches, prefetch
 python3 dev.py doctor compiler-stack --deep # also replay every patch series in a temporary Git index
 python3 dev.py setup              # .venv + cached uv install; cmake/ninja/Peano from wheels
@@ -277,6 +344,7 @@ python3 dev.py build iron-tools   # aie-opt/aie-translate/bootgen against build/
 python3 dev.py build hrx          # the amdxdna HAL (IREE runtime)
 python3 dev.py build all          # native CLI + compiler stack + HRX, in order
 python3 dev.py test [DESIGN]      # e2e build test, no NPU run
+python3 dev.py test-npu-jit --build-only # compiler + IRON JIT smoke, no NPU run
 python3 dev.py test-iron-ops [OP] # build the iron-ops operators, no NPU run
 python3 dev.py deps               # print requirements/compiler-stack.txt
 ```
@@ -299,8 +367,9 @@ runner rather than on the NPU. Which operators it covers is
 [tests/iron-ops/suite.py](tests/iron-ops/suite.py); adding a row extends it.
 
 On a machine **with** an NPU, `dev.py test-npu` dispatches an iron-tools design through
-the HAL, and `dev.py test-npu-iron-ops` runs the iron-ops operators' own tests on the
-device (their references, their tolerances) with `IRON_RUNTIME=hrx`. The latter needs
+the HAL, `dev.py test-npu-jit` compiles and dispatches the `@iron.jit` smoke design, and
+`dev.py test-npu-iron-ops` runs the iron-ops operators' own tests on the
+device (their references, their tolerances) with `NPU_RUNTIME=hrx`. The latter needs
 their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
 [`requirements/iron-ops-test.txt`](requirements/iron-ops-test.txt); the build path does not need them).
 
@@ -310,6 +379,11 @@ their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
 
 - [Native runtime CLI](docs/runtime-cli.md): `rocm-npu version`, `probe`,
   `doctor`, and `self-test`
+- [tests/npu/jit_smoke.py](tests/npu/jit_smoke.py): the compiler + JIT smoke
+  test, and the smallest complete iron-tools design
+- iron-tools programming:
+  [guide](https://xilinx.github.io/mlir-aie/dev/) and
+  [examples](https://github.com/Xilinx/mlir-aie/tree/main/programming_examples)
 - [Model qualification](docs/qualification.md): optional qualification
   profiles and evidence
 - [Third-party notices](docs/third-party-notices.md)

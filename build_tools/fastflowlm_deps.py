@@ -44,7 +44,7 @@ def check_fastflowlm_linux_host(verbose: bool) -> tuple[bool, list[str]]:
         (
             "Perl IPC::Cmd",
             environment.have_perl_module("IPC::Cmd"),
-            "libipc-cmd-perl",
+            "perl",
         ),
         (
             "<linux/types.h>",

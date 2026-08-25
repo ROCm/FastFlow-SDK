@@ -374,6 +374,15 @@ def create_parser():
     tno.add_argument(
         "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
     )
+    tnj = _add_command(sub, "test-npu-jit", device_testing.cmd_test_npu_jit)
+    tnj.add_argument(
+        "--build-only",
+        action="store_true",
+        help="compile the smoke design but do not dispatch it (no NPU needed)",
+    )
+    tnj.add_argument(
+        "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
+    )
     tn = _add_command(sub, "test-npu", device_testing.cmd_test_npu)
     tn.add_argument("design", nargs="?")
     tn.add_argument(
