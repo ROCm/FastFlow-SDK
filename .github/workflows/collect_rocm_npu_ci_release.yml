@@ -113,6 +113,9 @@ jobs:
             --expected-wheel-tag py3-none-win_amd64 \
             --expected-wheel-tag cp312-abi3-manylinux_2_28_x86_64 \
             --expected-wheel-tag cp312-abi3-win_amd64
+          # Copies into release/ are done; drop duplicate downloads before
+          # the multi-target pip resolution loops.
+          rm -rf wheelhouse archives qualification-parity
 
       - name: Create release-wide qualification candidate
         env:
@@ -153,6 +156,7 @@ jobs:
               target="qualification-release-install-${platform}-${python_tag}"
               python -m pip install \
                 --disable-pip-version-check \
+                --no-cache-dir \
                 --no-index \
                 --find-links release \
                 --only-binary=:all: \
@@ -165,12 +169,14 @@ jobs:
                 "rocm-npu-fastflowlm==${ROCM_NPU_PACKAGE_VERSION}"
               python -m pip install \
                 --disable-pip-version-check \
+                --no-cache-dir \
                 --no-index \
                 --no-deps \
                 --target "${target}" \
                 "${qualification_wheel}"
               python -m pip install \
                 --disable-pip-version-check \
+                --no-cache-dir \
                 --only-binary=:all: \
                 --implementation cp \
                 --python-version "${python_minor}" \
@@ -181,6 +187,7 @@ jobs:
               python -m build_tools.verify_qualification_dependencies \
                 --target "${target}" \
                 --version "${ROCM_NPU_PACKAGE_VERSION}"
+              rm -rf "${target}"
             done
           done
 
