@@ -1038,8 +1038,9 @@ def test_benchmark_soak_validates_every_output_and_generated_config(
 
 def test_benchmark_accepts_terse_sentinel_only_output(monkeypatch, tmp_path):
     # Small/omni models may obey "begin with exactly HRX-NPU-4K-PASS" and emit
-    # only the terse sentinel for a stage. That is fewer than eight words, but the
-    # sentinel exception must keep it from being flagged as incoherent.
+    # only the terse sentinel for a stage. That is fewer than four multi-letter
+    # words, but the sentinel exception must keep it from being flagged as
+    # incoherent.
     model = _model()
     model["tests"] = [
         {
@@ -1080,7 +1081,53 @@ def test_benchmark_accepts_terse_sentinel_only_output(monkeypatch, tmp_path):
     assert records[0]["status"] == "pass"
 
 
-def test_benchmark_csv_rejects_malformed_or_nonfinite_metrics():
+def test_benchmark_coherence_threshold_is_four_multi_letter_words(
+    monkeypatch, tmp_path
+):
+    model = _model()
+    model["tests"] = [
+        {
+            "name": "context-1k",
+            "kind": "bench",
+            "config": "bench/bench_1k_smoke.json",
+            "timeout_seconds": 10,
+            "checkpoint_min": 950,
+            "checkpoint_max": 1024,
+            "expected_regex": "",
+        }
+    ]
+
+    def run_with(raw: str, *, stamp: str):
+        def fake_bench(*args, **kwargs):
+            csv_path = kwargs["cwd"] / "bench_qwen3_0.6b_result.csv"
+            csv_path.write_text(
+                ",".join(benchmark.BENCHMARK_CSV_HEADER)
+                + "\n1,2.5,0,2.5,2.5,391,0,391,391,35,0,35,35\n",
+                encoding="utf-8",
+            )
+            return _result(
+                stdout=(
+                    "Creating checkpoint at context length 1001\n"
+                    "Starting benchmark for 1k and iteration 1\n"
+                    f"Model RAW Output:\n{raw}\n>>>"
+                )
+            )
+
+        monkeypatch.setattr(runner, "run_command", fake_bench)
+        return runner._test_model(
+            model,
+            flm=tmp_path / "flm",
+            model_cache=tmp_path / "models",
+            offline=False,
+            writer=EvidenceWriter(tmp_path / stamp),
+            environment={},
+        )
+
+    # Four multi-letter words is the floor; three is still garbage/too terse.
+    assert run_with("able able able able", stamp="pass-evidence")[0]["status"] == "pass"
+    failed = run_with("able able able", stamp="fail-evidence")
+    assert failed[0]["status"] == "fail"
+    assert "not coherent text" in failed[0]["error"]
     header = list(benchmark.BENCHMARK_CSV_HEADER)
     valid = [
         "1",
@@ -1845,7 +1892,7 @@ def test_default_tests_for_scopes_by_kind():
     assert runner._SWEEP_BENCH_DEFAULT == "8k"
     assert bench["name"] == "context-8k"
     assert bench["config"] == "bench/bench_8k_smoke.json"
-    assert bench["checkpoint_min"] == 7600 and bench["checkpoint_max"] == 8192
+    assert bench["checkpoint_min"] == 7600 and bench["checkpoint_max"] == 8320
     for kind in ("embed", "asr"):
         serve = runner._default_tests_for({"kind": kind, "footprint": 6.0})
         assert len(serve) == 1
@@ -1860,8 +1907,8 @@ def test_default_tests_for_scopes_by_kind():
 def test_default_tests_for_selects_benchmark_context():
     expected = {
         "1k": ("context-1k", "bench/bench_1k_smoke.json", 950, 1152),
-        "4k": ("context-4k", "bench/bench_4k_smoke.json", 3800, 4096),
-        "8k": ("context-8k", "bench/bench_8k_smoke.json", 7600, 8192),
+        "4k": ("context-4k", "bench/bench_4k_smoke.json", 3800, 4224),
+        "8k": ("context-8k", "bench/bench_8k_smoke.json", 7600, 8320),
     }
     for context, (name, config, cmin, cmax) in expected.items():
         tests = runner._default_tests_for(
@@ -2291,11 +2338,21 @@ def test_serve_branch_fails_on_probe_error(monkeypatch, tmp_path):
     assert "did not report a listening port" in records[0]["error"]
 
 
-def _all_models_args(tmp_path):
+def _sweep_args(
+    tmp_path,
+    *,
+    all_models=False,
+    bench=None,
+    bench_context=None,
+    bench_iterations=None,
+    models=None,
+):
     return SimpleNamespace(
         profile=None,
         fast=False,
-        all_models=True,
+        all_models=all_models,
+        bench=bench,
+        models=models,
         output=tmp_path / "evidence",
         model_cache=tmp_path / "models",
         offline=False,
@@ -2304,11 +2361,27 @@ def _all_models_args(tmp_path):
         candidate_manifest=None,
         keep_going=False,
         list_profiles=False,
-        bench_context="8k",
+        bench_context=bench_context,
+        bench_iterations=bench_iterations,
     )
 
 
-def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
+def _all_models_args(tmp_path):
+    return _sweep_args(tmp_path, all_models=True, bench_context="8k")
+
+
+def _run_sweep(
+    monkeypatch,
+    tmp_path,
+    *,
+    candidate_manifest=None,
+    config_factory=_sweep_config,
+    all_models=False,
+    bench=None,
+    bench_context=None,
+    bench_iterations=None,
+    models=None,
+):
     _patch_qualification(monkeypatch, tmp_path, doctor_exit=0)
 
     def core_report(core, command, **kwargs):
@@ -2332,7 +2405,7 @@ def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
     monkeypatch.setattr(runner, "_run_core_report", core_report)
     flm = tmp_path / "flm"
     flm.write_bytes(b"flm")
-    config = _sweep_config(tmp_path)
+    config = config_factory(tmp_path)
     monkeypatch.setattr(runner, "_resolve_flm", lambda: (flm, config, {"FLM_ENV": "x"}))
     monkeypatch.setattr(
         runner, "run_command", lambda *a, **k: _result(stdout="FLM v1.2.3\n")
@@ -2378,30 +2451,60 @@ def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
                     artifacts=[],
                 )
             elif test["kind"] == "bench":
+                name = test["name"]
+                context_k = {
+                    "context-1k": 1,
+                    "context-4k": 4,
+                    "context-8k": 8,
+                }.get(name, 1)
+                # Packaged 8k smoke runs three iterations; --bench sets this
+                # explicitly on the test spec.
+                iterations = int(
+                    test["iterations"]
+                    if "iterations" in test
+                    else (3 if context_k == 8 else 1)
+                )
                 record.update(
                     metrics={
-                        "checkpoint_tokens": 7744,
-                        "iterations": 3,
+                        "checkpoint_tokens": context_k * 1000,
+                        "iterations": iterations,
                         "csv_checkpoint_metrics": {
-                            "context_length_k": 8,
-                            "ttft_avg_s": 0.922,
-                            "prefill_avg_toks_per_s": 1075.37,
-                            "decoding_avg_toks_per_s": 52.15,
+                            "context_length_k": context_k,
+                            "ttft_avg_s": 0.922 if context_k == 8 else 0.5,
+                            "prefill_avg_toks_per_s": (
+                                1075.37 if context_k == 8 else 900.0
+                            ),
+                            "decoding_avg_toks_per_s": (
+                                52.15 if context_k == 8 else 40.0
+                            ),
                         },
                     },
                     artifacts=[],
                 )
             elif test["kind"] == "serve":
-                record.update(
-                    metrics={"probe_kind": test["probe_kind"], "port": 11434},
-                    artifacts=[],
-                )
+                probe_kind = test.get("probe_kind", "embed")
+                metrics = {"probe_kind": probe_kind, "port": 11434}
+                if probe_kind == "embed":
+                    metrics["encode_toks_per_s"] = 120.0
+                elif probe_kind == "asr":
+                    metrics["real_time_factor"] = 0.25
+                    metrics["word_error_rate"] = 0.05
+                record.update(metrics=metrics, artifacts=[])
             records.append(record)
         return records
 
     monkeypatch.setattr(runner, "_test_model", fake_test_model)
 
-    args = _all_models_args(tmp_path)
+    args = _sweep_args(
+        tmp_path,
+        all_models=all_models,
+        bench=bench,
+        bench_context=bench_context if bench_context is not None else (
+            "8k" if all_models else None
+        ),
+        bench_iterations=bench_iterations,
+        models=models,
+    )
     if candidate_manifest is not None:
         args.candidate_manifest = candidate_manifest
     exit_code, summary = runner.run_qualification(args)
@@ -2409,6 +2512,16 @@ def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
         (tmp_path / "evidence" / "evidence.json").read_text(encoding="utf-8")
     )
     return exit_code, summary, evidence
+
+
+def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
+    return _run_sweep(
+        monkeypatch,
+        tmp_path,
+        candidate_manifest=candidate_manifest,
+        all_models=True,
+        bench_context="8k",
+    )
 
 
 def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
@@ -2561,9 +2674,14 @@ def test_bench_tuning_flag_parsing():
     parsed = parser.parse_args(["--bench", "--bench-context", "4k", "--bench-iterations", "20"])
     assert parsed.bench_context == "4k"
     assert parsed.bench_iterations == 20
-    # Context choices are still validated.
+    # Context choices are still validated; non-positive iterations are rejected
+    # at parse time so 0 cannot silently become the default.
     with pytest.raises(SystemExit):
         parser.parse_args(["--bench", "--bench-context", "2k"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bench", "--bench-iterations", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bench", "--bench-iterations", "-1"])
 
 
 def test_models_flag_parsing():
@@ -2584,7 +2702,7 @@ def test_benchmark_tests_for_chat_is_bench_only():
     assert bench["name"] == "context-4k"
     assert bench["config"] == "bench/bench_4k_smoke.json"
     assert bench["iterations"] == 20
-    assert (bench["checkpoint_min"], bench["checkpoint_max"]) == (3800, 4096)
+    assert (bench["checkpoint_min"], bench["checkpoint_max"]) == (3800, 4224)
     # Timeout scales with iteration count but stays bounded by the harness cap.
     assert 300 <= bench["timeout_seconds"] <= 7200
 
@@ -2669,22 +2787,12 @@ def _benchmark_config(root):
 def _benchmark_args(
     tmp_path, *, bench="all", bench_context=None, bench_iterations=None, models=None
 ):
-    return SimpleNamespace(
-        profile=None,
-        fast=False,
-        all_models=False,
+    return _sweep_args(
+        tmp_path,
         bench=bench,
-        models=models,
-        output=tmp_path / "evidence",
-        model_cache=tmp_path / "models",
-        offline=False,
-        no_pull=False,
-        json=True,
-        candidate_manifest=None,
-        keep_going=False,
-        list_profiles=False,
         bench_context=bench_context,
         bench_iterations=bench_iterations,
+        models=models,
     )
 
 
@@ -2697,124 +2805,15 @@ def _run_benchmark_sweep(
     bench_iterations=None,
     models=None,
 ):
-    _patch_qualification(monkeypatch, tmp_path, doctor_exit=0)
-
-    def core_report(core, command, **kwargs):
-        kwargs["writer"].path(f"logs/tests/core-{command}.log").write_text(
-            f"{command}\n", encoding="utf-8"
-        )
-        report = {
-            "schema_version": 1,
-            "command": command,
-            "status": "pass",
-            "product": {"version": "1.2.3", "source_revision": "a" * 40},
-            "data": {
-                "os": "Windows 11",
-                "architecture": "x86_64",
-                "target_family": "npu2",
-            },
-        }
-        return report, 0
-
-    monkeypatch.setattr(runner, "_run_core_report", core_report)
-    flm = tmp_path / "flm"
-    flm.write_bytes(b"flm")
-    config = _benchmark_config(tmp_path)
-    monkeypatch.setattr(runner, "_resolve_flm", lambda: (flm, config, {"FLM_ENV": "x"}))
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: _result(stdout="FLM v1.2.3\n")
-    )
-
-    def fake_resolve(model, **kwargs):
-        return (
-            {
-                "tag": model["tag"],
-                "identity_policy": model["identity_policy"],
-                "source": model["source"],
-                "revision": model["revision"],
-                "status": "pass",
-                "cache_directory": "models/x",
-                "registry_sha256": "b" * 64,
-                "pulled": False,
-                "files": [{"path": "model.q4nx", "size": 1, "sha256": "c" * 64}],
-            },
-            [],
-        )
-
-    monkeypatch.setattr(runner, "resolve_model_dynamic", fake_resolve)
-
-    def fake_test_model(model, **kwargs):
-        kwargs["writer"].path("logs/tests/x.log").write_text(
-            "ok\n", encoding="utf-8"
-        )
-        records = []
-        for test in model["tests"]:
-            if test["kind"] == "serve":
-                probe_kind = test.get("probe_kind", "embed")
-                metrics = {"probe_kind": probe_kind, "port": 9000, "detail": "served"}
-                if probe_kind == "embed":
-                    metrics["encode_toks_per_s"] = 120.0
-                else:
-                    metrics["real_time_factor"] = 0.25
-                    metrics["word_error_rate"] = 0.05
-                records.append(
-                    {
-                        "model": model["tag"],
-                        "name": test["name"],
-                        "kind": "serve",
-                        "status": "pass",
-                        "returncode": 0,
-                        "timed_out": False,
-                        "duration_seconds": 0.1,
-                        "log": "logs/tests/x.log",
-                        "metrics": metrics,
-                        "artifacts": [],
-                    }
-                )
-                continue
-            iterations = int(test.get("iterations", 1))
-            context_k = {
-                "context-1k": 1,
-                "context-4k": 4,
-                "context-8k": 8,
-            }.get(test["name"], 1)
-            records.append(
-                {
-                    "model": model["tag"],
-                    "name": test["name"],
-                    "kind": test["kind"],
-                    "status": "pass",
-                    "duration_seconds": 0.1,
-                    "log": "logs/tests/x.log",
-                    "metrics": {
-                        "checkpoint_tokens": context_k * 1000,
-                        "iterations": iterations,
-                        "csv_checkpoint_metrics": {
-                            "context_length_k": context_k,
-                            "ttft_avg_s": 0.5,
-                            "prefill_avg_toks_per_s": 900.0,
-                            "decoding_avg_toks_per_s": 40.0,
-                        },
-                    },
-                    "artifacts": [],
-                }
-            )
-        return records
-
-    monkeypatch.setattr(runner, "_test_model", fake_test_model)
-
-    args = _benchmark_args(
+    return _run_sweep(
+        monkeypatch,
         tmp_path,
+        config_factory=_benchmark_config,
         bench=bench,
         bench_context=bench_context,
         bench_iterations=bench_iterations,
         models=models,
     )
-    exit_code, summary = runner.run_qualification(args)
-    evidence = json.loads(
-        (tmp_path / "evidence" / "evidence.json").read_text(encoding="utf-8")
-    )
-    return exit_code, summary, evidence
 
 
 def test_benchmark_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
@@ -2833,7 +2832,7 @@ def test_benchmark_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
     assert profile["kind"] == "diagnostic-sweep"
     assert profile["name"] == "bench-all"
     assert profile["bench_context"] == "1k"
-    assert profile["benchmark_iterations"] == 5
+    assert profile["bench_iterations"] == 5
     # Measurement-only: chat models run the one benchmark stage, embed/ASR run
     # the serve-probe; the single-prompt/multi-turn stages never appear.
     tests_by_tag = {model["tag"]: model["tests"] for model in profile["models"]}
@@ -2852,6 +2851,7 @@ def test_benchmark_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
     report_text = (tmp_path / "evidence" / "report.md").read_text(encoding="utf-8")
     assert "## Benchmark (HRX, 1k, averaged over 5 iterations)" in report_text
     assert "## Embedding probe (HRX)" in report_text
+    assert "## HRX per-model results" not in report_text
 
     schema = json.loads(
         (
@@ -2872,7 +2872,7 @@ def test_benchmark_sweep_honors_context_and_iteration_spec(monkeypatch, tmp_path
         (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
     )
     assert profile["bench_context"] == "4k"
-    assert profile["benchmark_iterations"] == 20
+    assert profile["bench_iterations"] == 20
     bench_tests = [test for test in evidence["tests"] if test["kind"] == "bench"]
     assert {test["name"] for test in bench_tests} == {"context-4k"}
     assert all(test["metrics"]["iterations"] == 20 for test in bench_tests)
@@ -2892,3 +2892,16 @@ def test_benchmark_sweep_honors_models_filter(monkeypatch, tmp_path):
         (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
     )
     assert "selected via --models" in profile["description"]
+
+
+def test_empty_models_flag_is_an_error(monkeypatch, tmp_path):
+    for empty in ("", "  ,  ", ","):
+        with pytest.raises(runner.QualificationError, match="at least one tag"):
+            _run_benchmark_sweep(monkeypatch, tmp_path, models=empty)
+
+
+def test_bench_iterations_zero_is_rejected_by_runner(monkeypatch, tmp_path):
+    # Defense in depth: SimpleNamespace callers (and a CLI that skipped the
+    # type= hook) still cannot treat 0 as "use the default".
+    with pytest.raises(runner.QualificationError, match="positive integer"):
+        _run_benchmark_sweep(monkeypatch, tmp_path, bench_iterations=0)

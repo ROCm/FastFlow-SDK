@@ -106,9 +106,10 @@ _SWEEP_BENCH_CONFIGS: dict[str, dict[str, Any]] = {
         "config": "bench/bench_1k_smoke.json",
         "name": "context-1k",
         "checkpoint_min": 950,
-        # A model's chat template can add non-trivial overhead on top of the raw
-        # 1k prompt (gpt-oss's harmony template checkpoints at ~1035), so the
-        # upper band is widened past 1024 to admit that legitimate inflation.
+        # Chat-template overhead is additive: gpt-oss's harmony template
+        # checkpoints a 1k prompt at ~1035, which is the only overflow observed
+        # so far. The same 128-token slack is applied to every band so a later
+        # template cannot miss the 4k/8k ceilings the same way.
         "checkpoint_max": 1152,
         "timeout_factor": 4,
     },
@@ -116,14 +117,14 @@ _SWEEP_BENCH_CONFIGS: dict[str, dict[str, Any]] = {
         "config": "bench/bench_4k_smoke.json",
         "name": "context-4k",
         "checkpoint_min": 3800,
-        "checkpoint_max": 4096,
+        "checkpoint_max": 4224,
         "timeout_factor": 6,
     },
     "8k": {
         "config": "bench/bench_8k_smoke.json",
         "name": "context-8k",
         "checkpoint_min": 7600,
-        "checkpoint_max": 8192,
+        "checkpoint_max": 8320,
         "timeout_factor": 8,
     },
 }
@@ -980,22 +981,26 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         benchmark_context = (
             getattr(args, "bench_context", None) or _BENCHMARK_DEFAULT_CONTEXT
         )
-        benchmark_iterations = (
-            getattr(args, "bench_iterations", None) or _BENCHMARK_DEFAULT_ITERATIONS
-        )
-        if benchmark_iterations < 1:
-            raise QualificationError(
-                "--bench-iterations must be a positive integer, got "
-                f"{benchmark_iterations}"
-            )
+        raw_iterations = getattr(args, "bench_iterations", None)
+        if raw_iterations is None:
+            benchmark_iterations = _BENCHMARK_DEFAULT_ITERATIONS
+        else:
+            benchmark_iterations = int(raw_iterations)
+            if benchmark_iterations < 1:
+                raise QualificationError(
+                    "--bench-iterations must be a positive integer, got "
+                    f"{benchmark_iterations}"
+                )
     # --models narrows a benchmark sweep to an explicit tag subset. It only has
     # meaning for a benchmark mode; anywhere else it is warned about and ignored.
+    # An explicit empty list (``--models=`` / commas-only) is an error: the flag
+    # is a restriction, not a no-op that silently sweeps the whole registry.
     models_arg = getattr(args, "models", None)
     model_filter: list[str] | None = None
-    if models_arg:
+    if models_arg is not None:
         model_filter = [tag.strip() for tag in models_arg.split(",") if tag.strip()]
         if not model_filter:
-            model_filter = None
+            raise QualificationError("--models requires at least one tag")
     if model_filter and not benchmark:
         print(
             "qualify: --models has no effect without --bench; ignoring it",
@@ -1051,7 +1056,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 "chat models; serve-probe for embed/ASR models."
             ),
             "bench_context": benchmark_context,
-            "benchmark_iterations": benchmark_iterations,
+            "bench_iterations": benchmark_iterations,
             "models": [],
         }
     else:

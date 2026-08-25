@@ -224,8 +224,8 @@ rocm-npu qualify --model-cache $cache --output qualification-evidence
 rocm-npu qualify --profile extended --model-cache $cache --output extended-evidence
 rocm-npu qualify --all-models --model-cache $cache --output all-models-evidence
 rocm-npu qualify --all-models --bench-context 1k --model-cache $cache --output all-models-1k-evidence
-rocm-npu qualify --bench all --model-cache $cache --output benchmark-evidence
-rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output benchmark-4k-evidence
+rocm-npu qualify --bench all --model-cache $cache --output bench-all-evidence
+rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
 rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```
 

@@ -3,10 +3,11 @@
 
 """Render a human-readable Markdown report from a qualification evidence bundle.
 
-The complete-sweep (``--all-models``) run emits, in a single command, the same
-tables the manual HRX experiment harness produced: an environment header, a
-per-model functional matrix, and an averaged on-NPU benchmark table. Only HRX
-numbers are available here, so no XRT columns are rendered.
+Sweeps emit an environment header, an averaged on-NPU benchmark table, and
+embedding/ASR probe tables. The complete-sweep (``--all-models``) also includes
+a per-model functional matrix (single-prompt / multi-turn); ``--bench`` skips
+that matrix because it does not run those stages. Those tables report HRX
+numbers only here, so no XRT columns are rendered.
 """
 
 from __future__ import annotations
@@ -128,6 +129,13 @@ def _model_kind(
 def _results_table(
     evidence: dict[str, Any], kinds: dict[str, str] | None
 ) -> list[str]:
+    # Measurement-only --bench runs never schedule the single-prompt / multi-turn
+    # stages, so a run/verify matrix of dashes is noise. Skip it unless at least
+    # one run test actually executed.
+    if not any(
+        test.get("kind") == "run" for test in evidence.get("tests", [])
+    ):
+        return []
     grouped = _tests_by_model(evidence)
     lines = [
         "## HRX per-model results (run/verify)",

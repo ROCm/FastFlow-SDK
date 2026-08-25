@@ -27,7 +27,26 @@ from .offline import (
 )
 from .profiles import ProfileError, profile_names
 from .power import inhibit_system_sleep
-from .runner import finalize_partial_evidence, run_qualification
+from .runner import (
+    _BENCHMARK_MODES,
+    finalize_partial_evidence,
+    run_qualification,
+)
+
+
+def _positive_int(value: str) -> int:
+    """argparse type: a strictly positive integer."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"must be a positive integer, got {value!r}"
+        ) from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(
+            f"must be a positive integer, got {parsed}"
+        )
+    return parsed
 
 
 class QualificationArgumentParser(argparse.ArgumentParser):
@@ -82,7 +101,7 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         nargs="?",
         const="all",
         default=None,
-        choices=("all",),
+        choices=_BENCHMARK_MODES,
         metavar="MODE",
         help=(
             "run a measurement-only benchmark sweep: the on-NPU decode benchmark "
@@ -116,7 +135,7 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--bench-iterations",
-        type=int,
+        type=_positive_int,
         default=None,
         metavar="N",
         help=(
