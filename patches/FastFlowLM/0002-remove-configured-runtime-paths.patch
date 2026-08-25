@@ -6,9 +6,7 @@ after honoring explicit environment variables (FLM_CONFIG_PATH,
 FLM_MODELINFO_PATH, FLM_XCLBIN_PATH). Remove the obsolete configured-prefix
 fallbacks -- and the CMAKE_INSTALL_PREFIX/CMAKE_XCLBIN_PREFIX compile
 definitions that feed them -- so release binaries do not retain the build
-host's checkout or install paths. a432a07 split model discovery into
-find_model_list() and find_model_info(); strip the baked prefix from both as
-well as find_xclbin_path().
+host's checkout or install paths.
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index dd4d33f..f07b89d 100644
@@ -24,7 +22,7 @@ index dd4d33f..f07b89d 100644
      __NPU_VERSION__=\"${NPU_VERSION}\"
  )
 diff --git a/src/common/utils.cpp b/src/common/utils.cpp
-index d4fd9ae..a1548a4 100644
+index 5e16386..7c9412f 100644
 --- a/src/common/utils.cpp
 +++ b/src/common/utils.cpp
 @@ -20,8 +20,6 @@
@@ -53,12 +51,12 @@ index d4fd9ae..a1548a4 100644
  std::string find_model_info() {
 -    std::string install_prefix = CMAKE_INSTALL_PREFIX;
 -
-     // 1. Check FLM_CONFIG_PATH environment variable
+     // 1. Check FLM_MODELINFO_PATH environment variable
      const char* env_path = std::getenv("FLM_MODELINFO_PATH");
      if (env_path && *env_path) {
-@@ -79,12 +69,6 @@ std::string find_model_info() {
-     if (std::filesystem::exists(exe_relative_path)) {
-         return exe_relative_path;
+@@ -98,12 +88,6 @@ std::string find_model_info() {
+     if (std::filesystem::exists(bundle_path)) {
+         return bundle_path;
      }
 -
 -    // Linux: install
@@ -69,7 +67,7 @@ index d4fd9ae..a1548a4 100644
  #else
      // Windows: Check relative to executable
      std::string exe_dir = get_executable_directory();
-@@ -99,8 +83,6 @@ std::string find_model_info() {
+@@ -118,8 +102,6 @@ std::string find_model_info() {
  }
  
  std::string find_xclbin_path() {
@@ -78,7 +76,7 @@ index d4fd9ae..a1548a4 100644
      // Check FLM_CONFIG_PATH environment variable
      const char* env_path = std::getenv("FLM_XCLBIN_PATH");
      if (env_path && *env_path) {
-@@ -136,12 +118,6 @@ std::string find_xclbin_path() {
+@@ -155,12 +137,6 @@ std::string find_xclbin_path() {
          return bundle_path;
      }
  
