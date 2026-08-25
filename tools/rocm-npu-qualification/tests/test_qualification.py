@@ -1038,8 +1038,9 @@ def test_benchmark_soak_validates_every_output_and_generated_config(
 
 def test_benchmark_accepts_terse_sentinel_only_output(monkeypatch, tmp_path):
     # Small/omni models may obey "begin with exactly HRX-NPU-4K-PASS" and emit
-    # only the terse sentinel for a stage. That is fewer than eight words, but the
-    # sentinel exception must keep it from being flagged as incoherent.
+    # only the terse sentinel for a stage. That is fewer than four multi-letter
+    # words, but the sentinel exception must keep it from being flagged as
+    # incoherent.
     model = _model()
     model["tests"] = [
         {
@@ -1080,7 +1081,53 @@ def test_benchmark_accepts_terse_sentinel_only_output(monkeypatch, tmp_path):
     assert records[0]["status"] == "pass"
 
 
-def test_benchmark_csv_rejects_malformed_or_nonfinite_metrics():
+def test_benchmark_coherence_threshold_is_four_multi_letter_words(
+    monkeypatch, tmp_path
+):
+    model = _model()
+    model["tests"] = [
+        {
+            "name": "context-1k",
+            "kind": "bench",
+            "config": "bench/bench_1k_smoke.json",
+            "timeout_seconds": 10,
+            "checkpoint_min": 950,
+            "checkpoint_max": 1024,
+            "expected_regex": "",
+        }
+    ]
+
+    def run_with(raw: str, *, stamp: str):
+        def fake_bench(*args, **kwargs):
+            csv_path = kwargs["cwd"] / "bench_qwen3_0.6b_result.csv"
+            csv_path.write_text(
+                ",".join(benchmark.BENCHMARK_CSV_HEADER)
+                + "\n1,2.5,0,2.5,2.5,391,0,391,391,35,0,35,35\n",
+                encoding="utf-8",
+            )
+            return _result(
+                stdout=(
+                    "Creating checkpoint at context length 1001\n"
+                    "Starting benchmark for 1k and iteration 1\n"
+                    f"Model RAW Output:\n{raw}\n>>>"
+                )
+            )
+
+        monkeypatch.setattr(runner, "run_command", fake_bench)
+        return runner._test_model(
+            model,
+            flm=tmp_path / "flm",
+            model_cache=tmp_path / "models",
+            offline=False,
+            writer=EvidenceWriter(tmp_path / stamp),
+            environment={},
+        )
+
+    # Four multi-letter words is the floor; three is still garbage/too terse.
+    assert run_with("able able able able", stamp="pass-evidence")[0]["status"] == "pass"
+    failed = run_with("able able able", stamp="fail-evidence")
+    assert failed[0]["status"] == "fail"
+    assert "not coherent text" in failed[0]["error"]
     header = list(benchmark.BENCHMARK_CSV_HEADER)
     valid = [
         "1",
@@ -1845,7 +1892,7 @@ def test_default_tests_for_scopes_by_kind():
     assert runner._SWEEP_BENCH_DEFAULT == "8k"
     assert bench["name"] == "context-8k"
     assert bench["config"] == "bench/bench_8k_smoke.json"
-    assert bench["checkpoint_min"] == 7600 and bench["checkpoint_max"] == 8192
+    assert bench["checkpoint_min"] == 7600 and bench["checkpoint_max"] == 8320
     for kind in ("embed", "asr"):
         serve = runner._default_tests_for({"kind": kind, "footprint": 6.0})
         assert len(serve) == 1
@@ -1859,9 +1906,9 @@ def test_default_tests_for_scopes_by_kind():
 
 def test_default_tests_for_selects_benchmark_context():
     expected = {
-        "1k": ("context-1k", "bench/bench_1k_smoke.json", 950, 1024),
-        "4k": ("context-4k", "bench/bench_4k_smoke.json", 3800, 4096),
-        "8k": ("context-8k", "bench/bench_8k_smoke.json", 7600, 8192),
+        "1k": ("context-1k", "bench/bench_1k_smoke.json", 950, 1152),
+        "4k": ("context-4k", "bench/bench_4k_smoke.json", 3800, 4224),
+        "8k": ("context-8k", "bench/bench_8k_smoke.json", 7600, 8320),
     }
     for context, (name, config, cmin, cmax) in expected.items():
         tests = runner._default_tests_for(
@@ -2291,11 +2338,21 @@ def test_serve_branch_fails_on_probe_error(monkeypatch, tmp_path):
     assert "did not report a listening port" in records[0]["error"]
 
 
-def _all_models_args(tmp_path):
+def _sweep_args(
+    tmp_path,
+    *,
+    all_models=False,
+    bench=None,
+    bench_context=None,
+    bench_iterations=None,
+    models=None,
+):
     return SimpleNamespace(
         profile=None,
         fast=False,
-        all_models=True,
+        all_models=all_models,
+        bench=bench,
+        models=models,
         output=tmp_path / "evidence",
         model_cache=tmp_path / "models",
         offline=False,
@@ -2304,11 +2361,27 @@ def _all_models_args(tmp_path):
         candidate_manifest=None,
         keep_going=False,
         list_profiles=False,
-        bench_context="8k",
+        bench_context=bench_context,
+        bench_iterations=bench_iterations,
     )
 
 
-def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
+def _all_models_args(tmp_path):
+    return _sweep_args(tmp_path, all_models=True, bench_context="8k")
+
+
+def _run_sweep(
+    monkeypatch,
+    tmp_path,
+    *,
+    candidate_manifest=None,
+    config_factory=_sweep_config,
+    all_models=False,
+    bench=None,
+    bench_context=None,
+    bench_iterations=None,
+    models=None,
+):
     _patch_qualification(monkeypatch, tmp_path, doctor_exit=0)
 
     def core_report(core, command, **kwargs):
@@ -2332,7 +2405,7 @@ def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
     monkeypatch.setattr(runner, "_run_core_report", core_report)
     flm = tmp_path / "flm"
     flm.write_bytes(b"flm")
-    config = _sweep_config(tmp_path)
+    config = config_factory(tmp_path)
     monkeypatch.setattr(runner, "_resolve_flm", lambda: (flm, config, {"FLM_ENV": "x"}))
     monkeypatch.setattr(
         runner, "run_command", lambda *a, **k: _result(stdout="FLM v1.2.3\n")
@@ -2378,30 +2451,60 @@ def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
                     artifacts=[],
                 )
             elif test["kind"] == "bench":
+                name = test["name"]
+                context_k = {
+                    "context-1k": 1,
+                    "context-4k": 4,
+                    "context-8k": 8,
+                }.get(name, 1)
+                # Packaged 8k smoke runs three iterations; --bench sets this
+                # explicitly on the test spec.
+                iterations = int(
+                    test["iterations"]
+                    if "iterations" in test
+                    else (3 if context_k == 8 else 1)
+                )
                 record.update(
                     metrics={
-                        "checkpoint_tokens": 7744,
-                        "iterations": 3,
+                        "checkpoint_tokens": context_k * 1000,
+                        "iterations": iterations,
                         "csv_checkpoint_metrics": {
-                            "context_length_k": 8,
-                            "ttft_avg_s": 0.922,
-                            "prefill_avg_toks_per_s": 1075.37,
-                            "decoding_avg_toks_per_s": 52.15,
+                            "context_length_k": context_k,
+                            "ttft_avg_s": 0.922 if context_k == 8 else 0.5,
+                            "prefill_avg_toks_per_s": (
+                                1075.37 if context_k == 8 else 900.0
+                            ),
+                            "decoding_avg_toks_per_s": (
+                                52.15 if context_k == 8 else 40.0
+                            ),
                         },
                     },
                     artifacts=[],
                 )
             elif test["kind"] == "serve":
-                record.update(
-                    metrics={"probe_kind": test["probe_kind"], "port": 11434},
-                    artifacts=[],
-                )
+                probe_kind = test.get("probe_kind", "embed")
+                metrics = {"probe_kind": probe_kind, "port": 11434}
+                if probe_kind == "embed":
+                    metrics["encode_toks_per_s"] = 120.0
+                elif probe_kind == "asr":
+                    metrics["real_time_factor"] = 0.25
+                    metrics["word_error_rate"] = 0.05
+                record.update(metrics=metrics, artifacts=[])
             records.append(record)
         return records
 
     monkeypatch.setattr(runner, "_test_model", fake_test_model)
 
-    args = _all_models_args(tmp_path)
+    args = _sweep_args(
+        tmp_path,
+        all_models=all_models,
+        bench=bench,
+        bench_context=bench_context if bench_context is not None else (
+            "8k" if all_models else None
+        ),
+        bench_iterations=bench_iterations,
+        models=models,
+    )
     if candidate_manifest is not None:
         args.candidate_manifest = candidate_manifest
     exit_code, summary = runner.run_qualification(args)
@@ -2409,6 +2512,16 @@ def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
         (tmp_path / "evidence" / "evidence.json").read_text(encoding="utf-8")
     )
     return exit_code, summary, evidence
+
+
+def _run_all_models_sweep(monkeypatch, tmp_path, *, candidate_manifest=None):
+    return _run_sweep(
+        monkeypatch,
+        tmp_path,
+        candidate_manifest=candidate_manifest,
+        all_models=True,
+        bench_context="8k",
+    )
 
 
 def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
@@ -2528,8 +2641,267 @@ def test_all_models_is_mutually_exclusive_with_profile():
         parser.parse_args(["--all-models", "--profile", "fast"])
     args = parser.parse_args(["--all-models"])
     assert args.all_models is True
-    # 8k is the default benchmark stage; 1k/4k/8k are selectable
-    assert args.bench_context == "8k"
+    # The parser leaves --bench-context unset; the runner resolves the per-mode
+    # default (8k for --all-models). 1k/4k/8k are selectable.
+    assert args.bench_context is None
     assert parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context == "4k"
     with pytest.raises(SystemExit):
         parser.parse_args(["--all-models", "--bench-context", "16k"])
+
+
+def test_bench_flag_parsing_and_mutual_exclusion():
+    parser = cli.create_parser()
+    # Absent -> None; bare -> const "all"; explicit mode captured verbatim.
+    assert parser.parse_args([]).bench is None
+    assert parser.parse_args(["--bench"]).bench == "all"
+    assert parser.parse_args(["--bench", "all"]).bench == "all"
+    assert parser.parse_args(["--bench=all"]).bench == "all"
+    # Unknown modes are rejected by argparse choices.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bench", "nope"])
+    # Mutually exclusive with the other run-mode selectors.
+    for other in (["--all-models"], ["--fast"], ["--profile", "fast"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--bench", *other])
+
+
+def test_bench_tuning_flag_parsing():
+    parser = cli.create_parser()
+    # Context/iterations are dedicated flags; both default to unset so the
+    # runner can pick the per-mode default.
+    assert parser.parse_args([]).bench_context is None
+    assert parser.parse_args([]).bench_iterations is None
+    parsed = parser.parse_args(["--bench", "--bench-context", "4k", "--bench-iterations", "20"])
+    assert parsed.bench_context == "4k"
+    assert parsed.bench_iterations == 20
+    # Context choices are still validated; non-positive iterations are rejected
+    # at parse time so 0 cannot silently become the default.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bench", "--bench-context", "2k"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bench", "--bench-iterations", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bench", "--bench-iterations", "-1"])
+
+
+def test_models_flag_parsing():
+    parser = cli.create_parser()
+    assert parser.parse_args([]).models is None
+    assert (
+        parser.parse_args(["--bench", "--models=llama3.2:1b,qwen3:0.6b"]).models
+        == "llama3.2:1b,qwen3:0.6b"
+    )
+
+
+def test_benchmark_tests_for_chat_is_bench_only():
+    tests = runner._benchmark_tests_for(
+        {"kind": "chat", "footprint": 1.0}, bench_context="4k", iterations=20
+    )
+    assert [test["kind"] for test in tests] == ["bench"]
+    bench = tests[0]
+    assert bench["name"] == "context-4k"
+    assert bench["config"] == "bench/bench_4k_smoke.json"
+    assert bench["iterations"] == 20
+    assert (bench["checkpoint_min"], bench["checkpoint_max"]) == (3800, 4224)
+    # Timeout scales with iteration count but stays bounded by the harness cap.
+    assert 300 <= bench["timeout_seconds"] <= 7200
+
+
+def test_benchmark_tests_for_embed_and_asr_use_serve_probe():
+    for kind in ("embed", "asr"):
+        tests = runner._benchmark_tests_for(
+            {"kind": kind, "footprint": 0.6}, bench_context="1k", iterations=5
+        )
+        assert [test["kind"] for test in tests] == ["serve"]
+        probe = tests[0]
+        assert probe["name"] == "serve-probe"
+        assert probe["probe_kind"] == kind
+        assert 300 <= probe["timeout_seconds"] <= 7200
+        # No decode-benchmark fields leak into a probe-only stage.
+        assert "checkpoint_min" not in probe
+
+
+def test_filter_models_by_tags_keeps_requested_order_and_warns(capsys):
+    discovered = [
+        {"tag": "embed-gemma:300m", "kind": "embed"},
+        {"tag": "gpt-oss:20b", "kind": "chat"},
+        {"tag": "qwen3:0.6b", "kind": "chat"},
+        {"tag": "lfm2:1.2b", "kind": "chat"},
+    ]
+    selected = runner._filter_models_by_tags(
+        discovered, ["qwen3:0.6b", "gpt-oss:20b", "absent:1b"]
+    )
+    # Requested order (not discovery order); unknown tags dropped with a warning.
+    assert [model["tag"] for model in selected] == ["qwen3:0.6b", "gpt-oss:20b"]
+    warning = capsys.readouterr().err
+    assert "--models skipping tags absent" in warning
+    assert "absent:1b" in warning
+
+
+def test_filter_models_by_tags_requires_at_least_one():
+    with pytest.raises(runner.QualificationError, match="none of the --models"):
+        runner._filter_models_by_tags(
+            [{"tag": "present:1b", "kind": "chat"}], ["absent:1b"]
+        )
+
+
+def _benchmark_config(root):
+    path = root / "benchmark_model_list.json"
+
+    def entry(name, family, footprint, label=None):
+        spec = {
+            "name": name,
+            "url": f"https://hf.example/{name}",
+            "files": ["model.q4nx"],
+            "footprint": footprint,
+            "details": {"family": family},
+        }
+        if label is not None:
+            spec["label"] = label
+        return spec
+
+    path.write_text(
+        json.dumps(
+            {
+                "model_path": "models",
+                "models": {
+                    "qwen3": {"0.6b": entry("Qwen3-0.6B-NPU2", "qwen3", 0.66)},
+                    "lfm2": {"1.2b": entry("LFM2-1.2B-NPU2", "lfm2", 0.96)},
+                    "gpt-oss": {"20b": entry("GPT-OSS-20B-NPU2", "gpt-oss", 14.0)},
+                    "embed-gemma": {
+                        "300m": entry(
+                            "Embedding-Gemma-300M-NPU2",
+                            "embed-gemma",
+                            0.62,
+                            ["embeddings"],
+                        )
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _benchmark_args(
+    tmp_path, *, bench="all", bench_context=None, bench_iterations=None, models=None
+):
+    return _sweep_args(
+        tmp_path,
+        bench=bench,
+        bench_context=bench_context,
+        bench_iterations=bench_iterations,
+        models=models,
+    )
+
+
+def _run_benchmark_sweep(
+    monkeypatch,
+    tmp_path,
+    *,
+    bench="all",
+    bench_context=None,
+    bench_iterations=None,
+    models=None,
+):
+    return _run_sweep(
+        monkeypatch,
+        tmp_path,
+        config_factory=_benchmark_config,
+        bench=bench,
+        bench_context=bench_context,
+        bench_iterations=bench_iterations,
+        models=models,
+    )
+
+
+def test_benchmark_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_benchmark_sweep(monkeypatch, tmp_path)
+    assert exit_code == 0
+    assert summary["status"] == "pass"
+    assert summary["profile"] == "bench-all"
+    # Every registry model is measured: chat models via the decode benchmark and
+    # the embed model via the serve-probe (discovery order preserved).
+    tags = [model["tag"] for model in evidence["models"]]
+    assert tags == ["qwen3:0.6b", "lfm2:1.2b", "gpt-oss:20b", "embed-gemma:300m"]
+
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["kind"] == "diagnostic-sweep"
+    assert profile["name"] == "bench-all"
+    assert profile["bench_context"] == "1k"
+    assert profile["bench_iterations"] == 5
+    # Measurement-only: chat models run the one benchmark stage, embed/ASR run
+    # the serve-probe; the single-prompt/multi-turn stages never appear.
+    tests_by_tag = {model["tag"]: model["tests"] for model in profile["models"]}
+    assert tests_by_tag["qwen3:0.6b"] == ["context-1k"]
+    assert tests_by_tag["gpt-oss:20b"] == ["context-1k"]
+    assert tests_by_tag["embed-gemma:300m"] == ["serve-probe"]
+
+    model_test_kinds = {
+        test["kind"]
+        for test in evidence["tests"]
+        if test["model"] != "native-core"
+    }
+    assert model_test_kinds == {"bench", "serve"}
+    assert "run" not in model_test_kinds
+
+    report_text = (tmp_path / "evidence" / "report.md").read_text(encoding="utf-8")
+    assert "## Benchmark (HRX, 1k, averaged over 5 iterations)" in report_text
+    assert "## Embedding probe (HRX)" in report_text
+    assert "## HRX per-model results" not in report_text
+
+    schema = json.loads(
+        (
+            ROOT
+            / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+            / "schemas/evidence-v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    Draft202012Validator(schema).validate(evidence)
+
+
+def test_benchmark_sweep_honors_context_and_iteration_spec(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_benchmark_sweep(
+        monkeypatch, tmp_path, bench_context="4k", bench_iterations=20
+    )
+    assert exit_code == 0
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["bench_context"] == "4k"
+    assert profile["bench_iterations"] == 20
+    bench_tests = [test for test in evidence["tests"] if test["kind"] == "bench"]
+    assert {test["name"] for test in bench_tests} == {"context-4k"}
+    assert all(test["metrics"]["iterations"] == 20 for test in bench_tests)
+    report_text = (tmp_path / "evidence" / "report.md").read_text(encoding="utf-8")
+    assert "## Benchmark (HRX, 4k, averaged over 20 iterations)" in report_text
+
+
+def test_benchmark_sweep_honors_models_filter(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_benchmark_sweep(
+        monkeypatch, tmp_path, models="gpt-oss:20b,qwen3:0.6b,absent:1b"
+    )
+    assert exit_code == 0
+    # Only the requested (and present) tags run, in the requested order.
+    tags = [model["tag"] for model in evidence["models"]]
+    assert tags == ["gpt-oss:20b", "qwen3:0.6b"]
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert "selected via --models" in profile["description"]
+
+
+def test_empty_models_flag_is_an_error(monkeypatch, tmp_path):
+    for empty in ("", "  ,  ", ","):
+        with pytest.raises(runner.QualificationError, match="at least one tag"):
+            _run_benchmark_sweep(monkeypatch, tmp_path, models=empty)
+
+
+def test_bench_iterations_zero_is_rejected_by_runner(monkeypatch, tmp_path):
+    # Defense in depth: SimpleNamespace callers (and a CLI that skipped the
+    # type= hook) still cannot treat 0 as "use the default".
+    with pytest.raises(runner.QualificationError, match="positive integer"):
+        _run_benchmark_sweep(monkeypatch, tmp_path, bench_iterations=0)
