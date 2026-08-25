@@ -206,6 +206,21 @@ def test_profile_schema_rejection_and_packaged_profiles():
     }
     assert lfm_tests["long-lived-context-1k"]["iterations"] == 100
 
+    # Candidate contract generation must apply the same inheritance rules as
+    # load_profile, including test_extensions; otherwise extended evidence
+    # cannot be sealed against the embedded qualification_contract.
+    from importlib import resources
+
+    from rocm_npu_qualification.profiles import materialize_profiles
+
+    root = resources.files("rocm_npu_qualification").joinpath("profiles")
+    raw = {
+        path.name[:-5]: json.loads(path.read_text(encoding="utf-8"))
+        for path in root.iterdir()
+        if path.name.endswith(".json")
+    }
+    assert materialize_profiles(raw)["extended"] == extended
+
 
 def test_profile_selection_and_fast_parity_contract():
     parser = cli.create_parser()

@@ -276,6 +276,93 @@ def profile_names() -> list[str]:
     )
 
 
+def merge_inherited_profile(value: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
+    """Materialize an `extends` profile, including `test_extensions`.
+
+    Candidate contract generation must use this same merge so sealed evidence
+    profiles match the embedded qualification_contract.
+    """
+    allowed_properties = {
+        "schema_version",
+        "name",
+        "description",
+        "extends",
+        "models",
+    }
+    _require(
+        set(value)
+        in (allowed_properties, allowed_properties | {"test_extensions"}),
+        "inherited profile properties are invalid",
+    )
+    _require(
+        value["schema_version"] == PROFILE_SCHEMA_VERSION,
+        "unsupported profile schema",
+    )
+    merged = {
+        "schema_version": PROFILE_SCHEMA_VERSION,
+        "name": value["name"],
+        "description": value["description"],
+        "models": [*deepcopy(parent["models"]), *deepcopy(value.get("models", []))],
+    }
+    models_by_tag = {model["tag"]: model for model in merged["models"]}
+    test_extensions = value.get("test_extensions", [])
+    _require(
+        isinstance(test_extensions, list),
+        "inherited profile test extensions must be an array",
+    )
+    extended_models: set[str] = set()
+    for extension in test_extensions:
+        _require(
+            isinstance(extension, dict) and set(extension) == {"model", "tests"},
+            "inherited profile test extension is invalid",
+        )
+        model_tag = extension.get("model")
+        _require(
+            isinstance(model_tag, str) and model_tag in models_by_tag,
+            "inherited profile test extension references an unknown model",
+        )
+        _require(
+            model_tag not in extended_models,
+            "inherited profile contains duplicate model test extensions",
+        )
+        extended_models.add(model_tag)
+        tests = extension.get("tests")
+        _require(
+            isinstance(tests, list) and tests,
+            "inherited profile test extension must contain tests",
+        )
+        models_by_tag[model_tag]["tests"].extend(deepcopy(tests))
+    return validate_profile(merged)
+
+
+def materialize_profiles(raw_profiles: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Resolve a profile name→raw-JSON map the same way installed profiles load."""
+    loading: set[str] = set()
+
+    def resolve(name: str) -> dict[str, Any]:
+        if name in loading or name not in raw_profiles:
+            raise ProfileError(
+                f"qualification profile inheritance is invalid: {name}"
+            )
+        value = raw_profiles[name]
+        if isinstance(value, dict) and "extends" in value:
+            parent_name = value["extends"]
+            _require(
+                isinstance(parent_name, str) and parent_name != name,
+                "profile parent is invalid",
+            )
+            _require(value.get("name") == name, "profile name does not match filename")
+            loading.add(name)
+            parent = resolve(parent_name)
+            loading.remove(name)
+            return merge_inherited_profile(value, parent)
+        profile = validate_profile(value)
+        _require(profile["name"] == name, "profile name does not match filename")
+        return profile
+
+    return {name: resolve(name) for name in sorted(raw_profiles)}
+
+
 def _load_profile(name: str, loading: set[str]) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9-]+", name):
         raise ProfileError("profile name is invalid")
@@ -287,65 +374,14 @@ def _load_profile(name: str, loading: set[str]) -> dict[str, Any]:
         raise ProfileError(f"unknown qualification profile: {name}")
     value = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(value, dict) and "extends" in value:
-        allowed_properties = {
-            "schema_version",
-            "name",
-            "description",
-            "extends",
-            "models",
-        }
-        _require(
-            set(value)
-            in (allowed_properties, allowed_properties | {"test_extensions"}),
-            "inherited profile properties are invalid",
-        )
-        _require(
-            value["schema_version"] == PROFILE_SCHEMA_VERSION,
-            "unsupported profile schema",
-        )
-        _require(value["name"] == name, "profile name does not match filename")
         parent_name = value["extends"]
         _require(
             isinstance(parent_name, str) and parent_name != name,
             "profile parent is invalid",
         )
-        parent = deepcopy(_load_profile(parent_name, loading | {name}))
-        merged = {
-            "schema_version": PROFILE_SCHEMA_VERSION,
-            "name": value["name"],
-            "description": value["description"],
-            "models": [*parent["models"], *value["models"]],
-        }
-        models_by_tag = {model["tag"]: model for model in merged["models"]}
-        test_extensions = value.get("test_extensions", [])
-        _require(
-            isinstance(test_extensions, list),
-            "inherited profile test extensions must be an array",
-        )
-        extended_models: set[str] = set()
-        for extension in test_extensions:
-            _require(
-                isinstance(extension, dict)
-                and set(extension) == {"model", "tests"},
-                "inherited profile test extension is invalid",
-            )
-            model_tag = extension.get("model")
-            _require(
-                isinstance(model_tag, str) and model_tag in models_by_tag,
-                "inherited profile test extension references an unknown model",
-            )
-            _require(
-                model_tag not in extended_models,
-                "inherited profile contains duplicate model test extensions",
-            )
-            extended_models.add(model_tag)
-            tests = extension.get("tests")
-            _require(
-                isinstance(tests, list) and tests,
-                "inherited profile test extension must contain tests",
-            )
-            models_by_tag[model_tag]["tests"].extend(tests)
-        return validate_profile(merged)
+        _require(value.get("name") == name, "profile name does not match filename")
+        parent = _load_profile(parent_name, loading | {name})
+        return merge_inherited_profile(value, parent)
     profile = validate_profile(value)
     _require(profile["name"] == name, "profile name does not match filename")
     return profile
