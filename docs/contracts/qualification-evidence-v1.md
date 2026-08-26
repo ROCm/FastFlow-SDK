@@ -21,7 +21,9 @@ A qualification run writes a portable directory containing:
 - `junit.xml`: CI-compatible passed and failed test cases
 - `report.md`: optional human-readable HRX overlay written for sweeps. It is
   covered by `SHA256SUMS` but is not schema-validated and carries no intake
-  semantics; profile runs omit it.
+  semantics; profile runs omit it. When `--bench --xrt-flm <path>` runs, the
+  decode benchmark table and the Embedding/ASR probe tables widen to a
+  side-by-side HRX-vs-XRT comparison.
 - `logs/pull/` and `logs/tests/`: redacted subprocess transcripts
 - `SHA256SUMS`: every other evidence file in deterministic path order
 
@@ -31,6 +33,18 @@ Status is
 written as `running` before device work begins and updated as results arrive,
 so interrupted and failed runs retain useful partial evidence. Both successes
 and failures remain in the final bundle.
+
+An optional `--bench --xrt-flm <path>` comparison never adds test entries: each
+model's XRT result is folded into the matching HRX record under the free-form
+`metrics.xrt` object (`status`, measurements, log/artifact references, or
+`status: "unavailable"` with an error). Chat models fold onto the `bench`
+record; embed/ASR models fold onto the `serve` record. This keeps XRT strictly
+informational -- it never changes the run's `pass`/`fail` and needs no schema
+change. When the flag is given, the diagnostic-sweep `profile.json` records the
+requested path, the resolved XRT entrypoint, and the host `XILINX_XRT` prefix
+(or `status: "unavailable"` with an error if the build or host XRT could not
+be resolved). An unresolved `--xrt-flm` still stamps `metrics.xrt` unavailable
+on every model so the report keeps XRT columns.
 
 The subject records exact versions for `rocm-npu-runtime`,
 `rocm-npu-fastflowlm`, and `rocm-npu-qualification`, the native core source

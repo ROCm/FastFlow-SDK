@@ -7,7 +7,11 @@ Sweeps emit an environment header, an averaged on-NPU benchmark table, and
 embedding/ASR probe tables. The complete-sweep (``--all-models``) also includes
 a per-model functional matrix (single-prompt / multi-turn); ``--bench`` skips
 that matrix because it does not run those stages. Those tables report HRX
-numbers only here, so no XRT columns are rendered.
+numbers by default; when a run additionally exercises an XRT-backed FastFlowLM
+build (``qualify --bench --xrt-flm <path>``), each widens to a side-by-side
+HRX-vs-XRT comparison (decode metrics for chat, encode-tok/s / RTF / WER for
+the probes). XRT metric cells are N/A unless that comparison passed; an XRT
+Status column distinguishes PASS, FAIL, and N/A (unavailable).
 """
 
 from __future__ import annotations
@@ -185,6 +189,11 @@ def _results_table(
     return lines
 
 
+def _bench_cell(source: dict[str, Any], key: str, ok: bool) -> str:
+    """Format a benchmark metric cell, rendering N/A when the backend didn't pass."""
+    return _fmt(source.get(key)) if ok else "N/A"
+
+
 def _benchmark_table(
     evidence: dict[str, Any], kinds: dict[str, str] | None
 ) -> list[str]:
@@ -202,18 +211,38 @@ def _benchmark_table(
         for test in bench_tests
     }
     contexts.discard(None)
-    facets = ["HRX"]
+    # A single bench record carrying metrics.xrt means --xrt-flm was supplied, so
+    # render the wide HRX-vs-XRT comparison. Metric cells are N/A unless that
+    # backend passed; the XRT Status column distinguishes pass / fail /
+    # unavailable so a failing comparison is not indistinguishable from a missing
+    # build.
+    with_xrt = any(
+        isinstance(test.get("metrics", {}).get("xrt"), dict) for test in bench_tests
+    )
+    facets = ["HRX vs XRT" if with_xrt else "HRX"]
     if len(contexts) == 1:
         facets.append(f"{contexts.pop()}k")
     if len(iteration_counts) == 1:
         facets.append(f"averaged over {iteration_counts.pop()} iterations")
     else:
         facets.append("averaged over configured iterations")
+    if with_xrt:
+        header = (
+            "| Model | XRT Status | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | "
+            "HRX prefill tok/s | XRT decode tok/s | HRX decode tok/s |"
+        )
+        divider = (
+            "|-------|-----------|-----------|-----------|-------------------|"
+            "-------------------|------------------|------------------|"
+        )
+    else:
+        header = "| Model | TTFT s | Prefill tok/s | Decode tok/s |"
+        divider = "|-------|--------|---------------|--------------|"
     lines = [
         f"## Benchmark ({', '.join(facets)})",
         "",
-        "| Model | TTFT s | Prefill tok/s | Decode tok/s |",
-        "|-------|--------|---------------|--------------|",
+        header,
+        divider,
     ]
     for model in evidence.get("models", []):
         tag = str(model.get("tag", ""))
@@ -226,14 +255,31 @@ def _benchmark_table(
         bench = _first(tests, lambda test: test.get("kind") == "bench")
         metrics = (bench or {}).get("metrics", {})
         csv_metrics = metrics.get("csv_checkpoint_metrics") or {}
-        if bench is None or bench.get("status") != "pass" or not csv_metrics:
-            lines.append(f"| `{tag}` | N/A | N/A | N/A |")
+        hrx_ok = (
+            bench is not None and bench.get("status") == "pass" and bool(csv_metrics)
+        )
+        if not with_xrt:
+            if not hrx_ok:
+                lines.append(f"| `{tag}` | N/A | N/A | N/A |")
+                continue
+            lines.append(
+                f"| `{tag}` | "
+                f"{_fmt(csv_metrics.get('ttft_avg_s'))} | "
+                f"{_fmt(csv_metrics.get('prefill_avg_toks_per_s'))} | "
+                f"{_fmt(csv_metrics.get('decoding_avg_toks_per_s'))} |"
+            )
             continue
+        xrt = metrics.get("xrt") if isinstance(metrics.get("xrt"), dict) else {}
+        xrt_csv = xrt.get("csv_checkpoint_metrics") or {}
+        xrt_ok = xrt.get("status") == "pass" and bool(xrt_csv)
         lines.append(
-            f"| `{tag}` | "
-            f"{_fmt(csv_metrics.get('ttft_avg_s'))} | "
-            f"{_fmt(csv_metrics.get('prefill_avg_toks_per_s'))} | "
-            f"{_fmt(csv_metrics.get('decoding_avg_toks_per_s'))} |"
+            f"| `{tag}` | {_xrt_status_label(xrt)} | "
+            f"{_bench_cell(xrt_csv, 'ttft_avg_s', xrt_ok)} | "
+            f"{_bench_cell(csv_metrics, 'ttft_avg_s', hrx_ok)} | "
+            f"{_bench_cell(xrt_csv, 'prefill_avg_toks_per_s', xrt_ok)} | "
+            f"{_bench_cell(csv_metrics, 'prefill_avg_toks_per_s', hrx_ok)} | "
+            f"{_bench_cell(xrt_csv, 'decoding_avg_toks_per_s', xrt_ok)} | "
+            f"{_bench_cell(csv_metrics, 'decoding_avg_toks_per_s', hrx_ok)} |"
         )
     lines.append("")
     return lines
@@ -263,12 +309,50 @@ def _serve_metrics(
     return rows
 
 
+def _xrt_status_label(xrt: dict[str, Any]) -> str:
+    """Render XRT status: pass, fail, or N/A when the comparison was unavailable."""
+    status = xrt.get("status")
+    if status == "pass":
+        return "PASS"
+    if status == "unavailable":
+        return "N/A"
+    return "FAIL"
+
+
+def _serve_has_xrt(
+    rows: list[tuple[str, dict[str, Any], dict[str, Any]]]
+) -> bool:
+    """Whether any serve row carries a metrics.xrt comparison object."""
+    return any(isinstance(metrics.get("xrt"), dict) for _, _, metrics in rows)
+
+
 def _embedding_table(
     evidence: dict[str, Any], kinds: dict[str, str] | None
 ) -> list[str]:
     rows = _serve_metrics(evidence, kinds, "embed")
     if not rows:
         return []
+    with_xrt = _serve_has_xrt(rows)
+    if with_xrt:
+        lines = [
+            "## Embedding probe (HRX vs XRT)",
+            "",
+            "| Model | XRT Status | HRX Status | XRT Encode tok/s | "
+            "HRX Encode tok/s |",
+            "|-------|-----------|-----------|------------------|"
+            "------------------|",
+        ]
+        for tag, serve, metrics in rows:
+            xrt = metrics.get("xrt") if isinstance(metrics.get("xrt"), dict) else {}
+            xrt_ok = xrt.get("status") == "pass"
+            hrx_ok = serve.get("status") == "pass"
+            lines.append(
+                f"| `{tag}` | {_xrt_status_label(xrt)} | {_status_label(serve)} | "
+                f"{_bench_cell(xrt, 'encode_toks_per_s', xrt_ok)} | "
+                f"{_bench_cell(metrics, 'encode_toks_per_s', hrx_ok)} |"
+            )
+        lines.append("")
+        return lines
     lines = [
         "## Embedding probe (HRX)",
         "",
@@ -290,6 +374,29 @@ def _asr_table(
     rows = _serve_metrics(evidence, kinds, "asr")
     if not rows:
         return []
+    with_xrt = _serve_has_xrt(rows)
+    if with_xrt:
+        lines = [
+            "## ASR probe (HRX vs XRT)",
+            "",
+            "| Model | XRT Status | HRX Status | XRT RTF | HRX RTF | "
+            "XRT WER % | HRX WER % |",
+            "|-------|-----------|-----------|---------|---------|"
+            "----------|----------|",
+        ]
+        for tag, serve, metrics in rows:
+            xrt = metrics.get("xrt") if isinstance(metrics.get("xrt"), dict) else {}
+            xrt_ok = xrt.get("status") == "pass"
+            hrx_ok = serve.get("status") == "pass"
+            lines.append(
+                f"| `{tag}` | {_xrt_status_label(xrt)} | {_status_label(serve)} | "
+                f"{_bench_cell(xrt, 'real_time_factor', xrt_ok)} | "
+                f"{_bench_cell(metrics, 'real_time_factor', hrx_ok)} | "
+                f"{_fmt_pct(xrt.get('word_error_rate')) if xrt_ok else 'N/A'} | "
+                f"{_fmt_pct(metrics.get('word_error_rate')) if hrx_ok else 'N/A'} |"
+            )
+        lines.append("")
+        return lines
     lines = [
         "## ASR probe (HRX)",
         "",
