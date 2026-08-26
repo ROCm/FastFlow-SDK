@@ -31,11 +31,13 @@ XADX_ROUNDS = {
         "resident_rounds": 20,
         "readback_rounds": 32,
     }
-    # "all-models" and "bench-all" are the diagnostic sweeps. They share the
-    # curated soak depth (5/20/32) but are named explicitly rather than falling
-    # through to the default policy, so a sweep's XADX execution can never drift
-    # silently.
-    for name in ("fast", "default", "extended", "all-models", "bench-all")
+    # "all-models", "bench-all", and "bench-dev" are the diagnostic sweeps.
+    # They share the curated soak depth (5/20/32) but are named explicitly rather
+    # than falling through to the default policy, so a sweep's XADX execution can
+    # never drift silently.
+    for name in (
+        "fast", "default", "extended", "all-models", "bench-all", "bench-dev"
+    )
 }
 
 
