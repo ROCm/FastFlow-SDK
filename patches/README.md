@@ -96,6 +96,19 @@ which makes wheel provenance host-specific and defeats strict relocation checks.
 **Remove when:** FastFlowLM no longer compiles configured source/install paths
 into release executables upstream.
 
+### 0003-prefer-explicit-xrt-dirs.patch
+Skips `pkg_check_modules(XRT)` when the caller already set `XRT_INCLUDE_DIR`
+and `XRT_LIB_DIR`. Distro `xrt.pc` is often broken (`prefix=/usr//usr`) and
+would otherwise override those explicit host paths. pkg-config remains the
+discovery fallback when the cache variables are unset.
+
+**Why:** `dev.py build fastflowlm-xrt` passes the discovered host include/lib
+dirs. Inventing a stub `xrt.pc` with `Version: 2.0` is not a pin, and leaving
+pkg-config first would still pick the broken distro file.
+
+**Remove when:** FastFlowLM prefers caller-provided XRT dirs over pkg-config
+upstream.
+
 ## patches/iron-ops/
 
 ### 0001-xrt-free-host-stack.patch

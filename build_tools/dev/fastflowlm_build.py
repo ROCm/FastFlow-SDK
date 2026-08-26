@@ -97,6 +97,18 @@ def _host_xrt_include_dir(prefix):
     return None
 
 
+def _host_xrt_pkgconfig_dir(prefix):
+    """Return the directory containing a real host ``xrt.pc``, or ``None``.
+
+    Distro ``xrt.pc`` is often broken (``prefix=/usr//usr``). A file next to
+    the runtime prefix is a real pin; a synthesized stub with ``Version: 2.0``
+    is not. CMake is given ``-DXRT_INCLUDE_DIR`` / ``-DXRT_LIB_DIR`` from the
+    discovered install, so a stub is unnecessary.
+    """
+    host_pc = Path(prefix) / "share" / "pkgconfig" / "xrt.pc"
+    return host_pc.parent if host_pc.is_file() else None
+
+
 def cmd_build_fastflowlm(args):
     _build_fastflowlm(args, backend="hrx")
 
@@ -159,41 +171,15 @@ def _build_fastflowlm(args, *, backend):
             )
         print(f"  host XRT: {host_xrt}")
         print(f"  XRT headers: {xrt_include}")
-        # Distro xrt.pc is often broken (prefix=/usr//usr). Prefer a .pc next
-        # to the runtime prefix; otherwise drop a tiny one that points at the
-        # host runtime + headers so CMake's pkg-config path is usable without
-        # hiding fftw/ffmpeg/readline.
-        env = dict(env)
-        host_pc = host_xrt / "share" / "pkgconfig" / "xrt.pc"
-        if host_pc.is_file():
+        # Prefer a real xrt.pc next to the runtime prefix. Do not synthesize a
+        # stub (that invented Version: 2.0) and do not put distro pkg-config
+        # first: CMake is given -DXRT_INCLUDE_DIR / -DXRT_LIB_DIR instead.
+        host_pc_dir = _host_xrt_pkgconfig_dir(host_xrt)
+        if host_pc_dir is not None:
+            env = dict(env)
             env["PKG_CONFIG_PATH"] = os.pathsep.join(
                 entry
-                for entry in (str(host_pc.parent), env.get("PKG_CONFIG_PATH", ""))
-                if entry
-            )
-        else:
-            pc_dir = paths.BUILD / "xrt-pkgconfig"
-            pc_dir.mkdir(parents=True, exist_ok=True)
-            (pc_dir / "xrt.pc").write_text(
-                "\n".join(
-                    [
-                        f"prefix={host_xrt}",
-                        f"libdir={host_xrt / 'lib'}",
-                        f"includedir={xrt_include}",
-                        "",
-                        "Name: XRT",
-                        "Description: Host XRT for the FastFlowLM-xrt diagnostic build",
-                        "Version: 2.0",
-                        "Libs: -L${libdir} -lxrt_coreutil",
-                        "Cflags: -I${includedir}",
-                        "",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            env["PKG_CONFIG_PATH"] = os.pathsep.join(
-                entry
-                for entry in (str(pc_dir), env.get("PKG_CONFIG_PATH", ""))
+                for entry in (str(host_pc_dir), env.get("PKG_CONFIG_PATH", ""))
                 if entry
             )
     patches.apply_patches({"FastFlowLM"})
@@ -222,7 +208,8 @@ def _build_fastflowlm(args, *, backend):
         # XRT diagnostic build: no HRX prerequisite. Link the host XRT runtime
         # and the matching development headers. Do not enable FLM_PORTABLE_BUILD:
         # that bundles libxrt into the prefix and is the wrong product for a
-        # host-XRT comparison. Distro pkg-config is bypassed (see env above).
+        # host-XRT comparison. Explicit -DXRT_* dirs satisfy CMake; a stub
+        # xrt.pc is not written.
         backend_flags = [
             "-DFLM_USE_HRX=OFF",
             f"-DXRT_INCLUDE_DIR={environment.cmake_path(xrt_include)}",
