@@ -46,7 +46,7 @@ jobs:
   build_rocm_npu_staging_windows:
     name: ${{ inputs.name }}
     runs-on: azure-windows-scale-rocm
-    # Cold build compiles LLVM 23 + iron-tools + the amdxdna HAL from source; ccache
+    # Cold build compiles LLVM 24 + iron-tools + the amdxdna HAL from source; ccache
     # (CCACHE_DIR) speeds up warm runs but the first run is long.
     timeout-minutes: 180
     env:

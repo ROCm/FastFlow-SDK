@@ -252,7 +252,7 @@ commands; use `python3 dev.py COMMAND --help` for command flags.
 The stack, built from source against one ROCm LLVM except for the Peano wheel:
 
 ```
-LLVM+MLIR (ROCm amd-llvm pin, LLVM 23) ──┐
+LLVM+MLIR (ROCm amd-llvm pin, LLVM 24) ──┐
                                          ├─ iron-tools/IRON design ─ .xclbin
 Peano (llvm-aie wheel, AIE codegen) ─────┘                         │
 hrx-xclbinutil (xclbin packaging; vendored in mlir-aie) ───────────┘  ─ HRX amdxdna HAL extracts PDI
