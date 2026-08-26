@@ -65,7 +65,7 @@ candidate version instead.
 
 `rocm-npu-qualification` is `py3-none-any` and requires
 `rocm-npu-fastflowlm` at exactly the same version plus NumPy 2.4.6 and
-ml-dtypes 0.5.4. Pip resolves the numeric wheels from the package index for
+ml-dtypes 0.6.0. Pip resolves the numeric wheels from the package index for
 CPython 3.11 through 3.14 on Linux and Windows. Candidate v1 binds the required
 versions, and qualification evidence records the installed wheel tags, RECORD
 digest, and verified payload digest.

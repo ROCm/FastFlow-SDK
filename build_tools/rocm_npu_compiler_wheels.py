@@ -93,7 +93,7 @@ COMPILER_WHEEL_COMPRESSION_LEVEL = 1
 COMPILER_BINDINGS_RUNTIME_REQUIREMENTS = (
     "aiofiles ==25.1.0",
     "cloudpickle ==3.1.2",
-    "ml-dtypes ==0.5.4",
+    "ml-dtypes ==0.6.0",
     "numpy ==2.4.6",
     "rich ==15.0.0",
 )

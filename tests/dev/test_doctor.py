@@ -170,7 +170,7 @@ class TestDoctorCommand:
 
     def test_compiler_stack_checks_prefetch_and_returns_success(self, tmp_path):
         patch_file = (
-            tmp_path / "patches" / "iron-tools" / "0001-eudsl-for-amd-llvm-23.patch"
+            tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
         )
         patch_file.parent.mkdir(parents=True)
         patch_file.write_text("+eudsl-python-extras==1.2.3\n")
@@ -195,3 +195,57 @@ class TestDoctorCommand:
 
         assert result == 0
         cache_ok.assert_called_once_with()
+
+    def test_compiler_stack_eudsl_in_sync_when_patch_only_rewrites_find_links(
+        self, tmp_path
+    ):
+        patch_file = (
+            tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
+        )
+        patch_file.parent.mkdir(parents=True)
+        patch_file.write_text(
+            "--f https://llvm.github.io/eudsl\n"
+            "+-f ../../../.cache/find-links\n"
+            " eudsl-python-extras==1.2.3 \\\n"
+        )
+        with (
+            mock.patch.object(paths, "PATCHES", tmp_path / "patches"),
+            mock.patch.object(paths, "PROJ", tmp_path / "projects"),
+            mock.patch.object(doctor, "check_system", return_value=(True, [])),
+            mock.patch.object(doctor.patches, "check_pins", return_value=[]),
+            mock.patch.object(doctor.patches, "eudsl_cache_ok", return_value=True),
+            mock.patch.object(
+                doctor.patches,
+                "manifest",
+                return_value={"eudsl": {"version": "1.2.3"}},
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = doctor.cmd_doctor(
+                SimpleNamespace(profile="compiler-stack", deep=False)
+            )
+
+        assert result == 0
+
+
+class TestEudslVersionFromPatch:
+    def test_override_hunk_wins(self):
+        text = (
+            "-eudsl-python-extras==old \\\n"
+            "+eudsl-python-extras==1.2.3 \\\n"
+        )
+        assert doctor.eudsl_version_from_patch(text) == "1.2.3"
+
+    def test_unchanged_context_line_when_only_find_links_changes(self):
+        text = (
+            "--f https://llvm.github.io/eudsl\n"
+            "+-f ../../../.cache/find-links\n"
+            " eudsl-python-extras==0.1.0.20260801.905+68a0d7a \\\n"
+        )
+        assert (
+            doctor.eudsl_version_from_patch(text)
+            == "0.1.0.20260801.905+68a0d7a"
+        )
+
+    def test_missing_version_is_none(self):
+        assert doctor.eudsl_version_from_patch("+-f ../../../.cache/find-links\n") is None

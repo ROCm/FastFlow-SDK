@@ -30,7 +30,7 @@ zstandard==0.25.0     # streaming .tar.zst compiler products on Windows and Linu
 
 # --- IRON runtime: to run the source-built aie.dialects / aie.extras ---
 numpy==2.4.6
-ml_dtypes==0.5.4
+ml_dtypes==0.6.0
 cloudpickle
 rich
 aiofiles

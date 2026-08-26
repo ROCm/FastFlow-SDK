@@ -1,8 +1,8 @@
 diff --git a/iron/common/sequence.py b/iron/common/sequence.py
-index f29ea6f..3a25573 100644
+index 0d33b48..4311d79 100644
 --- a/iron/common/sequence.py
 +++ b/iron/common/sequence.py
-@@ -7,20 +7,39 @@ import time
+@@ -7,19 +7,40 @@ import time
  from pathlib import Path
  import numpy as np
  import ml_dtypes
@@ -10,8 +10,6 @@ index f29ea6f..3a25573 100644
  import torch
  from . import compilation as comp
  from .base import AIEOperatorBase, MLIROperator
--from .utils import XRTSubBuffer
-+from .utils import XRTSubBuffer, XRTTensor
  import aie.utils as aie_utils
  from aie.iron.device import NPU2
 -from aie.utils.hostruntime.xrtruntime.tensor import XRTTensor
@@ -20,13 +18,15 @@ index f29ea6f..3a25573 100644
  
 +try:
 +    import pyxrt
++    from aie.utils.hostruntime.xrtruntime.tensor import XRTTensor
 +except ImportError:
 +    # Host stacks without XRT (e.g. the HRX/amdxdna runtime) have no pyxrt. The two
 +    # on-device dispatch policies below are XRT-native (pyxrt.elf / hw_context / run,
-+    # plus sub-buffer views), so they cannot run there; _require_xrt() makes that
++    # plus XRTTensor views), so they cannot run there; _require_xrt() makes that
 +    # explicit at construction. The CPU policy and the whole compile path do not care,
 +    # and must keep importing.
 +    pyxrt = None
++    XRTTensor = None
 +
  logger = logging.getLogger(__name__)
  
@@ -45,7 +45,7 @@ index f29ea6f..3a25573 100644
  # ##########################################################################
  # Dispatch policies
  # ##########################################################################
-@@ -508,6 +527,7 @@ class SequenceFullELFCallable(SequenceCallable):
+@@ -542,6 +563,7 @@ class SequenceFullELFCallable(SequenceCallable):
      """
  
      def __init__(self, op, device_name="main", sequence_name="sequence"):
@@ -53,7 +53,7 @@ index f29ea6f..3a25573 100644
          self.device_name = device_name
          self.sequence_name = sequence_name
  
-@@ -648,6 +668,7 @@ class SequenceXclbinCallable(_PerBufferCallable):
+@@ -686,6 +708,7 @@ class SequenceXclbinCallable(_PerBufferCallable):
      """
  
      def __init__(self, op, dispatch):
@@ -139,37 +139,3 @@ index 1671491..a0fc0ff 100644
          else:
              raise ValueError(f"Unsupported direction: {spec.direction}")
  
-diff --git a/iron/common/utils.py b/iron/common/utils.py
-index a0ca9b2..aada5c4 100644
---- a/iron/common/utils.py
-+++ b/iron/common/utils.py
-@@ -3,7 +3,15 @@
- 
- import numpy as np
- from aie.dialects.aie import get_target_model, WireBundle
--from aie.utils.hostruntime.xrtruntime.tensor import XRTTensor, xrt as _pyxrt
-+
-+try:
-+    from aie.utils.hostruntime.xrtruntime.tensor import XRTTensor, xrt as _pyxrt
-+except ImportError:
-+    # Host stacks without XRT (e.g. the HRX/amdxdna runtime) have no pyxrt. Only the
-+    # XRT sub-buffer view below needs it -- it wraps a pyxrt.bo and has no analogue in
-+    # the other backends -- so keep importing this module and let that type fail loudly
-+    # when it is constructed. Everything else here is backend-agnostic.
-+    XRTTensor, _pyxrt = object, None
- 
- 
- def get_shim_dma_limit(dev) -> int:
-@@ -62,6 +70,12 @@ class XRTSubBuffer(XRTTensor):
-                 device state to the parent (they share the same memory), so a
-                 later whole-parent sync stays consistent with the sub-views.
-         """
-+        if _pyxrt is None:
-+            raise RuntimeError(
-+                "XRTSubBuffer needs the XRT host runtime (pyxrt), which is not installed. "
-+                "This host stack has no sub-buffer API; allocate a whole tensor with "
-+                "aie.utils.tensor() instead."
-+            )
-         # Skip XRTTensor.__init__ (which would allocate a new bo); set base attrs directly.
-         self.device = "npu"
-         self.dtype = np.dtype(dtype)

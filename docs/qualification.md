@@ -8,7 +8,7 @@ python -m pip install --find-links <release-assets> \
 ```
 
 The package depends on the exact same-version `rocm-npu-fastflowlm`, which in
-turn depends on `rocm-npu-runtime`, and pins NumPy 2.4.6 and ml-dtypes 0.5.4.
+turn depends on `rocm-npu-runtime`, and pins NumPy 2.4.6 and ml-dtypes 0.6.0.
 Pip resolves those binary dependencies from the package index. The candidate
 manifest binds their required versions, while each evidence bundle records the
 installed wheel tags, RECORD digest, and verified payload digest. Only the

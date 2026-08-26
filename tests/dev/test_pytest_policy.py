@@ -92,7 +92,7 @@ def test_test_profile_covers_presubmit_runtime_dependencies():
     }
     assert entries == {
         "jsonschema==4.26.0",
-            "ml-dtypes==0.5.4",
+            "ml-dtypes==0.6.0",
             "numpy==2.4.6",
         "pytest==8.4.2",
         "zstandard==0.25.0",

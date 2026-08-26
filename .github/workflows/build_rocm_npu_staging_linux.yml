@@ -1,7 +1,7 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 #
-# Reusable workflow: build the rocm-npu-staging stack from source (LLVM 23 + iron-tools
+# Reusable workflow: build the rocm-npu-staging stack from source (LLVM 24 + iron-tools
 # + hrx-xclbinutil + the amdxdna HAL) and run build-level smoke + the e2e (build an
 # iron-tools IRON design -> xclbin + HAL PDI artifact-contract check). The ROCm scale
 # runner + manylinux build container can do the heavy from-source build.
@@ -34,7 +34,7 @@ jobs:
   build_rocm_npu_staging_linux:
     name: ${{ inputs.name }}
     runs-on: aws-linux-scale-rocm-prod
-    # Cold build compiles LLVM 23 + iron-tools + the amdxdna HAL from source; ccache
+    # Cold build compiles LLVM 24 + iron-tools + the amdxdna HAL from source; ccache
     # (CCACHE_DIR) speeds up warm runs but the first run is long.
     timeout-minutes: 180
     container:

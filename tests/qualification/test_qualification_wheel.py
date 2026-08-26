@@ -250,7 +250,7 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "\nrocm-npu =" not in entry_points
     assert "Requires-Dist: rocm-npu-fastflowlm ==1.2.3" in metadata_text
     assert "Requires-Dist: numpy ==2.4.6" in metadata_text
-    assert "Requires-Dist: ml-dtypes ==0.5.4" in metadata_text
+    assert "Requires-Dist: ml-dtypes ==0.6.0" in metadata_text
     assert "Requires-Python: >=3.11,<3.15" in metadata_text
     assert (
         "License-Expression: MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms"

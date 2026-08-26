@@ -173,9 +173,8 @@ def cmd_build_hrx_xclbinutil(args):
     source = paths.PROJ / "iron-tools" / "third_party" / "hrx-xclbinutil"
     if not (source / "CMakeLists.txt").exists():
         sys.exit(
-            "missing hrx-xclbinutil (vendored in mlir-aie); run: "
-            "python dev.py submodules iron-tools (recursive init pulls "
-            "projects/iron-tools/third_party/hrx-xclbinutil)"
+            "missing hrx-xclbinutil (vendored in-tree under mlir-aie); run: "
+            "python dev.py submodules iron-tools"
         )
     build_dir = source / "bld"
     env = environment.cmake_env()

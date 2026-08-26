@@ -19,15 +19,15 @@ CI-only scaffolding belongs in `tests/` here, not inside a patch.
 Never hand-edit hunk bodies or `@@` headers: the line counts must agree with the
 body, and a malformed hunk only fails later, at `git apply` time. Regenerate the
 patch instead, from the submodule's pinned commit. To edit a patch that applies on
-top of earlier ones (e.g. `0004`), apply the preceding patches first so
+top of earlier ones (e.g. `0005`), apply the preceding patches first so
 `git diff` yields the one you are editing alone:
 
 ```bash
 cd projects/iron-tools
 git checkout -f <pin> && git clean -fdx     # -x also clears gitignored build output
 git apply ../../patches/iron-tools/000[12]-*.patch
-# ...edit the files 0004 touches...
-git diff -- <files 0004 touches> > ../../patches/iron-tools/0004-hostruntime-cleanup.patch
+# ...edit the files 0005 touches...
+git diff -- <files 0005 touches> > ../../patches/iron-tools/0005-eudsl-download-no-build-isolation.patch
 ```
 
 Use `git add -f` if a patch you are (re)creating adds a file that is gitignored
@@ -125,23 +125,9 @@ that require XRT.
 
 **Remove when:** iron-ops avoids eager cross-operator imports upstream.
 
-### 0003-adapt-aiecc-native-cli.patch
-Rewrites the `aiecc` command lines in `iron/common/compilation/base.py` to the
-native `aiecc` "declarative driver" CLI shipped by the current iron-tools pin
-(mlir-aie replaced the Python `aiecc.py` entry point with a C++ `tools/aiecc`
-binary). The old flags become: `-v` → `--verbose`, `-j1` → `-j 1`, drop
-`--no-compile-host` (host compilation is now opt-in via `-o`),
-`--aie-generate-xclbin` → `--get-xclbin`, `--aie-generate-npu-insts` →
-`--get-npu-insts`, `--generate-full-elf` → `--get-full-elf`, and dropping
-`--no-compile` (an insts-only build simply requests only the `--get-npu-insts`
-edge). Without this the off-device `dev.py test-iron-ops` gate fails immediately
-with `aiecc: Unknown command line argument '--aie-generate-xclbin'`.
-
-**Why here:** iron-ops develops against the mlir_aie wheel, whose `aiecc` still
-takes the old CLI; this stack builds iron-tools from a newer source pin.
-
-**Remove when:** iron-ops targets the native `aiecc` CLI upstream (or this stack
-pins an iron-tools revision whose `aiecc` still accepts the legacy flags).
+The former 0003 (adapt aiecc native CLI) was dropped at the iron-ops `aab8083`
+pin: IRON #145/#150 now compile through mlir-aie's `compile_mlir_module()`,
+which already emits native `aiecc --get-*` flags.
 
 ## patches/llvm-project/
 
@@ -157,30 +143,27 @@ Python support DLLs.
 
 ## patches/iron-tools/
 
-### 0001-eudsl-for-amd-llvm-23.patch
+### 0001-eudsl-offline-find-links.patch
 Edits one file in the submodule (upstream `Xilinx/mlir-aie`):
-1. `python/requirements.txt`: bumps the pinned `eudsl-python-extras` to the
-   `manifests/versions.toml [eudsl]` version, and repoints its `-f` find-links from
-   `https://llvm.github.io/eudsl` to the local prefetch cache (`../../../.cache/find-links`)
-   so `vendor_eudsl.py` never lists the remote.
+1. `python/requirements.txt`: leaves mlir-aie's `eudsl-python-extras` version
+   line alone, and repoints its `-f` find-links from `https://llvm.github.io/eudsl`
+   to the local prefetch cache (`../../../.cache/find-links`) so `vendor_eudsl.py`
+   never lists the remote.
 
 (The former second hunk — `--no-build-isolation` in `vendor_eudsl.py` — is now upstream
-in mlir-aie's `install_eudsl`, so this patch is `requirements.txt` only.)
+in mlir-aie's `install_eudsl`, so this patch is `requirements.txt` only. The former
+version override to `0.1.0.20260629` was dropped when this stack's LLVM pin aligned
+with mlir-aie's `clone-llvm.sh` commit.)
 
 Combined with `dev.py` setting `PIP_FIND_LINKS` (absolute cache) + `PIP_NO_INDEX=1`
 for the iron-tools build, eudsl vendoring is **network-free** (resolved from the
 sha256-verified prefetched sdist).
 
-**Why:** mlir-aie pins eudsl `0.1.0.20260520` — correct for mlir-aie's *intended*
-LLVM. We build mlir-aie's Python bindings against **ROCm amd-llvm 23**, whose
-nanobind rejects eudsl 04-18's `ScalarValue` re-init path (`Value(OpResult)`),
-breaking IRON design generation. A newer eudsl (`0.1.0.20260629`) fixes that and
-— verified — emits **byte-size-identical** lowered IR/xclbin, so it changes nothing
-else for our designs.
+**Why:** mlir-aie pins eudsl from `https://llvm.github.io/eudsl`, which `PIP_NO_INDEX`
+cannot see. The patch only rewrites that `-f` onto `.cache/find-links`.
 
-**Remove when:** mlir-aie's Python/IRON path is built against an aligned LLVM, at
-which point mlir-aie's own eudsl pin works and this override is unnecessary. Until
-then, also worth upstreaming to mlir-aie as a build-against-newer-LLVM compatibility note.
+**Remove when:** mlir-aie's `vendor_eudsl.py` / `requirements.txt` can resolve eudsl
+from a local find-links cache without a remote `-f`.
 
 ### 0002-windows-clang-cl.patch
 Lets the submodule build under **clang-cl** (the Windows toolchain; see the

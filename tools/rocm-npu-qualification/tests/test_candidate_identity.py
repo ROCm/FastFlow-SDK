@@ -270,7 +270,7 @@ def test_candidate_manifest_binds_exact_wheels(tmp_path):
         assert len(identity["package_manifest_sha256"]) == 64
     assert candidate_manifest["numeric_runtime"] == {
         "numpy": "2.4.6",
-        "ml-dtypes": "0.5.4",
+        "ml-dtypes": "0.6.0",
     }
     normalized = installation.normalize_candidate(candidate_manifest)
     selected = {
@@ -299,7 +299,7 @@ def test_candidate_does_not_require_numeric_wheels_in_release_payload(tmp_path):
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["numeric_runtime"] == {
         "numpy": "2.4.6",
-        "ml-dtypes": "0.5.4",
+        "ml-dtypes": "0.6.0",
     }
 
 
@@ -549,7 +549,7 @@ def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path
                 result.append(item)
             return result
 
-    for distribution, version in (("numpy", "2.4.6"), ("ml-dtypes", "0.5.4")):
+    for distribution, version in (("numpy", "2.4.6"), ("ml-dtypes", "0.6.0")):
         wheel = _write_numeric_wheel(tmp_path, distribution, version)
         with zipfile.ZipFile(wheel) as archive:
             archive.extractall(installed_root)
@@ -565,8 +565,8 @@ def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path
     assert {
         distribution: identity["version"]
         for distribution, identity in identities.items()
-    } == {"numpy": "2.4.6", "ml-dtypes": "0.5.4"}
-    manifest = {"numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.5.4"}}
+    } == {"numpy": "2.4.6", "ml-dtypes": "0.6.0"}
+    manifest = {"numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.6.0"}}
     installation.verify_numeric_runtime(manifest)
 
     numpy_payload = installed_root / "numpy/__init__.py"

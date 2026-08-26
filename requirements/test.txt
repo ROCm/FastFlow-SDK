@@ -5,7 +5,7 @@
 #     --python-version 3.12 --universal --system-certs \
 #     --output-file requirements/test.lock
 jsonschema==4.26.0
-ml-dtypes==0.5.4
+ml-dtypes==0.6.0
 numpy==2.4.6
 pytest==8.4.2
 zstandard==0.25.0
