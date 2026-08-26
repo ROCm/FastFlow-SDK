@@ -14,6 +14,13 @@ from build_tools.windows_npu import probe_runtime as probe_windows_npu_runtime
 HRX_CTS_TIMEOUT_SECONDS = 30 * 60
 
 
+def _select_hrx_runtime(env):
+    """Select HRX for IRON. IRON_RUNTIME is the older name for NPU_RUNTIME."""
+    env["IRON_RUNTIME"] = "hrx"
+    env["NPU_RUNTIME"] = "hrx"
+    return hrx_runtime.add_hrx_install_env(env)
+
+
 def cmd_test_npu_package(args):
     try:
         npu_test_package.verify_npu_test_package(
@@ -171,9 +178,7 @@ def cmd_test_npu(args):
     if not design_dir.is_dir():
         sys.exit(f"{design}: no such design under programming_examples/basic")
     _require_hrx_runtime(getattr(args, "compiler_prefix", None))
-    env = iron.iron_env(getattr(args, "compiler_prefix", None))
-    env["IRON_RUNTIME"] = "hrx"
-    hrx_runtime.add_hrx_install_env(env)
+    env = _select_hrx_runtime(iron.iron_env(getattr(args, "compiler_prefix", None)))
     target = getattr(args, "device", None) or "npu2"
     try:
         artifacts = iron.build_design(
@@ -209,6 +214,27 @@ def cmd_test_npu(args):
     print(f"test-npu: ok ({design} ran on the NPU via hrx)")
 
 
+def cmd_test_npu_jit(args):
+    build_only = getattr(args, "build_only", False)
+    compiler_prefix = getattr(args, "compiler_prefix", None)
+    if not build_only:
+        _require_hrx_runtime(compiler_prefix)
+    env = iron.iron_env(compiler_prefix)
+    command = [
+        environment.venv_py(),
+        paths.ROOT / "tests" / "npu" / "jit_smoke.py",
+    ]
+    if build_only:
+        command.append("--build-only")
+    else:
+        _select_hrx_runtime(env)
+    environment.sh(command, env=env)
+    print(
+        "test-npu-jit: ok "
+        + ("(compiler + JIT, no dispatch)" if build_only else "(ran on the NPU via hrx)")
+    )
+
+
 def cmd_test_npu_iron_ops(args):
     try:
         operators = iron.select(getattr(args, "operator", None))
@@ -231,9 +257,7 @@ def cmd_test_npu_iron_ops(args):
                 f"{operator.name}: no test.py under " "projects/iron-ops/iron/operators"
             )
         test_dirs.append(str(test_dir))
-    env = iron.iron_ops_env(compiler_prefix)
-    env["IRON_RUNTIME"] = "hrx"
-    hrx_runtime.add_hrx_install_env(env)
+    env = _select_hrx_runtime(iron.iron_ops_env(compiler_prefix))
     filters = [
         operator.hrx_pytest_filter
         for operator in operators

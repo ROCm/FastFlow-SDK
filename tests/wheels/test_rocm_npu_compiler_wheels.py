@@ -396,6 +396,7 @@ class TestRocmNpuCompilerWheels:
     ):
         compiler = types.ModuleType("rocm_npu_compiler")
         compiler.activate_native_libraries = lambda: None
+        compiler.activate_toolchain_env = lambda: None
         monkeypatch.setitem(sys.modules, "rocm_npu_compiler", compiler)
         monkeypatch.delitem(sys.modules, "rocm_npu_runtime", raising=False)
         exec(_binding_bootstrap(), {})
@@ -406,6 +407,7 @@ class TestRocmNpuCompilerWheels:
         calls = []
         compiler = types.ModuleType("rocm_npu_compiler")
         compiler.activate_native_libraries = lambda: None
+        compiler.activate_toolchain_env = lambda: None
         runtime = types.ModuleType("rocm_npu_runtime")
         runtime.activate_iron_host = lambda: calls.append("iron")
         monkeypatch.setitem(sys.modules, "rocm_npu_compiler", compiler)
@@ -418,6 +420,7 @@ class TestRocmNpuCompilerWheels:
     ):
         compiler = types.ModuleType("rocm_npu_compiler")
         compiler.activate_native_libraries = lambda: None
+        compiler.activate_toolchain_env = lambda: None
         runtime = types.ModuleType("rocm_npu_runtime")
         monkeypatch.setitem(sys.modules, "rocm_npu_compiler", compiler)
         monkeypatch.setitem(sys.modules, "rocm_npu_runtime", runtime)
@@ -428,7 +431,8 @@ class TestRocmNpuCompilerWheels:
         compiler = site / "rocm_npu_compiler"
         compiler.mkdir(parents=True)
         (compiler / "__init__.py").write_text(
-            "def activate_native_libraries():\n    return None\n",
+            "def activate_native_libraries():\n    return None\n"
+            "\n\ndef activate_toolchain_env():\n    return None\n",
             encoding="utf-8",
         )
         aie = site / "aie"

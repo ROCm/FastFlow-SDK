@@ -269,6 +269,16 @@ def toolchain_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def activate_toolchain_env() -> None:
+    """Apply toolchain_env() to this process, keeping values already set."""
+    env = toolchain_env()
+    for name in ("PATH", "LD_LIBRARY_PATH"):
+        if name in env:
+            os.environ[name] = env[name]
+    for name in ("PEANO_INSTALL_DIR", "AIEOPT_DIR", "ROCM_NPU_COMPILER_PREFIX"):
+        os.environ.setdefault(name, env[name])
+
+
 def native_library_dir() -> Path:
     return compiler_prefix() / "lib" / "aie"
 
@@ -316,9 +326,12 @@ def _is_core_aie_native(path: Path) -> bool:
 def _binding_bootstrap() -> str:
     return (
         "\n# ROCm NPU compiler split-wheel native activation.\n"
-        "from rocm_npu_compiler import activate_native_libraries as "
-        "_rocm_npu_activate_native_libraries\n"
+        "from rocm_npu_compiler import (\n"
+        "    activate_native_libraries as _rocm_npu_activate_native_libraries,\n"
+        "    activate_toolchain_env as _rocm_npu_activate_toolchain_env,\n"
+        ")\n"
         "_rocm_npu_activate_native_libraries()\n"
+        "_rocm_npu_activate_toolchain_env()\n"
         "try:\n"
         "    from rocm_npu_runtime import (\n"
         "        activate_iron_host as _rocm_npu_activate_iron_host,\n"
