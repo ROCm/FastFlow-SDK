@@ -7,13 +7,6 @@ Compiles the smallest complete design -- a pure-DMA memcpy, DDR -> MemTile ->
 DDR, with no compute kernel -- and dispatches it. That covers the whole chain:
 IRON -> MLIR -> aiecc -> bootgen -> xclbin -> HRX -> NPU.
 
-The wheels configure themselves on import: the compiler locates its own tools
-and the runtime selects HRX. Nothing here sets PEANO_INSTALL_DIR or
-NPU_RUNTIME, which is part of what this smoke test covers.
-
---build-only stops at the xclbin so a CPU-only runner can gate the compiler and
-the JIT without an NPU.
-
 Run it with `python dev.py test-npu-jit [--build-only]`, or directly once
 rocm-npu-compiler is installed.
 

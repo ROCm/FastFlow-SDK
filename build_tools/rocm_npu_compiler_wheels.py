@@ -270,11 +270,7 @@ def toolchain_env(base: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def activate_toolchain_env() -> None:
-    """Apply toolchain_env() to this process, keeping values already set.
-
-    The in-process IRON JIT resolves PEANO_INSTALL_DIR when `aie` is imported,
-    which no subprocess environment can reach.
-    """
+    """Apply toolchain_env() to this process, keeping values already set."""
     prefix = compiler_prefix()
     path_entries = [prefix / "bin"]
     if os.name == "nt":

@@ -15,7 +15,7 @@ HRX_CTS_TIMEOUT_SECONDS = 30 * 60
 
 
 def _select_hrx_runtime(env):
-    """Point IRON at HRX. IRON_RUNTIME is the pre-upstreaming name of NPU_RUNTIME."""
+    """Select HRX for IRON. IRON_RUNTIME is the older name for NPU_RUNTIME."""
     env["IRON_RUNTIME"] = "hrx"
     env["NPU_RUNTIME"] = "hrx"
     return hrx_runtime.add_hrx_install_env(env)
@@ -215,7 +215,6 @@ def cmd_test_npu(args):
 
 
 def cmd_test_npu_jit(args):
-    """Compile the IRON JIT smoke design, and dispatch it unless --build-only."""
     build_only = getattr(args, "build_only", False)
     compiler_prefix = getattr(args, "compiler_prefix", None)
     if not build_only:
