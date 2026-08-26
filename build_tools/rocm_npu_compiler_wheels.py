@@ -271,20 +271,12 @@ def toolchain_env(base: dict[str, str] | None = None) -> dict[str, str]:
 
 def activate_toolchain_env() -> None:
     """Apply toolchain_env() to this process, keeping values already set."""
-    prefix = compiler_prefix()
-    path_entries = [prefix / "bin"]
-    if os.name == "nt":
-        path_entries.append(prefix / "lib")
-    os.environ["PATH"] = os.pathsep.join(
-        [*(str(path) for path in path_entries), os.environ.get("PATH", "")]
-    )
-    if os.name != "nt":
-        os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
-            [str(prefix / "lib"), os.environ.get("LD_LIBRARY_PATH", "")]
-        )
-    os.environ.setdefault("PEANO_INSTALL_DIR", str(prefix / "peano" / "llvm-aie"))
-    os.environ.setdefault("AIEOPT_DIR", str(prefix / "third_party" / "aie_api"))
-    os.environ.setdefault("ROCM_NPU_COMPILER_PREFIX", str(prefix))
+    env = toolchain_env()
+    for name in ("PATH", "LD_LIBRARY_PATH"):
+        if name in env:
+            os.environ[name] = env[name]
+    for name in ("PEANO_INSTALL_DIR", "AIEOPT_DIR", "ROCM_NPU_COMPILER_PREFIX"):
+        os.environ.setdefault(name, env[name])
 
 
 def native_library_dir() -> Path:
