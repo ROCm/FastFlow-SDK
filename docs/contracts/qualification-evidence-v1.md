@@ -14,7 +14,8 @@ A qualification run writes a portable directory containing:
   (`kind: "diagnostic-sweep"`) recording what a sweep actually ran (name, bench
   context, and the selected tags with their test names). The `--all-models`
   sweep records `name: "all-models"`; the measurement-only `--bench all` sweep
-  records `name: "bench-all"` and its `bench_iterations`. A diagnostic-sweep
+  records `name: "bench-all"` and its `bench_iterations`; `--bench dev` records
+  `name: "bench-dev"` and its `bench_iterations`. A diagnostic-sweep
   descriptor is never a packaged contract: it pins no files or XCLBINs and is
   always ad-hoc (`candidate_bound: false`), so intake refuses it.
 - `models.json`: model source, revision, pull state, and content hashes

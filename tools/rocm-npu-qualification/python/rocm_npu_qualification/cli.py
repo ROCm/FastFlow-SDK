@@ -108,11 +108,10 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
             "for chat models and the serve-probe for embed/ASR models (no "
             "single-prompt or multi-turn stages). MODE selects the coverage; "
             "'all' (the default when the flag is given bare) sweeps every model "
-            "in the installed FastFlowLM registry, while 'dev' is the fast "
-            "development variant that runs the same stages over a curated set of "
-            "representative chat models. Tune the run with --bench-context and "
-            "--bench-iterations, and narrow the set with --models. Implies "
-            "--keep-going."
+            "in the installed FastFlowLM registry, while 'dev' runs the same "
+            "stages over a curated set of chat tags. Tune the run with "
+            "--bench-context and --bench-iterations, and narrow the chosen set "
+            "with --models. Implies --keep-going."
         ),
     )
     parser.add_argument(
@@ -120,10 +119,12 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         default=None,
         metavar="TAG[,TAG...]",
         help=(
-            "comma-separated FastFlowLM registry tags to restrict a --bench "
-            "sweep to (for example --models=llama3.2:1b,qwen3:0.6b). Tags absent "
-            "from the installed registry are skipped with a warning; has no "
-            "effect without --bench."
+            "comma-separated FastFlowLM tags to restrict a --bench sweep to "
+            "(for example --models=llama3.2:1b,qwen3:0.6b). With --bench all, "
+            "tags absent from the installed registry are skipped with a "
+            "warning. With --bench dev, --models further restricts the curated "
+            "chat set: tags not in that set are skipped even if they are "
+            "installed. Has no effect without --bench."
         ),
     )
     parser.add_argument(

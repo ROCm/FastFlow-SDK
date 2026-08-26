@@ -134,18 +134,18 @@ _SWEEP_BENCH_DEFAULT = "8k"
 # benchmark, embed/ASR models run the serve-probe (their encode-tok/s / RTF / WER
 # measurements). Unlike --all-models it omits the single-prompt and multi-turn
 # correctness stages. MODE selects coverage ('all' sweeps the whole installed
-# registry); --bench-context / --bench-iterations tune the run and an optional
-# --models filter narrows the set to explicit tags.
+# registry; 'dev' a curated chat subset); --bench-context / --bench-iterations
+# tune the run and an optional --models filter narrows the chosen set.
 BENCHMARK_MODES: tuple[str, ...] = ("all", "dev")
 _BENCHMARK_MODES = BENCHMARK_MODES
 _BENCHMARK_DEFAULT_CONTEXT = "1k"
 _BENCHMARK_DEFAULT_ITERATIONS = 5
 
 # --bench dev is the fast development variant of --bench all: instead of the
-# whole registry it runs a curated, hand-picked set of representative chat models
-# (one per variant, always including the large gpt-oss and qwen3.6-moe MoE, never
-# the embed/ASR models). It shares --bench's test synthesis, tuning flags, XRT
-# comparison, and --models filter -- it only trades registry coverage for speed.
+# whole registry it runs these curated chat tags (including the large gpt-oss
+# and qwen3.6-moe MoE; never embed/ASR). It shares --bench's test synthesis,
+# tuning flags, XRT comparison, and --models filter -- --models further
+# restricts this list, and the only speedup is fewer FastFlowLM tags.
 _BENCHMARK_MODEL_TAGS: tuple[str, ...] = (
     "llama3.2:1b",
     "qwen3:0.6b",
@@ -209,27 +209,32 @@ def _benchmark_tests_for(
 
 
 def _filter_models_by_tags(
-    discovered: list[dict[str, Any]], tags: list[str]
+    discovered: list[dict[str, Any]],
+    tags: list[str],
+    *,
+    pool: str = "installed FLM registry",
 ) -> list[dict[str, Any]]:
-    """Restrict the discovered registry set to an explicit ``--models`` list.
+    """Restrict ``discovered`` to an explicit ``--models`` list.
 
-    Preserves the requested order and warns (rather than fails) about any tag
-    missing from the installed registry, so a stale tag still benchmarks the
-    rest. Raises when none of the requested tags are present.
+    ``discovered`` is the set ``--models`` filters: the installed registry for
+    ``--bench all``, or the curated chat subset for ``--bench dev``. Preserves
+    the requested order and warns (rather than fails) about any tag missing
+    from that pool, so a stale or non-curated tag still benchmarks the rest.
+    Raises when none of the requested tags are present.
     """
     by_tag = {model["tag"]: model for model in discovered}
     selected = [by_tag[tag] for tag in tags if tag in by_tag]
     missing = [tag for tag in tags if tag not in by_tag]
     if missing:
         print(
-            "qualify: --models skipping tags absent from the installed FLM "
-            f"registry: {', '.join(missing)}",
+            f"qualify: --models skipping tags absent from the {pool}: "
+            f"{', '.join(missing)}",
             file=sys.stderr,
             flush=True,
         )
     if not selected:
         raise QualificationError(
-            "none of the --models tags are present in the installed FLM registry"
+            f"none of the --models tags are present in the {pool}"
         )
     return selected
 
@@ -1489,7 +1494,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         scope = (
             f"the {len(model_filter)} model(s) selected via --models"
             if model_filter
-            else "a curated set of representative chat models"
+            else "a curated set of chat tags"
         )
         profile = {
             "schema_version": PROFILE_SCHEMA_VERSION,
@@ -1720,7 +1725,15 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 _select_benchmark_models(discovered) if benchmark_dev else discovered
             )
             execution_models = (
-                _filter_models_by_tags(base_models, model_filter)
+                _filter_models_by_tags(
+                    base_models,
+                    model_filter,
+                    pool=(
+                        "curated --bench dev set"
+                        if benchmark_dev
+                        else "installed FLM registry"
+                    ),
+                )
                 if model_filter
                 else base_models
             )

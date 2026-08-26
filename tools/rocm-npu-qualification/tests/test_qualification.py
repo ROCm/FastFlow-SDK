@@ -3268,14 +3268,46 @@ def test_filter_models_by_tags_keeps_requested_order_and_warns(capsys):
     # Requested order (not discovery order); unknown tags dropped with a warning.
     assert [model["tag"] for model in selected] == ["qwen3:0.6b", "gpt-oss:20b"]
     warning = capsys.readouterr().err
-    assert "--models skipping tags absent" in warning
+    assert "--models skipping tags absent from the installed FLM registry" in warning
     assert "absent:1b" in warning
 
 
 def test_filter_models_by_tags_requires_at_least_one():
-    with pytest.raises(runner.QualificationError, match="none of the --models"):
+    with pytest.raises(
+        runner.QualificationError,
+        match="none of the --models tags are present in the installed FLM registry",
+    ):
         runner._filter_models_by_tags(
             [{"tag": "present:1b", "kind": "chat"}], ["absent:1b"]
+        )
+
+
+def test_filter_models_by_tags_reports_curated_pool(capsys):
+    curated = [
+        {"tag": "gpt-oss:20b", "kind": "chat"},
+        {"tag": "qwen3:0.6b", "kind": "chat"},
+    ]
+    selected = runner._filter_models_by_tags(
+        curated,
+        ["embed-gemma:300m", "qwen3:0.6b"],
+        pool="curated --bench dev set",
+    )
+    assert [model["tag"] for model in selected] == ["qwen3:0.6b"]
+    warning = capsys.readouterr().err
+    assert "--models skipping tags absent from the curated --bench dev set" in warning
+    assert "embed-gemma:300m" in warning
+    assert "installed FLM registry" not in warning
+
+
+def test_filter_models_by_tags_empty_curated_pool_is_an_error():
+    with pytest.raises(
+        runner.QualificationError,
+        match="none of the --models tags are present in the curated --bench dev set",
+    ):
+        runner._filter_models_by_tags(
+            [{"tag": "qwen3:0.6b", "kind": "chat"}],
+            ["embed-gemma:300m"],
+            pool="curated --bench dev set",
         )
 
 
@@ -3502,11 +3534,31 @@ def test_bench_dev_sweep_selects_curated_chat_models(monkeypatch, tmp_path):
     assert kinds == {"bench"}
 
 
-def test_bench_dev_honors_models_filter(monkeypatch, tmp_path):
-    # --models narrows the curated set further (and drops non-curated tags).
+def test_bench_dev_honors_models_filter(monkeypatch, tmp_path, capsys):
+    # --models narrows the curated set further. embed-gemma is in the installed
+    # registry but not curated, so it is skipped as missing from the curated
+    # set rather than as missing from the registry.
     exit_code, _, evidence = _run_benchmark_sweep(
-        monkeypatch, tmp_path, bench="dev", models="gpt-oss:20b,qwen3:0.6b"
+        monkeypatch,
+        tmp_path,
+        bench="dev",
+        models="gpt-oss:20b,embed-gemma:300m,qwen3:0.6b",
     )
     assert exit_code == 0
     tags = [model["tag"] for model in evidence["models"]]
     assert tags == ["gpt-oss:20b", "qwen3:0.6b"]
+    assert "embed-gemma:300m" not in tags
+    warning = capsys.readouterr().err
+    assert "--models skipping tags absent from the curated --bench dev set" in warning
+    assert "embed-gemma:300m" in warning
+    assert "installed FLM registry: embed-gemma:300m" not in warning
+
+
+def test_bench_dev_models_only_non_curated_is_an_error(monkeypatch, tmp_path):
+    with pytest.raises(
+        runner.QualificationError,
+        match="none of the --models tags are present in the curated --bench dev set",
+    ):
+        _run_benchmark_sweep(
+            monkeypatch, tmp_path, bench="dev", models="embed-gemma:300m"
+        )

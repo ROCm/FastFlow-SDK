@@ -62,19 +62,23 @@ turns), and embed/ASR models run *only* their serve-probe (the same
 encode-tok/s, RTF, and WER measurements the complete sweep records). It defaults
 to a `1k` context benchmark of five iterations; tune the context with
 `--bench-context <1k|4k|8k>` and the iteration count with `--bench-iterations
-<N>` (a positive integer). Pass `--models=<tag>[,<tag>...]` to narrow the
-sweep to an explicit subset of registry tags (tags absent from the installed
+<N>` (a positive integer). Pass `--models=<tag>[,<tag>...]` to narrow `--bench
+all` to an explicit subset of registry tags (tags absent from the installed
 registry are skipped with a warning); it has no effect without `--bench`.
 Like `--all-models`, `--bench` is a dynamic diagnostic sweep (not pinned,
 not candidate-bound) and implies `--keep-going`.
 
 `--bench dev` is the fast development variant of `--bench all`. It runs the
 same measurement stages with the same `--bench-context`/`--bench-iterations`
-tuning and the same `--models` and `--xrt-flm` modifiers, but over a curated set
-of representative chat models (one per variant, always including the large
-`gpt-oss` and `qwen3.6-moe` MoE, never the embed/ASR models) instead of the
-whole registry -- trading coverage for a much faster inner loop. Curated tags
-absent from the installed registry are skipped with a warning.
+tuning and the same `--models` and `--xrt-flm` modifiers, but over a curated
+set of chat tags (including the large `gpt-oss` and `qwen3.6-moe` MoE; never
+embed/ASR) instead of the whole registry. Curated tags absent from the
+installed registry are skipped with a warning. `--models` then further
+restricts that curated set: an installed tag that is not curated is skipped as
+missing from the curated set, not as missing from the registry. The speedup is
+fewer FastFlowLM tags -- native checks and the XADX kernel recipe still run at
+the same soak depth as `--bench all` (5/20/32). `--bench` already drops
+functional chat stages; XADX is a separate envelope.
 
 `--xrt-flm <path>` (only meaningful with `--bench`; Linux, requires a host XRT
 install) additionally exercises each model through an XRT-backed FastFlowLM
@@ -135,11 +139,11 @@ Useful options include:
 - `--bench-context <1k|4k|8k>` (with `--bench` or `--all-models`; default `1k`
   for `--bench`, `8k` for `--all-models`)
 - `--bench [all|dev]` (measurement-only sweep; `all` covers the whole registry,
-  `dev` a curated set of representative chat models)
+  `dev` a curated set of chat tags)
 - `--bench-iterations <N>` (decode-benchmark iterations per chat model for
   `--bench`; a positive integer, default `5`)
-- `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit
-  registry tags; ignored without `--bench`)
+- `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit tags;
+  with `dev`, further restricts the curated set; ignored without `--bench`)
 - `--xrt-flm <path>` (with `--bench`; Linux; add a best-effort HRX-vs-XRT
   comparison against a host XRT install, off by default)
 - `--json`
