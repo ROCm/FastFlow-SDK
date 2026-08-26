@@ -22,6 +22,7 @@ from build_tools.artifact import (
     sha256_sidecar_path,
     verify_sha256_sidecar,
 )
+from build_tools.fastflowlm_artifact import artifact_name as standalone_artifact_name
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
 )
@@ -186,11 +187,13 @@ def _copy_release_archives(
     expected_version: str,
     expected_source_sha: str,
 ) -> list[dict[str, object]]:
+    linux_artifact = standalone_artifact_name("linux", "x86_64")
+    windows_artifact = standalone_artifact_name("windows", "x86_64")
     expected = {
-        "fastflowlm-hrx-linux-x86_64.tar.zst":
-            ("linux-x86_64", "Linux", "fastflowlm-hrx-linux-x86_64"),
-        "fastflowlm-hrx-windows-x86_64.zip":
-            ("windows-x86_64", "Windows", "fastflowlm-hrx-windows-x86_64"),
+        f"{linux_artifact}.tar.zst":
+            ("linux-x86_64", "Linux", linux_artifact),
+        f"{windows_artifact}.zip":
+            ("windows-x86_64", "Windows", windows_artifact),
     }
     archives = {
         path.name: path

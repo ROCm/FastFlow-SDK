@@ -228,8 +228,13 @@ def smoke_fastflowlm(iterations: int) -> int:
 
 def _find_fastflowlm_archive(directory):
     directory = Path(directory)
-    archives = sorted([*directory.glob("fastflowlm-hrx-*.zip"),
-                       *directory.glob("fastflowlm-hrx-*.tar.zst")])
+    # Match rocm-npu-{os}-{arch} only; do not pick up rocm-npu-compiler-*.
+    archives = sorted([
+        *directory.glob("rocm-npu-linux-*.zip"),
+        *directory.glob("rocm-npu-linux-*.tar.zst"),
+        *directory.glob("rocm-npu-windows-*.zip"),
+        *directory.glob("rocm-npu-windows-*.tar.zst"),
+    ])
     if len(archives) != 1:
         sys.exit(f"expected exactly one FastFlowLM artifact in {directory}, found {len(archives)}")
     archive = archives[0]

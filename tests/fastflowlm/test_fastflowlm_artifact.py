@@ -26,6 +26,7 @@ from build_tools.fastflowlm_artifact import (
     _linux_dependencies_and_licenses,
     _linux_package_owner_candidates,
     _system_license_destination,
+    artifact_name,
     create_archive,
     extract_archive,
     validate_source_policy,
@@ -69,8 +70,12 @@ def _init_git_repository(root: Path, files: dict[str, str]) -> Path:
 
 
 class TestFastFlowLMArtifact:
+    def test_artifact_name_uses_rocm_npu_product_stem(self):
+        assert artifact_name("Linux", "x86_64") == "rocm-npu-linux-x86_64"
+        assert artifact_name("Windows", "AMD64") == "rocm-npu-windows-x86_64"
+
     def make_bundle(self, root):
-        bundle = root / "fastflowlm-hrx-test-x86_64"
+        bundle = root / "rocm-npu-test-x86_64"
         payload = bundle / "bin" / ("flm.exe" if os.name == "nt" else "flm")
         payload.parent.mkdir(parents=True)
         payload.write_bytes(b"runtime")
