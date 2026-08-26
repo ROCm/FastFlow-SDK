@@ -125,23 +125,9 @@ that require XRT.
 
 **Remove when:** iron-ops avoids eager cross-operator imports upstream.
 
-### 0003-adapt-aiecc-native-cli.patch
-Rewrites the `aiecc` command lines in `iron/common/compilation/base.py` to the
-native `aiecc` "declarative driver" CLI shipped by the current iron-tools pin
-(mlir-aie replaced the Python `aiecc.py` entry point with a C++ `tools/aiecc`
-binary). The old flags become: `-v` → `--verbose`, `-j1` → `-j 1`, drop
-`--no-compile-host` (host compilation is now opt-in via `-o`),
-`--aie-generate-xclbin` → `--get-xclbin`, `--aie-generate-npu-insts` →
-`--get-npu-insts`, `--generate-full-elf` → `--get-full-elf`, and dropping
-`--no-compile` (an insts-only build simply requests only the `--get-npu-insts`
-edge). Without this the off-device `dev.py test-iron-ops` gate fails immediately
-with `aiecc: Unknown command line argument '--aie-generate-xclbin'`.
-
-**Why here:** iron-ops develops against the mlir_aie wheel, whose `aiecc` still
-takes the old CLI; this stack builds iron-tools from a newer source pin.
-
-**Remove when:** iron-ops targets the native `aiecc` CLI upstream (or this stack
-pins an iron-tools revision whose `aiecc` still accepts the legacy flags).
+The former 0003 (adapt aiecc native CLI) was dropped at the iron-ops `aab8083`
+pin: IRON #145/#150 now compile through mlir-aie's `compile_mlir_module()`,
+which already emits native `aiecc --get-*` flags.
 
 ## patches/llvm-project/
 
