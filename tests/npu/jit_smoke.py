@@ -24,7 +24,7 @@ import numpy as np
 
 import aie.iron as iron
 from aie.iron import CompileTime, In, ObjectFifo, Out, Program, Runtime
-from aie.iron.device import NPU2
+from aie.iron.device import AnyShimTile, NPU2
 
 LINE = 1024
 SIZE = 4096
@@ -36,12 +36,21 @@ def memcpy_passthrough(src: In, dst: Out, *, n: CompileTime[int]):
     vec_ty = np.ndarray[(n,), np.dtype[np.int32]]
 
     of_in = ObjectFifo(line_ty, name="in")
-    of_out = of_in.cons().forward(name="out")
+    of_out = of_in.cons().forward()
 
-    rt = Runtime()
-    with rt.sequence(vec_ty, vec_ty) as (a_in, c_out):
-        rt.fill(of_in.prod(), a_in)
-        rt.drain(of_out.cons(), c_out, wait=True)
+    def sequence(a_in, c_out, in_handle, out_handle):
+        in_handle.fill(a_in)
+        out_handle.drain(c_out, wait=True)
+
+    rt = Runtime(
+        sequence,
+        [
+            vec_ty,
+            vec_ty,
+            of_in.prod(tile=AnyShimTile),
+            of_out.cons(tile=AnyShimTile),
+        ],
+    )
 
     return Program(NPU2(), rt).resolve_program()
 
@@ -59,16 +68,16 @@ def build_only(size: int) -> int:
 
 
 def build_and_run(size: int) -> int:
-    src = iron.arange(size, dtype=np.int32)
-    dst = iron.zeros(size, dtype=np.int32)
+    src = iron.arange(1, size + 1, dtype=np.int32, device="npu")
+    dst = iron.zeros_like(src)
 
     memcpy_passthrough(src, dst, n=size)
 
-    if np.array_equal(np.asarray(src), np.asarray(dst)):
+    if np.array_equal(dst.numpy(), src.numpy()):
         print(f"PASS: {size} int32 elements copied through the NPU")
         return 0
 
-    differing = int(np.count_nonzero(np.asarray(src) != np.asarray(dst)))
+    differing = int(np.count_nonzero(dst.numpy() != src.numpy()))
     print(f"FAIL: {differing}/{size} elements differ")
     return 1
 
