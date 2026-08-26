@@ -90,6 +90,8 @@ class TestRocmNpuLinuxWheelNative:
         source = (package / "__init__.py").read_text(encoding="utf-8")
         assert "scripts = str(Path(sys.executable).parent)" in source
         assert "Path(sys.executable).resolve()" not in source
+        assert "def activate_iron_host()" in source
+        assert "\nactivate_iron_host()\n" in source
 
     def test_build_wheel_writes_metadata_record_and_checksum(self):
         with tempfile.TemporaryDirectory() as temporary:

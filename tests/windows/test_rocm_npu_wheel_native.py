@@ -162,7 +162,12 @@ class TestRocmNpuWheelNative:
             package / "licenses" / "Microsoft-Visual-Cpp-Runtime-NOTICE.txt"
         ).read_text(encoding="utf-8") == "Microsoft runtime terms\n"
 
-    def test_generated_runtime_keeps_dll_directory_and_library_alive(self, tmp_path):
+    def test_generated_runtime_keeps_dll_directory_and_library_alive(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("NPU_RUNTIME", raising=False)
+        monkeypatch.delenv("IRON_RUNTIME", raising=False)
+        monkeypatch.delenv("HRX_LIBHRX", raising=False)
         package = tmp_path / RUNTIME_PACKAGE
         (package / "bin").mkdir(parents=True)
         (package / "bin" / "hrx.dll").write_bytes(b"MZ")
