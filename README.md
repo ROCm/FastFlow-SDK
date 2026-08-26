@@ -56,23 +56,23 @@ The release description lists the driver versions validated for that build.
 
 Each release includes a relocatable FastFlowLM + HRX archive:
 
-- Windows: `fastflowlm-hrx-windows-x86_64.zip`
-- Linux: `fastflowlm-hrx-linux-x86_64.tar.zst`
+- Windows: `rocm-npu-windows-x86_64.zip`
+- Linux: `rocm-npu-linux-x86_64.tar.zst`
 
 Extract it and run the binaries from the archive root (`bin/flm` and
 `bin/rocm-npu`):
 
 ```powershell
-Expand-Archive .\fastflowlm-hrx-windows-x86_64.zip -DestinationPath .
-cd .\fastflowlm-hrx-windows-x86_64
+Expand-Archive .\rocm-npu-windows-x86_64.zip -DestinationPath .
+cd .\rocm-npu-windows-x86_64
 .\bin\rocm-npu.exe doctor
 .\bin\flm.exe list
 .\bin\flm.exe run qwen3:0.6b
 ```
 
 ```bash
-tar --zstd -xf fastflowlm-hrx-linux-x86_64.tar.zst
-cd fastflowlm-hrx-linux-x86_64
+tar --zstd -xf rocm-npu-linux-x86_64.tar.zst
+cd rocm-npu-linux-x86_64
 ./bin/rocm-npu doctor
 ./bin/flm list
 ./bin/flm run qwen3:0.6b

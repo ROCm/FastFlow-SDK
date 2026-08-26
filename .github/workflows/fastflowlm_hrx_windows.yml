@@ -220,13 +220,13 @@ jobs:
         with:
           subject-path: |
             build/artifacts/rocm_npu_*.whl
-            build/artifacts/fastflowlm-hrx-windows-x86_64.zip
+            build/artifacts/rocm-npu-windows-x86_64.zip
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fastflowlm-hrx-windows-x86_64
-          path: build/artifacts/fastflowlm-hrx-windows-x86_64.zip*
+          name: rocm-npu-windows-x86_64
+          path: build/artifacts/rocm-npu-windows-x86_64.zip*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -298,7 +298,7 @@ jobs:
       - name: Download standalone runtime archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fastflowlm-hrx-windows-x86_64
+          name: rocm-npu-windows-x86_64
           path: .native-artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -358,7 +358,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = Get-ChildItem .native-artifact -Recurse -File -Filter fastflowlm-hrx-windows-x86_64.zip |
+          $archive = Get-ChildItem .native-artifact -Recurse -File -Filter rocm-npu-windows-x86_64.zip |
             Select-Object -First 1
           if (-not $archive) { throw 'standalone runtime archive was not downloaded' }
           $checksum = (Get-Content "$($archive.FullName).sha256" -Raw).Trim().Split()[0]

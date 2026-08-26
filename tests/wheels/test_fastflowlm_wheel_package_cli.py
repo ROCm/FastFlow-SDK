@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from build_tools import fastflowlm_package
+from build_tools.artifact import write_sha256_sidecar
 from build_tools.dev import host_testing
 from build_tools.rocm_npu_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
@@ -148,3 +149,13 @@ class TestFastFlowLMWheelPackageCli:
         assert "--inference-iterations" in command
         assert "3" in command
         assert env["FASTFLOWLM_INSTALLED_PACKAGE"] == "1"
+
+    def test_find_archive_ignores_compiler_product(self, tmp_path):
+        runtime = tmp_path / "rocm-npu-linux-x86_64.tar.zst"
+        compiler = tmp_path / "rocm-npu-compiler-linux-x86_64.tar.zst"
+        runtime.write_bytes(b"runtime")
+        compiler.write_bytes(b"compiler")
+        write_sha256_sidecar(runtime)
+        write_sha256_sidecar(compiler)
+
+        assert fastflowlm_package._find_fastflowlm_archive(tmp_path) == runtime

@@ -138,10 +138,10 @@ class TestRocmNpuWheelRelease:
         archives.mkdir()
         output.mkdir()
         archive_metadata = {
-            "fastflowlm-hrx-linux-x86_64.tar.zst":
-                ("Linux", "fastflowlm-hrx-linux-x86_64"),
-            "fastflowlm-hrx-windows-x86_64.zip":
-                ("Windows", "fastflowlm-hrx-windows-x86_64"),
+            "rocm-npu-linux-x86_64.tar.zst":
+                ("Linux", "rocm-npu-linux-x86_64"),
+            "rocm-npu-windows-x86_64.zip":
+                ("Windows", "rocm-npu-windows-x86_64"),
         }
         for name, (system, artifact) in archive_metadata.items():
             _write_release_archive(
@@ -162,12 +162,12 @@ class TestRocmNpuWheelRelease:
             "linux-x86_64",
             "windows-x86_64",
         }
-        assert (output / "fastflowlm-hrx-windows-x86_64.zip").is_file()
+        assert (output / "rocm-npu-windows-x86_64.zip").is_file()
         stale_archive = _write_release_archive(
             archives,
-            "fastflowlm-hrx-windows-x86_64.zip",
+            "rocm-npu-windows-x86_64.zip",
             system="Windows",
-            artifact="fastflowlm-hrx-windows-x86_64",
+            artifact="rocm-npu-windows-x86_64",
             version="1.2.2",
             source_sha="abc123",
         )
@@ -281,14 +281,14 @@ class TestRocmNpuWheelRelease:
         archives.mkdir()
         for name, system, artifact in (
             (
-                "fastflowlm-hrx-linux-x86_64.tar.zst",
+                "rocm-npu-linux-x86_64.tar.zst",
                 "Linux",
-                "fastflowlm-hrx-linux-x86_64",
+                "rocm-npu-linux-x86_64",
             ),
             (
-                "fastflowlm-hrx-windows-x86_64.zip",
+                "rocm-npu-windows-x86_64.zip",
                 "Windows",
-                "fastflowlm-hrx-windows-x86_64",
+                "rocm-npu-windows-x86_64",
             ),
         ):
             _write_release_archive(

@@ -140,6 +140,8 @@ class TestRocmNpuReleaseWheelWorkflow:
         )
         assert "name: rocm-npu-qualification-wheel" in collector
         assert "name: rocm-npu-qualification-wheel-windows-local" in collector
+        assert "name: rocm-npu-linux-x86_64" in collector
+        assert "name: rocm-npu-windows-x86_64" in collector
         assert "verify_qualification_wheel_parity.py" in collector
         assert "rocm_npu_wheel_release_cli.py prepare" in collector
         assert "Create release-wide qualification candidate" in collector
@@ -193,8 +195,8 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert '--publish-target "${INPUT_PUBLISH_TARGET}"' in workflow
         assert "rocm-npu-runtime-fastflowlm-linux-x86_64" in workflow
         assert "rocm-npu-runtime-fastflowlm-windows-x86_64" in workflow
-        assert "fastflowlm-hrx-linux-x86_64" in workflow
-        assert "fastflowlm-hrx-windows-x86_64" in workflow
+        assert "rocm-npu-linux-x86_64" in workflow
+        assert "rocm-npu-windows-x86_64" in workflow
         assert "--archive-dir archives" in workflow
         assert "release/*.zip,release/*.tar.zst" in workflow
         assert "release/*.zip.manifest.json" in workflow
@@ -386,7 +388,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         attestation = workflow.index("actions/attest-build-provenance@")
         archive_suffix = ".zip" if platform == "windows" else ".tar.zst"
         assert (
-            f"build/artifacts/fastflowlm-hrx-{platform}-x86_64{archive_suffix}"
+            f"build/artifacts/rocm-npu-{platform}-x86_64{archive_suffix}"
             in workflow
         )
         artifact_upload = workflow.index("name: Upload runtime")

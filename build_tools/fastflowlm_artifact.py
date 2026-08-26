@@ -665,7 +665,7 @@ def _linux_dependencies_and_licenses(
 def artifact_name(system: str | None = None, machine: str | None = None) -> str:
     system = (system or platform.system()).lower()
     machine = (machine or platform.machine()).lower().replace("amd64", "x86_64")
-    return f"fastflowlm-hrx-{system}-{machine}"
+    return f"rocm-npu-{system}-{machine}"
 
 
 def _patch_manifest(root: Path) -> list[dict[str, object]]:

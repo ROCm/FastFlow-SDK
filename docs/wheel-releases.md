@@ -118,11 +118,14 @@ The `Release ROCm NPU Wheels` workflow defaults to validation only. With
 uploads a temporary Actions artifact. `publish_target=github-prerelease` also
 builds and attests the release payload, but its GitHub publication job is
 disabled; it does not create or push a tag.
-The same payload includes the tested Linux `.tar.zst` and Windows `.zip`
-standalone FastFlowLM + HRX runtime archives, checksum sidecars, and detached
-bundle provenance manifests. Release assembly rejects archives whose embedded
-version, source revision, platform, or archive digest does not match the
-resolved release.
+The same payload includes the tested standalone FastFlowLM + HRX runtime
+archives (`rocm-npu-linux-x86_64.tar.zst` and `rocm-npu-windows-x86_64.zip`),
+checksum sidecars, and detached bundle provenance manifests. Compiler CI also
+builds relocatable product archives (`rocm-npu-compiler-linux-x86_64.tar.gz` /
+`rocm-npu-compiler-windows-x86_64.tar.zst`) for packaging and verification, but
+only compiler wheels are collected into this release payload. Release assembly
+rejects runtime archives whose embedded version, source revision, platform, or
+archive digest does not match the resolved release.
 
 Pull-request CI builds one stable-ABI bindings wheel per platform and validates
 that same wheel on Python 3.12, 3.13, and 3.14.

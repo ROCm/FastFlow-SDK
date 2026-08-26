@@ -194,14 +194,14 @@ jobs:
         with:
           subject-path: |
             build/artifacts/rocm_npu_*.whl
-            build/artifacts/fastflowlm-hrx-linux-x86_64.tar.zst
+            build/artifacts/rocm-npu-linux-x86_64.tar.zst
             build/qualification-artifacts/rocm_npu_qualification-*.whl
 
       - name: Upload runtime archive artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fastflowlm-hrx-linux-x86_64
-          path: build/artifacts/fastflowlm-hrx-linux-x86_64.tar.zst*
+          name: rocm-npu-linux-x86_64
+          path: build/artifacts/rocm-npu-linux-x86_64.tar.zst*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -266,7 +266,7 @@ jobs:
       - name: Download standalone runtime archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fastflowlm-hrx-linux-x86_64
+          name: rocm-npu-linux-x86_64
           path: .native-artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -306,7 +306,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$(realpath "$(find .native-artifact -name 'fastflowlm-hrx-linux-x86_64.tar.zst' -type f -print -quit)")"
+          archive="$(realpath "$(find .native-artifact -name 'rocm-npu-linux-x86_64.tar.zst' -type f -print -quit)")"
           test -n "${archive}"
           (
             cd "$(dirname "${archive}")"
