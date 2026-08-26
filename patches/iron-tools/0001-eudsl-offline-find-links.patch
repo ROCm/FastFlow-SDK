@@ -1,5 +1,5 @@
 diff --git a/python/requirements.txt b/python/requirements.txt
-index 1e06b7f2013..1feb71f6ee9 100644
+index 1e06b7f2013..64258f74d40 100644
 --- a/python/requirements.txt
 +++ b/python/requirements.txt
 @@ -5,6 +5,6 @@ numpy>=2.5.2,<3.0; python_version >= "3.12"
@@ -7,7 +7,6 @@ index 1e06b7f2013..1feb71f6ee9 100644
  ml_dtypes>=0.6.0
  cloudpickle # required by eudsl when it is vendored instead of installed
 --f https://llvm.github.io/eudsl
--eudsl-python-extras==0.1.0.20260801.905+68a0d7a \
 +-f ../../../.cache/find-links
-+eudsl-python-extras==0.1.0.20260629.149+b27b3ae \
+ eudsl-python-extras==0.1.0.20260801.905+68a0d7a \
    --config-settings=EUDSL_PYTHON_EXTRAS_HOST_PACKAGE_PREFIX=aie

@@ -143,30 +143,27 @@ Python support DLLs.
 
 ## patches/iron-tools/
 
-### 0001-eudsl-for-amd-llvm-23.patch
+### 0001-eudsl-offline-find-links.patch
 Edits one file in the submodule (upstream `Xilinx/mlir-aie`):
-1. `python/requirements.txt`: bumps the pinned `eudsl-python-extras` to the
-   `manifests/versions.toml [eudsl]` version, and repoints its `-f` find-links from
-   `https://llvm.github.io/eudsl` to the local prefetch cache (`../../../.cache/find-links`)
-   so `vendor_eudsl.py` never lists the remote.
+1. `python/requirements.txt`: leaves mlir-aie's `eudsl-python-extras` version
+   line alone, and repoints its `-f` find-links from `https://llvm.github.io/eudsl`
+   to the local prefetch cache (`../../../.cache/find-links`) so `vendor_eudsl.py`
+   never lists the remote.
 
 (The former second hunk — `--no-build-isolation` in `vendor_eudsl.py` — is now upstream
-in mlir-aie's `install_eudsl`, so this patch is `requirements.txt` only.)
+in mlir-aie's `install_eudsl`, so this patch is `requirements.txt` only. The former
+version override to `0.1.0.20260629` was dropped when this stack's LLVM pin aligned
+with mlir-aie's `clone-llvm.sh` commit.)
 
 Combined with `dev.py` setting `PIP_FIND_LINKS` (absolute cache) + `PIP_NO_INDEX=1`
 for the iron-tools build, eudsl vendoring is **network-free** (resolved from the
 sha256-verified prefetched sdist).
 
-**Why:** mlir-aie pins eudsl `0.1.0.20260801` for its intended LLVM. This patch
-still overrides to the cached `0.1.0.20260629` sdist (verified to emit
-size-identical IR on the previous pin) and repoints find-links at
-`.cache/find-links` so vendoring stays network-free under `PIP_NO_INDEX`. LLVM
-is now aligned with mlir-aie's clone-llvm.sh pin; keep the version override
-until 20260801 is confirmed on this stack.
+**Why:** mlir-aie pins eudsl from `https://llvm.github.io/eudsl`, which `PIP_NO_INDEX`
+cannot see. The patch only rewrites that `-f` onto `.cache/find-links`.
 
-**Remove when:** mlir-aie's Python/IRON path is built against an aligned LLVM, at
-which point mlir-aie's own eudsl pin works and this override is unnecessary. Until
-then, also worth upstreaming to mlir-aie as a build-against-newer-LLVM compatibility note.
+**Remove when:** mlir-aie's `vendor_eudsl.py` / `requirements.txt` can resolve eudsl
+from a local find-links cache without a remote `-f`.
 
 ### 0002-windows-clang-cl.patch
 Lets the submodule build under **clang-cl** (the Windows toolchain; see the

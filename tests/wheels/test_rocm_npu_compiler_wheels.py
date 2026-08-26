@@ -374,7 +374,7 @@ class TestRocmNpuCompilerWheels:
         assert set(metadata.get_all("Requires-Dist") or ()) == {
             "aiofiles ==25.1.0",
             "cloudpickle ==3.1.2",
-            "ml-dtypes ==0.5.4",
+            "ml-dtypes ==0.6.0",
             "numpy ==2.4.6",
             "rich ==15.0.0",
             "rocm-npu-compiler-core ==0.1.0.dev1",

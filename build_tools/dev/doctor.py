@@ -24,6 +24,24 @@ _SYS_HEADERS = [
     ("openssl/opensslv.h", "libssl-dev"),
 ]
 
+EUDSL_FIND_LINKS_PATCH = "0001-eudsl-offline-find-links.patch"
+
+
+def eudsl_version_from_patch(text: str) -> str | None:
+    """Version iron-tools installs after the eudsl find-links patch.
+
+    A ``+eudsl-python-extras==`` hunk is an override. If the patch only rewrites
+    ``-f``, the unchanged context line is mlir-aie's pin — that is in-sync with
+    ``[eudsl]``.
+    """
+    plus = re.search(r"^\+eudsl-python-extras==(\S+)", text, re.M)
+    if plus:
+        return plus.group(1)
+    context = re.search(r"^ eudsl-python-extras==(\S+)", text, re.M)
+    if context:
+        return context.group(1)
+    return None
+
 
 def check_compiler_stack_system(verbose, *, windows: bool | None = None):
     """Return (ok, missing_apt_packages) for the LLVM/IRON compiler stack."""
@@ -269,24 +287,16 @@ def cmd_doctor(args):
             "eudsl sdist cached + sha256 verified"
         )
         eudsl_ver = patches.manifest().get("eudsl", {}).get("version", "")
-        patch_file = (
-            paths.PATCHES / "iron-tools" / "0001-eudsl-for-amd-llvm-23.patch"
-        )
-        match = (
-            re.search(
-                r"\+eudsl-python-extras==(\S+)", patch_file.read_text()
-            )
+        patch_file = paths.PATCHES / "iron-tools" / EUDSL_FIND_LINKS_PATCH
+        installed = (
+            eudsl_version_from_patch(patch_file.read_text())
             if patch_file.exists()
             else None
         )
-        ver_ok = (
-            bool(eudsl_ver)
-            and match is not None
-            and match.group(1) == eudsl_ver
-        )
+        ver_ok = bool(eudsl_ver) and installed == eudsl_ver
         print(
             f"  [{'ok  ' if ver_ok else 'DRIFT'}] eudsl version: "
-            f"patch=={match.group(1) if match else '?'} == "
+            f"patch=={installed or '?'} == "
             f"manifest=={eudsl_ver or '?'}"
         )
         print(
@@ -296,7 +306,8 @@ def cmd_doctor(args):
     rc = 0
     if not ver_ok:
         print(
-            "\neudsl version DRIFT: patches/iron-tools/0001-… and versions.toml "
+            "\neudsl version DRIFT: patches/iron-tools/"
+            f"{EUDSL_FIND_LINKS_PATCH} and versions.toml "
             "[eudsl] disagree — sync them"
         )
         rc = 1

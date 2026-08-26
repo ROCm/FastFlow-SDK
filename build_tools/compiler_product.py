@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Relocatable ROCm NPU compiler product staging and verification."""
 
+import hashlib
 import json
 import os
 import platform
@@ -83,27 +84,37 @@ def _stage(src, dst):
         shutil.copy2(src, dst, follow_symlinks=True)
 
 
+def _git_tracked_diff_sha256(repo, *pathspecs):
+    """SHA-256 of `git diff HEAD` scoped to optional pathspecs."""
+    command = ["git", "-C", str(repo), "diff", "HEAD"]
+    if pathspecs:
+        command.extend(["--", *pathspecs])
+    diff = subprocess.run(command, check=True, capture_output=True).stdout
+    return hashlib.sha256(diff).hexdigest()
+
+
 def _hrx_xclbinutil_source_state():
     """Provenance for hrx-xclbinutil: nested git repo, or vendored in iron-tools."""
     source = PROJ / "iron-tools" / "third_party" / "hrx-xclbinutil"
     if (source / ".git").exists():
         return git_source_state(source)
-    iron_state = git_source_state(PROJ / "iron-tools")
+    iron = PROJ / "iron-tools"
+    iron_state = git_source_state(iron)
     prefix = "third_party/hrx-xclbinutil/"
+    changed_files = [
+        item
+        for item in iron_state["changed_files"]
+        if item["path"].replace("\\", "/").startswith(prefix)
+    ]
     return {
-        "revision": git_revision(PROJ / "iron-tools"),
-        "dirty": any(
-            item["path"].replace("\\", "/").startswith(prefix)
-            for item in iron_state["changed_files"]
-        ),
+        "revision": git_revision(iron),
+        "dirty": bool(changed_files),
         "vendored_in": "iron-tools",
         "path": "third_party/hrx-xclbinutil",
-        "tracked_diff_sha256": iron_state["tracked_diff_sha256"],
-        "changed_files": [
-            item
-            for item in iron_state["changed_files"]
-            if item["path"].replace("\\", "/").startswith(prefix)
-        ],
+        "tracked_diff_sha256": _git_tracked_diff_sha256(
+            iron, "third_party/hrx-xclbinutil"
+        ),
+        "changed_files": changed_files,
     }
 
 

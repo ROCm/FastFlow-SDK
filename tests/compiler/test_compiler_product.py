@@ -705,3 +705,91 @@ def test_relocated_toolchain_env_uses_installed_wheel_bindings(tmp_path):
         env = run_e2e.toolchain_env(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", prefix)
 
     assert env["PYTHONPATH"] == str(site_packages)
+
+
+def test_hrx_xclbinutil_source_state_uses_nested_git_when_present(tmp_path, monkeypatch):
+    source = tmp_path / "iron-tools" / "third_party" / "hrx-xclbinutil"
+    source.mkdir(parents=True)
+    (source / ".git").mkdir()
+    nested = {
+        "revision": "nestedsha",
+        "dirty": False,
+        "tracked_diff_sha256": "00" * 32,
+        "changed_files": [],
+    }
+
+    def fake_git_source_state(path):
+        assert path == source
+        return nested
+
+    monkeypatch.setattr(compiler_product, "PROJ", tmp_path)
+    monkeypatch.setattr(compiler_product, "git_source_state", fake_git_source_state)
+    assert compiler_product._hrx_xclbinutil_source_state() == nested
+
+
+def test_hrx_xclbinutil_source_state_scopes_vendored_diff(tmp_path, monkeypatch):
+    iron = tmp_path / "iron-tools"
+    vendored = iron / "third_party" / "hrx-xclbinutil"
+    vendored.mkdir(parents=True)
+    whole_tree_hash = "ab" * 32
+    scoped_hash = "cd" * 32
+    iron_state = {
+        "revision": "ironsha",
+        "dirty": True,
+        "tracked_diff_sha256": whole_tree_hash,
+        "changed_files": [
+            {"path": "python/requirements.txt", "sha256": "aa"},
+            {"path": "third_party/hrx-xclbinutil/README", "sha256": "bb"},
+        ],
+    }
+
+    def fake_git_source_state(path):
+        assert path == iron
+        return iron_state
+
+    monkeypatch.setattr(compiler_product, "PROJ", tmp_path)
+    monkeypatch.setattr(compiler_product, "git_source_state", fake_git_source_state)
+    monkeypatch.setattr(compiler_product, "git_revision", lambda path: "ironsha")
+    monkeypatch.setattr(
+        compiler_product,
+        "_git_tracked_diff_sha256",
+        lambda repo, *pathspecs: scoped_hash,
+    )
+
+    state = compiler_product._hrx_xclbinutil_source_state()
+    assert state["vendored_in"] == "iron-tools"
+    assert state["path"] == "third_party/hrx-xclbinutil"
+    assert state["revision"] == "ironsha"
+    assert state["dirty"] is True
+    assert state["changed_files"] == [
+        {"path": "third_party/hrx-xclbinutil/README", "sha256": "bb"}
+    ]
+    assert state["tracked_diff_sha256"] == scoped_hash
+    assert state["tracked_diff_sha256"] != whole_tree_hash
+
+
+def test_hrx_xclbinutil_source_state_clean_when_vendored_tree_unchanged(
+    tmp_path, monkeypatch
+):
+    iron = tmp_path / "iron-tools"
+    (iron / "third_party" / "hrx-xclbinutil").mkdir(parents=True)
+    empty_hash = "ee" * 32
+    iron_state = {
+        "revision": "ironsha",
+        "dirty": True,
+        "tracked_diff_sha256": "ff" * 32,
+        "changed_files": [{"path": "python/requirements.txt", "sha256": "aa"}],
+    }
+    monkeypatch.setattr(compiler_product, "PROJ", tmp_path)
+    monkeypatch.setattr(compiler_product, "git_source_state", lambda path: iron_state)
+    monkeypatch.setattr(compiler_product, "git_revision", lambda path: "ironsha")
+    monkeypatch.setattr(
+        compiler_product,
+        "_git_tracked_diff_sha256",
+        lambda repo, *pathspecs: empty_hash,
+    )
+
+    state = compiler_product._hrx_xclbinutil_source_state()
+    assert state["dirty"] is False
+    assert state["changed_files"] == []
+    assert state["tracked_diff_sha256"] == empty_hash
