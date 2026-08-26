@@ -106,6 +106,25 @@ def self_test(*, load: bool = False) -> Path:
     return path
 
 
+def activate_iron_host() -> None:
+    """Select HRX for in-process IRON JIT without overriding a caller's values.
+
+    IRON defaults to XRT and does not search this wheel. Existing environment
+    values win so an explicit NPU_RUNTIME or HRX_LIBHRX stays authoritative.
+    A missing native library still selects HRX by name; HRX_LIBHRX is only
+    set when libhrx_path() resolves.
+    """
+    os.environ.setdefault("NPU_RUNTIME", "hrx")
+    os.environ.setdefault("IRON_RUNTIME", "hrx")
+    try:
+        os.environ.setdefault("HRX_LIBHRX", str(libhrx_path()))
+    except FileNotFoundError:
+        pass
+
+
+activate_iron_host()
+
+
 def main() -> int:
     environment = os.environ.copy()
     scripts = str(Path(sys.executable).parent)

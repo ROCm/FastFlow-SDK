@@ -3,9 +3,12 @@
 
 import csv
 import hashlib
+import importlib.util
 import io
 import json
+import os
 import zipfile
+from pathlib import Path
 
 try:
     from cyclonedx.schema import SchemaVersion
@@ -29,6 +32,7 @@ from build_tools.rocm_npu_wheel_common import (
     verify_wheel_checksums,
 )
 from build_tools.runtime_wheel_staging import (
+    _write_runtime_module,
     prepare_runtime_wheel_trees,
     write_runtime_wheel_manifests,
 )
@@ -392,3 +396,70 @@ class TestRocmNpuWheelCommon:
         assert validate_version("1.2.3.dev4+local.1") == "1.2.3.dev4+local.1"
         with pytest.raises(RuntimeError, match="invalid PEP 440"):
             validate_version("1.2.3 DEV")
+
+    def _load_generated_runtime(self, package: Path, name: str):
+        spec = importlib.util.spec_from_file_location(name, package / "__init__.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module
+
+    def test_generated_runtime_activates_iron_host_from_libhrx(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("NPU_RUNTIME", raising=False)
+        monkeypatch.delenv("IRON_RUNTIME", raising=False)
+        monkeypatch.delenv("HRX_LIBHRX", raising=False)
+        package = tmp_path / "rocm_npu_runtime"
+        library = (
+            package / "bin" / "hrx.dll"
+            if os.name == "nt"
+            else package / "lib" / "libhrx.so"
+        )
+        library.parent.mkdir(parents=True)
+        library.write_bytes(b"lib")
+        _write_runtime_module(package)
+
+        self._load_generated_runtime(package, "generated_runtime_iron_host")
+
+        assert os.environ["NPU_RUNTIME"] == "hrx"
+        assert os.environ["IRON_RUNTIME"] == "hrx"
+        assert Path(os.environ["HRX_LIBHRX"]) == library.resolve()
+
+    def test_generated_runtime_preserves_explicit_iron_host(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("NPU_RUNTIME", "xrt")
+        monkeypatch.setenv("IRON_RUNTIME", "xrt")
+        monkeypatch.setenv("HRX_LIBHRX", "/explicit/libhrx")
+        package = tmp_path / "rocm_npu_runtime"
+        library = (
+            package / "bin" / "hrx.dll"
+            if os.name == "nt"
+            else package / "lib" / "libhrx.so"
+        )
+        library.parent.mkdir(parents=True)
+        library.write_bytes(b"lib")
+        _write_runtime_module(package)
+
+        self._load_generated_runtime(package, "generated_runtime_iron_host_preserve")
+
+        assert os.environ["NPU_RUNTIME"] == "xrt"
+        assert os.environ["IRON_RUNTIME"] == "xrt"
+        assert os.environ["HRX_LIBHRX"] == "/explicit/libhrx"
+
+    def test_generated_runtime_activates_iron_host_without_native_library(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("NPU_RUNTIME", raising=False)
+        monkeypatch.delenv("IRON_RUNTIME", raising=False)
+        monkeypatch.delenv("HRX_LIBHRX", raising=False)
+        package = tmp_path / "rocm_npu_runtime"
+        package.mkdir()
+        _write_runtime_module(package)
+
+        self._load_generated_runtime(package, "generated_runtime_iron_host_missing")
+
+        assert os.environ["NPU_RUNTIME"] == "hrx"
+        assert os.environ["IRON_RUNTIME"] == "hrx"
+        assert "HRX_LIBHRX" not in os.environ

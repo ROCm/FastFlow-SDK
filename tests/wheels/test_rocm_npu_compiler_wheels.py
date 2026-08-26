@@ -3,8 +3,11 @@
 
 import email.parser
 import json
+import os
 import re
 import subprocess
+import sys
+import types
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -28,6 +31,7 @@ from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
+    _binding_bootstrap,
     _is_core_aie_native,
     binding_wheel_tag,
     build_compiler_wheel_family,
@@ -40,6 +44,7 @@ from build_tools.rocm_npu_compiler_wheels import (
     verify_windows_compiler_wheels,
 )
 from build_tools.rocm_npu_wheel_release import _copy_release_wheel
+from build_tools.runtime_wheel_staging import _write_runtime_module
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -380,6 +385,114 @@ class TestRocmNpuCompilerWheels:
             "rocm-npu-compiler-core ==0.1.0.dev1",
         }
         assert (python_root / "aie" / "__init__.py").read_text(encoding="utf-8") == ""
+        with zipfile.ZipFile(wheel) as archive:
+            init = archive.read("aie/__init__.py").decode("utf-8")
+        assert "activate_iron_host" in init
+        assert "except ImportError:" in init
+        assert "rocm-npu-runtime" not in (metadata.get_all("Requires-Dist") or ())
+
+    def test_binding_bootstrap_skips_iron_host_when_runtime_is_absent(
+        self, monkeypatch
+    ):
+        compiler = types.ModuleType("rocm_npu_compiler")
+        compiler.activate_native_libraries = lambda: None
+        monkeypatch.setitem(sys.modules, "rocm_npu_compiler", compiler)
+        monkeypatch.delitem(sys.modules, "rocm_npu_runtime", raising=False)
+        exec(_binding_bootstrap(), {})
+
+    def test_binding_bootstrap_activates_iron_host_when_runtime_is_installed(
+        self, monkeypatch
+    ):
+        calls = []
+        compiler = types.ModuleType("rocm_npu_compiler")
+        compiler.activate_native_libraries = lambda: None
+        runtime = types.ModuleType("rocm_npu_runtime")
+        runtime.activate_iron_host = lambda: calls.append("iron")
+        monkeypatch.setitem(sys.modules, "rocm_npu_compiler", compiler)
+        monkeypatch.setitem(sys.modules, "rocm_npu_runtime", runtime)
+        exec(_binding_bootstrap(), {})
+        assert calls == ["iron"]
+
+    def test_binding_bootstrap_skips_old_runtime_without_activate_iron_host(
+        self, monkeypatch
+    ):
+        compiler = types.ModuleType("rocm_npu_compiler")
+        compiler.activate_native_libraries = lambda: None
+        runtime = types.ModuleType("rocm_npu_runtime")
+        monkeypatch.setitem(sys.modules, "rocm_npu_compiler", compiler)
+        monkeypatch.setitem(sys.modules, "rocm_npu_runtime", runtime)
+        exec(_binding_bootstrap(), {})
+
+    def _write_import_site(self, root: Path, *, with_runtime: bool) -> Path:
+        site = root / "site"
+        compiler = site / "rocm_npu_compiler"
+        compiler.mkdir(parents=True)
+        (compiler / "__init__.py").write_text(
+            "def activate_native_libraries():\n    return None\n",
+            encoding="utf-8",
+        )
+        aie = site / "aie"
+        aie.mkdir()
+        (aie / "__init__.py").write_text(_binding_bootstrap(), encoding="utf-8")
+        if with_runtime:
+            package = site / "rocm_npu_runtime"
+            library = (
+                package / "bin" / "hrx.dll"
+                if os.name == "nt"
+                else package / "lib" / "libhrx.so"
+            )
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"lib")
+            _write_runtime_module(package)
+        return site
+
+    def _run_import_aie_probe(self, site: Path, probe: Path) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(site)
+        env["PYTHONNOUSERSITE"] = "1"
+        for key in ("NPU_RUNTIME", "IRON_RUNTIME", "HRX_LIBHRX"):
+            env.pop(key, None)
+        return subprocess.run(
+            [sys.executable, str(probe)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_import_aie_selects_hrx_without_importing_runtime(self, tmp_path):
+        site = self._write_import_site(tmp_path, with_runtime=True)
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            "import os\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "\n"
+            "assert 'rocm_npu_runtime' not in sys.modules\n"
+            "import aie  # noqa: F401\n"
+            "assert 'rocm_npu_runtime' in sys.modules\n"
+            "assert os.environ['NPU_RUNTIME'] == 'hrx'\n"
+            "assert os.environ['IRON_RUNTIME'] == 'hrx'\n"
+            "assert Path(os.environ['HRX_LIBHRX']).is_file()\n",
+            encoding="utf-8",
+        )
+        result = self._run_import_aie_probe(site, probe)
+        assert result.returncode == 0, result.stderr
+
+    def test_import_aie_skips_iron_host_when_runtime_is_not_installed(self, tmp_path):
+        site = self._write_import_site(tmp_path, with_runtime=False)
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            "import os\n"
+            "import sys\n"
+            "\n"
+            "import aie  # noqa: F401\n"
+            "assert 'rocm_npu_runtime' not in sys.modules\n"
+            "assert 'NPU_RUNTIME' not in os.environ\n"
+            "assert 'HRX_LIBHRX' not in os.environ\n",
+            encoding="utf-8",
+        )
+        result = self._run_import_aie_probe(site, probe)
+        assert result.returncode == 0, result.stderr
 
     def test_binding_stage_rejects_cpython_specific_extension(self, tmp_path):
         root = tmp_path

@@ -106,6 +106,11 @@ Both the meta-package and bindings require the matching core at exactly the
 same version. Moving the 127 MB `AIEAggregateCAPI` library into the core avoids
 duplicating it in every CPython bindings wheel. Importing `aie` activates the
 core wheel's native-library directory before loading its extension modules.
+When `rocm-npu-runtime` is also installed, the same import selects HRX for
+in-process IRON (`NPU_RUNTIME`, `IRON_RUNTIME`, and `HRX_LIBHRX` from
+`rocm_npu_runtime.libhrx_path()`) if those variables are unset. Compiler
+wheels do not depend on the runtime package; a compiler-only install skips
+the hook. Importing `rocm_npu_runtime` performs the same HRX selection.
 
 The unified workflow builds and validates Linux and Windows wheels from one
 source commit. An operator may publish the validated payload manually under

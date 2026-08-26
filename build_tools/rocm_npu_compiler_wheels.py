@@ -319,6 +319,14 @@ def _binding_bootstrap() -> str:
         "from rocm_npu_compiler import activate_native_libraries as "
         "_rocm_npu_activate_native_libraries\n"
         "_rocm_npu_activate_native_libraries()\n"
+        "try:\n"
+        "    from rocm_npu_runtime import (\n"
+        "        activate_iron_host as _rocm_npu_activate_iron_host,\n"
+        "    )\n"
+        "except ImportError:\n"
+        "    pass\n"
+        "else:\n"
+        "    _rocm_npu_activate_iron_host()\n"
     )
 
 
