@@ -371,13 +371,6 @@ jobs:
       - name: Verify compiler product relocation
         run: .venv/Scripts/python.exe dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted --relocate
 
-      # The JIT entry point users actually call (@iron.jit), rather than the
-      # Makefile/aiecc path `dev.py test` covers. --build-only stops at the
-      # xclbin so this gates the compiler and the JIT on a CPU runner; the
-      # dispatch half needs an NPU and runs from `dev.py test-npu-jit`.
-      - name: IRON JIT smoke (compile only)
-        run: .venv/Scripts/python.exe dev.py test-npu-jit --build-only --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-windows-x86_64
-
       # Same iron-ops operator build as Linux, same driver. This is the only place the
       # operator library is compiled on Windows at all, so it is also what would catch a
       # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).

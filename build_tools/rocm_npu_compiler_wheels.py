@@ -270,20 +270,25 @@ def toolchain_env(base: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def activate_toolchain_env() -> None:
-    """Export this wheel's tool locations to the current process.
+    """Apply toolchain_env() to this process, keeping values already set.
 
-    toolchain_env() only reaches the tools this package launches as
-    subprocesses. The in-process IRON JIT reads aie.utils.configure, which
-    resolves PEANO_INSTALL_DIR at import time, so the values have to be in
-    os.environ before `aie` is imported. Existing values win.
+    The in-process IRON JIT resolves PEANO_INSTALL_DIR when `aie` is imported,
+    which no subprocess environment can reach.
     """
     prefix = compiler_prefix()
-    for name, value in (
-        ("PEANO_INSTALL_DIR", prefix / "peano" / "llvm-aie"),
-        ("AIEOPT_DIR", prefix / "third_party" / "aie_api"),
-        ("ROCM_NPU_COMPILER_PREFIX", prefix),
-    ):
-        os.environ.setdefault(name, str(value))
+    path_entries = [prefix / "bin"]
+    if os.name == "nt":
+        path_entries.append(prefix / "lib")
+    os.environ["PATH"] = os.pathsep.join(
+        [*(str(path) for path in path_entries), os.environ.get("PATH", "")]
+    )
+    if os.name != "nt":
+        os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
+            [str(prefix / "lib"), os.environ.get("LD_LIBRARY_PATH", "")]
+        )
+    os.environ.setdefault("PEANO_INSTALL_DIR", str(prefix / "peano" / "llvm-aie"))
+    os.environ.setdefault("AIEOPT_DIR", str(prefix / "third_party" / "aie_api"))
+    os.environ.setdefault("ROCM_NPU_COMPILER_PREFIX", str(prefix))
 
 
 def native_library_dir() -> Path:

@@ -115,20 +115,8 @@ Replace `<tag>` and `<version>` with values from the release (tags look like
 `https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029`
 is a valid `--find-links` path:
 
-```powershell
-# Windows
-python -m pip install --only-binary=:all: `
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
-  "rocm-npu-fastflowlm==<version>"
-rocm-npu doctor
-flm run qwen3:0.6b
-```
-
 ```bash
-# Linux
-python -m pip install --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
-  "rocm-npu-fastflowlm==<version>"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-fastflowlm==<version>"
 rocm-npu doctor
 flm run qwen3:0.6b
 ```
@@ -161,18 +149,12 @@ the design, the runtime dispatches it on the NPU. Replace `<tag>` and
 `rocm-npu-v<version>`):
 
 ```bash
-# Linux
-python -m pip install --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
-  "rocm-npu-compiler==<version>" "rocm-npu-runtime==<version>"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-compiler==<version>" "rocm-npu-runtime==<version>"
 ```
 
 For example:
 ```bash
-# Linux
-python -m pip install --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029" \
-  "rocm-npu-compiler==0.1.0.dev202608250029" "rocm-npu-runtime==0.1.0.dev202608250029"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029" "rocm-npu-compiler==0.1.0.dev202608250029" "rocm-npu-runtime==0.1.0.dev202608250029"
 ```
 
 If you need bleeding-edge `iron-tools` features, you may also choose to install

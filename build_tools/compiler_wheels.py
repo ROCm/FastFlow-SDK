@@ -403,6 +403,10 @@ def cmd_verify_compiler_wheels(args):
         check=True,
         env=_compiler_e2e_env(prefix),
     )
+    subprocess.run(
+        [python, ROOT / "tests" / "npu" / "jit_smoke.py", "--build-only"],
+        check=True,
+    )
     if getattr(args, "consumer_root", None):
         exported = _export_compiler_consumer_root(python, args.consumer_root)
         print("compiler wheel consumer root:", exported)

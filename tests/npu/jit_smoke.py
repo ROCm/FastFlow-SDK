@@ -5,9 +5,10 @@
 
 Compiles the smallest complete design -- a pure-DMA memcpy, DDR -> MemTile ->
 DDR, with no compute kernel -- and dispatches it. That covers the whole chain:
-IRON -> MLIR -> aiecc -> bootgen -> xclbin -> HRX -> NPU. Nothing here is
-Peano-specific, so a Peano or aie_api regression shows up as a compile failure
-rather than a wrong result.
+IRON -> MLIR -> aiecc -> bootgen -> xclbin -> HRX -> NPU.
+
+The compiler locates its own tools, so nothing here sets PEANO_INSTALL_DIR;
+that is part of what this smoke test covers.
 
 --build-only stops at the xclbin so a CPU-only runner can gate the compiler and
 the JIT without an NPU.
@@ -27,36 +28,12 @@ import sys
 from pathlib import Path
 
 try:
-    import rocm_npu_compiler
-except ImportError:
-    # Source build: dev.py test-npu-jit exports the toolchain location.
-    pass
-else:
-    # Compiler wheels from 0.1.0.dev202608050023 and earlier do not export their
-    # own tool locations to the in-process JIT. Newer ones do, and setdefault
-    # keeps any caller's values.
-    _prefix = Path(rocm_npu_compiler.compiler_prefix())
-    os.environ.setdefault("PEANO_INSTALL_DIR", str(_prefix / "peano" / "llvm-aie"))
-    os.environ.setdefault("AIEOPT_DIR", str(_prefix / "third_party" / "aie_api"))
-    # Found on PATH, so this also works when the virtual environment is not activated.
-    os.environ["PATH"] = os.pathsep.join(
-        [str(_prefix / "bin"), os.environ.get("PATH", "")]
-    )
-
-try:
     import rocm_npu_runtime
 except ImportError:
-    # Source build, or --build-only against a compiler-only install.
     pass
 else:
-    # HRX is opt-in, and its discovery does not look inside the runtime wheel.
     os.environ.setdefault("NPU_RUNTIME", "hrx")
-    _runtime_root = Path(rocm_npu_runtime.__file__).parent
-    for _pattern in ("lib/libhrx.so*", "bin/hrx.dll", "lib/hrx.dll"):
-        _found = sorted(_runtime_root.glob(_pattern))
-        if _found:
-            os.environ.setdefault("HRX_LIBHRX", str(_found[0]))
-            break
+    os.environ.setdefault("HRX_LIBHRX", str(rocm_npu_runtime.libhrx_path()))
 
 import numpy as np  # noqa: E402  (must follow the environment setup above)
 
