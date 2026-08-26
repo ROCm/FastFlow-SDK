@@ -7,8 +7,9 @@ Compiles the smallest complete design -- a pure-DMA memcpy, DDR -> MemTile ->
 DDR, with no compute kernel -- and dispatches it. That covers the whole chain:
 IRON -> MLIR -> aiecc -> bootgen -> xclbin -> HRX -> NPU.
 
-The compiler locates its own tools, so nothing here sets PEANO_INSTALL_DIR;
-that is part of what this smoke test covers.
+The wheels configure themselves on import: the compiler locates its own tools
+and the runtime selects HRX. Nothing here sets PEANO_INSTALL_DIR or
+NPU_RUNTIME, which is part of what this smoke test covers.
 
 --build-only stops at the xclbin so a CPU-only runner can gate the compiler and
 the JIT without an NPU.
@@ -23,23 +24,14 @@ many more designs, see the iron-tools/MLIR-AIE programming guide
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
-try:
-    import rocm_npu_runtime
-except ImportError:
-    pass
-else:
-    os.environ.setdefault("NPU_RUNTIME", "hrx")
-    os.environ.setdefault("HRX_LIBHRX", str(rocm_npu_runtime.libhrx_path()))
+import numpy as np
 
-import numpy as np  # noqa: E402  (must follow the environment setup above)
-
-import aie.iron as iron  # noqa: E402
-from aie.iron import CompileTime, In, ObjectFifo, Out, Program, Runtime  # noqa: E402
-from aie.iron.device import NPU2  # noqa: E402
+import aie.iron as iron
+from aie.iron import CompileTime, In, ObjectFifo, Out, Program, Runtime
+from aie.iron.device import NPU2
 
 LINE = 1024
 SIZE = 4096
