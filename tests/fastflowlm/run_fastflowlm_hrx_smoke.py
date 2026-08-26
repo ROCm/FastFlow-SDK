@@ -398,14 +398,14 @@ def main():
         env["FLM_XCLBIN_PATH"] = str(xclbin_prefix)
     env["FLM_MODEL_PATH"] = str(model_cache)
     if not bundle and not installed_package:
+        # lib/hrx holds the HRX-native engine libraries (lib/ keeps the older
+        # XRT-era third-party ones); prepend_search_path skips absent entries.
         if IS_WINDOWS:
-            prepend_search_path(
-                env, "PATH", [flm_bin.parent, hrx_runtime.parent, flm_src / "lib"]
-            )
+            prepend_search_path(env, "PATH", [flm_bin.parent, hrx_runtime.parent,
+                                              flm_src / "lib" / "hrx", flm_src / "lib"])
         else:
-            prepend_search_path(
-                env, "LD_LIBRARY_PATH", [hrx_runtime.parent, flm_src / "lib"]
-            )
+            prepend_search_path(env, "LD_LIBRARY_PATH", [hrx_runtime.parent,
+                                                         flm_src / "lib" / "hrx", flm_src / "lib"])
 
     print("FastFlowLM HRX smoke")
     print(f"  model:       {model}")

@@ -73,6 +73,33 @@ firmware keeps command chains enabled by default.
 **Remove when:** Linux KMQ command chains are validated on stock Ubuntu firmware,
 or upstream hrx carries equivalent driver/firmware capability gating.
 
+### 0004-sync-submits-for-multi-submission-command-buffers.patch
+Stops the amdxdna direct command buffer from deferring completion when a single
+command buffer issues more than one native submission, which deadlocked
+`queue_execute` on Windows.
+
+**Why:** deferred completion hands every issued submission to the completion
+batch, and `iree_hal_amdxdna_queue_execute_apply` submits that batch only after
+the *whole* command buffer has been applied. Windows MCDM keeps one native
+submission in flight (`begin_pathb_submission` waits for
+`pathb_active_submission_count == 0`, because command objects and the shared
+command aperture are mutable staging resources). A command buffer that flushed
+two submissions therefore blocked forever on the second: the only thing that
+could retire the first was the batch this thread had not submitted yet. The
+patch counts the submissions a flush will issue and falls back to submit-and-wait
+when there is more than one, so each retires before the next begins. Single
+submission command buffers — every one on the Linux path, and the overwhelming
+majority on Windows — keep deferred completion and are byte-for-byte unaffected.
+
+Symptom this fixes: FastFlowLM's hybrid-attention (GDN) models — qwen3.5
+(0.8b/2b/4b/9b) and qwen3.6-moe — hung on Windows immediately after prefill.
+Their decode step records an RTP-only run plus the per-layer dispatches into one
+stream flush, and that command buffer is the one that flushes two groups. Prefill
+submits one dispatch per flush, so it never hit this.
+
+**Remove when:** upstream hrx either lets a command buffer's deferred batch drain
+mid-apply, or allows more than one native submission in flight on Windows MCDM.
+
 ## patches/FastFlowLM/
 
 ### 0001-support-redirected-windows-cli-input.patch

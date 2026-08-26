@@ -1,0 +1,59 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+index 62755d3c4..75998bc96 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+@@ -49,6 +49,12 @@ typedef struct iree_hal_amdxdna_direct_command_buffer {
+   // support async submit, native commands are issued without waiting here; the
+   // batch owns native completion, cleanup, and HAL semaphore signaling.
+   iree_hal_amdxdna_completion_batch_t* completion_batch;
++  // Set by flush when this command buffer issues more than one native
++  // submission. Deferred completion cannot be used then: the batch that would
++  // retire the first submission is only submitted once the whole command buffer
++  // has been applied, so a backend that admits one submission at a time would
++  // deadlock on the second. See flush_chains().
++  bool force_sync_submits;
+ } iree_hal_amdxdna_direct_command_buffer;
+ 
+ typedef struct iree_hal_amdxdna_cached_single_release_t {
+@@ -64,7 +70,8 @@ typedef struct iree_hal_amdxdna_cached_chain_release_t {
+ static bool iree_hal_amdxdna_direct_command_buffer_uses_async_completion(
+     const iree_hal_amdxdna_direct_command_buffer* command_buffer) {
+   return command_buffer->completion_batch &&
+-         command_buffer->device->native_caps.submit_completion_is_deferred;
++         command_buffer->device->native_caps.submit_completion_is_deferred &&
++         !command_buffer->force_sync_submits;
+ }
+ 
+ static void iree_hal_amdxdna_completion_destroy_native_command(
+@@ -1905,6 +1912,31 @@ static iree_status_t iree_hal_amdxdna_direct_command_buffer_flush_chains(
+     }
+   }
+ 
++  // Deferred completion hands each issued submission to the completion batch,
++  // which queue execution only submits after this whole command buffer has been
++  // applied. A backend that admits one submission at a time (Windows MCDM keeps
++  // one in flight while its command objects and shared command aperture are
++  // mutable staging resources) therefore deadlocks as soon as one command
++  // buffer issues a second submission: nothing can retire the first one while
++  // this thread blocks issuing the next. Fall back to submit-and-wait for those
++  // command buffers so each submission retires before the next begins; the
++  // batch still owns cleanup and HAL semaphore signaling.
++  iree_host_size_t submission_count = 0;
++  for (iree_host_size_t i = 0; i < accum->group_count; ++i) {
++    iree_hal_amdxdna_chain_group_t* group = &accum->groups[i];
++    if (!iree_hal_amdxdna_chain_group_requires_parent_chain(group)) {
++      submission_count += 1;  // one direct single-dispatch submit
++    } else if (device_supports_command_chain) {
++      submission_count += 1;  // one native batch of parent chains
++    } else {
++      submission_count += group->cmd_count;  // serial child submissions
++    }
++    if (submission_count > 1) break;
++  }
++  if (submission_count > 1) {
++    command_buffer->force_sync_submits = true;
++  }
++
+   // Max slots per chain that fit the fixed-size exec buffer (constant per
+   // device; computed once and cached). Atomic load with relaxed ordering: a
+   // racing first-time probe is idempotent (same value), and the slot count is
