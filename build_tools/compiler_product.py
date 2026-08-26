@@ -21,6 +21,7 @@ from build_tools.archive import (
 from build_tools.artifact import (
     file_inventory,
     file_record,
+    git_revision,
     git_source_state,
     reset_directory,
     sha256_sidecar_path,
@@ -80,6 +81,30 @@ def _stage(src, dst):
         shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True)
     else:
         shutil.copy2(src, dst, follow_symlinks=True)
+
+
+def _hrx_xclbinutil_source_state():
+    """Provenance for hrx-xclbinutil: nested git repo, or vendored in iron-tools."""
+    source = PROJ / "iron-tools" / "third_party" / "hrx-xclbinutil"
+    if (source / ".git").exists():
+        return git_source_state(source)
+    iron_state = git_source_state(PROJ / "iron-tools")
+    prefix = "third_party/hrx-xclbinutil/"
+    return {
+        "revision": git_revision(PROJ / "iron-tools"),
+        "dirty": any(
+            item["path"].replace("\\", "/").startswith(prefix)
+            for item in iron_state["changed_files"]
+        ),
+        "vendored_in": "iron-tools",
+        "path": "third_party/hrx-xclbinutil",
+        "tracked_diff_sha256": iron_state["tracked_diff_sha256"],
+        "changed_files": [
+            item
+            for item in iron_state["changed_files"]
+            if item["path"].replace("\\", "/").startswith(prefix)
+        ],
+    }
 
 
 def _platform_machine(machine=None):
@@ -434,12 +459,7 @@ def stage_product():
             "rocm-npu-staging": git_source_state(ROOT),
             "llvm-project": git_source_state(PROJ / "llvm-project"),
             "iron-tools": git_source_state(PROJ / "iron-tools"),
-            "hrx-xclbinutil": git_source_state(
-                PROJ
-                / "iron-tools"
-                / "third_party"
-                / "hrx-xclbinutil"
-            ),
+            "hrx-xclbinutil": _hrx_xclbinutil_source_state(),
         },
         "dependencies": {
             "requirements": [

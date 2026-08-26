@@ -19,15 +19,15 @@ CI-only scaffolding belongs in `tests/` here, not inside a patch.
 Never hand-edit hunk bodies or `@@` headers: the line counts must agree with the
 body, and a malformed hunk only fails later, at `git apply` time. Regenerate the
 patch instead, from the submodule's pinned commit. To edit a patch that applies on
-top of earlier ones (e.g. `0004`), apply the preceding patches first so
+top of earlier ones (e.g. `0005`), apply the preceding patches first so
 `git diff` yields the one you are editing alone:
 
 ```bash
 cd projects/iron-tools
 git checkout -f <pin> && git clean -fdx     # -x also clears gitignored build output
 git apply ../../patches/iron-tools/000[12]-*.patch
-# ...edit the files 0004 touches...
-git diff -- <files 0004 touches> > ../../patches/iron-tools/0004-hostruntime-cleanup.patch
+# ...edit the files 0005 touches...
+git diff -- <files 0005 touches> > ../../patches/iron-tools/0005-eudsl-download-no-build-isolation.patch
 ```
 
 Use `git add -f` if a patch you are (re)creating adds a file that is gitignored
@@ -171,12 +171,13 @@ Combined with `dev.py` setting `PIP_FIND_LINKS` (absolute cache) + `PIP_NO_INDEX
 for the iron-tools build, eudsl vendoring is **network-free** (resolved from the
 sha256-verified prefetched sdist).
 
-**Why:** mlir-aie pins eudsl `0.1.0.20260520` — correct for mlir-aie's *intended*
+**Why:** mlir-aie pins eudsl `0.1.0.20260801` — correct for mlir-aie's *intended*
 LLVM. We build mlir-aie's Python bindings against **ROCm amd-llvm 23**, whose
-nanobind rejects eudsl 04-18's `ScalarValue` re-init path (`Value(OpResult)`),
-breaking IRON design generation. A newer eudsl (`0.1.0.20260629`) fixes that and
-— verified — emits **byte-size-identical** lowered IR/xclbin, so it changes nothing
-else for our designs.
+nanobind rejected the older eudsl `ScalarValue` re-init path (`Value(OpResult)`),
+breaking IRON design generation. eudsl `0.1.0.20260629` fixes that and — verified
+against the previous pin — emits **byte-size-identical** lowered IR/xclbin, so it
+changes nothing else for our designs. Keep this override until the newer mlir-aie
+eudsl pin is confirmed against amd-llvm 23.
 
 **Remove when:** mlir-aie's Python/IRON path is built against an aligned LLVM, at
 which point mlir-aie's own eudsl pin works and this override is unnecessary. Until
@@ -288,3 +289,29 @@ no-op on Linux.
 
 **Remove when:** upstream mlir-aie compiles `tools/aiecc/Utils.h` cleanly under
 clang-cl (annotates the fields, or `#if`-guards them out on Windows).
+
+### 0008-restore-densemapinfo-sentinels-for-llvm-23.patch
+Restores `getEmptyKey` / `getTombstoneKey` on the `llvm::DenseMapInfo`
+specializations for `TileID`, `Port`, `DMAChannel`, `ObjectFifoAcquireOp`, and
+`ObjectFifoCreateOp`.
+
+**Why:** mlir-aie #3491 ("Update LLVM version") deleted those sentinels while
+moving onto a newer LLVM. ROCm amd-llvm 23 still requires them, so the iron-tools
+build fails with `'getEmptyKey' is not a member of DenseMapInfo<...>`. The
+methods are the previous pin's implementations restored as-is.
+
+**Remove when:** this stack's LLVM pin no longer requires DenseMapInfo sentinels
+(or mlir-aie restores them for LLVM 23 compatibility).
+
+### 0009-arith-expand-ops-llvm23.patch
+Guards aiecc's `includeMinMaxF` arith-expand option behind `LLVM_VERSION_MAJOR
+>= 24`. On LLVM 23 the option field does not exist and min/max expansion is
+still the unconditional default, so the pass is created with no options.
+
+**Why:** mlir-aie #3509 set `ArithExpandOpsPassOptions.includeMinMaxF = true`
+after LLVM 24 hid those patterns behind an option that defaults to false
+(Peano cannot legalize the resulting `G_FMAXNUM`). ROCm amd-llvm 23 has no
+such field, so the native `aiecc` target fails to compile.
+
+**Remove when:** this stack's LLVM pin is 24+ (or mlir-aie carries the version
+guard upstream).

@@ -1,0 +1,27 @@
+diff --git a/tools/aiecc/IRTransforms.h b/tools/aiecc/IRTransforms.h
+index 13060b78840..7bcea2c0ecb 100644
+--- a/tools/aiecc/IRTransforms.h
++++ b/tools/aiecc/IRTransforms.h
+@@ -46,6 +46,7 @@
+ #include "llvm/ADT/StringMap.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/ADT/StringSet.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/IR/LLVMContext.h"
+ #include "llvm/IR/Module.h"
+ #include "llvm/Support/Error.h"
+@@ -896,9 +897,14 @@ getCoreLLVMLoweringPipeline(mlir::MLIRContext *ctx, llvm::StringRef deviceName,
+     //
+     // Only the float half is needed: scalar integer min/max is already taken
+     // care of before this point, so include-min-max-i is left at its default.
++    // LLVM 23 still expands min/max unconditionally (no includeMinMaxF field).
++#if LLVM_VERSION_MAJOR >= 24
+     mlir::arith::ArithExpandOpsPassOptions arithOpts;
+     arithOpts.includeMinMaxF = true;
+     pm->addPass(mlir::arith::createArithExpandOpsPass(arithOpts));
++#else
++    pm->addPass(mlir::arith::createArithExpandOpsPass());
++#endif
+   }
+   pm->addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+   pm->addPass(mlir::createConvertFuncToLLVMPass(

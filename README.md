@@ -259,9 +259,8 @@ hrx-xclbinutil (xclbin packaging; vendored in mlir-aie) ────────
 ```
 
 `hrx-xclbinutil` lives inside iron-tools at
-`projects/iron-tools/third_party/hrx-xclbinutil` and is pulled in by the
-recursive `iron-tools` submodule init. `dev.py build hrx-xclbinutil` builds
-that nested checkout.
+`projects/iron-tools/third_party/hrx-xclbinutil` (vendored in-tree).
+`dev.py build hrx-xclbinutil` builds that tree.
 
 System prerequisites for the compiler-stack flow (apt; cmake/ninja come from
 the uv-managed environment after setup): `sudo apt-get install -y gcc g++ python3-dev git make
