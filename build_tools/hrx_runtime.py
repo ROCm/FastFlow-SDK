@@ -19,6 +19,8 @@ HRX_AMDXDNA_HOST_TESTS = (
     "xclbin_util_test",
     "direct_command_buffer_chain_cache_test",
     "direct_command_buffer_single_cache_test",
+    "context_cache_test",
+    "context_cache_capacity_test",
     "direct_command_buffer_planning_test",
     "async_queue_test",
     "completion_queue_test",
