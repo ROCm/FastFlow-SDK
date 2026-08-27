@@ -52,8 +52,9 @@ class TestRequirementsFile:
             for line in source.splitlines()
             if line.strip().startswith("--find-links ")
         }
-        assert find_links
         assert find_links.issubset(set(lock.splitlines()))
+        assert "llvm-aie==" not in source
+        assert "llvm-aie==" not in lock
 
     @pytest.mark.parametrize(
         ("profile_name", "actions"),

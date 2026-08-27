@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT
 # rocm-npu-staging Python dependencies (installed into .venv by `dev.py setup`).
 #
-# Policy: Peano (llvm-aie) is the ONLY wheel-sourced toolchain piece. Everything
-# else — LLVM/MLIR, mlir-aie (aie-opt/aie-translate/aiecc), bootgen, aie_api,
-# aie-rt — is built from source under projects/. `eudsl_python_extras` is built by
+# Policy: LLVM/MLIR, Peano/llvm-aie, mlir-aie
+# (aie-opt/aie-translate/aiecc), bootgen, aie_api, and aie-rt are built from
+# source under projects/. `eudsl_python_extras` is built by
 # the mlir-aie CMake build (utils/.../vendor_eudsl.py), so it is NOT pip-installed.
 #
 # NON-pip system deps (apt) — checked by `dev.py doctor`:
@@ -34,10 +34,6 @@ ml_dtypes==0.6.0
 cloudpickle
 rich
 aiofiles
-
-# --- Peano: AIE hardware codegen (the only wheel-sourced toolchain piece) ---
---find-links https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
-llvm-aie==21.0.0.2026061501+acc2a72c
 
 # --- iron-ops (projects/iron-ops, the IRON operator library) ---
 # The package itself is installed from the SUBMODULE, editable and --no-deps (see dev.py

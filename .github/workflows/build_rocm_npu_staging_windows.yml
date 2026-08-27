@@ -3,9 +3,9 @@
 #
 # Reusable workflow: build the rocm-npu-staging stack from source on WINDOWS — the
 # Windows counterpart of build_rocm_npu_staging_linux.yml, kept as consistent with it
-# as possible. SAME dev.py command sequence (setup -> doctor -> build all -> smoke ->
-# e2e), including the same e2e; steps run in bash (Git Bash is present on the runner)
-# so the git/dev.py steps are identical to Linux.
+# as possible. SAME dev.py command sequence (setup -> doctor -> Peano cache/build ->
+# build all -> smoke -> e2e), including the same e2e; steps run in bash (Git Bash is
+# present on the runner) so the git/dev.py steps are identical to Linux.
 #
 # Only OS-forced differences: the azure-windows-scale-rocm runner (no manylinux
 # container); clang-cl (from the VS Developer environment, or LLVM) instead of the
@@ -46,9 +46,9 @@ jobs:
   build_rocm_npu_staging_windows:
     name: ${{ inputs.name }}
     runs-on: azure-windows-scale-rocm
-    # Cold build compiles LLVM 24 + iron-tools + the amdxdna HAL from source; ccache
-    # (CCACHE_DIR) speeds up warm runs but the first run is long.
-    timeout-minutes: 180
+    # Cold build compiles two LLVM trees, iron-tools, and the amdxdna HAL from source;
+    # ccache + the Peano install cache speed up warm runs.
+    timeout-minutes: 240
     env:
       RNS_BUILD_IMAGE: azure-windows-scale-rocm
       ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
@@ -56,9 +56,10 @@ jobs:
       UV_CACHE_DIR: ${{ github.workspace }}/build/caches/uv
       UV_LINK_MODE: hardlink
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
-      CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
-      # RNS_LLVM_BUILD_DIR is set in a step below (the `runner` context is not allowed in
-      # a job-level env: block) — see "Point the LLVM build tree at the job-scoped temp".
+      CCACHE_MAXSIZE: 5G
+      # RNS_LLVM_BUILD_DIR and RNS_LLVM_AIE_BUILD_DIR are set in a step below (the
+      # `runner` context is not allowed in a job-level env: block) — see "Point the
+      # LLVM build trees at the job-scoped temp".
       # OPENSSL_ROOT_DIR is set dynamically from the vcpkg install below (points
       # CMake's find_package(OpenSSL) at it) — see "Install OpenSSL (vcpkg)".
     steps:
@@ -182,8 +183,10 @@ jobs:
       # This must be a step: the `runner` context is rejected in a job-level env: block
       # ("Unrecognized named-value: 'runner'" -> the workflow never runs). Use the
       # RUNNER_TEMP env var instead, forward-slashed so CMake/Python read it cleanly.
-      - name: Point the LLVM build tree at the job-scoped temp
-        run: echo "RNS_LLVM_BUILD_DIR=${RUNNER_TEMP//\\//}/llvm" >> "$GITHUB_ENV"
+      - name: Point the LLVM build trees at the job-scoped temp
+        run: |
+          echo "RNS_LLVM_BUILD_DIR=${RUNNER_TEMP//\\//}/llvm" >> "$GITHUB_ENV"
+          echo "RNS_LLVM_AIE_BUILD_DIR=${RUNNER_TEMP//\\//}/llvm-aie" >> "$GITHUB_ENV"
 
       # vcpkg's openssl port builds from source (~3 min); persist its binary-package store so
       # that happens once. `files` provider, not `x-gha`: x-gha uses the legacy cache API.
@@ -276,11 +279,11 @@ jobs:
           key: ${{ steps.vcpkg-binaries.outputs.cache-primary-key }}
 
       # Same submodules as Linux. --depth 1 (fetch only the pinned commit, not full
-      # history — big for the LLVM monorepo) + --jobs (clone in parallel): cloning is
-      # markedly slower on this runner than on Linux. The build needs the pinned trees,
-      # not history; check_pins/patches work on shallow checkouts.
+      # history — big for the LLVM-family monorepos) + --jobs (clone in parallel):
+      # cloning is markedly slower on this runner than on Linux. The build needs the
+      # pinned trees, not history; check_pins/patches work on shallow checkouts.
       - name: Initialize submodules
-        run: python dev.py submodules llvm-project hrx iron-tools iron-ops --shallow
+        run: python dev.py submodules llvm-project llvm-aie hrx iron-tools iron-ops --shallow
       # setup creates .venv, installs the pinned requirements (including the Python
       # zstandard codec used to package the compiler product), applies the temporary
       # patches, and prefetches the eudsl sdist (the single network step).
@@ -309,6 +312,44 @@ jobs:
       - name: Test compiler-stack tooling
         run: .venv/Scripts/python.exe -m pytest --basetemp=.pytest-tmp -m "compiler_stack or presubmit"
 
+      - name: Identify Peano install cache inputs
+        id: peano-cache-key
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          peano = tomllib.loads(Path("manifests/versions.toml").read_text(encoding="utf-8"))["peano"]
+          commit = subprocess.check_output(
+              ["git", "-C", "projects/llvm-aie", "rev-parse", "HEAD"],
+              text=True,
+          ).strip()
+          if commit != peano["commit"]:
+              raise SystemExit(f"llvm-aie checkout {commit} != manifest {peano['commit']}")
+          image = hashlib.sha256(
+              os.environ.get("RNS_BUILD_IMAGE", "").encode("utf-8")
+          ).hexdigest()[:12]
+          windows_compiler = "cl"
+          key = (
+              f"peano-install-v{peano['cache_recipe']}-{os.environ['RUNNER_OS']}-"
+              f"{os.environ['RUNNER_ARCH']}-{commit[:12]}-{windows_compiler}-"
+              f"{image}"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"commit={commit}", file=output)
+              print(f"key={key}", file=output)
+          PY
+
+      - name: Restore Peano install cache
+        id: peano-install
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/llvm-aie-install
+          key: ${{ steps.peano-cache-key.outputs.key }}
+
       # ccache was never installed here, so dev.py silently compiled uncached. It supports
       # clang-cl; Release means no PDBs, so the usual /Z7-vs-PDB caching trap does not apply.
       - name: Install ccache
@@ -323,9 +364,23 @@ jobs:
           key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: ccache-v2-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
+      # Peano follows the upstream llvm-aie Windows release recipe and uses MSVC cl
+      # by default. CC/CXX=clang-cl remains in the environment for the ROCm LLVM,
+      # iron-tools, hrx-xclbinutil, and HRX builds that follow.
+      - name: Build Peano (source llvm-aie)
         run: |
           ccache -z
+          .venv/Scripts/python.exe dev.py build llvm-aie --llvm-aie-windows-compiler cl
+
+      - name: Save Peano install cache
+        if: success() && steps.peano-install.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/llvm-aie-install
+          key: ${{ steps.peano-cache-key.outputs.key }}
+
+      - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
+        run: |
           .venv/Scripts/python.exe dev.py build all --include-tests
 
       - name: Build amdxdna HAL conformance binaries

@@ -5,8 +5,8 @@
 # git submodules; this file records their pins. Build orchestration is in dev.py,
 # Python deps in requirements/compiler-stack.txt.
 #
-# Everything is built FROM SOURCE (submodules) against one ROCm LLVM; Peano
-# (llvm-aie) is the ONLY wheel-sourced toolchain piece.
+# LLVM/MLIR, Peano/llvm-aie, mlir-aie, IRON operators, HRX, and FastFlowLM are
+# built FROM SOURCE submodules. eudsl is the only build-time fetched package.
 
 [meta]
 host = "linux-x86_64; build + artifact handoff only — on-device run needs an NPU + amdxdna driver"
@@ -45,10 +45,15 @@ xrt_note = "0001 is what lets IRON run without XRT at all: iron/common/sequence.
 lazy_note = "0002 makes iron.operators re-export lazily (PEP 562). Eagerly, importing ANY operator imported ALL of them — including mha (torch) and swiglu (pyxrt) — so the CPU build jobs would have had to install torch just to compile an elementwise add. See requirements/iron-ops-test.txt."
 aiecc_note = "The former 0003 (adapt aiecc native CLI) was dropped at this pin: iron-ops #145/#150 now compile through mlir-aie's compile_mlir_module(), which already emits native aiecc --get-* flags. The previous pin still spawned `aiecc.py` with the old Python-driver flags."
 
-[peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
-wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"
-index = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
-note  = "LLVM 21 (lags ROCm's 24). Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
+[peano]                         # projects/llvm-aie — Peano AIE codegen, LLVM 21
+repo       = "github.com/Xilinx/llvm-aie"
+commit     = "acc2a72c8cbe358ce27ba01460c19ab14f2b651c"  # previous wheel short pin: acc2a72c
+branch     = "aie-public"
+llvm_major = 21
+cache_recipe = 1
+provides   = ["clang/clang++ for aie2p-none-unknown-elf", "ld.lld", "llc", "AIE compiler-rt/libc/libc++ runtimes"]
+note       = "Built from source into build/llvm-aie-install and staged as peano/llvm-aie in the compiler product. CI caches the install tree by OS/arch, source commit, build image, Windows compiler selector where applicable, and cache_recipe. This is still a separate LLVM fork that lags ROCm LLVM 24; folding the AIE backend onto ROCm LLVM is future work."
+win_note   = "Peano's Windows build defaults to MSVC cl via dev.py build llvm-aie --llvm-aie-windows-compiler cl, matching Xilinx/llvm-aie's own release recipe. The rest of the rocm-npu compiler stack keeps using clang-cl; pass clang-cl or env only for explicit experiments."
 
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/ROCm/hrx-system"                # canonical ROCm remote (no fork in the chain)
@@ -79,4 +84,4 @@ note         = "Prefetch mlir-aie's own eudsl pin (LLVM is aligned with clone-ll
 #   bootgen -> built by iron-tools -> build/iron-tools/bin/bootgen  (build-time only, never runtime)
 #   eudsl   -> prefetched + verified (see [eudsl]); the only build-time network fetch
 #   xrt     -> NONE at runtime (XRT source used only to build hrx-xclbinutil)
-#   peano   -> the only wheel (see [peano])
+#   peano   -> built from projects/llvm-aie (see [peano])

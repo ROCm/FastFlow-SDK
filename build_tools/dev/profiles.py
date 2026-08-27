@@ -35,6 +35,7 @@ class ProfileSpec:
 
 _PINNED_SUBMODULES = (
     ("llvm", "llvm-project"),
+    ("peano", "llvm-aie"),
     ("iron_tools", "iron-tools"),
     ("hrx", "hrx"),
     ("fastflowlm", "FastFlowLM"),
@@ -44,7 +45,7 @@ _PINNED_SUBMODULES = (
 PIN_SECTION_TO_SUBMODULE = dict(_PINNED_SUBMODULES)
 
 _COMPILER_STACK = frozenset(
-    {"llvm-project", "iron-tools", "hrx", "iron-ops"}
+    {"llvm-project", "llvm-aie", "iron-tools", "hrx", "iron-ops"}
 )
 _FASTFLOWLM = frozenset({"hrx", "FastFlowLM"})
 

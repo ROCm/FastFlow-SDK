@@ -101,6 +101,7 @@ class TestDevCli:
     def test_build_registry_has_direct_domain_handlers(self):
         expected_modules = {
             "llvm": "build_tools.dev.compiler_build",
+            "llvm-aie": "build_tools.dev.compiler_build",
             "iron-tools": "build_tools.dev.compiler_build",
             "hrx-xclbinutil": "build_tools.dev.compiler_build",
             "hrx": "build_tools.dev.runtime_build",
@@ -116,12 +117,18 @@ class TestDevCli:
         assert set(parsed._handler.__globals__["dev_build"].BUILD_HANDLERS) == set(
             expected_modules
         )
+        assert parsed.llvm_aie_windows_compiler == "cl"
+        parsed = cli.create_parser().parse_args(
+            ["build", "llvm-aie", "--llvm-aie-windows-compiler", "clang-cl"]
+        )
+        assert parsed.llvm_aie_windows_compiler == "clang-cl"
 
     def test_build_all_preserves_compiler_stack_sequence(self):
         calls = []
         names = (
             (build.runtime_build, "cmd_build_rocm_npu_cli"),
             (build.compiler_build, "cmd_build_hrx_xclbinutil"),
+            (build.compiler_build, "cmd_build_llvm_aie"),
             (build.compiler_build, "cmd_build_llvm"),
             (build.compiler_build, "cmd_build_iron_tools"),
             (build.runtime_build, "cmd_build_hrx"),
@@ -132,7 +139,7 @@ class TestDevCli:
             )
             for owner, name in names
         ]
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             build.cmd_build_all(SimpleNamespace(fresh=False))
         assert calls == [name for _, name in names]
 

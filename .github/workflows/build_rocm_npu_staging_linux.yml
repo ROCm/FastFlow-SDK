@@ -1,10 +1,11 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 #
-# Reusable workflow: build the rocm-npu-staging stack from source (LLVM 24 + iron-tools
-# + hrx-xclbinutil + the amdxdna HAL) and run build-level smoke + the e2e (build an
-# iron-tools IRON design -> xclbin + HAL PDI artifact-contract check). The ROCm scale
-# runner + manylinux build container can do the heavy from-source build.
+# Reusable workflow: build the rocm-npu-staging stack from source (LLVM 24 + Peano
+# llvm-aie + iron-tools + hrx-xclbinutil + the amdxdna HAL) and run build-level smoke
+# + the e2e (build an iron-tools IRON design -> xclbin + HAL PDI artifact-contract
+# check). The ROCm scale runner + manylinux build container can do the heavy
+# from-source build.
 #
 # Every submodule is public, so they are all fetched over anonymous HTTPS and the
 # workflow needs no secrets.
@@ -34,9 +35,9 @@ jobs:
   build_rocm_npu_staging_linux:
     name: ${{ inputs.name }}
     runs-on: aws-linux-scale-rocm-prod
-    # Cold build compiles LLVM 24 + iron-tools + the amdxdna HAL from source; ccache
-    # (CCACHE_DIR) speeds up warm runs but the first run is long.
-    timeout-minutes: 180
+    # Cold build compiles two LLVM trees, iron-tools, and the amdxdna HAL from source;
+    # ccache + the Peano install cache speed up warm runs.
+    timeout-minutes: 240
     container:
       image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
     env:
@@ -46,7 +47,7 @@ jobs:
       UV_CACHE_DIR: ${{ github.workspace }}/build/caches/uv
       UV_LINK_MODE: hardlink
       CCACHE_DIR: ${{ github.workspace }}/build/caches/ccache
-      CCACHE_MAXSIZE: 1G   # whole stack is ~0.15 GB of compressed objects; room for a few pins
+      CCACHE_MAXSIZE: 5G
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -87,14 +88,14 @@ jobs:
           echo "::error::openssl-devel could not be installed after 5 attempts"
           exit 1
 
-      # --shallow: llvm-project alone is >4 GB of history this build never reads.
+      # --shallow: the LLVM-family submodules are large and this build never reads history.
       # Only iron-tools needs --clean: its patch adds gitignored files, and a leftover
       # copy makes `git apply` fail. See cmd_submodules.
       # iron-ops is NOT in --clean: unlike iron-tools, its patches modify only tracked files,
       # which --reset restores on its own. (-x would also delete the editable install's
       # egg-info, which `dev.py setup` puts there.)
       - name: Initialize submodules
-        run: python3 dev.py submodules llvm-project hrx iron-tools iron-ops --reset --clean iron-tools --shallow
+        run: python3 dev.py submodules llvm-project llvm-aie hrx iron-tools iron-ops --reset --clean iron-tools --shallow
       # setup creates .venv, installs requirements/compiler-stack.lock, applies the
       # temporary patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + hash-pinned deps + prefetch)
@@ -115,6 +116,43 @@ jobs:
       - name: Test compiler-stack tooling
         run: .venv/bin/python -m pytest --basetemp=.pytest-tmp -m "compiler_stack or presubmit"
 
+      - name: Identify Peano install cache inputs
+        id: peano-cache-key
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          peano = tomllib.loads(Path("manifests/versions.toml").read_text(encoding="utf-8"))["peano"]
+          commit = subprocess.check_output(
+              ["git", "-C", "projects/llvm-aie", "rev-parse", "HEAD"],
+              text=True,
+          ).strip()
+          if commit != peano["commit"]:
+              raise SystemExit(f"llvm-aie checkout {commit} != manifest {peano['commit']}")
+          image = hashlib.sha256(
+              os.environ.get("RNS_BUILD_IMAGE", "").encode("utf-8")
+          ).hexdigest()[:12]
+          key = (
+              f"peano-install-v{peano['cache_recipe']}-{os.environ['RUNNER_OS']}-"
+              f"{os.environ['RUNNER_ARCH']}-{commit[:12]}-"
+              f"{image}"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"commit={commit}", file=output)
+              print(f"key={key}", file=output)
+          PY
+
+      - name: Restore Peano install cache
+        id: peano-install
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/llvm-aie-install
+          key: ${{ steps.peano-cache-key.outputs.key }}
+
       # The runners are ephemeral, so CCACHE_DIR was empty every job and the hit rate was 0.
       - name: Cache ccache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -123,9 +161,20 @@ jobs:
           key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('manifests/versions.toml', 'patches/**/*.patch', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: ccache-v2-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
+      - name: Build Peano (source llvm-aie)
         run: |
           ccache -z
+          .venv/bin/python dev.py build llvm-aie
+
+      - name: Save Peano install cache
+        if: success() && steps.peano-install.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/llvm-aie-install
+          key: ${{ steps.peano-cache-key.outputs.key }}
+
+      - name: Build (hrx-xclbinutil, LLVM, iron-tools, amdxdna HAL)
+        run: |
           .venv/bin/python dev.py build all --include-tests
 
       # Hit rate is the whole point of the step above; print it rather than assume it.

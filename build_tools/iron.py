@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import sysconfig
 import tomllib
 from pathlib import Path
 from typing import NamedTuple
@@ -20,7 +19,6 @@ PROJ = paths.PROJ
 OUT = paths.OUT
 EXE = ".exe" if os.name == "nt" else ""  # the one irreducible platform difference
 VENV_BIN = Path(sys.executable).parent  # .venv/bin or .venv/Scripts
-SITE = Path(sysconfig.get_paths()["purelib"])  # this interpreter's site-packages
 
 # Sections hrx-xclbinutil must have packaged into the .xclbin.
 REQUIRED_SECTIONS = ("MEM_TOPOLOGY", "AIE_PARTITION", "EMBEDDED_METADATA")
@@ -158,7 +156,7 @@ def toolchain_env(xclbinutil: Path,
     else:
         aie_bin = ROOT / "build" / "iron-tools" / "bin"
         aie_python = ROOT / "build" / "iron-tools" / "python"
-        peano = SITE / "llvm-aie"
+        peano = paths.LLVM_AIE_INSTALL
         aieopt_dir = PROJ / "iron-tools" / "third_party" / "aie_api"
     if not (aie_bin / f"aie-opt{EXE}").exists():
         raise E2EError(
@@ -196,7 +194,7 @@ def toolchain_env(xclbinutil: Path,
         print(f"== toolchain: relocated rocm-npu compiler product ({compiler_prefix}) ==")
     else:
         print(
-            "== toolchain: SOURCE iron-tools (built against ROCm amd-llvm) + Peano wheel =="
+            "== toolchain: SOURCE iron-tools (built against ROCm amd-llvm) + source-built Peano =="
         )
     return env
 
