@@ -166,7 +166,7 @@ jobs:
       # example: MLIR -> Peano (incl. the operator's own aie_kernels/*.cc) -> xclbin + insts.
       # iron-ops is developed against the mlir_aie WHEEL, so this is where its drift from our
       # source-built aie package shows up — on a CPU runner, minutes in, instead of an hour
-      # later on the shared NPU runners. Which operators: tests/iron-ops/suite.py.
+      # later on the shared NPU runners. Which operators: build_tools/iron.py OPERATORS.
       - name: iron-ops (build operators off-device)
         run: .venv/bin/python dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-linux-x86_64
 

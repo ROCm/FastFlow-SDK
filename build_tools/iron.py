@@ -311,20 +311,73 @@ class Operator(NamedTuple):
     hrx_pytest_filter: str | None = None
 
 
-# Keep the HRX on-device gate to out-of-box single-stream cases for now. Multi-stream
-# direct-FIFO designs currently show zeroed output chunks through HRX, so they need a
-# runtime/topology fix rather than a CI expectation that every upstream parameter passes.
+def _channeled_unary(name, *, extra=None, filter_extra=""):
+    """One-column, one-channel, size=tile_size=2048 — the non-extensive unary shape."""
+    kwargs = {
+        "size": 2048,
+        "num_aie_columns": 1,
+        "num_channels": 1,
+        "tile_size": 2048,
+    }
+    if extra:
+        kwargs.update(extra)
+    pytest_filter = (
+        f"test_{name} and input_length_2048 and num_aie_columns_1 and "
+        f"num_channels_1 and tile_size_2048{filter_extra}"
+    )
+    return Operator(name=name, build_kwargs=kwargs, hrx_pytest_filter=pytest_filter)
+
+
+def _binary(name, *, extra=None, filter_extra=""):
+    """One-column, size=tile_size=2048 — the non-extensive binary-elementwise shape."""
+    kwargs = {"size": 2048, "num_aie_columns": 1, "tile_size": 2048}
+    if extra:
+        kwargs.update(extra)
+    pytest_filter = (
+        f"test_{name} and input_length_2048 and num_aie_columns_1 and "
+        f"tile_size_2048{filter_extra}"
+    )
+    return Operator(name=name, build_kwargs=kwargs, hrx_pytest_filter=pytest_filter)
+
+
+# Compile one small single-stream configuration per operator. On-device pytest uses
+# the matching non-extensive case when the operator has a test.py. Operators without
+# tests are compile-only. MHA and SwiGLU stay out of this list: their modules import
+# torch, which the CPU compiler-stack job does not install. package-npu-test-package
+# only wraps operators that also have CASE_GENERATORS.
 OPERATORS = (
+    _binary("elementwise_add"),
+    _binary("elementwise_mul"),
+    _binary("axpy", extra={"scalar_factor": 3.0}),
+    _channeled_unary("relu"),
+    _channeled_unary("gelu"),
+    _channeled_unary("leaky_relu"),
+    _channeled_unary("sigmoid"),
+    _channeled_unary("tanh"),
+    _channeled_unary("layer_norm"),
     Operator(
-        name="elementwise_add",
+        name="silu",
         build_kwargs={"size": 2048, "num_aie_columns": 1, "tile_size": 2048},
         hrx_pytest_filter=(
-            "test_elementwise_add and input_length_2048 and "
-            "num_aie_columns_1 and tile_size_2048"
+            "test_silu and input_length_2048 and num_aie_columns_1 and tile_size_2048"
         ),
     ),
     Operator(
-        name="relu",
+        name="rms_norm",
+        build_kwargs={
+            "size": 2048,
+            "num_aie_columns": 1,
+            "num_channels": 1,
+            "tile_size": 2048,
+            "weighted": False,
+        },
+        hrx_pytest_filter=(
+            "test_rms_norm and input_length_2048 and num_aie_columns_1 and "
+            "num_channels_1 and tile_size_2048"
+        ),
+    ),
+    Operator(
+        name="dequant",
         build_kwargs={
             "size": 2048,
             "num_aie_columns": 1,
@@ -332,7 +385,21 @@ OPERATORS = (
             "tile_size": 2048,
         },
         hrx_pytest_filter=(
-            "test_relu and input_length_2048 and num_aie_columns_1 and "
+            "test_dequant and input_length_2048 and num_aie_columns_1 and "
+            "num_channels_1 and tile_size_2048"
+        ),
+    ),
+    Operator(
+        name="mem_copy",
+        build_kwargs={
+            "size": 2048,
+            "num_cores": 1,
+            "num_channels": 1,
+            "bypass": False,
+            "tile_size": 2048,
+        },
+        hrx_pytest_filter=(
+            "test_mem_copy and input_length_2048 and num_cores_1 and "
             "num_channels_1 and tile_size_2048"
         ),
     ),
@@ -346,6 +413,74 @@ OPERATORS = (
             "tile_size_output": 128,
         },
         hrx_pytest_filter="test_gemv and M_128 and K_128 and num_aie_columns_1",
+    ),
+    Operator(
+        name="gemm",
+        build_kwargs={
+            "M": 256,
+            "K": 64,
+            "N": 64,
+            "num_aie_columns": 1,
+            "tile_m": 64,
+            "tile_k": 64,
+            "tile_n": 64,
+        },
+        # Compile shape is not in iron-ops pytest; keep the compile ids so
+        # test-npu-iron-ops does not dispatch the 2048^3 regular case.
+        hrx_pytest_filter="test_gemm and M_256 and K_64 and N_64 and num_aie_columns_1",
+    ),
+    Operator(
+        name="softmax",
+        # aie2p softmax.cc loops vector_size / SM_VEC_LEN with SM_VEC_LEN=64.
+        # cols=32 compiles but runs 0 iterations and writes zeros.
+        build_kwargs={
+            "rows": 32,
+            "cols": 64,
+            "num_aie_columns": 1,
+            "num_channels": 1,
+        },
+        # Compile shape is not in iron-ops pytest (those cases use length 32768).
+        hrx_pytest_filter=(
+            "test_softmax and input_length_2048 and tile_size_64 and "
+            "num_aie_columns_1 and num_channels_1"
+        ),
+    ),
+    Operator(
+        name="rope",
+        build_kwargs={
+            "rows": 32,
+            "cols": 512,
+            "angle_rows": 8,
+            "num_aie_columns": 1,
+            "method_type": 0,
+        },
+        hrx_pytest_filter=(
+            "test_rope and rows_32 and cols_512 and angle_rows_8 and "
+            "aie_columns_1 and method_type_0"
+        ),
+    ),
+    Operator(
+        name="transpose",
+        build_kwargs={
+            "M": 64,
+            "N": 64,
+            "num_aie_columns": 1,
+            "num_channels": 1,
+            "m": 64,
+            "n": 64,
+            "s": 8,
+            "num_batches": 1,
+        },
+        # Compile 64x64 is extensive in iron-ops pytest; -m not extensive skips it.
+        hrx_pytest_filter=(
+            "test_transpose and M_64 and N_64 and aie_columns_1 and "
+            "channels_1 and num_batches_1"
+        ),
+    ),
+    Operator(
+        name="repeat",
+        # cols must exceed 1023 so the design's DMA split is 4-byte aligned for BF16.
+        build_kwargs={"rows": 32, "cols": 1024, "repeat": 2},
     ),
 )
 
