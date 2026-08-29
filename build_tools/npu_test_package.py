@@ -244,6 +244,8 @@ def cmd_package_npu_test_package(args):
     )
 
     for operator in iron.OPERATORS:
+        if operator.name not in npu_test_cases.CASE_GENERATORS:
+            continue
         build_dir = OUT / "iron-ops" / operator.name
         xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
         insts = _single_artifact(build_dir, "*.bin", "operator transaction")
@@ -289,7 +291,9 @@ def _source_revision():
 
 def verify_npu_test_package(package):
     expected_cases = ["vector_scalar_add", "vector_scalar_add_chain4"] + [
-        operator.name for operator in iron.OPERATORS
+        operator.name
+        for operator in iron.OPERATORS
+        if operator.name in npu_test_cases.CASE_GENERATORS
     ]
     return verify_tree(
         package, expected_cases, _source_revision(), platform.system().lower()

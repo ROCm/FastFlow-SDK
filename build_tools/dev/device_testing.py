@@ -253,10 +253,11 @@ def cmd_test_npu_iron_ops(args):
     for operator in operators:
         test_dir = ops_dir / "iron" / "operators" / operator.name
         if not (test_dir / "test.py").exists():
-            sys.exit(
-                f"{operator.name}: no test.py under " "projects/iron-ops/iron/operators"
-            )
+            print(f"{operator.name}: no test.py; compile-only, skipping on-device")
+            continue
         test_dirs.append(str(test_dir))
+    if not test_dirs:
+        sys.exit("test-npu-iron-ops: no operator in the suite has a test.py")
     env = _select_hrx_runtime(iron.iron_ops_env(compiler_prefix))
     filters = [
         operator.hrx_pytest_filter

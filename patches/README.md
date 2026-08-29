@@ -129,6 +129,12 @@ The former 0003 (adapt aiecc native CLI) was dropped at the iron-ops `aab8083`
 pin: IRON #145/#150 now compile through mlir-aie's `compile_mlir_module()`,
 which already emits native `aiecc --get-*` flags.
 
+### 0004-windows-link-fallback.patch
+Copies aiecc work-dir inputs when `pathlib.Path.symlink_to` is denied. Windows
+without Developer Mode cannot create symlinks; CI runners typically can.
+
+**Remove when:** iron-ops copies (or hard-links) those work-dir inputs upstream.
+
 ## patches/llvm-project/
 
 ### 0001-link-python-support-to-stable-abi.patch

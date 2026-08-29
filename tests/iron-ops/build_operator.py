@@ -87,13 +87,13 @@ def find_operator_class(name: str) -> type:
 def instantiate(
     cls: type, operator_spec: iron.Operator, context: AIEContext
 ) -> AIEOperatorBase:
-    """The operator shape declared in suite.py."""
+    """The operator shape declared in OPERATORS."""
     params = inspect.signature(cls.__init__).parameters
     unknown = [p for p in operator_spec.build_kwargs if p not in params]
     if unknown:
         takes = ", ".join(p for p in params if p != "self")
         raise BuildError(
-            f"{operator_spec.name}: suite.py passes unsupported constructor arg(s) "
+            f"{operator_spec.name}: OPERATORS passes unsupported constructor arg(s) "
             f"{', '.join(unknown)} to {cls.__name__}; it takes ({takes})."
         )
     return cls(**operator_spec.build_kwargs, context=context)

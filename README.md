@@ -346,7 +346,7 @@ operator library (`ElementwiseAdd`, …) rather than an iron-tools example, comp
 operator's own `aie_kernels/*.cc` through Peano. iron-ops is developed against the
 `mlir_aie` *wheel*, so this is what catches its drift from our source pin — on a CPU
 runner rather than on the NPU. Which operators it covers is
-[tests/iron-ops/suite.py](tests/iron-ops/suite.py); adding a row extends it.
+[`build_tools/iron.py`](build_tools/iron.py) `OPERATORS`; adding a row extends it.
 
 On a machine **with** an NPU, `dev.py test-npu` dispatches an iron-tools design through
 the HAL, `dev.py test-npu-jit` compiles and dispatches the `@iron.jit` smoke design, and
