@@ -76,8 +76,8 @@ class FakeLibrary:
         )
         self.hrx_buffer_map_with_mode.implementation = self._map
         self.hrx_executable_load_data.implementation = (
-            lambda device, data, size, executable_format, out: self._set_handle(
-                out, 0x400
+            lambda device, data, size, target_family, target_key, out: (
+                self._set_handle(out, 0x400)
             )
         )
         self.hrx_executable_lookup_export_by_name.implementation = self._lookup
@@ -201,7 +201,8 @@ def test_runtime_loads_maps_dispatches_and_releases():
     buffer.invalidate()
 
     load_call = library.hrx_executable_load_data.calls[0]
-    assert load_call[3] == b"amdxdna-xclbin-fb"
+    assert load_call[3] == hrx.HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY
+    assert load_call[4] == hrx.HRX_AMDXDNA_EXECUTABLE_TARGET_KEY
     allocate_call = library.hrx_buffer_allocate.calls[0]
     assert allocate_call[1] == 16
     assert (

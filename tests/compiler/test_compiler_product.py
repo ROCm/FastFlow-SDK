@@ -360,6 +360,8 @@ def test_ci_builds_hrx_unit_tests_without_installing_test_artifacts():
     assert "dev.py build all --include-tests" in windows
     assert '"-DHRX_INSTALL_TESTS=OFF"' in runtime_build
     assert '"HrxPublicDist"' in runtime_build
+    assert "libhrx_tools_hrx-info" in runtime_build
+    assert "LIBHRX_BUILD_TOOLS" not in runtime_build
 
 
 def test_windows_ci_retries_transient_chocolatey_llvm_lookup_failures():

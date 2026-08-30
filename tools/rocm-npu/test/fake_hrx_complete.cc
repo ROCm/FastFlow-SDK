@@ -59,7 +59,8 @@ HRX_API hrx_status_t hrx_buffer_invalidate_range(hrx_buffer_t, size_t,
 }
 HRX_API void hrx_buffer_release(hrx_buffer_t) {}
 HRX_API hrx_status_t hrx_executable_load_data(
-    hrx_device_t, const void*, size_t, const char*, hrx_executable_t*) {
+    hrx_device_t, const void*, size_t, const char*, const char*,
+    hrx_executable_t*) {
   return nullptr;
 }
 HRX_API hrx_status_t hrx_executable_export_info(

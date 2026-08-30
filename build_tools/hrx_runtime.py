@@ -29,7 +29,6 @@ HRX_AMDXDNA_HOST_TESTS = (
     "direct_command_buffer_test",
     "device_test",
     "driver_test",
-    "event_test",
     "executable_test",
     "executable_xclbin_test",
     "nop_executable_cache_test",
@@ -207,7 +206,7 @@ HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0 = 0
 HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0 = 0
 HRX_AMDXDNA_CONTEXT_MODE_CREATE = 0
 
-HRX_MEMORY_TYPE_HOST_LOCAL = 0x00000046
+HRX_MEMORY_TYPE_HOST_LOCAL = 0x00000042
 HRX_MEMORY_TYPE_DEVICE_VISIBLE = 0x00000010
 HRX_BUFFER_USAGE_DEFAULT = 0x00000C03
 HRX_BUFFER_USAGE_MAPPING_PERSISTENT = 0x02000000
@@ -216,7 +215,8 @@ HRX_MAP_WRITE = 0x02
 HRX_MAPPING_MODE_PERSISTENT = 0x00000002
 HRX_DISPATCH_FLAG_NONE = 0
 
-HRX_AMDXDNA_XCLBIN_FORMAT = b"amdxdna-xclbin-fb"
+HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY = b"amdxdna"
+HRX_AMDXDNA_EXECUTABLE_TARGET_KEY = b"amdxdna"
 
 _Handle = ctypes.c_void_p
 _Status = ctypes.c_void_p
@@ -523,6 +523,7 @@ class HrxApi:
                 ctypes.c_void_p,
                 ctypes.c_size_t,
                 ctypes.c_char_p,
+                ctypes.c_char_p,
                 ctypes.POINTER(_Handle),
             ],
         )
@@ -697,7 +698,8 @@ class HrxRuntime:
                 self.device,
                 ctypes.cast(storage, ctypes.c_void_p),
                 len(xadx),
-                HRX_AMDXDNA_XCLBIN_FORMAT,
+                HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY,
+                HRX_AMDXDNA_EXECUTABLE_TARGET_KEY,
                 ctypes.byref(executable),
             ),
             "hrx_executable_load_data",
