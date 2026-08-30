@@ -19,10 +19,13 @@ FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 def _hrx_test_cmake_options(include_tests, include_cts):
     enabled = "ON" if include_tests or include_cts else "OFF"
     # IREE's async CTS test libraries include benchmark support whenever tests
-    # are enabled, even when only non-benchmark targets are built.
+    # are enabled, even when only non-benchmark targets are built. Several host
+    # tests also link the local-sync HAL driver, so that driver must be on for
+    # the same configure.
     return (
         f"-DIREE_BUILD_TESTS={enabled}",
         f"-DIREE_BUILD_BENCHMARKS={enabled}",
+        f"-DIREE_HAL_DRIVER_LOCAL_SYNC={enabled}",
     )
 
 
@@ -90,9 +93,7 @@ def cmd_build_hrx(args):
             "-DHRX_INSTALL_TESTS=OFF",
             "-DLIBHRX_BUILD_PASSTHROUGH=OFF",
             "-DLIBHRX_BUILD_HIP_BINDING=OFF",
-            "-DLIBHRX_BUILD_TOOLS=OFF",
             "-DLOOM_BUILD=OFF",
-            "-DIREE_HAL_DRIVER_LOCAL_SYNC=OFF",
             "-DIREE_HAL_DRIVER_NULL=OFF",
             *environment.cmake_source_override("FETCHCONTENT_SOURCE_DIR_FLATCC"),
             *environment.cmake_compiler_flags(cc, cxx),
@@ -110,6 +111,8 @@ def cmd_build_hrx(args):
             "iree_hal_drivers_amdxdna_registration_registration",
             "hrx",
             "flatcc_runtime",
+            # Public dist installs hrx-info; a targeted build otherwise skips it.
+            "libhrx_tools_hrx-info",
             "-j",
             BUILD_JOBS,
         ],

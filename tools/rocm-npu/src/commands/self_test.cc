@@ -21,10 +21,10 @@
 #include "rocm_npu/product.h"
 #include "rocm_npu/sha256.h"
 
+#include <hrx_amdxdna.h>
+
 namespace rocm_npu {
 namespace {
-
-constexpr const char* kXadxFormat = "amdxdna-xclbin-fb";
 
 class CleanupGuard {
  public:
@@ -659,8 +659,10 @@ Report RunSelfTest(const Invocation& invocation) {
     return report;
   }
   status_error = consume(
-      functions.executable_load_data(device, xadx->data(), xadx->size(),
-                                     kXadxFormat, &executable),
+      functions.executable_load_data(
+          device, xadx->data(), xadx->size(),
+          HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY,
+          HRX_AMDXDNA_EXECUTABLE_TARGET_KEY, &executable),
       "hrx_executable_load_data");
   if (!status_error.empty()) {
     fail("executable_load", status_error);

@@ -30,8 +30,9 @@ from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
 _Handle = ctypes.c_void_p
 _Status = ctypes.c_void_p
-_FORMAT = b"amdxdna-xclbin-fb"
-_MEMORY_TYPE = 0x00000046 | 0x00000010
+_TARGET_FAMILY = b"amdxdna"
+_TARGET_KEY = b"amdxdna"
+_MEMORY_TYPE = 0x00000042 | 0x00000010  # HOST_LOCAL|DEVICE_VISIBLE
 
 
 def _numeric_runtime():
@@ -231,6 +232,7 @@ class _Runtime:
                 ctypes.c_void_p,
                 ctypes.c_size_t,
                 ctypes.c_char_p,
+                ctypes.c_char_p,
                 ctypes.POINTER(_Handle),
             ],
         )
@@ -300,7 +302,8 @@ class _Runtime:
                 self.device,
                 ctypes.cast(storage, ctypes.c_void_p),
                 len(data),
-                _FORMAT,
+                _TARGET_FAMILY,
+                _TARGET_KEY,
                 ctypes.byref(handle),
             ),
             "hrx_executable_load_data",

@@ -194,6 +194,7 @@ class TestDevCli:
         ) == (
             f"-DIREE_BUILD_TESTS={enabled}",
             f"-DIREE_BUILD_BENCHMARKS={enabled}",
+            f"-DIREE_HAL_DRIVER_LOCAL_SYNC={enabled}",
         )
 
     def test_hrx_host_test_names_map_to_scoped_cmake_and_ctest_names(self):
@@ -210,6 +211,34 @@ class TestDevCli:
 
         with mock.patch.object(hrx_runtime.paths, "is_windows", return_value=True):
             assert "native_windows_mcdm_test" in hrx_runtime.hrx_amdxdna_host_tests()
+
+    def test_hrx_host_tests_exist_in_amdxdna_cmake(self):
+        cmake_path = (
+            hrx_runtime.paths.PROJ
+            / "hrx"
+            / "runtime"
+            / "src"
+            / "iree"
+            / "hal"
+            / "drivers"
+            / "amdxdna"
+            / "CMakeLists.txt"
+        )
+        if not cmake_path.is_file():
+            pytest.skip("HRX submodule is not checked out")
+        declared = set(
+            re.findall(
+                r"iree_cc_test\(\s*NAME\s+(\S+)",
+                cmake_path.read_text(encoding="utf-8"),
+            )
+        )
+        missing = [
+            name
+            for name in hrx_runtime.HRX_AMDXDNA_HOST_TESTS
+            + hrx_runtime.HRX_AMDXDNA_HOST_TESTS_WINDOWS
+            if name not in declared
+        ]
+        assert missing == []
 
     @pytest.mark.parametrize("value", ["0", "-1", "abc"])
     def test_positive_integer_rejects_invalid_values(self, value):
