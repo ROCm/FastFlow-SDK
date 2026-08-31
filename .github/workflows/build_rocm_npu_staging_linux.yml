@@ -220,12 +220,27 @@ jobs:
             --consumer-only \
             --consumer-e2e
 
+      # py3-none-any: one wheel, one interpreter. Install into the 3.12 compiler
+      # verify venv so we do not pip-install compiler-core a second time. 3.13/3.14
+      # already covered the abi3 compiler; ops is the same .py files.
+      - name: Package and verify ops wheel
+        run: |
+          .venv/bin/python dev.py package-ops-wheels
+          .venv/bin/python dev.py verify-ops-wheels \
+            --venv build/compiler-wheel-verify-312 \
+            --reuse-venv
+
       - name: Attest Linux compiler wheels
         if: ${{ inputs.attest_wheels }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: build/artifacts/rocm_npu_compiler*.whl
+          subject-path: |
+            build/artifacts/rocm_npu_compiler*.whl
+            build/artifacts/rocm_npu_ops*.whl
 
+      # Canonical py3-none-any ops wheel rides with this Linux compiler-family
+      # artifact so collect sees one copy. Windows still package+verify ops
+      # but does not upload it.
       - name: Upload compiler wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -233,6 +248,8 @@ jobs:
           path: |
             build/artifacts/rocm_npu_compiler*.whl
             build/artifacts/rocm_npu_compiler*.whl.sha256
+            build/artifacts/rocm_npu_ops*.whl
+            build/artifacts/rocm_npu_ops*.whl.sha256
             build/artifacts/rocm-npu-compiler-wheel-report.json
           if-no-files-found: error
           compression-level: 0

@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 from build_tools import compiler_product, environment, paths
@@ -16,7 +15,6 @@ from build_tools.manylinux_audit import auditwheel_policy
 from build_tools.package_version import default_package_version
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION,
-    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     build_compiler_wheel_family,
@@ -29,8 +27,10 @@ from build_tools.rocm_npu_compiler_wheels import (
     verify_windows_compiler_wheels,
 )
 from build_tools.rocm_npu_wheel_common import (
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_PACKAGE,
     verify_wheel_checksums,
+    verify_wheel_source_revision,
 )
 
 ROOT = paths.ROOT
@@ -88,28 +88,9 @@ def _compiler_wheel_files(directory):
 
 
 def verify_compiler_wheel_source_revision(wheels, expected_revision):
-    for wheel in wheels:
-        with zipfile.ZipFile(wheel) as archive:
-            manifests = [
-                name
-                for name in archive.namelist()
-                if name.count("/") == 1 and name.endswith("/manifest.json")
-            ]
-            if len(manifests) != 1:
-                raise RuntimeError(
-                    f"compiler wheel must contain one package manifest: {wheel}"
-                )
-            manifest = json.loads(archive.read(manifests[0]))
-        revision = (
-            manifest.get("sources", {})
-            .get("rocm-npu-staging", {})
-            .get("revision")
-        )
-        if revision != expected_revision:
-            raise RuntimeError(
-                "compiler wheel source revision does not match checkout: "
-                f"{wheel}: embedded={revision!r}, expected={expected_revision!r}"
-            )
+    verify_wheel_source_revision(
+        wheels, expected_revision, product="compiler wheel"
+    )
 
 
 def cmd_package_compiler_wheels(args):

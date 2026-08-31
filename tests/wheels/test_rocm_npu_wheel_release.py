@@ -18,17 +18,17 @@ from build_tools.release_policy import (
     numeric_package_versions,
     numeric_python_abis,
 )
-from build_tools.rocm_npu_compiler_wheels import (
-    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
-)
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_PACKAGE,
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     COMPILER_PACKAGE,
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
+    OPS_DISTRIBUTION,
+    OPS_PACKAGE,
     QUALIFICATION_DISTRIBUTION,
     QUALIFICATION_PACKAGE,
     RUNTIME_DISTRIBUTION,
@@ -348,6 +348,7 @@ class TestRocmNpuWheelRelease:
             RUNTIME_DISTRIBUTION: 2,
             COMPILER_DISTRIBUTION: 1,
             QUALIFICATION_DISTRIBUTION: 1,
+            OPS_DISTRIBUTION: 1,
             COMPILER_CORE_DISTRIBUTION: 2,
             COMPILER_BINDINGS_DISTRIBUTION: 2,
         }
@@ -379,6 +380,7 @@ class TestRocmNpuWheelRelease:
             FASTFLOWLM_DISTRIBUTION,
             COMPILER_DISTRIBUTION,
             QUALIFICATION_DISTRIBUTION,
+            OPS_DISTRIBUTION,
             COMPILER_CORE_DISTRIBUTION,
             COMPILER_BINDINGS_DISTRIBUTION,
         ):
@@ -390,6 +392,7 @@ class TestRocmNpuWheelRelease:
             if distribution not in (
                 COMPILER_DISTRIBUTION,
                 QUALIFICATION_DISTRIBUTION,
+                OPS_DISTRIBUTION,
             ):
                 assert "win_amd64" in index
         checksum_names = {
@@ -649,6 +652,16 @@ class TestRocmNpuWheelRelease:
                 console_scripts={
                     "rocm-npu-qualify": f"{QUALIFICATION_PACKAGE}.cli:main"
                 },
+                root_is_purelib=True,
+            )
+            build_wheel(
+                self._package_tree(root, OPS_PACKAGE),
+                OPS_DISTRIBUTION,
+                version,
+                output_directory,
+                summary="ops",
+                tag="py3-none-any",
+                requires=(f"{COMPILER_DISTRIBUTION} =={version}",),
                 root_is_purelib=True,
             )
         build_wheel(

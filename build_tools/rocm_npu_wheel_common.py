@@ -14,6 +14,7 @@ import re
 import stat
 import uuid
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -31,11 +32,13 @@ QUALIFICATION_DISTRIBUTION = "rocm-npu-qualification"
 COMPILER_DISTRIBUTION = "rocm-npu-compiler"
 COMPILER_CORE_DISTRIBUTION = "rocm-npu-compiler-core"
 COMPILER_BINDINGS_DISTRIBUTION = "rocm-npu-compiler-bindings"
+OPS_DISTRIBUTION = "rocm-npu-ops"
 RUNTIME_PACKAGE = "rocm_npu_runtime"
 FASTFLOWLM_PACKAGE = "rocm_npu_fastflowlm"
 QUALIFICATION_PACKAGE = "rocm_npu_qualification"
 COMPILER_PACKAGE = "rocm_npu_compiler"
 COMPILER_BINDINGS_PACKAGE = "rocm_npu_compiler_bindings"
+OPS_PACKAGE = "rocm_npu_ops"
 LICENSE_EXPRESSIONS = {
     RUNTIME_DISTRIBUTION: "MIT AND Apache-2.0",
     FASTFLOWLM_DISTRIBUTION:
@@ -46,7 +49,18 @@ LICENSE_EXPRESSIONS = {
     COMPILER_CORE_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
     COMPILER_BINDINGS_DISTRIBUTION:
         "MIT AND (Apache-2.0 WITH LLVM-exception)",
+    OPS_DISTRIBUTION: "MIT AND Apache-2.0",
 }
+
+COMPILER_BINDINGS_RUNTIME_REQUIREMENTS = (
+    "aiofiles ==25.1.0",
+    "cloudpickle ==3.1.2",
+    "ml-dtypes ==0.6.0",
+    "numpy ==2.4.6",
+    "rich ==15.0.0",
+)
+
+
 @dataclass(frozen=True)
 class WheelPathReference:
     """A forbidden local path embedded in a wheel member."""
@@ -653,6 +667,34 @@ def find_distribution_wheels(
     return wheels
 
 
+def verify_wheel_source_revision(
+    wheels: Iterable[Path], expected_revision: str, *, product: str
+) -> None:
+    """Requires each wheel's package manifest to record ``expected_revision``."""
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            manifests = [
+                name
+                for name in archive.namelist()
+                if name.count("/") == 1 and name.endswith("/manifest.json")
+            ]
+            if len(manifests) != 1:
+                raise RuntimeError(
+                    f"{product} must contain one package manifest: {wheel}"
+                )
+            manifest = json.loads(archive.read(manifests[0]))
+        revision = (
+            manifest.get("sources", {})
+            .get("rocm-npu-staging", {})
+            .get("revision")
+        )
+        if revision != expected_revision:
+            raise RuntimeError(
+                f"{product} source revision does not match checkout: "
+                f"{wheel}: embedded={revision!r}, expected={expected_revision!r}"
+            )
+
+
 def remove_distribution_wheels(
     directory: Path, distributions: tuple[str, ...]
 ) -> None:
@@ -733,3 +775,42 @@ def find_wheel_path_references(
                         )
                     )
     return references
+
+
+WHEEL_TEXT_PATH_SUFFIXES = (
+    ".cc",
+    ".cmake",
+    ".h",
+    ".hpp",
+    ".json",
+    ".md",
+    ".pc",
+    ".py",
+    ".pth",
+    ".txt",
+    ".yaml",
+    ".yml",
+)
+
+
+def verify_wheel_text_path_references(
+    wheels: dict[str, Path],
+    forbidden_paths: tuple[Path, ...],
+    *,
+    product: str,
+) -> None:
+    """Fails if a text wheel member embeds a forbidden local path."""
+    references = find_wheel_path_references(wheels, forbidden_paths)
+    text_references = [
+        reference
+        for reference in references
+        if reference.member.casefold().endswith(WHEEL_TEXT_PATH_SUFFIXES)
+    ]
+    if text_references:
+        details = "\n  ".join(
+            f"{item.wheel.name}:{item.member} -> {item.forbidden_path}"
+            for item in text_references
+        )
+        raise RuntimeError(
+            f"{product} text payload contains local paths:\n  " + details
+        )

@@ -23,14 +23,13 @@ from build_tools.artifact import (
     verify_sha256_sidecar,
 )
 from build_tools.fastflowlm_artifact import artifact_name as standalone_artifact_name
-from build_tools.rocm_npu_compiler_wheels import (
-    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
-)
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
+    OPS_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
     validate_version,
@@ -50,6 +49,7 @@ RELEASE_DISTRIBUTIONS = (
     COMPILER_DISTRIBUTION,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_BINDINGS_DISTRIBUTION,
+    OPS_DISTRIBUTION,
 )
 
 
@@ -348,6 +348,7 @@ def _find_release_wheels(
         (FASTFLOWLM_DISTRIBUTION, windows),
         (COMPILER_DISTRIBUTION, "py3-none-any"),
         (QUALIFICATION_DISTRIBUTION, "py3-none-any"),
+        (OPS_DISTRIBUTION, "py3-none-any"),
         (COMPILER_CORE_DISTRIBUTION, manylinux),
         (COMPILER_CORE_DISTRIBUTION, windows),
     }
@@ -494,6 +495,9 @@ def prepare_rocm_npu_release_payload(
             COMPILER_DISTRIBUTION: {
                 f"{COMPILER_CORE_DISTRIBUTION} =={version}",
                 f"{COMPILER_BINDINGS_DISTRIBUTION} =={version}",
+            },
+            OPS_DISTRIBUTION: {
+                f"{COMPILER_DISTRIBUTION} =={version}",
             },
             COMPILER_BINDINGS_DISTRIBUTION: {
                 f"{COMPILER_CORE_DISTRIBUTION} =={version}",

@@ -16,6 +16,7 @@ from build_tools import (
     hrx_runtime,
     npu_prereqs,
     npu_test_package,
+    rocm_npu_ops_wheels,
     rocm_npu_qualification_wheel,
 )
 from build_tools import (
@@ -196,6 +197,46 @@ def create_parser():
         "--xadx-assets",
         required=True,
         help="verified generated FastFlowLM XADX asset directory",
+    )
+    powh = _add_command(
+        sub,
+        "package-ops-wheels",
+        rocm_npu_ops_wheels.cmd_package_ops_wheels,
+    )
+    powh.add_argument(
+        "--version", help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})"
+    )
+    powh.add_argument(
+        "--dir",
+        default=str(rocm_npu_ops_wheels.OPS_WHEEL_ARTIFACTS),
+        help="wheel output directory",
+    )
+    vow = _add_command(
+        sub,
+        "verify-ops-wheels",
+        rocm_npu_ops_wheels.cmd_verify_ops_wheels,
+    )
+    vow.add_argument(
+        "--dir",
+        default=str(rocm_npu_ops_wheels.OPS_WHEEL_ARTIFACTS),
+        help="directory containing the ops wheel and matching compiler wheels",
+    )
+    vow.add_argument("--version")
+    vow.add_argument(
+        "--venv",
+        default=str(rocm_npu_ops_wheels.OPS_WHEEL_VENV),
+        help="venv used to install and import the ops wheel",
+    )
+    vow.add_argument(
+        "--reuse-venv",
+        action="store_true",
+        help="install into --venv instead of replacing it "
+        "(CI: the Python 3.12 compiler verify venv)",
+    )
+    vow.add_argument(
+        "--skip-compile",
+        action="store_true",
+        help="import every operator module, but skip compiling the torch-free suite",
     )
     afw = _add_command(
         sub, "audit-fastflowlm-wheels", fastflowlm_package.cmd_audit_fastflowlm_wheels

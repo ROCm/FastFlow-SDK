@@ -89,6 +89,16 @@ class TestDevCli:
             choices["setup"]._defaults["_handler"].__module__ == "build_tools.dev.setup"
         )
         assert (
+            choices["package-ops-wheels"]._defaults["_handler"].__module__
+            == "build_tools.rocm_npu_ops_wheels"
+        )
+        assert (
+            choices["verify-ops-wheels"]._defaults["_handler"].__module__
+            == "build_tools.rocm_npu_ops_wheels"
+        )
+        verify_ops = choices["verify-ops-wheels"]
+        assert any(option.dest == "reuse_venv" for option in verify_ops._actions)
+        assert (
             choices["fetch"]._defaults["_handler"].__module__
             == "build_tools.dev.patches"
         )

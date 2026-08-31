@@ -452,59 +452,25 @@ jobs:
           set -euo pipefail
           compiler_meta="release/rocm_npu_compiler-${ROCM_NPU_PACKAGE_VERSION}-py3-none-any.whl"
           test -f "${compiler_meta}"
-          for platform in linux windows; do
-            for python_minor in 3.12 3.13 3.14; do
-              python_tag="cp${python_minor/./}"
-              target="compiler-release-install-${platform}-${python_tag}"
-              if [[ "${platform}" == linux ]]; then
-                platform_args=(--platform manylinux_2_28_x86_64)
-              else
-                platform_args=(--platform win_amd64)
-              fi
-              python -m pip install \
-                --disable-pip-version-check \
-                --no-cache-dir \
-                --find-links release \
-                --only-binary=:all: \
-                "${platform_args[@]}" \
-                --implementation cp \
-                --python-version "${python_minor}" \
-                --abi "${python_tag}" \
-                --abi abi3 \
-                --target "${target}" \
-                "${compiler_meta}"
-              ROCM_NPU_INSTALL_TARGET="${target}" python - <<'PY'
-          import importlib.metadata as metadata
-          import os
+          python -m build_tools.resolve_release_wheel \
+            --wheel "${compiler_meta}" \
+            --find-links release \
+            --version "${ROCM_NPU_PACKAGE_VERSION}" \
+            --product compiler
 
-          from packaging.requirements import Requirement
-          from packaging.utils import canonicalize_name
-
-          from build_tools.rocm_npu_compiler_wheels import (
-              COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
-          )
-
-          version = os.environ["ROCM_NPU_PACKAGE_VERSION"]
-          target = os.environ["ROCM_NPU_INSTALL_TARGET"]
-          installed = {
-              canonicalize_name(distribution.metadata["Name"]): distribution.version
-              for distribution in metadata.distributions(path=[target])
-          }
-          expected = {
-              "rocm-npu-compiler": version,
-              "rocm-npu-compiler-core": version,
-              "rocm-npu-compiler-bindings": version,
-          }
-          for requirement_text in COMPILER_BINDINGS_RUNTIME_REQUIREMENTS:
-              requirement = Requirement(requirement_text)
-              specifiers = list(requirement.specifier)
-              assert len(specifiers) == 1 and specifiers[0].operator == "=="
-              expected[canonicalize_name(requirement.name)] = specifiers[0].version
-          assert expected.items() <= installed.items(), (expected, installed)
-          PY
-              rm -rf "${target}"
-            done
-          done
+      - name: Resolve ops wheel
+        shell: bash
+        env:
+          ROCM_NPU_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          ops_wheel="release/rocm_npu_ops-${ROCM_NPU_PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "${ops_wheel}"
+          python -m build_tools.resolve_release_wheel \
+            --wheel "${ops_wheel}" \
+            --find-links release \
+            --version "${ROCM_NPU_PACKAGE_VERSION}" \
+            --product ops
 
       - name: Upload release payload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -546,8 +512,8 @@ jobs:
           commit: ${{ needs.prepare.outputs.source_sha }}
           body: |
             Linux and Windows prerelease wheels for the ROCm NPU compiler,
-            runtime, and FastFlowLM. Compiler bindings support CPython
-            3.12, 3.13, and 3.14.
+            operator library, runtime, and FastFlowLM. Compiler bindings
+            support CPython 3.12, 3.13, and 3.14.
             Tested standalone Linux `.tar.zst` and Windows `.zip` runtime
             archives are attached to this release.
 
@@ -570,6 +536,12 @@ jobs:
 
             ```console
             python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" rocm-npu-compiler==${{ needs.prepare.outputs.package_version }}
+            ```
+
+            Install the IRON operator library (depends on the compiler) with:
+
+            ```console
+            python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" rocm-npu-ops==${{ needs.prepare.outputs.package_version }}
             ```
           artifacts: "release/*.whl,release/*.zip,release/*.tar.zst,release/*.sha256,release/*.zip.manifest.json,release/*.tar.zst.manifest.json,release/SHA256SUMS,release/candidate-SHA256SUMS,release/candidate-manifest.json,release/rocm-npu-release-manifest.json,release/index.html"
           artifactErrorsFailBuild: true
