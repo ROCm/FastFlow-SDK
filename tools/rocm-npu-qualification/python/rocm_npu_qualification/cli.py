@@ -23,6 +23,7 @@ from .offline import (
     intake_evidence,
     load_qualification_policy,
     pack_evidence,
+    stage_github_release,
     verify_archive,
 )
 from .profiles import ProfileError, profile_names
@@ -216,6 +217,24 @@ def _offline_parser(
         parser.add_argument(
             "--require-status", choices=("pass", "fail", "interrupted")
         )
+    elif command == "stage-release":
+        parser.add_argument("--payload-dir", type=Path, required=True)
+        parser.add_argument("--aggregate", type=Path, required=True)
+        parser.add_argument(
+            "--index",
+            type=Path,
+            help=(
+                "qualification-index.json from intake (default: next to --aggregate)"
+            ),
+        )
+        parser.add_argument("--output-dir", type=Path, required=True)
+        parser.add_argument(
+            "--candidate-manifest",
+            type=Path,
+            help=(
+                "canonical candidate manifest (default: payload candidate-manifest.json)"
+            ),
+        )
     return parser
 
 
@@ -223,7 +242,14 @@ def _print_summary(summary: dict[str, Any], *, json_output: bool) -> None:
     if json_output:
         print(json.dumps(summary, sort_keys=True))
     elif summary["status"] == "pass":
-        print(f"qualification passed: {summary.get('output', '')}")
+        staged = summary.get("output") or summary.get("bundle_output") or ""
+        if summary.get("file_count") is not None:
+            print(
+                f"github release upload staged: {staged} "
+                f"({summary['file_count']} files)"
+            )
+        else:
+            print(f"qualification passed: {staged}")
     else:
         print(
             f"qualification {summary['status']}: {summary.get('error', '')}",
@@ -276,7 +302,7 @@ def _run_offline_command(
             summary = verify_archive(
                 args.input, candidate_manifest=args.candidate_manifest
             )
-        else:
+        elif command == "intake":
             policy = load_qualification_policy(args.policy)
             summary = intake_evidence(
                 args.input_dir,
@@ -286,6 +312,16 @@ def _run_offline_command(
                 require_status=args.require_status,
                 policy=policy,
             )
+        elif command == "stage-release":
+            summary = stage_github_release(
+                args.payload_dir,
+                args.aggregate,
+                args.output_dir,
+                index=args.index,
+                candidate_manifest=args.candidate_manifest,
+            )
+        else:
+            raise EvidenceError(f"unsupported offline command: {command}")
         exit_code = 0
     except IntakePolicyError as error:
         exit_code = 5
@@ -311,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         "pack",
         "verify",
         "intake",
+        "stage-release",
     }:
         return _run_offline_command(
             effective_argv[0], effective_argv[1:], json_output=json_output

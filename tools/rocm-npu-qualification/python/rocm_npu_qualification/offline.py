@@ -1421,3 +1421,256 @@ def intake_evidence(
         "candidate_manifest_sha256": candidate_digest,
         "policy": policy_result,
     }
+
+
+def _parse_checksum_records(text: str, *, label: str) -> dict[str, str]:
+    records: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line:
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if match is None:
+            raise EvidenceError(f"{label} has a malformed row")
+        digest, name = match.group(1), match.group(2)
+        if name != Path(name).name or "/" in name or "\\" in name or name in {".", ".."}:
+            raise EvidenceError(f"{label} path must be a top-level file: {name}")
+        if name in records:
+            raise EvidenceError(f"{label} has a duplicate path: {name}")
+        records[name] = digest
+    if not records:
+        raise EvidenceError(f"{label} is empty")
+    return records
+
+
+def _parse_payload_sha256sums(payload_directory: Path) -> dict[str, str]:
+    checksums_path = payload_directory / "SHA256SUMS"
+    try:
+        text = checksums_path.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as error:
+        raise EvidenceError(
+            f"release payload SHA256SUMS is missing or unreadable: {checksums_path}"
+        ) from error
+    records = _parse_checksum_records(text, label="release payload SHA256SUMS")
+    if "SHA256SUMS" in records:
+        raise EvidenceError("release payload SHA256SUMS must not list itself")
+    return records
+
+
+def _verify_candidate_checksums(payload_directory: Path) -> None:
+    """Validate the separate candidate checksum file used by release payloads.
+
+    ``SHA256SUMS`` covers product assets. ``candidate-SHA256SUMS`` separately
+    covers ``candidate-manifest.json`` and the qualification candidate wheels;
+    those two files are intentionally not listed in ``SHA256SUMS``.
+    """
+    checksums_path = payload_directory / "candidate-SHA256SUMS"
+    manifest_path = payload_directory / "candidate-manifest.json"
+    if not checksums_path.is_file():
+        raise EvidenceError(
+            f"release payload candidate-SHA256SUMS is missing: {checksums_path}"
+        )
+    if not manifest_path.is_file():
+        raise EvidenceError(f"candidate manifest is missing: {manifest_path}")
+    try:
+        text = checksums_path.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as error:
+        raise EvidenceError(
+            "release payload candidate-SHA256SUMS is unreadable"
+        ) from error
+    records = _parse_checksum_records(text, label="candidate-SHA256SUMS")
+    if "candidate-manifest.json" not in records:
+        raise EvidenceError(
+            "candidate-SHA256SUMS must list candidate-manifest.json"
+        )
+    for name, digest in sorted(records.items()):
+        path = payload_directory / name
+        if not path.is_file():
+            raise EvidenceError(f"candidate checksum target is missing: {name}")
+        if sha256_file(path) != digest:
+            raise EvidenceError(f"candidate checksum mismatch: {name}")
+
+
+def stage_github_release(
+    payload_directory: Path,
+    aggregate: Path,
+    output_directory: Path,
+    *,
+    index: Path | None = None,
+    candidate_manifest: Path | None = None,
+) -> dict[str, Any]:
+    """Stage a flat GitHub-upload directory from a release payload plus intake.
+
+    The upload set is exactly:
+
+    - every file listed in the payload ``SHA256SUMS``, plus ``SHA256SUMS``
+    - ``candidate-manifest.json`` and ``candidate-SHA256SUMS`` (separate from
+      ``SHA256SUMS``, matching the collected release payload layout)
+    - the aggregate ZIP, its external ``.sha256`` sidecar, and
+      ``qualification-index.json``
+
+    The aggregate basename must be ``qualification-evidence-<version>.zip``
+    for the candidate version. ``output_directory`` must not exist or must be
+    empty (same rule as intake). Nested payload directories such as ``simple/``
+    are ignored. Any other top-level payload file fails the command.
+    """
+    payload_directory = Path(payload_directory).resolve()
+    aggregate = Path(aggregate).resolve()
+    output_directory = Path(output_directory).resolve()
+    if not payload_directory.is_dir():
+        raise EvidenceError(
+            f"release payload directory does not exist: {payload_directory}"
+        )
+    if not aggregate.is_file():
+        raise EvidenceError(f"qualification aggregate is missing: {aggregate}")
+    if output_directory.exists() and any(output_directory.iterdir()):
+        raise EvidenceError("upload output directory is not empty")
+    if (
+        output_directory == payload_directory
+        or output_directory in payload_directory.parents
+    ):
+        raise EvidenceError(
+            "upload output directory must be outside the payload directory"
+        )
+    if aggregate.parent == output_directory or output_directory in aggregate.parents:
+        raise EvidenceError(
+            "upload output directory must not contain the aggregate input path"
+        )
+
+    payload_records = _parse_payload_sha256sums(payload_directory)
+    for name, digest in sorted(payload_records.items()):
+        path = payload_directory / name
+        if not path.is_file():
+            raise EvidenceError(f"release payload is missing listed file: {name}")
+        if sha256_file(path) != digest:
+            raise EvidenceError(f"release payload checksum mismatch: {name}")
+    _verify_candidate_checksums(payload_directory)
+
+    # Product SHA256SUMS plus the separate candidate checksum pair.
+    candidate_names = {"candidate-manifest.json", "candidate-SHA256SUMS"}
+    payload_names = set(payload_records) | {"SHA256SUMS"} | candidate_names
+    top_level_files = {
+        path.name for path in payload_directory.iterdir() if path.is_file()
+    }
+    missing_payload = sorted(payload_names - top_level_files)
+    extra_payload = sorted(top_level_files - payload_names)
+    if missing_payload or extra_payload:
+        raise EvidenceError(
+            "release payload top-level files do not match the upload contract: "
+            f"missing={missing_payload} extra={extra_payload}"
+        )
+
+    candidate_path = (
+        Path(candidate_manifest).resolve()
+        if candidate_manifest is not None
+        else payload_directory / "candidate-manifest.json"
+    )
+    if not candidate_path.is_file():
+        raise EvidenceError(f"candidate manifest is missing: {candidate_path}")
+    payload_candidate = payload_directory / "candidate-manifest.json"
+    if candidate_path.read_bytes() != payload_candidate.read_bytes():
+        raise EvidenceError(
+            "candidate manifest does not match payload candidate-manifest.json"
+        )
+    candidate = normalize_candidate_manifest(
+        _json_object(payload_candidate.read_bytes(), "candidate-manifest.json")
+    )
+    expected_aggregate = f"qualification-evidence-{candidate['version']}.zip"
+    if aggregate.name != expected_aggregate:
+        raise EvidenceError(
+            "qualification aggregate basename must be "
+            f"{expected_aggregate}: {aggregate.name}"
+        )
+    checksums_path = payload_directory / "SHA256SUMS"
+
+    index_path = (
+        Path(index).resolve()
+        if index is not None
+        else aggregate.with_name("qualification-index.json")
+    )
+    if not index_path.is_file():
+        raise EvidenceError(f"qualification-index.json is missing: {index_path}")
+    with zipfile.ZipFile(aggregate) as archive:
+        try:
+            embedded_index = archive.read("qualification-index.json")
+        except KeyError as error:
+            raise EvidenceError(
+                "qualification aggregate is missing qualification-index.json"
+            ) from error
+    if index_path.read_bytes() != embedded_index:
+        raise EvidenceError(
+            "qualification-index.json does not match the aggregate contents"
+        )
+
+    aggregate_digest = _verify_external_checksum(aggregate)
+    verify_summary = verify_aggregate(aggregate, candidate_manifest=candidate_path)
+
+    sidecar = aggregate.with_name(aggregate.name + ".sha256")
+    evidence_names = {
+        aggregate.name,
+        sidecar.name,
+        "qualification-index.json",
+    }
+    overlap = evidence_names & payload_names
+    if overlap:
+        raise EvidenceError(
+            "release payload already contains evidence upload names: "
+            + ", ".join(sorted(overlap))
+        )
+    expected = payload_names | evidence_names
+
+    output_directory.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(
+        tempfile.mkdtemp(
+            prefix=output_directory.name + ".",
+            dir=output_directory.parent,
+        )
+    )
+    try:
+        for name in sorted(payload_names):
+            shutil.copyfile(payload_directory / name, stage / name)
+        shutil.copyfile(aggregate, stage / aggregate.name)
+        shutil.copyfile(sidecar, stage / sidecar.name)
+        shutil.copyfile(index_path, stage / "qualification-index.json")
+        staged_names = {path.name for path in stage.iterdir() if path.is_file()}
+        if any(path.is_dir() for path in stage.iterdir()):
+            raise EvidenceError("staged upload directory contains nested directories")
+        missing = sorted(expected - staged_names)
+        extra = sorted(staged_names - expected)
+        if missing or extra:
+            raise EvidenceError(
+                "staged GitHub upload set is incorrect: "
+                f"missing={missing} extra={extra}"
+            )
+        for name, digest in payload_records.items():
+            if sha256_file(stage / name) != digest:
+                raise EvidenceError(f"staged payload checksum mismatch: {name}")
+        if (stage / "SHA256SUMS").read_bytes() != checksums_path.read_bytes():
+            raise EvidenceError("staged SHA256SUMS mismatch")
+        if sha256_file(stage / aggregate.name) != aggregate_digest:
+            raise EvidenceError("staged aggregate checksum mismatch")
+        if (stage / sidecar.name).read_text(encoding="ascii") != (
+            f"{aggregate_digest}  {aggregate.name}\n"
+        ):
+            raise EvidenceError("staged aggregate checksum sidecar mismatch")
+        if (stage / "qualification-index.json").read_bytes() != embedded_index:
+            raise EvidenceError("staged qualification-index.json mismatch")
+        if output_directory.exists():
+            output_directory.rmdir()
+        stage.replace(output_directory)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+    return {
+        "schema_version": COMMAND_REPORT_SCHEMA_VERSION,
+        "status": "pass",
+        "output": str(output_directory),
+        "files": sorted(expected),
+        "file_count": len(expected),
+        "aggregate": aggregate.name,
+        "aggregate_sha256": aggregate_digest,
+        "candidate_manifest_sha256": verify_summary["candidate_manifest_sha256"],
+        "candidate_version": candidate["version"],
+        "runs": verify_summary["runs"],
+        "policy": verify_summary["policy"],
+    }
