@@ -142,7 +142,8 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         metavar="N",
         help=(
             "number of decode-benchmark iterations per chat model for a --bench "
-            "sweep (a positive integer, default 5; ignored without --bench)"
+            "or --all-models sweep (a positive integer; default 5 for --bench, "
+            "and the packaged benchmark config's own count for --all-models)"
         ),
     )
     parser.add_argument(
@@ -182,6 +183,19 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     parser.add_argument("--candidate-manifest", type=Path)
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--list-profiles", action="store_true")
+    parser.add_argument(
+        "--skip-xadx",
+        action="store_true",
+        help="skip production-kernel XADX cases (keep prior results when reusing evidence)",
+    )
+    parser.add_argument(
+        "--reuse-evidence",
+        type=Path,
+        help=(
+            "merge this run into an existing evidence directory: keep tests "
+            "for models that are not selected and rewrite report.md in place"
+        ),
+    )
     return parser
 
 
