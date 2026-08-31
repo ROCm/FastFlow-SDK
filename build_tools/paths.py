@@ -18,6 +18,10 @@ FETCH_CACHE = ROOT / ".cache" / "find-links"
 
 # Stable build layout shared by developer commands, product packaging, and tests.
 LLVM_BUILD = Path(os.environ.get("RNS_LLVM_BUILD_DIR") or (BUILD / "llvm"))
+LLVM_AIE_BUILD = Path(os.environ.get("RNS_LLVM_AIE_BUILD_DIR") or (BUILD / "llvm-aie"))
+LLVM_AIE_INSTALL = Path(
+    os.environ.get("RNS_LLVM_AIE_INSTALL_DIR") or (BUILD / "llvm-aie-install")
+)
 IRON_TOOLS_BUILD = BUILD / "iron-tools"
 IRON_TOOLS_INSTALL = BUILD / "iron-tools-install"
 TOOLS_BIN = ROOT / "tools-bin"

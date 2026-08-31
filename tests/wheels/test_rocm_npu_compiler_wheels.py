@@ -108,11 +108,18 @@ class TestRocmNpuCompilerWheels:
                         "rocm-npu-staging": {
                             "revision": "abc",
                             "dirty": False,
-                        }
+                        },
+                        "llvm-aie": {
+                            "revision": "def",
+                            "dirty": False,
+                        },
                     },
                     "dependencies": {},
                     "toolchain": {"python": "3.12"},
-                    "peano": {"wheel": "llvm-aie==1"},
+                    "peano": {
+                        "source": "projects/llvm-aie",
+                        "path": "peano/llvm-aie",
+                    },
                     "files": [],
                 }
             ),
@@ -346,7 +353,11 @@ class TestRocmNpuCompilerWheels:
                 "rocm-npu-staging": {
                     "revision": "abc",
                     "dirty": False,
-                }
+                },
+                "llvm-aie": {
+                    "revision": "def",
+                    "dirty": False,
+                },
             }
         release = root / "release"
         release.mkdir()

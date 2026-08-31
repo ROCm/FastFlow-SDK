@@ -10,10 +10,9 @@ import re
 import shutil
 import subprocess
 import sys
-import sysconfig
 from pathlib import Path
 
-from build_tools import environment, iron, paths
+from build_tools import environment, iron, llvm_aie, paths
 from build_tools.archive import (
     create_deterministic_tar_gz,
     create_deterministic_tar_zst,
@@ -52,10 +51,8 @@ COMPILER_PRODUCT_RELOCATED = paths.BUILD / "rocm-npu-compiler-relocated"
 COMPILER_ARTIFACTS = paths.BUILD / "artifacts"
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27
-PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
-PEANO_INDEX = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
 NPU_PREREQ_TOOLS = ["aiecc", "aie-opt", "aie-translate", "bootgen", "target_model", "target_model_rtti", "register_database"]
-COMPILER_PRODUCT_LICENSES = ("rocm-npu-staging-LICENSE", "iron-tools-LICENSE", "hrx-xclbinutil-LICENSE", "llvm-LICENSE.txt", "aie-api-LICENSE", "aie-runtime-LICENSE.txt", "bootgen-LICENSE")
+COMPILER_PRODUCT_LICENSES = ("rocm-npu-staging-LICENSE", "iron-tools-LICENSE", "hrx-xclbinutil-LICENSE", "llvm-LICENSE.txt", "llvm-aie-LICENSE.txt", "aie-api-LICENSE", "aie-runtime-LICENSE.txt", "bootgen-LICENSE")
 IS_WINDOWS = paths.is_windows()
 _EXE = ".exe" if IS_WINDOWS else ""
 sh = environment.sh
@@ -164,12 +161,13 @@ def _stage_runtime_tree(src, dst):
 
 
 def _peano_prefix():
-    peano = Path(sysconfig.get_paths()["purelib"]) / "llvm-aie"
-    if not peano.is_dir():
+    try:
+        return llvm_aie.verify_install(paths.LLVM_AIE_INSTALL)
+    except RuntimeError as error:
         raise RuntimeError(
-            f"Peano is not installed in this Python environment: {peano}\n"
-            "run: python dev.py setup")
-    return peano
+            f"Peano is not built from source: {paths.LLVM_AIE_INSTALL}\n"
+            "run: python dev.py build llvm-aie"
+        ) from error
 
 
 def _stage_compiler_openssl_license(product, copied):
@@ -440,6 +438,7 @@ def stage_product():
         # terms under the component-specific name.
         (ROOT / "LICENSE", "hrx-xclbinutil-LICENSE"),
         (PROJ / "llvm-project" / "llvm" / "LICENSE.TXT", "llvm-LICENSE.txt"),
+        (PROJ / "llvm-aie" / "LICENSE.TXT", "llvm-aie-LICENSE.txt"),
         (
             PROJ / "iron-tools" / "third_party" / "aie_api" / "LICENSE",
             "aie-api-LICENSE",
@@ -464,11 +463,11 @@ def stage_product():
         "artifact": product.name,
         "platform": {"system": platform.system(), "machine": platform.machine()},
         "required_tools": required_tools,
-        "peano": {"wheel": PEANO_WHEEL, "index": PEANO_INDEX,
-                  "path": "peano/llvm-aie"},
+        "peano": {"source": "projects/llvm-aie", "path": "peano/llvm-aie"},
         "sources": {
             "rocm-npu-staging": git_source_state(ROOT),
             "llvm-project": git_source_state(PROJ / "llvm-project"),
+            "llvm-aie": git_source_state(PROJ / "llvm-aie"),
             "iron-tools": git_source_state(PROJ / "iron-tools"),
             "hrx-xclbinutil": _hrx_xclbinutil_source_state(),
         },

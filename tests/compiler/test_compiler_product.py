@@ -364,6 +364,19 @@ def test_ci_builds_hrx_unit_tests_without_installing_test_artifacts():
     assert "LIBHRX_BUILD_TOOLS" not in runtime_build
 
 
+def test_ci_restores_exact_peano_install_cache():
+    workflows = ROOT / ".github" / "workflows"
+    linux = (workflows / "build_rocm_npu_staging_linux.yml").read_text()
+    windows = (workflows / "build_rocm_npu_staging_windows.yml").read_text()
+
+    assert "id: peano-cache-key" in linux
+    assert "id: peano-cache-key" in windows
+    assert "key: ${{ steps.peano-cache-key.outputs.key }}" in linux
+    assert "key: ${{ steps.peano-cache-key.outputs.key }}" in windows
+    assert "build/llvm-aie-install" in linux
+    assert "build/llvm-aie-install" in windows
+
+
 def test_windows_ci_retries_transient_chocolatey_llvm_lookup_failures():
     workflow = (
         ROOT / ".github" / "workflows" / "build_rocm_npu_staging_windows.yml"

@@ -14,6 +14,7 @@ from build_tools import (
     fastflowlm_package,
     fastflowlm_xadx_assets,
     hrx_runtime,
+    llvm_aie,
     npu_prereqs,
     npu_test_package,
     rocm_npu_qualification_wheel,
@@ -100,6 +101,15 @@ def create_parser():
         "--fresh",
         action="store_true",
         help="clear generated CMake state and outputs before configuring",
+    )
+    b.add_argument(
+        "--llvm-aie-windows-compiler",
+        choices=llvm_aie.WINDOWS_COMPILER_CHOICES,
+        default="cl",
+        help=(
+            "compiler driver for source-built Peano on Windows "
+            "(ignored on non-Windows; env uses CC/CXX)"
+        ),
     )
     b.add_argument(
         "--include-tests",

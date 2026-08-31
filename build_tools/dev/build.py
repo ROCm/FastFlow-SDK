@@ -10,6 +10,7 @@ from build_tools.dev import (
 
 BUILD_HANDLERS = {
     "llvm": compiler_build.cmd_build_llvm,
+    "llvm-aie": compiler_build.cmd_build_llvm_aie,
     "iron-tools": compiler_build.cmd_build_iron_tools,
     "hrx-xclbinutil": compiler_build.cmd_build_hrx_xclbinutil,
     "hrx": runtime_build.cmd_build_hrx,
@@ -25,6 +26,7 @@ def cmd_build_all(args):
     """Build the complete compiler-stack developer toolchain."""
     runtime_build.cmd_build_rocm_npu_cli(args)
     compiler_build.cmd_build_hrx_xclbinutil(args)
+    compiler_build.cmd_build_llvm_aie(args)
     compiler_build.cmd_build_llvm(args)
     compiler_build.cmd_build_iron_tools(args)
     runtime_build.cmd_build_hrx(args)

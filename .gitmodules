@@ -18,3 +18,7 @@
 	url = https://github.com/ROCm/FastFlowLM.git
 	branch = hrx_native_pr
 	ignore = dirty
+[submodule "projects/llvm-aie"]
+	path = projects/llvm-aie
+	url = https://github.com/Xilinx/llvm-aie.git
+	branch = aie-public

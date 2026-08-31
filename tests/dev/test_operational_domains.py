@@ -16,6 +16,7 @@ from build_tools import (
     environment,
     fastflowlm_package,
     iron,
+    llvm_aie,
     npu_prereqs,
     npu_test_package,
     paths,
@@ -45,6 +46,8 @@ class TestPathOwnership:
             "PATCHES",
             "FETCH_CACHE",
             "LLVM_BUILD",
+            "LLVM_AIE_BUILD",
+            "LLVM_AIE_INSTALL",
             "IRON_TOOLS_BUILD",
             "IRON_TOOLS_INSTALL",
             "TOOLS_BIN",
@@ -115,6 +118,166 @@ class TestBuildDomain:
 
     def test_llvm_build_includes_objcopy_for_relocated_products(self):
         assert "llvm-objcopy" in compiler_build.LLVM_BUILD_TARGETS
+
+    def test_llvm_aie_verification_requires_peano_runtime_targets(self, tmp_path):
+        install = tmp_path / "llvm-aie-install"
+        expected = {"schema_version": 1, "source_revision": "abc"}
+        for name in ("clang", "llc", "ld.lld", "llvm-ar"):
+            tool = install / "bin" / paths.executable_name(name)
+            tool.parent.mkdir(parents=True, exist_ok=True)
+            tool.touch()
+        for target in llvm_aie.RUNTIME_TARGETS:
+            header = install / "include" / target / "stdint.h"
+            library = install / "lib" / target / "libc.a"
+            header.parent.mkdir(parents=True)
+            library.parent.mkdir(parents=True)
+            header.touch()
+            library.touch()
+        (install / llvm_aie.BUILD_STAMP).write_text(
+            '{"schema_version": 1, "source_revision": "abc"}',
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            llvm_aie,
+            "expected_build_state",
+            return_value=expected,
+        ):
+            assert llvm_aie.verify_install(install) == install
+
+    def test_llvm_aie_windows_defaults_to_upstream_cl_compiler(self):
+        with mock.patch.object(compiler_build.paths, "is_windows", return_value=True):
+            assert compiler_build._llvm_aie_compilers() == ("cl", "cl")
+            assert compiler_build._llvm_aie_compilers("clang-cl") == (
+                "clang-cl",
+                "clang-cl",
+            )
+        with (
+            mock.patch.object(compiler_build.paths, "is_windows", return_value=True),
+            mock.patch.object(
+                compiler_build.environment,
+                "compilers",
+                return_value=("cc-env", "cxx-env"),
+            ),
+        ):
+            assert compiler_build._llvm_aie_compilers("env") == (
+                "cc-env",
+                "cxx-env",
+            )
+
+    def test_llvm_aie_windows_compiler_is_part_of_requested_build_state(self):
+        with (
+            mock.patch.object(compiler_build.paths, "is_windows", return_value=True),
+            mock.patch.object(llvm_aie, "git_revision", return_value="abc"),
+            mock.patch.object(
+                llvm_aie,
+                "manifest",
+                return_value={"cache_recipe": 1},
+            ),
+            mock.patch.object(
+                llvm_aie.platform,
+                "system",
+                return_value="Windows",
+            ),
+            mock.patch.object(
+                llvm_aie.platform,
+                "machine",
+                return_value="AMD64",
+            ),
+        ):
+            assert llvm_aie.expected_build_state("clang-cl")[
+                "windows_compiler"
+            ] == "clang-cl"
+
+    def test_llvm_aie_build_uses_peano_cache_and_install_prefix(self, tmp_path):
+        source = tmp_path / "projects" / "llvm-aie"
+        (source / "llvm").mkdir(parents=True)
+        (source / "llvm" / "CMakeLists.txt").touch()
+        cache = source / "clang" / "cmake" / "caches" / "Peano-AIE.cmake"
+        cache.parent.mkdir(parents=True)
+        cache.touch()
+        build_dir = tmp_path / "build" / "llvm-aie"
+        install = tmp_path / "build" / "llvm-aie-install"
+        commands = []
+        expected = {"schema_version": 1, "source_revision": "abc"}
+
+        def write_install_tree():
+            for name in ("clang", "llc", "ld.lld", "llvm-ar"):
+                tool = install / "bin" / paths.executable_name(name)
+                tool.parent.mkdir(parents=True, exist_ok=True)
+                tool.touch()
+            for target in llvm_aie.RUNTIME_TARGETS:
+                header = install / "include" / target / "stdint.h"
+                library = install / "lib" / target / "libc.a"
+                header.parent.mkdir(parents=True)
+                library.parent.mkdir(parents=True)
+                header.touch()
+                library.touch()
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            if "--target" in command and "install-distribution" in command:
+                write_install_tree()
+
+        with (
+            mock.patch.object(compiler_build.paths, "PROJ", tmp_path / "projects"),
+            mock.patch.object(compiler_build.paths, "BUILD", tmp_path / "build"),
+            mock.patch.object(compiler_build.paths, "LLVM_AIE_BUILD", build_dir),
+            mock.patch.object(compiler_build.paths, "LLVM_AIE_INSTALL", install),
+            mock.patch.object(compiler_build.paths, "is_windows", return_value=False),
+            mock.patch.object(
+                compiler_build.environment,
+                "compilers",
+                return_value=("cc", "c++"),
+            ),
+            mock.patch.object(
+                compiler_build.environment,
+                "cmake_compiler_flags",
+                return_value=["-DCMAKE_C_COMPILER=cc", "-DCMAKE_CXX_COMPILER=c++"],
+            ),
+            mock.patch.object(
+                compiler_build.environment,
+                "cmake_ccache_flags",
+                return_value=[],
+            ),
+            mock.patch.object(
+                compiler_build.environment,
+                "cmake_env",
+                return_value={},
+            ),
+            mock.patch.object(
+                compiler_build.environment,
+                "cmake_bin",
+                return_value="cmake",
+            ),
+            mock.patch.object(
+                compiler_build.environment,
+                "cmake_path",
+                side_effect=lambda path: str(path),
+            ),
+            mock.patch.object(
+                compiler_build.environment,
+                "venv_py",
+                return_value=Path("python"),
+            ),
+            mock.patch.object(
+                llvm_aie,
+                "expected_build_state",
+                return_value=expected,
+            ),
+            mock.patch.object(compiler_build.environment, "sh", side_effect=run),
+        ):
+            compiler_build.cmd_build_llvm_aie(
+                SimpleNamespace(fresh=False, llvm_aie_windows_compiler="cl")
+            )
+
+        configure = commands[0]
+        assert str(source / "llvm") in configure
+        assert "-C" in configure
+        assert str(cache) in configure
+        assert f"-DCMAKE_INSTALL_PREFIX={install}" in configure
+        assert "-DLLVM_LINK_LLVM_DYLIB=ON" in configure
+        assert "install-distribution" in commands[1]
 
 
 class TestSourceDomain:

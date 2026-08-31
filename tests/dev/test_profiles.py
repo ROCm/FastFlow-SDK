@@ -57,6 +57,7 @@ class TestProfiles:
     def test_profile_submodule_requirements(self):
         assert profiles.PROFILE_SPECS["compiler-stack"].submodules == {
             "llvm-project",
+            "llvm-aie",
             "iron-tools",
             "hrx",
             "iron-ops",

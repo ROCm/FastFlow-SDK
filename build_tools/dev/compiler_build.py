@@ -7,7 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from build_tools import environment, paths
+from build_tools import environment, llvm_aie, paths
+from build_tools.artifact import reset_directory
 from build_tools.dev import patches
 
 NPROC = str(os.cpu_count() or 8)
@@ -28,6 +29,38 @@ LLVM_BUILD_TARGETS = [
     "llvm-config",
     "llvm-objcopy",
 ]
+
+
+def _reset_owned_directory(path: Path) -> None:
+    allowed_roots = [paths.BUILD]
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        allowed_roots.append(Path(runner_temp))
+    last_error = None
+    for root in allowed_roots:
+        try:
+            reset_directory(path, root)
+            return
+        except RuntimeError as error:
+            last_error = error
+    raise RuntimeError(
+        f"unexpected build directory outside owned roots: {path}"
+    ) from last_error
+
+
+def _llvm_aie_compilers(
+    windows_compiler: str = "cl",
+) -> tuple[str | None, str | None]:
+    if not paths.is_windows():
+        return environment.compilers()
+    compiler = llvm_aie.normalize_windows_compiler(windows_compiler)
+    if compiler == "cl":
+        return "cl", "cl"
+    if compiler == "clang-cl":
+        return "clang-cl", "clang-cl"
+    if compiler == "env":
+        return environment.compilers()
+    raise AssertionError(f"unhandled llvm-aie Windows compiler: {compiler}")
 
 
 def cmd_build_llvm(args):
@@ -81,6 +114,115 @@ def cmd_build_llvm(args):
         env=environment.cmake_env(),
     )
     print("build llvm: ok ->", paths.LLVM_BUILD / "lib" / "cmake")
+
+
+def cmd_build_llvm_aie(args):
+    """Build Peano LLVM-AIE from the pinned source submodule."""
+    source = paths.PROJ / "llvm-aie"
+    llvm_source = source / "llvm"
+    cache = source / "clang" / "cmake" / "caches" / "Peano-AIE.cmake"
+    windows_compiler = getattr(args, "llvm_aie_windows_compiler", "cl")
+    if paths.is_windows():
+        windows_compiler = llvm_aie.normalize_windows_compiler(windows_compiler)
+    if not cache.is_file() or not (llvm_source / "CMakeLists.txt").is_file():
+        sys.exit(
+            "missing llvm-aie source checkout; run: "
+            "python dev.py submodules llvm-aie"
+        )
+    if getattr(args, "fresh", False):
+        _reset_owned_directory(paths.LLVM_AIE_BUILD)
+        _reset_owned_directory(paths.LLVM_AIE_INSTALL)
+    else:
+        try:
+            verified = llvm_aie.verify_install(
+                paths.LLVM_AIE_INSTALL,
+                windows_compiler=windows_compiler,
+            )
+            print("build llvm-aie: cached ->", verified)
+            return
+        except RuntimeError:
+            if paths.LLVM_AIE_INSTALL.exists():
+                _reset_owned_directory(paths.LLVM_AIE_INSTALL)
+
+    paths.LLVM_AIE_BUILD.mkdir(parents=True, exist_ok=True)
+    paths.LLVM_AIE_INSTALL.parent.mkdir(parents=True, exist_ok=True)
+    cc, cxx = _llvm_aie_compilers(windows_compiler)
+    configure = [
+        environment.cmake_bin(),
+        "-G",
+        "Ninja",
+        "-S",
+        environment.cmake_path(llvm_source),
+        "-B",
+        environment.cmake_path(paths.LLVM_AIE_BUILD),
+        "-C",
+        environment.cmake_path(cache),
+        "-DLLVM_BUILD_BENCHMARKS=OFF",
+        "-DLLVM_BUILD_EXAMPLES=OFF",
+        "-DLLVM_BUILD_TESTS=OFF",
+        "-DLLVM_BUILD_TOOLS=ON",
+        "-DLLVM_BUILD_UTILS=ON",
+        "-DLLVM_CCACHE_BUILD=ON",
+        "-DLLVM_ENABLE_ASSERTIONS=ON",
+        "-DLLVM_ENABLE_RTTI=ON",
+        "-DLLVM_ENABLE_ZSTD=OFF",
+        "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+        "-DLLVM_INCLUDE_EXAMPLES=OFF",
+        "-DLLVM_INCLUDE_TESTS=OFF",
+        "-DLLVM_INCLUDE_TOOLS=ON",
+        "-DLLVM_INCLUDE_UTILS=ON",
+        "-DLLVM_INSTALL_UTILS=ON",
+        "-DLLVM_VERSION_SUFFIX=",
+        "-DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON",
+        f"-DCMAKE_INSTALL_PREFIX={environment.cmake_path(paths.LLVM_AIE_INSTALL)}",
+        f"-DPython3_EXECUTABLE={environment.cmake_path(environment.venv_py())}",
+        f"-DPython_EXECUTABLE={environment.cmake_path(environment.venv_py())}",
+        "-DCMAKE_BUILD_TYPE=Release",
+        *environment.cmake_ccache_flags(),
+        *environment.cmake_compiler_flags(cc, cxx),
+    ]
+    if paths.is_windows():
+        configure.extend(
+            [
+                "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
+                "-DCMAKE_C_FLAGS=/MT",
+                "-DCMAKE_CXX_FLAGS=/MT",
+                "-DLLVM_USE_CRT_MINSIZEREL=MT",
+                "-DLLVM_USE_CRT_RELEASE=MT",
+                "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW",
+            ]
+        )
+    else:
+        configure.extend(
+            [
+                "-DLLVM_BUILD_LLVM_DYLIB=ON",
+                "-DLLVM_LINK_LLVM_DYLIB=ON",
+            ]
+        )
+        if "clang" in (cc or "") and shutil.which("ld.lld"):
+            configure.append("-DLLVM_USE_LINKER=lld")
+    environment.sh(configure, env=environment.cmake_env())
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(paths.LLVM_AIE_BUILD),
+            "-j",
+            NPROC,
+            "--target",
+            "install-distribution",
+        ],
+        env=environment.cmake_env(),
+    )
+    llvm_aie.write_build_stamp(
+        paths.LLVM_AIE_INSTALL,
+        windows_compiler=windows_compiler,
+    )
+    verified = llvm_aie.verify_install(
+        paths.LLVM_AIE_INSTALL,
+        windows_compiler=windows_compiler,
+    )
+    print("build llvm-aie: ok ->", verified)
 
 
 def build_iron_tools(python_executable, build_dir, install_dir):

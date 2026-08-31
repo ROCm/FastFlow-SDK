@@ -297,12 +297,12 @@ IRON end-to-end artifact checks.
 `python3 dev.py --help` is the canonical, generated inventory of developer
 commands; use `python3 dev.py COMMAND --help` for command flags.
 
-The stack, built from source against one ROCm LLVM except for the Peano wheel:
+The stack, built from source with Peano kept as a separate LLVM fork:
 
 ```
 LLVM+MLIR (ROCm amd-llvm pin, LLVM 24) ──┐
                                          ├─ iron-tools/IRON design ─ .xclbin
-Peano (llvm-aie wheel, AIE codegen) ─────┘                         │
+Peano (source-built llvm-aie, AIE codegen) ─┘                      │
 hrx-xclbinutil (xclbin packaging; vendored in mlir-aie) ───────────┘  ─ HRX amdxdna HAL extracts PDI
 ```
 
@@ -316,15 +316,17 @@ libssl-dev`. The canonical Linux compiler is **gcc**. To build with clang
 locally instead, install `clang lld` and set `CC=clang CXX=clang++`.
 
 ```bash
-git submodule update --init --recursive projects/iron-tools
-python3 dev.py doctor compiler-stack # quick post-setup check: prereqs, pins, patches, prefetch
+python3 dev.py submodules llvm-project llvm-aie hrx iron-tools iron-ops --shallow
+python3 dev.py doctor compiler-stack # quick preflight check: prereqs, pins, patches, prefetch
 python3 dev.py doctor compiler-stack --deep # also replay every patch series in a temporary Git index
-python3 dev.py setup              # .venv + cached uv install; cmake/ninja/Peano from wheels
+python3 dev.py setup              # .venv + cached uv install; cmake/ninja/Python deps
+python3 dev.py build llvm-aie     # Peano source build -> build/llvm-aie-install
+# Windows Peano defaults to --llvm-aie-windows-compiler cl; use env to follow CC/CXX.
 python3 dev.py build hrx-xclbinutil
 python3 dev.py build llvm         # LLVM+MLIR from the amd-llvm pin
 python3 dev.py build iron-tools   # aie-opt/aie-translate/bootgen against build/llvm
 python3 dev.py build hrx          # the amdxdna HAL (IREE runtime)
-python3 dev.py build all          # native CLI + compiler stack + HRX, in order
+python3 dev.py build all          # native CLI + Peano + compiler stack + HRX, in order
 python3 dev.py test [DESIGN]      # e2e build test, no NPU run
 python3 dev.py test-npu-jit --build-only # compiler + IRON JIT smoke, no NPU run
 python3 dev.py test-iron-ops [OP] # build the iron-ops operators, no NPU run
