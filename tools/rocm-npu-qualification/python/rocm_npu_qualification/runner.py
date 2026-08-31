@@ -69,17 +69,17 @@ from .report import build_markdown_report
 from .xadx import XadxError, run_recipe, validate_xadx_report
 
 # Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
-# 2+2 turn is left open-ended: forcing "one short sentence" pushes some small
-# models (e.g. the translation-tuned lfm2-trans:2.6b) into a terse, wrong reply
-# like "2." at greedy decoding, whereas given room to answer they reliably reach
-# "4". A numeric-only answer no longer trips the coherence gate because the
+# 2+2 turn must stay explicit: "What is 2+2?" is echoed as "2 + 2" by
+# qwen3:0.6b after prior turns, and "reply with only the number" makes it copy
+# "2". Asking for the number you get when adding 2 and 2 reaches "4" at greedy
+# decoding. A numeric-only answer no longer trips the coherence gate because the
 # expected_regex below asserts "4" directly (see the per-turn checks).
 _SWEEP_SINGLE_PROMPT = "What is the capital of France? Answer in one short sentence."
 _SWEEP_MULTI_TURNS: tuple[dict[str, Any], ...] = (
     {"prompt": "What is the capital of France? Answer in one short sentence."},
     {"prompt": "Name three primary colors."},
     {
-        "prompt": "What is 2+2?",
+        "prompt": "What number do you get when you add 2 and 2?",
         "expected_regex": r"\b4\b|four",
     },
     {"prompt": "Write one short sentence about the ocean."},
@@ -102,7 +102,9 @@ _SWEEP_GREEDY_SETUP: tuple[str, ...] = (
 _SWEEP_GREEDY_SETUP_MULTI: tuple[str, ...] = (
     "/set topk 1",
     "/set temp 0",
-    "/set gen-lim 64",
+    # Reasoning models spend the previous 64-token cap inside <think> and never
+    # emit the arithmetic answer; 256 leaves room for think + the digit.
+    "/set gen-lim 256",
 )
 # Complete-sweep benchmark stages, selectable via ``--bench-context``. Each entry
 # fixes the packaged config, the evidence test name, the transcript checkpoint
@@ -291,7 +293,17 @@ def _resolve_asr_sample(stack: ExitStack) -> Path | None:
         if resource.is_file():
             return stack.enter_context(resources.as_file(resource))
     except (TypeError, FileNotFoundError, ModuleNotFoundError, OSError):
-        return None
+        pass
+    # Source checkouts may omit the binary clip; the installed wheel still
+    # ships it. PYTHONPATH makes importlib.resources see the source tree.
+    import site
+
+    for base in (*site.getsitepackages(), site.getusersitepackages()):
+        wheel_wav = (
+            Path(base) / "rocm_npu_qualification" / "assets" / "asr_sample.wav"
+        )
+        if wheel_wav.is_file():
+            return wheel_wav
     return None
 
 
@@ -332,8 +344,49 @@ def _sweep_timeouts(footprint: float) -> tuple[int, int]:
     return boot, turn
 
 
+def _sweep_setup_commands(
+    model: dict[str, Any], base: tuple[str, ...]
+) -> list[str]:
+    """Greedy decode setup, plus /think to disable reasoning when it is on.
+
+    ``/think`` is a toggle. Models that ship with thinking enabled and a working
+    toggle (Qwen3 1.7B/4B/8B) need it so the arithmetic turn answers instead of
+    filling gen-lim with a chain of thought. Models with thinking already off
+    (Qwen3 0.6B) must not receive it.
+    """
+    commands = list(base)
+    if model.get("think") and model.get("think_toggleable"):
+        commands = ["/think", *commands]
+    return commands
+
+
+def _upsert_model_record(
+    models: list[dict[str, Any]], record: dict[str, Any]
+) -> None:
+    """Replace an existing catalog row with the same tag, or append."""
+    tag = record.get("tag")
+    for index, existing in enumerate(models):
+        if existing.get("tag") == tag:
+            models[index] = record
+            return
+    models.append(record)
+
+
+def _replace_tests_for_model(
+    tests: list[dict[str, Any]],
+    model_tag: str,
+    new_tests: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop stale rows for one model, then append the replacement set."""
+    kept = [test for test in tests if test.get("model") != model_tag]
+    return kept + new_tests
+
+
 def _default_tests_for(
-    model: dict[str, Any], *, bench_context: str = _SWEEP_BENCH_DEFAULT
+    model: dict[str, Any],
+    *,
+    bench_context: str = _SWEEP_BENCH_DEFAULT,
+    iterations: int | None = None,
 ) -> list[dict[str, Any]]:
     """Synthesize the complete-sweep test set for a discovered registry model.
 
@@ -341,6 +394,10 @@ def _default_tests_for(
     (8k by default, selectable via ``bench_context``); embed/asr -> a single
     serve-probe. Timeouts scale with footprint so large MoE models do not
     spuriously time out, and with the benchmark context length.
+
+    ``iterations`` overrides how many benchmark iterations the packaged config
+    asks for. Leave it ``None`` to keep the config's own count, which is what
+    the sweep's averaged numbers are calibrated against.
     """
     kind = model.get("kind", "chat")
     footprint = float(model.get("footprint", 0) or 0)
@@ -359,13 +416,29 @@ def _default_tests_for(
     )
     single_timeout = min(7200, max(180, turn))
     multi_timeout = min(7200, max(300, turn * 2))
-    bench_timeout = min(7200, max(300, turn * bench["timeout_factor"]))
+    # timeout_factor already covers the packaged config's own iteration count, so
+    # only scale it further when the caller overrides that count.
+    iteration_scale = max(1, iterations) if iterations else 1
+    bench_timeout = min(
+        7200, max(300, turn * bench["timeout_factor"] * iteration_scale)
+    )
+    bench_test: dict[str, Any] = {
+        "name": bench["name"],
+        "kind": "bench",
+        "config": bench["config"],
+        "timeout_seconds": bench_timeout,
+        "checkpoint_min": bench["checkpoint_min"],
+        "checkpoint_max": bench["checkpoint_max"],
+        "expected_regex": "",
+    }
+    if iterations is not None:
+        bench_test["iterations"] = iterations
     return [
         {
             "name": "single-prompt",
             "kind": "run",
             "turns": [{"prompt": _SWEEP_SINGLE_PROMPT}],
-            "setup_commands": _SWEEP_GREEDY_SETUP,
+            "setup_commands": _sweep_setup_commands(model, _SWEEP_GREEDY_SETUP),
             "process_iterations": 1,
             "timeout_seconds": single_timeout,
             "ctx_len": 1024,
@@ -374,20 +447,12 @@ def _default_tests_for(
             "name": "multi-turn",
             "kind": "run",
             "turns": [dict(turn) for turn in _SWEEP_MULTI_TURNS],
-            "setup_commands": _SWEEP_GREEDY_SETUP_MULTI,
+            "setup_commands": _sweep_setup_commands(model, _SWEEP_GREEDY_SETUP_MULTI),
             "process_iterations": 1,
             "timeout_seconds": multi_timeout,
             "ctx_len": 2048,
         },
-        {
-            "name": bench["name"],
-            "kind": "bench",
-            "config": bench["config"],
-            "timeout_seconds": bench_timeout,
-            "checkpoint_min": bench["checkpoint_min"],
-            "checkpoint_max": bench["checkpoint_max"],
-            "expected_regex": "",
-        },
+        bench_test,
     ]
 
 
@@ -1423,9 +1488,14 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             flush=True,
         )
         model_filter = None
-    if getattr(args, "bench_iterations", None) is not None and not any_benchmark:
+    if (
+        getattr(args, "bench_iterations", None) is not None
+        and not any_benchmark
+        and not all_models
+    ):
         print(
-            "qualify: --bench-iterations has no effect without --bench; ignoring it",
+            "qualify: --bench-iterations has no effect without --bench or "
+            "--all-models; ignoring it",
             file=sys.stderr,
             flush=True,
         )
@@ -1556,7 +1626,29 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     candidate_bound = candidate is not None and not is_sweep
     bound_candidate = candidate if candidate_bound else None
     numeric_runtime = _numeric_runtime_identities()
-    writer = EvidenceWriter(args.output)
+    reuse_path = getattr(args, "reuse_evidence", None)
+    skip_xadx = bool(getattr(args, "skip_xadx", False))
+    writer = EvidenceWriter(args.output, allow_existing=reuse_path is not None)
+    prior_tests: list[dict[str, Any]] = []
+    prior_models: list[dict[str, Any]] = []
+    prior_profile: dict[str, Any] | None = None
+    if reuse_path is not None:
+        reuse_root = Path(reuse_path)
+        tests_path = reuse_root / "tests.json"
+        models_path = reuse_root / "models.json"
+        profile_path = reuse_root / "profile.json"
+        if tests_path.is_file():
+            loaded = json.loads(tests_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                prior_tests = loaded
+        if models_path.is_file():
+            loaded = json.loads(models_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                prior_models = loaded
+        if profile_path.is_file():
+            loaded = json.loads(profile_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                prior_profile = loaded
     writer.write_candidate_manifest(bound_candidate)
     writer.write_json("profile.json", profile)
     started = _now()
@@ -1671,11 +1763,19 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             writer.finalize()
             return 1, _summary(evidence, args.output)
 
-    xadx_tests = _test_xadx(
-        writer,
-        target_family=str(evidence["observed_platform"].get("target_family", "")),
-        profile_name=profile["name"],
-    )
+    if skip_xadx:
+        xadx_tests = [test for test in prior_tests if test.get("kind") == "xadx"]
+        print(
+            f"qualify: skipping XADX ({len(xadx_tests)} prior kernel results kept)",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        xadx_tests = _test_xadx(
+            writer,
+            target_family=str(evidence["observed_platform"].get("target_family", "")),
+            profile_name=profile["name"],
+        )
     evidence["tests"].extend(xadx_tests)
     _report_test_results(xadx_tests)
     writer.write_json("tests.json", evidence["tests"])
@@ -1754,8 +1854,16 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             )
         else:
             bench_context = getattr(args, "bench_context", None) or _SWEEP_BENCH_DEFAULT
+            requested_iterations = getattr(args, "bench_iterations", None)
+            sweep_iterations = (
+                int(requested_iterations) if requested_iterations else None
+            )
             for base in discovered:
-                base["tests"] = _default_tests_for(base, bench_context=bench_context)
+                base["tests"] = _default_tests_for(
+                    base,
+                    bench_context=bench_context,
+                    iterations=sweep_iterations,
+                )
             execution_models = discovered
             summary_note = (
                 f"complete sweep discovered {len(discovered)} models from the "
@@ -1774,6 +1882,26 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         ]
         writer.write_json("profile.json", profile)
         print(f"qualify: {summary_note}", file=sys.stderr, flush=True)
+        if prior_profile and isinstance(prior_profile.get("models"), list):
+            # Keep the original catalog so report.md still covers every model.
+            profile["models"] = prior_profile["models"]
+            writer.write_json("profile.json", profile)
+
+    # Keep prior rerun-tag rows until that model is rewritten. Dropping them at
+    # start made a mid-run kill erase models that had not finished yet (qwen3.5:9b).
+    if prior_models:
+        evidence["models"] = list(prior_models)
+    if prior_tests:
+        evidence["tests"] = [
+            test
+            for test in evidence["tests"]
+            if test.get("kind") in ("native", "xadx")
+        ] + [
+            test
+            for test in prior_tests
+            if test.get("kind") not in ("native", "xadx")
+            and test.get("name") not in ("interruption", "internal-error")
+        ]
 
     resolve = resolve_model_dynamic if is_sweep else resolve_model
     for model in execution_models:
@@ -1798,7 +1926,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 environment=flm_environment,
                 echo=True,
             )
-            evidence["models"].append(model_record)
+            _upsert_model_record(evidence["models"], model_record)
             writer.write_json("models.json", evidence["models"])
             writer.write_json("evidence.json", evidence)
             source = "downloaded" if model_record["pulled"] else "cached"
@@ -1819,7 +1947,8 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     f"created.\n\n{error}\n",
                     encoding="utf-8",
                 )
-            evidence["models"].append(
+            _upsert_model_record(
+                evidence["models"],
                 {
                     "tag": model["tag"],
                     "identity_policy": model["identity_policy"],
@@ -1828,20 +1957,21 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     "status": "fail",
                     "error": str(error),
                     "files": [],
-                }
+                },
             )
-            evidence["tests"].append(
-                {
-                    "model": model["tag"],
-                    "name": "model-resolution",
-                    "kind": "model-resolution",
-                    "status": "fail",
-                    "duration_seconds": 0,
-                    "log": f"logs/pull/{safe_tag}.log",
-                    "error": str(error),
-                }
+            fail_test = {
+                "model": model["tag"],
+                "name": "model-resolution",
+                "kind": "model-resolution",
+                "status": "fail",
+                "duration_seconds": 0,
+                "log": f"logs/pull/{safe_tag}.log",
+                "error": str(error),
+            }
+            evidence["tests"] = _replace_tests_for_model(
+                evidence["tests"], model["tag"], [fail_test]
             )
-            _report_test_results([evidence["tests"][-1]])
+            _report_test_results([fail_test])
             failed = True
         else:
             try:
@@ -1869,7 +1999,9 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                         "error": str(error),
                     }
                 ]
-            evidence["tests"].extend(tests)
+            evidence["tests"] = _replace_tests_for_model(
+                evidence["tests"], model["tag"], tests
+            )
             _report_test_results(tests)
             writer.write_json("tests.json", evidence["tests"])
             failed = any(test["status"] != "pass" for test in tests)

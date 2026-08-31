@@ -1773,6 +1773,7 @@ def test_enumerate_registry_models_classifies_and_pins_identity(tmp_path):
     assert discovered["qwen3:0.6b"]["source"] == "https://hf.example/Qwen3-0.6B-NPU2"
     assert discovered["qwen3:0.6b"]["revision"] == "rev1"
     assert discovered["qwen3:0.6b"]["think"] is True
+    assert discovered["qwen3:0.6b"]["think_toggleable"] is False
     assert discovered["embed-gemma:300m"]["kind"] == "embed"
     assert discovered["embed-gemma:300m"]["identity_policy"] == "content-sha256"
     assert discovered["embed-gemma:300m"]["revision"] is None
@@ -1828,6 +1829,56 @@ def test_resolve_model_dynamic_builds_inventory_without_pins(tmp_path):
     assert record["cache_directory"] == "models/Qwen3-0.6B-NPU2"
     assert [entry["path"] for entry in record["files"]] == ["model.q4nx"]
     assert record["files"][0]["sha256"] == hashlib.sha256(b"weights").hexdigest()
+
+
+def test_resolve_model_dynamic_resumes_undersized_q4nx(monkeypatch, tmp_path):
+    config = _sweep_config(tmp_path)
+    cache = tmp_path / "cache"
+    model_directory = cache / "models" / "Qwen3-0.6B-NPU2"
+    model_directory.mkdir(parents=True)
+    dest = model_directory / "model.q4nx"
+    dest.write_bytes(b"partial")
+    model_info = tmp_path / "model_info.json"
+    model_info.write_text(
+        json.dumps(
+            {
+                "qwen3:0.6b": [
+                    {"path": "model.q4nx", "size": len(b"complete-weights")}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    model = next(
+        entry
+        for entry in models.enumerate_registry_models(config)
+        if entry["tag"] == "qwen3:0.6b"
+    )
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append([str(part) for part in argv])
+        if "curl" in str(argv[0]) or str(argv[0]).endswith("curl.exe"):
+            dest.write_bytes(b"complete-weights")
+        return _result(returncode=0)
+
+    monkeypatch.setattr(models, "run_command", fake_run)
+    record, commands = models.resolve_model_dynamic(
+        model,
+        flm=tmp_path / "flm",
+        config_path=config,
+        model_cache=cache,
+        pull_log=tmp_path / "pull.log",
+        offline=False,
+        no_pull=False,
+        environment={"FLM_MODELINFO_PATH": str(model_info)},
+    )
+    assert record["status"] == "pass"
+    assert record["pulled"] is True
+    assert dest.read_bytes() == b"complete-weights"
+    assert any("curl" in command[0] for command in seen)
+    assert not any(command[:2] == [str(tmp_path / "flm"), "pull"] for command in seen)
+    assert len(commands) == 2  # curl resume + flm check
 
 
 def test_resolve_model_dynamic_reports_missing_required_file(monkeypatch, tmp_path):
@@ -1897,7 +1948,12 @@ def test_default_tests_for_scopes_by_kind():
     assert tuple(single["setup_commands"]) == runner._SWEEP_GREEDY_SETUP
     assert tuple(multi["setup_commands"]) == runner._SWEEP_GREEDY_SETUP_MULTI
     assert "/set gen-lim 16" in single["setup_commands"]
-    assert "/set gen-lim 64" in multi["setup_commands"]
+    assert "/set gen-lim 256" in multi["setup_commands"]
+    think_on = runner._default_tests_for(
+        {"kind": "chat", "footprint": 3.1, "think": True, "think_toggleable": True}
+    )
+    assert think_on[0]["setup_commands"][0] == "/think"
+    assert think_on[1]["setup_commands"][0] == "/think"
     # 8k is the default complete-sweep benchmark stage.
     assert runner._SWEEP_BENCH_DEFAULT == "8k"
     assert bench["name"] == "context-8k"
@@ -2402,6 +2458,30 @@ def test_serve_probe_embed_parses_port_and_reports_throughput(tmp_path):
     assert "embedding dim=4" in probe["detail"]
 
 
+def test_serve_probe_embed_throughput_when_usage_missing(tmp_path):
+    script = tmp_path / "fake_serve_no_usage.py"
+    script.write_text(
+        _FAKE_SERVE_SERVER.replace(
+            '"usage": {"prompt_tokens": 12},',
+            "",
+        ),
+        encoding="utf-8",
+    )
+    result, probe = serve_probe(
+        [sys.executable, str(script)],
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="embed",
+        model="embed-gemma:300m",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+    )
+    assert probe["ok"] is True
+    assert result.returncode == 0
+    assert probe["metrics"]["encode_toks_per_s"] > 0
+    assert probe["metrics"]["input_tokens"] > 0
+
+
 def test_serve_probe_asr_transcribes_multipart_and_matches_phrase(tmp_path):
     import wave
 
@@ -2904,10 +2984,12 @@ def test_all_models_is_mutually_exclusive_with_profile():
     # The parser leaves --bench-context unset; the runner resolves the per-mode
     # default (8k for --all-models). 1k/4k/8k are selectable.
     assert args.bench_context is None
-    assert (
-        parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context
-        == "4k"
+    assert parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context == "4k"
+    restricted = parser.parse_args(
+        ["--all-models", "--models", "qwen3:0.6b,qwen3:4b", "--skip-xadx"]
     )
+    assert restricted.models == "qwen3:0.6b,qwen3:4b"
+    assert restricted.skip_xadx is True
     with pytest.raises(SystemExit):
         parser.parse_args(["--all-models", "--bench-context", "16k"])
 
