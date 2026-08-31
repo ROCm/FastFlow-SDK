@@ -28,11 +28,11 @@ from build_tools.release_policy import (
 )
 from build_tools.rocm_npu_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION,
-    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     _binding_bootstrap,
     _is_core_aie_native,
+    _rewrite_configure_install_path,
     binding_wheel_tag,
     build_compiler_wheel_family,
     compiler_core_shared_library_names,
@@ -42,6 +42,9 @@ from build_tools.rocm_npu_compiler_wheels import (
     verify_compiler_binding_stable_abi,
     verify_compiler_wheel_path_references,
     verify_windows_compiler_wheels,
+)
+from build_tools.rocm_npu_wheel_common import (
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
 )
 from build_tools.rocm_npu_wheel_release import _copy_release_wheel
 from build_tools.runtime_wheel_staging import _write_runtime_module
@@ -129,6 +132,16 @@ class TestRocmNpuCompilerWheels:
         (aie / "_mlir_libs" / "AIEAggregateCAPI.dll").write_bytes(b"MZlibrary")
         (aie / "_mlir_libs" / "MLIRPythonSupport-mlir.dll").write_bytes(b"MZsupport")
         (aie / "_mlir_libs" / "MLIRPythonSupport-mlir.lib").write_bytes(b"archive")
+        (aie / "utils").mkdir(parents=True, exist_ok=True)
+        (aie / "utils" / "configure.py").write_text(
+            "import os\n"
+            "\n"
+            "def install_path():\n"
+            "    path = os.path.dirname(os.path.realpath(__file__))\n"
+            '    path = os.path.join(path, "..", "..", "..")\n'
+            "    return os.path.realpath(path)\n",
+            encoding="utf-8",
+        )
         return python_root
 
     def metadata(self, wheel: Path):
@@ -387,8 +400,13 @@ class TestRocmNpuCompilerWheels:
         assert (python_root / "aie" / "__init__.py").read_text(encoding="utf-8") == ""
         with zipfile.ZipFile(wheel) as archive:
             init = archive.read("aie/__init__.py").decode("utf-8")
+            configure = archive.read("aie/utils/configure.py").decode("utf-8")
         assert "activate_iron_host" in init
         assert "except ImportError:" in init
+        assert 'os.getenv("ROCM_NPU_COMPILER_PREFIX")' in configure
+        assert "ROCM_NPU_COMPILER_PREFIX" not in (
+            python_root / "aie" / "utils" / "configure.py"
+        ).read_text(encoding="utf-8")
         assert "rocm-npu-runtime" not in (metadata.get_all("Requires-Dist") or ())
 
     def test_binding_bootstrap_skips_iron_host_when_runtime_is_absent(
@@ -497,6 +515,60 @@ class TestRocmNpuCompilerWheels:
         )
         result = self._run_import_aie_probe(site, probe)
         assert result.returncode == 0, result.stderr
+
+    def test_binding_stage_rewrites_install_path_without_mutating_source(
+        self, tmp_path
+    ):
+        root = tmp_path
+        product = self.make_product(root)
+        python_root = self.make_python_root(root)
+        source = python_root / "aie" / "utils" / "configure.py"
+        original = source.read_text(encoding="utf-8")
+        tree = stage_compiler_bindings(
+            product,
+            python_root,
+            root / "stage",
+            version="0.1.0.dev1",
+            platform_tag="win_amd64",
+        )
+        rewritten = (tree / "aie" / "utils" / "configure.py").read_text(
+            encoding="utf-8"
+        )
+        assert 'os.getenv("ROCM_NPU_COMPILER_PREFIX")' in rewritten
+        assert source.read_text(encoding="utf-8") == original
+        _rewrite_configure_install_path(tree / "aie" / "utils" / "configure.py")
+        assert (tree / "aie" / "utils" / "configure.py").read_text(
+            encoding="utf-8"
+        ) == rewritten
+
+    def test_rewrite_install_path_requires_the_upstream_function(self, tmp_path):
+        configure = tmp_path / "configure.py"
+        configure.write_text("peano_install_dir = 'peano'\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="function missing"):
+            _rewrite_configure_install_path(configure)
+
+    def test_rewrite_install_path_accepts_crlf(self, tmp_path):
+        configure = tmp_path / "configure.py"
+        configure.write_bytes(
+            b"import os\r\n\r\ndef install_path():\r\n    return '.'\r\n"
+        )
+        _rewrite_configure_install_path(configure)
+        text = configure.read_text(encoding="utf-8")
+        assert 'os.getenv("ROCM_NPU_COMPILER_PREFIX")' in text
+        assert "return '.'" in text
+
+    def test_binding_stage_skips_missing_configure_py(self, tmp_path):
+        root = tmp_path
+        python_root = self.make_python_root(root)
+        (python_root / "aie" / "utils" / "configure.py").unlink()
+        tree = stage_compiler_bindings(
+            self.make_product(root),
+            python_root,
+            root / "stage-no-configure",
+            version="0.1.0.dev1",
+            platform_tag="win_amd64",
+        )
+        assert not (tree / "aie" / "utils" / "configure.py").is_file()
 
     def test_binding_stage_rejects_cpython_specific_extension(self, tmp_path):
         root = tmp_path

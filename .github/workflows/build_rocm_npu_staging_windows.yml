@@ -417,6 +417,16 @@ jobs:
             --consumer-only \
             --consumer-e2e
 
+      # py3-none-any: one wheel, one interpreter. Install into the 3.12 compiler
+      # verify venv so we do not pip-install compiler-core a second time. 3.13/3.14
+      # already covered the abi3 compiler; ops is the same .py files.
+      - name: Package and verify ops wheel
+        run: |
+          .venv/Scripts/python.exe dev.py package-ops-wheels
+          .venv/Scripts/python.exe dev.py verify-ops-wheels \
+            --venv build/compiler-wheel-verify-312 \
+            --reuse-venv
+
       - name: Attest Windows compiler wheels
         if: ${{ inputs.attest_wheels }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1

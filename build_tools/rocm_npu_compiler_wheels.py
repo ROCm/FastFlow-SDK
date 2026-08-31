@@ -36,6 +36,7 @@ from build_tools.native_dependencies import (
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_PACKAGE,
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     COMPILER_PACKAGE,
@@ -90,13 +91,6 @@ COMPILER_TOOLS = (
 # deterministic DEFLATE wheels while avoiding most of zlib's single-threaded
 # search cost; artifact upload already skips a second compression pass.
 COMPILER_WHEEL_COMPRESSION_LEVEL = 1
-COMPILER_BINDINGS_RUNTIME_REQUIREMENTS = (
-    "aiofiles ==25.1.0",
-    "cloudpickle ==3.1.2",
-    "ml-dtypes ==0.6.0",
-    "numpy ==2.4.6",
-    "rich ==15.0.0",
-)
 CORE_AIE_NATIVE_PREFIXES = (
     "AIEAggregateCAPI",
     "libAIEAggregateCAPI",
@@ -343,6 +337,35 @@ def _binding_bootstrap() -> str:
     )
 
 
+def _rewrite_configure_install_path(configure_py: Path) -> None:
+    """Point ``aie.utils.configure.install_path`` at the split-wheel prefix.
+
+    Upstream walks three directories up from ``aie/utils``, which is the
+    mlir-aie install prefix when ``aie`` lives at ``$PREFIX/python/aie``. The
+    ROCm NPU bindings wheel puts ``aie`` at site-packages root, so that walk
+    lands on the venv ``Lib`` / ``lib/pythonX.Y`` directory. C++ kernel
+    compiles then fail looking for headers in ``<venv>/Lib/include``. Headers
+    actually live in ``rocm_npu_compiler/include``, which
+    ``ROCM_NPU_COMPILER_PREFIX`` already names.
+    """
+    text = configure_py.read_text(encoding="utf-8").replace("\r\n", "\n")
+    if 'os.getenv("ROCM_NPU_COMPILER_PREFIX")' in text:
+        return
+    needle = "def install_path():\n"
+    if needle not in text:
+        raise RuntimeError(
+            "cannot rewrite aie.utils.configure.install_path: "
+            f"function missing in {configure_py}"
+        )
+    replacement = (
+        "def install_path():\n"
+        '    prefix = os.getenv("ROCM_NPU_COMPILER_PREFIX")\n'
+        '    if prefix and os.path.isdir(os.path.join(prefix, "include")):\n'
+        "        return os.path.realpath(prefix)\n"
+    )
+    configure_py.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+
+
 def _common_manifest(
     source_manifest: dict[str, object],
     *,
@@ -472,12 +495,15 @@ def stage_compiler_bindings(
         if path.suffix.casefold() in (".a", ".lib") or _is_core_aie_native(path):
             continue
         destination = tree / "aie" / relative
-        # This file receives the wheel bootstrap below; all other staged inputs
-        # remain immutable and can safely share storage with the source product.
-        if relative == Path("__init__.py"):
+        # These files are rewritten after staging; copy so the source product
+        # (and hardlinked siblings) stay immutable.
+        if relative in (Path("__init__.py"), Path("utils") / "configure.py"):
             _copy_file(path, destination)
         else:
             _stage_file(path, destination)
+    configure_py = tree / "aie" / "utils" / "configure.py"
+    if configure_py.is_file():
+        _rewrite_configure_install_path(configure_py)
     init = tree / "aie" / "__init__.py"
     init.write_text(
         (init.read_text(encoding="utf-8") if init.is_file() else "")

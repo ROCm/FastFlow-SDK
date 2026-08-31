@@ -157,6 +157,16 @@ For example:
 python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029" "rocm-npu-compiler==0.1.0.dev202608250029" "rocm-npu-runtime==0.1.0.dev202608250029"
 ```
 
+### Install the IRON operator library
+
+`rocm-npu-ops` is the IRON operator library (`from iron.operators import ElementwiseAdd`).
+It depends on `rocm-npu-compiler` at the same version, so a compiler install
+above is enough, or this command will pull the compiler if it is missing:
+
+```bash
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-ops==<version>"
+```
+
 If you need bleeding-edge `iron-tools` features, you may also choose to install
 directly from the [upstream repository](https://github.com/Xilinx/mlir-aie)
 instead of the vendored `rocm-npu-compiler` package; see instructions there.

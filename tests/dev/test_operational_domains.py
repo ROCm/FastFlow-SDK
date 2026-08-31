@@ -19,6 +19,7 @@ from build_tools import (
     npu_prereqs,
     npu_test_package,
     paths,
+    rocm_npu_ops_wheels,
 )
 from build_tools.dev import compiler_build, device_testing, runtime_build, sources
 
@@ -68,6 +69,12 @@ class TestPathOwnership:
         )
         assert compiler_wheels.COMPILER_WHEEL_STAGE == (
             paths.BUILD / "rocm-npu-compiler-wheel-stage"
+        )
+        assert rocm_npu_ops_wheels.OPS_WHEEL_VENV == (
+            paths.BUILD / "rocm-npu-ops-wheel-venv"
+        )
+        assert rocm_npu_ops_wheels.OPS_WHEEL_ARTIFACTS == (
+            compiler_product.COMPILER_ARTIFACTS
         )
         assert npu_prereqs.NPU_PREREQ_DIR == paths.BUILD / "artifacts"
         assert npu_test_package.NPU_TEST_PACKAGE_STAGE == (

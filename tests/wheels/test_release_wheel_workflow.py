@@ -77,6 +77,31 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert 'rm -rf "${target}"' in section
         assert "ROCM_NPU_INSTALL_TARGET" not in section
 
+    def test_release_compiler_and_ops_resolution_uses_tested_helper(self):
+        workflow = read_workflow("release_rocm_npu_wheels.yml")
+        compiler_resolution = workflow.split(
+            "- name: Resolve compiler core and bindings", 1
+        )[1].split("- name: Resolve ops wheel", 1)[0]
+        ops_resolution = workflow.split("- name: Resolve ops wheel", 1)[1].split(
+            "- name: Upload release payload", 1
+        )[0]
+        assert (
+            "python -m build_tools.resolve_release_wheel" in compiler_resolution
+        )
+        assert "--product compiler" in compiler_resolution
+        assert '"${compiler_meta}"' in compiler_resolution
+        assert "--find-links release" in compiler_resolution
+        assert "--no-index" not in compiler_resolution
+        assert "COMPILER_BINDINGS_RUNTIME_REQUIREMENTS" not in compiler_resolution
+        assert "--abi abi3" not in compiler_resolution
+        assert (
+            "python -m build_tools.resolve_release_wheel" in ops_resolution
+        )
+        assert "--product ops" in ops_resolution
+        assert '"${ops_wheel}"' in ops_resolution
+        assert "rocm-npu-ops==${ROCM_NPU_PACKAGE_VERSION}" not in ops_resolution
+        assert "--abi abi3" not in ops_resolution
+
     def test_release_platform_jobs_validate_their_own_qualification_wheels(self):
         ci = read_workflow("ci.yml")
         assert ci.count(
@@ -219,23 +244,13 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "--expected-wheel-tag py3-none-any" in workflow
         assert "--expected-wheel-tag cp312-abi3-manylinux_2_28_x86_64" in workflow
         assert "--expected-wheel-tag cp312-abi3-win_amd64" in workflow
-        assert "--abi abi3" in workflow
         assert "-cp313-" not in workflow
         assert "-cp314-" not in workflow
         assert "--platform linux_x86_64" in workflow
         assert "--platform manylinux_2_28_x86_64" in workflow
         assert "python -m build_tools.verify_qualification_dependencies" in workflow
-        assert '"rocm-npu-compiler-bindings": version' in workflow
+        assert "python -m build_tools.resolve_release_wheel" in workflow
         assert "rm -rf wheelhouse archives qualification-parity" in workflow
-        compiler_resolution = workflow.split(
-            "- name: Resolve compiler core and bindings", 1
-        )[1].split("- name: Upload release payload", 1)[0]
-        assert "--no-index" not in compiler_resolution
-        assert "--no-cache-dir" in compiler_resolution
-        assert '--abi "${python_tag}"' in compiler_resolution
-        assert '"${compiler_meta}"' in compiler_resolution
-        assert 'rm -rf "${target}"' in compiler_resolution
-        assert "COMPILER_BINDINGS_RUNTIME_REQUIREMENTS" in compiler_resolution
         assert (
             "ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd"
             in workflow
@@ -338,6 +353,13 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "dev.py package-compiler-wheels" in workflow
             assert "--product build/rocm-npu-compiler-product" in workflow
             assert "dev.py verify-compiler-wheels" in workflow
+            assert "dev.py package-ops-wheels" in workflow
+            assert "dev.py verify-ops-wheels" in workflow
+            assert "Package and verify ops wheel" in workflow
+            assert "--reuse-venv" in workflow
+            assert "ops-wheel-verify-313" not in workflow
+            assert "ops-wheel-verify-314" not in workflow
+            assert "--skip-compile" not in workflow
             assert "actions/attest-build-provenance@" in workflow
             assert "ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}" in workflow
             assert workflow.count("--consumer-only") == 2
@@ -350,6 +372,8 @@ class TestRocmNpuReleaseWheelWorkflow:
         linux_workflow = read_workflow("build_rocm_npu_staging_linux.yml")
         assert "actions/setup-python@" not in linux_workflow
         assert "--require-hashes -r requirements/packaging-linux.lock" in linux_workflow
+        assert "build/artifacts/rocm_npu_ops*.whl" in linux_workflow
+        assert "subject-path:" in linux_workflow
         for tag in ("cp313-cp313", "cp314-cp314"):
             assert f"/opt/python/{tag}/bin/python" in linux_workflow
 
@@ -362,6 +386,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert (
             "subject-path: build/artifacts/rocm_npu_compiler_*.whl" in windows_workflow
         )
+        assert "build/artifacts/rocm_npu_ops*.whl" not in windows_workflow
         assert "{core,bindings}" not in windows_workflow
 
     def _assert_platform_workflow_contract(self, platform: str):
