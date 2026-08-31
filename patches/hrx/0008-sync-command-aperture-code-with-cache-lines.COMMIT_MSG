@@ -1,0 +1,62 @@
+amdxdna: sync command-aperture code with cache lines
+
+`SyncCommandApertureCode` always publishes staged path-B control code with an
+allocation-level `D3DKMTInvalidateCache`. On Windows Strix Halo that call costs
+~303us for the ~7.7 KiB range a single dispatch stages -- more than 25x a
+`D3DKMTSubmitCommandToHwQueue` (~11us) on the same queue -- because the miniport
+services the transition over the whole 64 MiB aperture allocation rather than
+the requested `Offset`/`Length`. At ~13.7k single dispatches per 1k-token MoE
+prefill that is 4.2s of the 22s TTFT.
+
+56b572e8c ("amdxdna: reduce Windows Path-B dispatch synchronization") already
+established the policy for this: match XRT by synchronizing mapped ranges below
+the LLC with cache-line operations and keeping allocation-level KMT invalidation
+for larger ranges. It applied that to buffers and explicitly deferred the
+command aperture ("Command-aperture invalidation, ownership transitions, and
+opcode-9 publication remain unchanged"). Apply it to the aperture too. Control
+code and chain descriptors are always far below the LLC, so they take the
+cache-line path; the KMT fallback stays for larger ranges and for apertures
+without a CPU mapping.
+
+This does not weaken either direction of the publication. The staged bytes
+already reach memory through the non-temporal stores and `sfence` in
+`CopyAndCommitPathBCodeWrites`, and the NPU-side instruction cache is still
+invalidated by the opcode-9 aperture-sync submit that follows every stage.
+`SyncSmallBufferCpuCache` is generalized to `SyncMappedCpuCacheRange` so both
+call sites share one implementation.
+
+This only pays off with 0007 applied. Without it, per-dispatch control-code BO
+allocations leave paging fences outstanding, every hardware-queue submit drains
+them first, and removing the KMT transition merely relocates the same wait to
+the next submit -- measured 38.65 -> 39.58 prefill tok/s, i.e. noise. With 0007
+the fences are gone and the transition cost is exposed and removable.
+
+Measured on Windows Strix Halo (1022:17f0), driver 32.0.203.314, FastFlowLM 1k
+bench, interleaved A/B in one binary from an idle-verified device, on top of
+0007:
+
+| model                  | prefill tok/s   | TTFT s          |
+|------------------------|-----------------|-----------------|
+| qwen3.6-moe:35b-a3b    | 44.84 -> 54.13  | 21.78 -> 18.05  |
+
+For reference, XRT on the same host and model reaches 58.36 prefill tok/s at
+16.8s TTFT, so this closes the backend gap on MoE prefill to 1.08x, in line with
+the 1.174x geomean HRX/XRT prefill ratio measured across 28 dense chat models.
+Best single idle-start measurement was 55.88 tok/s (1.04x); under a sustained
+soak MoE settles to 49.7-52.2 tok/s (1.12-1.17x) as the device drifts down on
+clocks, and `qwen3.5:0.8b` at 4k drifts by the same proportion, so the range is
+device thermal state rather than backend behaviour.
+
+Note: this crosses the boundary 56b572e8c deliberately drew around the command
+aperture. The argument above is derived from the code and from measurement, not
+from firmware documentation; if NPU-side coherence for aperture code turns out
+to depend on the KMT transition rather than on the opcode-9 publication, this
+patch is the one to drop -- 0007 stands alone and keeps most of the MoE win.
+
+Apply on top of: bb10dfb81 ("amdxdna: treat Windows UMDRIVERPRIVATE as adapter
+info"), with 0004-0007 applied.
+
+Tested: Windows Strix Halo (1022:17f0), driver 32.0.203.314. `dev.py
+test-fastflowlm` smoke PASS with coherent multi-turn output; qwen3.6-moe:35b-a3b
+1k, qwen3.5:0.8b 1k+4k, qwen3:0.6b 1k, gemma4-it:e2b 1k all PASS with zero `ert
+state 8` timeouts.

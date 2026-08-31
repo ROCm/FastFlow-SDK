@@ -1,0 +1,62 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc b/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc
+index 19006fbec..31272108d 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc
++++ b/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc
+@@ -223,15 +223,16 @@ uint64_t LastLevelCacheSize() {
+   return cache_size;
+ }
+ 
+-bool SyncSmallBufferCpuCache(const Buffer& buffer, uint64_t offset,
+-                             uint64_t length, Error* out_error) {
++bool SyncMappedCpuCacheRange(void* mapping, uint64_t mapping_size,
++                             uint64_t offset, uint64_t length,
++                             const char* range_name, Error* out_error) {
+   if (length == 0) return true;
+-  if (!buffer.cpu_ptr || offset > buffer.size || length > buffer.size - offset) {
+-    SetError(out_error, "CPU BO sync range is out of bounds");
++  if (!mapping || offset > mapping_size || length > mapping_size - offset) {
++    SetErrorFormat(out_error, "%s sync range is out of bounds", range_name);
+     return false;
+   }
+   constexpr uintptr_t kCacheLineSize = 64;
+-  uintptr_t line = reinterpret_cast<uintptr_t>(buffer.cpu_ptr) + offset;
++  uintptr_t line = reinterpret_cast<uintptr_t>(mapping) + offset;
+   const uintptr_t end = line + length;
+   _mm_lfence();
+   if (line & (kCacheLineSize - 1)) {
+@@ -245,6 +246,12 @@ bool SyncSmallBufferCpuCache(const Buffer& buffer, uint64_t offset,
+   return true;
+ }
+ 
++bool SyncSmallBufferCpuCache(const Buffer& buffer, uint64_t offset,
++                             uint64_t length, Error* out_error) {
++  return SyncMappedCpuCacheRange(buffer.cpu_ptr, buffer.size, offset, length,
++                                 "CPU BO", out_error);
++}
++
+ enum class CpuCacheOperation {
+   writeback,
+   invalidate,
+@@ -1561,6 +1568,22 @@ bool SyncCommandApertureCode(const KmtApi& api, const Device& device,
+     SetError(out_error, "SyncCommandApertureCode called before aperture setup");
+     return false;
+   }
++  // Same policy as SyncBuffer: XRT synchronizes mapped ranges smaller than the
++  // LLC with cache-line operations and keeps allocation-level KMT invalidation
++  // only for larger ranges. Command code and chain descriptors are always far
++  // below the LLC, while a KMT transition on the aperture costs ~300us -- more
++  // than an order of magnitude above a hardware-queue submit -- because the
++  // driver services it over the whole 64MiB allocation rather than the
++  // requested range. The written bytes already reach memory via the
++  // non-temporal stores and fence in CopyAndCommitPathBCodeWrites, and the NPU
++  // side is still invalidated by the opcode-9 publication that follows.
++  const uint64_t last_level_cache_size = LastLevelCacheSize();
++  if (aperture.gpu_cpu_ptr && last_level_cache_size &&
++      length < last_level_cache_size) {
++    return SyncMappedCpuCacheRange(aperture.gpu_cpu_ptr, aperture.gpu_va_size,
++                                   offset, length, "command aperture code",
++                                   out_error);
++  }
+   D3DKMT_INVALIDATECACHE invalidate = {};
+   invalidate.hDevice = device.device;
+   invalidate.hAllocation = aperture.gpu_allocation;

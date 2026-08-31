@@ -1,0 +1,81 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc b/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc
+index c0ddb6d4b..19006fbec 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc
++++ b/runtime/src/iree/hal/drivers/amdxdna/shim/windows/mcdm/kmt_api.cc
+@@ -1545,6 +1545,10 @@ bool SyncBuffer(const KmtApi& api, const Device& device, const Buffer& buffer,
+   return CheckStatus("D3DKMTInvalidateCache", status, out_error);
+ }
+ 
++bool LockCommandApertureGpuMapping(const KmtApi& api, const Device& device,
++                                   CommandAperture* aperture,
++                                   Error* out_error);
++
+ bool LockCommandApertureGpuAfterBootstrap(const KmtApi& api,
+                                           const Device& device,
+                                           CommandAperture* aperture,
+@@ -1614,7 +1618,9 @@ bool RefreshCommandApertureGpuMapping(const KmtApi& api, const Device& device,
+   // The path-B code BO is written through the host mapping after bootstrap.
+   // Pair the cache invalidate with a lock transition so the MCDM miniport sees
+   // the freshly staged instruction bytes before the opcode-3 submit consumes
+-  // the aperture.
++  // the aperture. Callers have already invalidated the range they wrote, and
++  // XRT invalidates the whole aperture only once after the opcode-2 bootstrap
++  // submit, so the transition must not repeat that allocation-wide invalidate.
+   if (aperture->gpu_cpu_ptr) {
+     D3DKMT_UNLOCK2 unlock = {};
+     unlock.hDevice = device.device;
+@@ -1627,7 +1633,7 @@ bool RefreshCommandApertureGpuMapping(const KmtApi& api, const Device& device,
+     aperture->gpu_cpu_ptr = nullptr;
+     aperture->code_cpu_ptr = nullptr;
+   }
+-  return LockCommandApertureGpuAfterBootstrap(api, device, aperture, out_error);
++  return LockCommandApertureGpuMapping(api, device, aperture, out_error);
+ }
+ 
+ bool RefreshBufferCpuMapping(const KmtApi& api, const Device& device,
+@@ -2127,14 +2133,12 @@ bool EnsureCommandApertureGpuMapping(const KmtApi& api, const Device& device,
+   return true;
+ }
+ 
+-bool LockCommandApertureGpuAfterBootstrap(const KmtApi& api,
+-                                          const Device& device,
+-                                          CommandAperture* aperture,
+-                                          Error* out_error) {
++bool LockCommandApertureGpuMapping(const KmtApi& api, const Device& device,
++                                   CommandAperture* aperture,
++                                   Error* out_error) {
+   if (!aperture || !aperture->gpu_allocation) {
+     SetError(out_error,
+-             "LockCommandApertureGpuAfterBootstrap called before aperture "
+-             "setup");
++             "command aperture GPU lock called before aperture setup");
+     return false;
+   }
+   if (aperture->gpu_cpu_ptr) return true;
+@@ -2152,13 +2156,25 @@ bool LockCommandApertureGpuAfterBootstrap(const KmtApi& api,
+         static_cast<uint8_t*>(aperture->gpu_cpu_ptr) +
+         aperture->code_offset;
+   }
++  return true;
++}
++
++bool LockCommandApertureGpuAfterBootstrap(const KmtApi& api,
++                                          const Device& device,
++                                          CommandAperture* aperture,
++                                          Error* out_error) {
++  const bool was_locked = aperture && aperture->gpu_cpu_ptr;
++  if (!LockCommandApertureGpuMapping(api, device, aperture, out_error)) {
++    return false;
++  }
++  if (was_locked) return true;
+ 
+   D3DKMT_INVALIDATECACHE invalidate = {};
+   invalidate.hDevice = device.device;
+   invalidate.hAllocation = aperture->gpu_allocation;
+   invalidate.Offset = 0;
+   invalidate.Length = aperture->gpu_va_size;
+-  status = api.invalidate_cache(&invalidate);
++  NTSTATUS status = api.invalidate_cache(&invalidate);
+   return CheckStatus("D3DKMTInvalidateCache(command aperture)", status,
+                      out_error);
+ }

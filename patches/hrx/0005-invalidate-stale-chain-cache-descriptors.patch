@@ -1,0 +1,166 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+index 75998bc96..18a42e948 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+@@ -741,6 +741,15 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_start_npu_cmd(
+                             "changed unexpectedly");
+   }
+   memcpy(cached->ctrl_words, dst, txn->count * sizeof(*cached->ctrl_words));
++  // Keep the descriptor describing the control words just realized above: the
++  // constants are a dispatch input baked into them, so a stale copy would let a
++  // later exact descriptor match resubmit this entry unchanged for a dispatch
++  // that needs different control code. The template match precondition
++  // guarantees the two constant blocks are the same size.
++  if (fresh->src_constant_count != 0) {
++    memcpy(cached->src_constants, fresh->src_constants,
++           fresh->src_constant_count);
++  }
+   memcpy(cached->binding_buffers, fresh->binding_buffers,
+          fresh->binding_count * sizeof(*cached->binding_buffers));
+   memcpy(cached->binding_device_addrs, fresh->binding_device_addrs,
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c
+index 0f27f79b6..13586a8f6 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c
+@@ -258,6 +258,7 @@ static void iree_hal_amdxdna_chain_cmd_free_deferred(
+ void iree_hal_amdxdna_chain_cmd_initialize(iree_hal_amdxdna_chain_cmd_t* cmd) {
+   memset(cmd, 0, sizeof(*cmd));
+   cmd->native_bindings_current = true;
++  cmd->descriptor_describes_contents = true;
+ }
+ 
+ void iree_hal_amdxdna_chain_cmd_deinitialize(
+@@ -730,6 +731,22 @@ static bool iree_hal_amdxdna_chain_cmd_device_signature_matches(
+              lhs->binding_lengths, rhs->binding_lengths, lhs->binding_count);
+ }
+ 
++// True when both commands run the same control program: the same executable
++// entry point run, or (for commands with no immutable source) byte-identical
++// control code and patch table.
++static bool iree_hal_amdxdna_chain_cmd_same_control_program(
++    const iree_hal_amdxdna_chain_cmd_t* lhs,
++    const iree_hal_amdxdna_chain_cmd_t* rhs) {
++  if (lhs->src_executable_identity != 0 || rhs->src_executable_identity != 0) {
++    return lhs->src_executable_identity == rhs->src_executable_identity &&
++           lhs->src_entry_point == rhs->src_entry_point &&
++           lhs->src_run_ordinal == rhs->src_run_ordinal;
++  }
++  return iree_hal_amdxdna_u32_list_equal(lhs->src_asm_inst,
++                                         rhs->src_asm_inst) &&
++         iree_hal_amdxdna_u32_list_equal(lhs->src_patches, rhs->src_patches);
++}
++
+ static bool iree_hal_amdxdna_chain_cmd_shape_matches(
+     const iree_hal_amdxdna_chain_cmd_t* lhs,
+     const iree_hal_amdxdna_chain_cmd_t* rhs) {
+@@ -783,9 +800,13 @@ bool iree_hal_amdxdna_chain_command_cache_shape_matches(
+   return true;
+ }
+ 
++// `lhs` is the cached command and `rhs` the freshly recorded one: a descriptor
++// match means "resubmit the cached entry unchanged", so it is only sound while
++// the cached descriptor still describes the entry's realized contents.
+ bool iree_hal_amdxdna_chain_cmd_descriptor_matches(
+     const iree_hal_amdxdna_chain_cmd_t* lhs,
+     const iree_hal_amdxdna_chain_cmd_t* rhs) {
++  if (!lhs->descriptor_describes_contents) return false;
+   const bool same_immutable_source =
+       lhs->src_executable_identity != 0 &&
+       lhs->src_executable_identity == rhs->src_executable_identity &&
+@@ -838,9 +859,14 @@ bool iree_hal_amdxdna_chain_command_cache_descriptor_matches(
+   return true;
+ }
+ 
++// As with iree_hal_amdxdna_chain_cmd_descriptor_matches, `lhs` is the cached
++// command. A template match re-realizes the control code from `rhs`'s template,
++// but only the cached command's `src_*` template is retained afterwards, so the
++// cached descriptor must still be the one its contents came from.
+ bool iree_hal_amdxdna_chain_cmd_descriptor_template_matches(
+     const iree_hal_amdxdna_chain_cmd_t* lhs,
+     const iree_hal_amdxdna_chain_cmd_t* rhs) {
++  if (!lhs->descriptor_describes_contents) return false;
+   const bool same_immutable_source =
+       lhs->src_executable_identity != 0 &&
+       lhs->src_executable_identity == rhs->src_executable_identity &&
+@@ -961,6 +987,23 @@ iree_status_t iree_hal_amdxdna_update_cached_chain_cmd(
+     cached->native_bindings_current = true;
+     if (out_rebound) *out_rebound = true;
+   }
++  // Keep the descriptor honest about what the command now holds. A shape match
++  // does not require the same control program, so the ctrl_words realized above
++  // may have come from a template this command's cloned `src_*` descriptor does
++  // not describe. Refresh the constants in place when they fit, and retire the
++  // descriptor whenever anything else about it went stale, so descriptor-keyed
++  // reuse cannot resubmit this entry unchanged for a dispatch that needs
++  // different control code.
++  const bool constants_refreshed =
++      cached->src_constant_count == fresh->src_constant_count;
++  if (constants_refreshed && fresh->src_constant_count != 0) {
++    memcpy(cached->src_constants, fresh->src_constants,
++           fresh->src_constant_count);
++  }
++  if (!constants_refreshed ||
++      !iree_hal_amdxdna_chain_cmd_same_control_program(cached, fresh)) {
++    cached->descriptor_describes_contents = false;
++  }
+   memcpy(cached->binding_buffers, fresh->binding_buffers,
+          fresh->binding_count * sizeof(*cached->binding_buffers));
+   memcpy(cached->binding_device_addrs, fresh->binding_device_addrs,
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h
+index 75504e22c..a538b427c 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h
+@@ -82,6 +82,12 @@ typedef struct iree_hal_amdxdna_chain_cmd_t {
+   // child command still holds older bound-buffer pointers. Safe until the next
+   // packet rewrite, which must rebind before BO-table generation dereferences.
+   bool native_bindings_current;
++  // False once an in-place rewrite realized control code from a control program
++  // other than the one the `src_*` template above was cloned from. The realized
++  // ctrl_words are still correct, but the descriptor no longer describes them,
++  // so descriptor-keyed reuse (which resubmits the entry unchanged) must not
++  // match this command. Content-keyed reuse compares ctrl_words and stays safe.
++  bool descriptor_describes_contents;
+ } iree_hal_amdxdna_chain_cmd_t;
+ 
+ // A contiguous run of dispatches that share one native queue. Flushed as one
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache_test.cc b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache_test.cc
+index 1596bc61c..a026144d6 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache_test.cc
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache_test.cc
+@@ -355,6 +355,36 @@ TEST(ChainCommandCacheTest,
+           &entry, &different_run_group, /*max_slots=*/24));
+ }
+ 
++// A shape-match rewrite can realize control code from a program the cached
++// command's descriptor was not cloned from, which retires that descriptor. Both
++// descriptor paths reuse the cached descriptor as the source of truth for the
++// control code (one resubmits the entry unchanged, the other re-realizes from
++// the retained template), so neither may match a retired descriptor. The
++// content-keyed paths compare the realized words and stay usable.
++TEST(ChainCommandCacheTest, RetiredDescriptorOnlyMatchesByContent) {
++  auto cached_cmd = MakeCmd(FakeBuffer(0x10), /*device_addr=*/0x80000000);
++  auto fresh_cmd = MakeCmd(FakeBuffer(0x10), /*device_addr=*/0x80000000);
++  cached_cmd.src_executable_identity = 7;
++  fresh_cmd.src_executable_identity = 7;
++  cached_cmd.src_entry_point = 2;
++  fresh_cmd.src_entry_point = 2;
++  cached_cmd.src_run_ordinal = 3;
++  fresh_cmd.src_run_ordinal = 3;
++  cached_cmd.descriptor_describes_contents = false;
++  auto cached_group = MakeGroup1(&cached_cmd);
++  auto fresh_group = MakeGroup1(&fresh_cmd);
++  auto entry = MakeCacheEntry(&cached_group);
++
++  EXPECT_FALSE(iree_hal_amdxdna_chain_command_cache_descriptor_matches(
++      &entry, &fresh_group, /*max_slots=*/24));
++  EXPECT_FALSE(iree_hal_amdxdna_chain_command_cache_descriptor_template_matches(
++      &entry, &fresh_group, /*max_slots=*/24));
++  EXPECT_TRUE(iree_hal_amdxdna_chain_command_cache_device_matches(
++      &entry, &fresh_group, /*max_slots=*/24));
++  EXPECT_TRUE(iree_hal_amdxdna_chain_command_cache_shape_matches(
++      &entry, &fresh_group, /*max_slots=*/24));
++}
++
+ TEST(ChainCommandCacheTest,
+      DescriptorTemplateMatchRejectsChangedConstantShape) {
+   auto cached_cmd = MakeCmd(FakeBuffer(0x10), /*device_addr=*/0x80000000);

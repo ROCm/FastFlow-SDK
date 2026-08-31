@@ -1,0 +1,60 @@
+amdxdna: reuse shape-compatible PARTIAL_ELF single commands
+
+`iree_hal_amdxdna_find_single_command_cache_descriptor_template_entry` keys the
+single-dispatch cache on the *identity* of the executable-owned run template
+(`src_asm_inst`/`src_patches` pointers). A model that fans one HAL dispatch out
+over many distinct templates therefore never hits: qwen3.6-moe:35b-a3b issues
+~13.7k single dispatches per 1k-token prefill across its expert layers and
+misses 13591 of them, with `src_asm_inst` distinct every time. Each miss
+allocates a control-code BO, maps a GPU VA, locks it, makes it resident, and
+destroys the whole thing again one dispatch later.
+
+The allocation itself is not the expensive part. Every `MakeResident` records a
+paging fence, and `SubmitCommandToHwQueueAfterPaging` drains all pending paging
+fences before *each* hardware-queue submit -- of which this path issues ~3.3 per
+dispatch (the dispatch, its opcode-9 code publication, and the code-range
+release). 13.6k fresh allocations therefore tax 44.8k submits, and the wait
+ahead of those submits dominates the prefill.
+
+Nothing about the rewrite needs template identity.
+`iree_hal_amdxdna_rewrite_cached_single_partial_elf_cmd` re-patches every
+control word from the *fresh* descriptor, rebinds every buffer, and refreshes
+the entry's host-side shadow copies; the cached descriptor is never read as a
+source of truth. All it requires is a compatible shape: same queue, same CU
+index, equal control-word count (the BO was sized for it) and equal binding
+count.
+
+So look up an idle PARTIAL_ELF entry by that shape when identity misses, and
+rewrite it in place. Because the rewrite realizes a *different* descriptor into
+the entry, the entry's recorded identity is updated to match, or a later
+identity lookup would match contents that are no longer there -- the same
+staleness class that 0005 fixed for the chain cache. Capacity stays at 8: the
+shape matcher reuses entries instead of accumulating them, so a larger cache
+measured no better (hit rate is already ~100% after the first few dispatches).
+
+56b572e8c ("amdxdna: reduce Windows Path-B dispatch synchronization") already
+did exactly this for the chain cache ("Reuse compatible PARTIAL_ELF chain
+entries before allocating new cache entries"); the single-dispatch path that MoE
+takes was left out.
+
+Measured on Windows Strix Halo (1022:17f0), driver 32.0.203.314, FastFlowLM 1k
+bench, qwen3.6-moe:35b-a3b, on top of 0006:
+
+| metric                                | before | after |
+|---------------------------------------|--------|-------|
+| prefill tok/s                         |  38.65 | 44.84 |
+| TTFT s                                |  25.27 | 21.78 |
+| pending-paging wait before submits    |  5.1s  | <0.2s |
+| control-code BO allocations           | 13591  |    ~8 |
+
+Hardware-queue submit count is unchanged (44847); only the paging wait ahead of
+them goes away. Decode is unaffected (14.4 tok/s either way) because decode
+issues few dispatches per token.
+
+Apply on top of: bb10dfb81 ("amdxdna: treat Windows UMDRIVERPRIVATE as adapter
+info"), with 0004-0006 applied.
+
+Tested: Windows Strix Halo (1022:17f0), driver 32.0.203.314. `dev.py
+test-fastflowlm` smoke PASS with coherent multi-turn output; qwen3.6-moe:35b-a3b
+1k, qwen3.5:0.8b 1k+4k, qwen3:0.6b 1k, gemma4-it:e2b 1k all PASS with zero `ert
+state 8` timeouts.

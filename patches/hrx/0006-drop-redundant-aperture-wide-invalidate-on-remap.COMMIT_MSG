@@ -1,0 +1,47 @@
+amdxdna: stop re-invalidating the whole command aperture per dispatch
+
+`RefreshCommandApertureGpuMapping` implements the legacy path-B "remap
+boundary": Unlock2/Lock2 the command aperture so the MCDM miniport observes
+freshly staged instruction bytes before the consuming submit. It re-acquired
+the mapping through `LockCommandApertureGpuAfterBootstrap`, which also issues a
+`D3DKMTInvalidateCache` over the *entire* aperture allocation (64 MiB on
+Strix). Every path-B single dispatch therefore paid an allocation-wide cache
+invalidate, plus the paging work that its collateral CPU-cache eviction forced
+onto each following opcode-9 publication and hardware-queue submit.
+
+That invalidate is bootstrap-only by construction, as the comment on the
+`SubmitAndWaitCommandAperture` call site already states: XRT locks and
+invalidates the 64 MiB aperture once, after the opcode-2 bootstrap submit.
+Every CPU write into the aperture afterwards is published over exactly the
+range it touched -- `CopyAndCommitPathBCodeWrites`/`CommitPathBCodeWrites`
+(KMT invalidate on the legacy contract) for code and chain descriptors -- so
+repeating an allocation-wide invalidate on the remap boundary adds nothing.
+
+Split the plain mapping lock out of the bootstrap helper. Bootstrap keeps
+lock + allocation-wide invalidate; the remap boundary keeps the Unlock2/Lock2
+lock transition and the caller's range-scoped invalidate, and drops the
+allocation-wide one. Instrumenting the re-lock showed it returns the same CPU
+pointer on all 13626 remaps of a MoE prefill, so the transition itself is
+mapping-neutral and is left in place.
+
+Measured on Windows Strix Halo (1022:17f0), driver 32.0.203.314, interleaved
+A/B in one binary, FastFlowLM 1k bench:
+
+| model                  | prefill tok/s | TTFT s |
+|------------------------|---------------|--------|
+| qwen3.6-moe:35b-a3b    | 24.9 -> 34.6  | 39.2 -> 28.2 |
+| qwen3:0.6b             |  897 -> 1014  | 1.100 -> 0.973 |
+| gemma4-it:e2b          |  460 ->  515  | 2.135 -> 1.903 |
+
+MoE amplifies the win because it issues ~13.7k single dispatches per 1k-token
+prefill; the per-dispatch aperture stage cost drops from 8.7s to 6.1s and the
+publish/submit phases from 1.4s/2.7s to 0.8s/1.0s. Dense models gain ~12%
+prefill for the same reason at lower dispatch counts.
+
+Apply on top of: bb10dfb81 ("amdxdna: treat Windows UMDRIVERPRIVATE as adapter
+info")
+
+Tested: Windows Strix Halo (1022:17f0), driver 32.0.203.314. `dev.py
+test-fastflowlm` smoke PASS with coherent multi-turn output; qwen3.6-moe:35b-a3b
+1k x3, qwen3.5:0.8b 1k+4k x5, qwen3:0.6b 1k x5, gemma4-it:e2b 1k x5 all PASS
+with zero `ert state 8` timeouts.

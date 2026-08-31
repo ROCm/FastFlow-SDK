@@ -100,6 +100,138 @@ submits one dispatch per flush, so it never hit this.
 **Remove when:** upstream hrx either lets a command buffer's deferred batch drain
 mid-apply, or allows more than one native submission in flight on Windows MCDM.
 
+### 0005-invalidate-stale-chain-cache-descriptors.patch
+Stops the amdxdna device chain-command cache from resubmitting a cached chain
+through its descriptor once an in-place rewrite has made that descriptor stale.
+
+**Why:** a cached `iree_hal_amdxdna_chain_cmd_t` holds both the control code it has
+realized (`ctrl_words` plus the control-code BO behind them) and a cloned descriptor
+of the dispatch that produced it (`src_executable_identity`, `src_entry_point`,
+`src_constants`, `src_asm_inst`, ...). The cache reuses an entry through four
+matchers, two keyed on the realized contents (device signature, shape) and two on
+that descriptor. The shape matcher only requires the control word count and binding
+shape to agree, so `iree_hal_amdxdna_update_cached_chain_cmd` legitimately rewrites
+an entry's realized words from a *different* control program — but it left the
+descriptor describing the previous one. A later flush whose own descriptor equalled
+that stale snapshot then took the exact-descriptor fast path, which resubmits the
+cached chain **unchanged**: the NPU ran the other program's control code and the
+command never retired (`ert state 8`, `ERT_CMD_STATE_TIMEOUT`).
+
+The rewrite now refreshes the constants block in place when it fits, and clears a new
+`descriptor_describes_contents` flag whenever the words it realized came from another
+control program; both descriptor matchers refuse a retired descriptor. The
+content-keyed matchers are unaffected, so the hot rewrite path (209 of 210 flushes on
+the repro) still hits.
+
+Symptom this fixes: FastFlowLM's `qwen3.5:{0.8b,2b,4b,9b}` and `qwen3.6-moe:35b-a3b`
+decode timed out the first time a bench grew the context back to a size it had already
+run (2k → 1k → **2k**), because that regenerates a byte-identical control program and
+so a matching descriptor. FLM does not treat a failed wait as fatal, so it then decoded
+garbage against a poisoned KV cache until an allocation failed. The client-side
+workaround was to defeat the executable cache entirely (`HRX_NOCACHE=1`, ~3% decode).
+
+**Remove when:** upstream hrx keeps chain-cache descriptors in sync with the control
+code their commands have realized, or drops the descriptor-keyed fast paths.
+
+### 0006-drop-redundant-aperture-wide-invalidate-on-remap.patch
+Stops every Windows path-B dispatch from re-invalidating the whole 64 MiB command
+aperture.
+
+**Why:** on the legacy MCDM contract each single dispatch stages its control code
+into the command aperture and then crosses the "remap boundary"
+(`RefreshCommandApertureGpuMapping`): an `Unlock2`/`Lock2` lock transition so the
+miniport observes the freshly staged bytes. It re-acquired the mapping through
+`LockCommandApertureGpuAfterBootstrap`, which *also* issues a
+`D3DKMTInvalidateCache` over the entire aperture allocation. So every dispatch paid
+an allocation-wide cache invalidate on top of the range-scoped one it had already
+done — and the CPU-cache eviction that caused then slowed each following opcode-9
+publication and hardware-queue submit.
+
+The allocation-wide invalidate is bootstrap-only by construction, as the comment at
+the `SubmitAndWaitCommandAperture` call site already says: XRT locks and invalidates
+the 64 MiB aperture once, after the opcode-2 bootstrap submit. Afterwards every CPU
+write into the aperture is published over exactly the range it touched
+(`CopyAndCommitPathBCodeWrites` / `CommitPathBCodeWrites`, which is a KMT invalidate
+on this contract), so repeating it allocation-wide adds nothing. The patch splits the
+plain mapping lock out of the bootstrap helper: bootstrap keeps lock + allocation-wide
+invalidate, the remap boundary keeps the lock transition and drops the invalidate.
+Instrumentation showed the re-lock returns the same CPU pointer on all 13626 remaps of
+a MoE prefill, so the transition is mapping-neutral and stays.
+
+Symptom this fixes: HRX prefill trailed XRT on every model in the comparison sweep
+(geo 1.12–1.17×), and `qwen3.6-moe:35b-a3b` trailed by ~2.3× because it issues ~13.7k
+single dispatches per 1k-token prefill. Measured 1k prefill, interleaved A/B in one
+binary on driver 32.0.203.314: `qwen3.6-moe:35b-a3b` 24.9 → 34.6 tok/s (TTFT 39.2 →
+28.2 s), `qwen3:0.6b` 897 → 1014 tok/s, `gemma4-it:e2b` 460 → 515 tok/s.
+
+**Remove when:** upstream hrx scopes the command-aperture invalidate to the range
+being published, or drops the legacy remap boundary altogether.
+
+### 0007-reuse-shape-compatible-partial-elf-single-commands.patch
+Lets the single-dispatch command cache reuse an idle PARTIAL_ELF entry of the same
+shape when run-template identity misses, instead of allocating a fresh control-code
+BO per dispatch.
+
+**Why:** the cache keys on the identity of the executable-owned run template
+(`src_asm_inst`/`src_patches` pointers). A model that fans one HAL dispatch out over
+many distinct templates never hits — `qwen3.6-moe:35b-a3b` issues ~13.7k single
+dispatches per 1k-token prefill and missed 13591 of them. The allocation is not the
+real cost: every `MakeResident` records a paging fence, and
+`SubmitCommandToHwQueueAfterPaging` drains all pending fences before *each*
+hardware-queue submit, of which this path issues ~3.3 per dispatch. 13.6k fresh
+allocations therefore taxed 44.8k submits, and that wait dominated the prefill.
+
+The rewrite never reads the cached descriptor as a source of truth —
+`iree_hal_amdxdna_rewrite_cached_single_partial_elf_cmd` re-patches every control word
+from the *fresh* descriptor and rebinds every buffer — so it only needs a compatible
+shape: same queue, same CU index, equal control-word count (the BO was sized for it)
+and equal binding count. The patch adds that lookup and then updates the entry's
+recorded identity, since the rewrite realizes a different descriptor into it; leaving
+the old identity would reintroduce exactly the staleness 0005 fixed for the chain
+cache. 56b572e8c already did this for the chain cache and left the single-dispatch
+path out.
+
+Measured 1k prefill on driver 32.0.203.314, on top of 0006: `qwen3.6-moe:35b-a3b`
+38.65 → 44.84 tok/s (TTFT 25.27 → 21.78 s), pending-paging wait 5.1 s → under 0.2 s,
+control-code BO allocations 13591 → ~8. Submit count is unchanged.
+
+**Remove when:** upstream hrx reuses shape-compatible PARTIAL_ELF entries in the
+single-dispatch cache as it already does in the chain cache.
+
+### 0008-sync-command-aperture-code-with-cache-lines.patch
+Publishes staged command-aperture code with CPU cache-line invalidation for sub-LLC
+ranges, keeping the allocation-level KMT transition only for larger ranges.
+
+**Why:** `SyncCommandApertureCode` always used `D3DKMTInvalidateCache`, which costs
+~303 µs for the ~7.7 KiB a dispatch stages — over 25× a hardware-queue submit (~11 µs)
+— because the miniport services it over the whole 64 MiB allocation rather than the
+requested range. 56b572e8c established the XRT-matching policy (cache lines below the
+LLC, KMT above) for buffers and explicitly deferred the aperture; this applies it
+there too. Neither direction of the publication weakens: the staged bytes already
+reach memory via the non-temporal stores and `sfence` in
+`CopyAndCommitPathBCodeWrites`, and the NPU instruction cache is still invalidated by
+the opcode-9 aperture sync that follows every stage.
+
+This only pays off with 0007 applied. Without it the outstanding paging fences make
+every submit drain them first, so removing the KMT transition just relocates the wait
+(measured 38.65 → 39.58 tok/s, i.e. noise). Measured interleaved on top of 0007:
+`qwen3.6-moe:35b-a3b` 44.84 → 54.13 tok/s (TTFT 21.78 → 18.05 s). With 0007+0008 the
+MoE prefill gap to XRT (58.36 tok/s, 16.8 s) is 1.08×, in line with the 1.174× geomean
+across 28 dense chat models; `qwen3:0.6b` reaches 1145 tok/s (XRT 1094) and
+`gemma4-it:e2b` 560 tok/s. MoE ranges 49.7–55.9 tok/s depending on how long the device
+has been under load; `qwen3.5:0.8b` at 4k drifts by the same proportion over a soak, so
+that spread is device clock state, not backend behaviour.
+
+Caveat: this is the one patch in the series that crosses a boundary upstream drew
+deliberately ("Command-aperture invalidation … remain unchanged"). The reasoning is
+derived from the code and from measurement, not from firmware documentation. If
+NPU-side coherence for aperture code turns out to depend on the KMT transition rather
+than on the opcode-9 publication, drop this patch — 0007 stands alone and keeps most
+of the MoE win.
+
+**Remove when:** upstream hrx applies its own sub-LLC synchronization policy to the
+command aperture, or confirms the KMT transition is required there.
+
 ## patches/FastFlowLM/
 
 ### 0001-support-redirected-windows-cli-input.patch

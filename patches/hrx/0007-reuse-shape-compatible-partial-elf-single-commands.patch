@@ -1,0 +1,104 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+index 18a42e948..a1e8dcfb0 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+@@ -1669,9 +1669,34 @@ iree_hal_amdxdna_direct_command_buffer_submit_accumulated_single(
+             cmd->src_use_native_partial_elf, cmd->binding_count,
+             &single_cache_entry);
+   }
++  // Descriptor identity only reuses a command recorded from the same run
++  // template. Models that fan one dispatch out over many distinct templates
++  // (MoE expert layers) never match, so every dispatch would otherwise
++  // allocate, make resident, and destroy a fresh control-code BO. Each of those
++  // allocations records a paging fence that every later hardware-queue submit
++  // has to wait on, which costs far more than the allocation itself. Reuse any
++  // idle PARTIAL_ELF command of the same shape instead and re-patch it in
++  // place, mirroring what the chain cache already does.
++  bool reused_partial_elf_shape = false;
++  if (iree_status_is_ok(status) && !single_cache_entry && single_cache_locked) {
++    status =
++        iree_hal_amdxdna_find_single_command_cache_partial_elf_shape_entry(
++            single_command_cache, group->queue, cmd->src_cu_idx.index,
++            cmd->src_asm_inst->count, cmd->binding_count, &single_cache_entry);
++    reused_partial_elf_shape = single_cache_entry != NULL;
++  }
+   if (iree_status_is_ok(status) && single_cache_entry) {
+     status = iree_hal_amdxdna_rewrite_cached_single_partial_elf_cmd(
+         command_buffer, single_command_cache, single_cache_entry, cmd);
++    // The rewrite realized this dispatch's descriptor into the entry, so the
++    // entry's recorded identity has to follow it or a later exact-descriptor
++    // lookup would match contents that are no longer there.
++    if (iree_status_is_ok(status) && reused_partial_elf_shape) {
++      iree_hal_amdxdna_single_command_cache_entry_set_descriptor_template(
++          single_cache_entry, cmd->src_asm_inst, cmd->src_patches,
++          cmd->src_constant_count, cmd->src_use_native_partial_elf,
++          single_cache_entry->ctrl_code_mapped_ptr);
++    }
+     if (iree_status_is_ok(status) &&
+         iree_hal_amdxdna_direct_command_buffer_uses_async_completion(
+             command_buffer)) {
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.c
+index d85692b8b..8d9397f15 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.c
+@@ -250,6 +250,37 @@ iree_status_t iree_hal_amdxdna_update_single_command_cache_entry(
+   return iree_ok_status();
+ }
+ 
++static bool iree_hal_amdxdna_single_command_cache_partial_elf_shape_matches(
++    const iree_hal_amdxdna_single_command_cache_entry_t* cache,
++    iree_hal_amdxdna_native_queue_t* queue, uint32_t cu_index,
++    iree_host_size_t ctrl_word_count, iree_host_size_t binding_count) {
++  return cache->command && cache->ctrl_code_buffer && cache->queue == queue &&
++         cache->in_flight_count == 0 && cache->cu_index == cu_index &&
++         cache->src_use_native_partial_elf && cache->src_asm_inst != NULL &&
++         cache->src_patches != NULL &&
++         cache->ctrl_word_count == ctrl_word_count &&
++         cache->binding_count == binding_count;
++}
++
++iree_status_t
++iree_hal_amdxdna_find_single_command_cache_partial_elf_shape_entry(
++    iree_hal_amdxdna_device_single_command_cache_t* cache,
++    iree_hal_amdxdna_native_queue_t* queue, uint32_t cu_index,
++    iree_host_size_t ctrl_word_count, iree_host_size_t binding_count,
++    iree_hal_amdxdna_single_command_cache_entry_t** out_entry) {
++  *out_entry = NULL;
++  for (iree_host_size_t i = 0; i < cache->entry_count; ++i) {
++    iree_hal_amdxdna_single_command_cache_entry_t* entry = &cache->entries[i];
++    if (iree_hal_amdxdna_single_command_cache_partial_elf_shape_matches(
++            entry, queue, cu_index, ctrl_word_count, binding_count)) {
++      entry->last_use = ++cache->use_clock;
++      *out_entry = entry;
++      return iree_ok_status();
++    }
++  }
++  return iree_ok_status();
++}
++
+ iree_status_t
+ iree_hal_amdxdna_find_single_command_cache_descriptor_template_entry(
+     iree_hal_amdxdna_device_single_command_cache_t* cache,
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.h b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.h
+index 09a1361ec..66640b435 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.h
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_single_cache.h
+@@ -76,6 +76,18 @@ iree_status_t iree_hal_amdxdna_find_single_command_cache_entry(
+     const iree_device_size_t* binding_lengths, iree_host_size_t binding_count,
+     iree_hal_amdxdna_single_command_cache_entry_t** out_entry);
+ 
++// Finds a retained PARTIAL_ELF command whose realized control code has the same
++// shape as a freshly recorded dispatch, without requiring it to have come from
++// the same run template. The caller must re-patch the entry from its own
++// descriptor (which rewrites every control word and rebinds every buffer) and
++// then refresh the entry's descriptor identity.
++iree_status_t
++iree_hal_amdxdna_find_single_command_cache_partial_elf_shape_entry(
++    iree_hal_amdxdna_device_single_command_cache_t* cache,
++    iree_hal_amdxdna_native_queue_t* queue, uint32_t cu_index,
++    iree_host_size_t ctrl_word_count, iree_host_size_t binding_count,
++    iree_hal_amdxdna_single_command_cache_entry_t** out_entry);
++
+ iree_status_t
+ iree_hal_amdxdna_find_single_command_cache_descriptor_template_entry(
+     iree_hal_amdxdna_device_single_command_cache_t* cache,
