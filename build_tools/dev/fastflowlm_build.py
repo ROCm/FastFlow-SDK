@@ -231,7 +231,7 @@ def _build_fastflowlm(args, *, backend):
             "-DCMAKE_BUILD_TYPE=Release",
             *backend_flags,
             "-DCMAKE_INSTALL_LIBDIR=lib",
-            "-DFLM_VERSION=1.0.2",
+            "-DFLM_VERSION=1.0.3",
             "-DNPU_VERSION=32.0.203.304",
             f"-DCMAKE_TOOLCHAIN_FILE={environment.cmake_path(Path(dependencies['toolchain']))}",
             f"-DVCPKG_TARGET_TRIPLET={dependencies['triplet']}",
