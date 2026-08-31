@@ -154,13 +154,14 @@ def _build_fastflowlm(args, *, backend):
             "libdrm (Ubuntu: sudo apt-get install libdrm-dev; "
             "Fedora: sudo dnf install libdrm-devel)"
         )
-    if not use_hrx and not paths.is_windows():
+    if not use_hrx:
         host_xrt = _host_xrt_prefix()
         if host_xrt is None:
             sys.exit(
-                "missing host XRT runtime: set XILINX_XRT or install to "
-                "/opt/xilinx/xrt (the XRT FastFlowLM build links the host "
-                "install; it does not bundle a relocatable XRT prefix)"
+                "missing host XRT runtime: set XILINX_XRT"
+                + ("" if paths.is_windows() else " or install to /opt/xilinx/xrt")
+                + " (the XRT FastFlowLM build links the host install; it does "
+                "not bundle a relocatable XRT prefix)"
             )
         xrt_include = _host_xrt_include_dir(host_xrt)
         if xrt_include is None:

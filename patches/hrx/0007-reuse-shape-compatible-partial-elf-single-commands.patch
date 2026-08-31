@@ -2,7 +2,7 @@ diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c b/runt
 index 18a42e948..a1e8dcfb0 100644
 --- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
 +++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
-@@ -1669,9 +1669,34 @@ iree_hal_amdxdna_direct_command_buffer_submit_accumulated_single(
+@@ -1669,9 +1669,35 @@ iree_hal_amdxdna_direct_command_buffer_submit_accumulated_single(
              cmd->src_use_native_partial_elf, cmd->binding_count,
              &single_cache_entry);
    }
@@ -30,8 +30,9 @@ index 18a42e948..a1e8dcfb0 100644
 +    // lookup would match contents that are no longer there.
 +    if (iree_status_is_ok(status) && reused_partial_elf_shape) {
 +      iree_hal_amdxdna_single_command_cache_entry_set_descriptor_template(
-+          single_cache_entry, cmd->src_asm_inst, cmd->src_patches,
-+          cmd->src_constant_count, cmd->src_use_native_partial_elf,
++          single_command_cache, single_cache_entry, cmd->src_asm_inst,
++          cmd->src_patches, cmd->src_constant_count,
++          cmd->src_use_native_partial_elf,
 +          single_cache_entry->ctrl_code_mapped_ptr);
 +    }
      if (iree_status_is_ok(status) &&
