@@ -28,12 +28,10 @@ int main(int argc, char** argv) {
   assert(!candidates.empty());
   assert(candidates.front().parent_path() == missing.parent_path());
 
-  rocm_npu::HrxLoadResult abi =
-      rocm_npu::HrxLibrary::Load(incompatible);
+  rocm_npu::HrxLoadResult abi = rocm_npu::HrxLibrary::Load(incompatible);
   assert(!abi.library);
   assert(abi.errors.size() == 1);
-  assert(abi.errors.front().find("incompatible HRX ABI") !=
-         std::string::npos);
+  assert(abi.errors.front().find("incompatible HRX ABI") != std::string::npos);
 
   const std::filesystem::path unicode_directory =
       rocm_npu::test::TestRoot("hrx");

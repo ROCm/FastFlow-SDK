@@ -13,9 +13,8 @@
 namespace rocm_npu {
 
 int RunMain(std::vector<std::string> arguments) {
-  const bool json_requested =
-      std::find(arguments.begin(), arguments.end(), "--json") !=
-      arguments.end();
+  const bool json_requested = std::find(arguments.begin(), arguments.end(),
+                                        "--json") != arguments.end();
   const rocm_npu::ParseResult parsed = rocm_npu::ParseInvocation(arguments);
   if (!parsed.invocation) {
     if (json_requested) {
@@ -61,8 +60,7 @@ int RunMain(std::vector<std::string> arguments) {
     }
     return rocm_npu::ExitCode(report);
   } catch (const std::exception& error) {
-    rocm_npu::Report report =
-        rocm_npu::MakeReport(parsed.invocation->command);
+    rocm_npu::Report report = rocm_npu::MakeReport(parsed.invocation->command);
     rocm_npu::AddCheck(
         report, {"internal.error", rocm_npu::Status::kError, error.what(), {}});
     if (parsed.invocation->json) {

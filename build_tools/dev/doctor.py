@@ -5,11 +5,13 @@
 import os
 import re
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from build_tools import environment, paths
-from build_tools.dev import patches
+from build_tools.dev import clang_format, patches
 from build_tools.dev.profiles import profile
 from build_tools.fastflowlm_deps import (
     MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
@@ -47,6 +49,53 @@ def eudsl_version_from_patch(text: str) -> str | None:
     if context:
         return context.group(1)
     return None
+
+
+def ruff_pinned_version() -> str:
+    return clang_format.requirement_pin("ruff")
+
+
+def format_pip_packages() -> list[str]:
+    return [
+        f"ruff=={ruff_pinned_version()}",
+        f"clang-format=={clang_format.PINNED_VERSION}",
+    ]
+
+
+def format_tools_install_command() -> str:
+    return clang_format.install_command()
+
+
+def _ruff_status() -> tuple[bool, str]:
+    expected = ruff_pinned_version()
+    try:
+        output = subprocess.check_output(
+            [sys.executable, "-m", "ruff", "--version"],
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False, f"ruff {expected} is not installed"
+    if expected not in output:
+        return False, f"expected ruff {expected}, got: {output.strip()}"
+    return True, output.strip()
+
+
+def check_format_tools(*, verbose: bool = True) -> bool:
+    """Return whether this interpreter has the pinned Ruff and clang-format."""
+    ruff_ok, ruff_detail = _ruff_status()
+    clang_exe, clang_error = clang_format.resolve_pinned_executable()
+    clang_ok = clang_exe is not None
+    if verbose:
+        print(f"  [{'ok  ' if ruff_ok else 'MISS'}] ruff {ruff_pinned_version()}")
+        if not ruff_ok:
+            print(f"         {ruff_detail}")
+        print(
+            f"  [{'ok  ' if clang_ok else 'MISS'}] clang-format "
+            f"{clang_format.PINNED_VERSION}"
+        )
+        if clang_error:
+            print(f"         {clang_error}")
+    return ruff_ok and clang_ok
 
 
 def check_compiler_stack_system(verbose, *, windows: bool | None = None):
@@ -227,6 +276,10 @@ def cmd_doctor(args):
     print(
         f"  [time] system prerequisites: {time.perf_counter() - section_started:.2f}s"
     )
+    print("\nformat tools (Presubmit):")
+    section_started = time.perf_counter()
+    format_ok = check_format_tools()
+    print(f"  [time] format tools: {time.perf_counter() - section_started:.2f}s")
     print("\nsubmodule pins vs manifests/versions.toml:")
     section_started = time.perf_counter()
     pin_bad = patches.check_pins(selected_submodules)
@@ -314,6 +367,12 @@ def cmd_doctor(args):
             )
         else:
             print("\nMISSING system prerequisites shown above")
+        rc = 1
+    if not format_ok:
+        print(
+            "\nMISSING format tools — install with:\n  "
+            + format_tools_install_command()
+        )
         rc = 1
     if pin_bad:
         print(

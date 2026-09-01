@@ -22,8 +22,8 @@ std::filesystem::path TestRoot(const std::string& name) {
          std::filesystem::u8path("rocm-npu-" + name + "-\xc3\xa9-test");
 }
 
-std::filesystem::path PluginExecutable(
-    const std::filesystem::path& directory, const std::string& command) {
+std::filesystem::path PluginExecutable(const std::filesystem::path& directory,
+                                       const std::string& command) {
   return directory / WidenAscii("rocm-npu-" + command + ".exe");
 }
 

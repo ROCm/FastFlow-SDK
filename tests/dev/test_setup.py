@@ -135,6 +135,10 @@ class TestSetupCommand:
             "venv",
         ]
         assert events[-2:] == [("fetch", None), ("iron-ops", True)]
+        format_packages = setup.doctor.format_pip_packages()
+        assert any(
+            event[0] == "run" and event[1][-2:] == format_packages for event in events
+        )
 
     def test_fastflowlm_uses_hashes_and_native_dependency_setup(self, tmp_path):
         args = SimpleNamespace(profile="fastflowlm", iron_ops_tests=False)
@@ -167,6 +171,10 @@ class TestSetupCommand:
         ):
             setup.cmd_setup(args)
 
-        assert "--require-hashes" in commands[-1]
+        assert "--require-hashes" in commands[-2]
+        assert commands[-1][-2:] == [
+            f"ruff=={setup.doctor.ruff_pinned_version()}",
+            f"clang-format=={setup.doctor.clang_format.PINNED_VERSION}",
+        ]
         install_iron_ops.assert_not_called()
         install_native.assert_called_once_with(paths.ROOT)

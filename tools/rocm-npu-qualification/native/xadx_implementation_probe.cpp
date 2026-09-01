@@ -34,9 +34,8 @@ std::vector<uint8_t> transaction(npu_sequence& sequence) {
   return {bytes, bytes + count * sizeof(uint32_t)};
 }
 
-std::vector<uint8_t> serialize(
-    const std::vector<uint8_t>& xclbin,
-    const std::vector<uint8_t>& commands) {
+std::vector<uint8_t> serialize(const std::vector<uint8_t>& xclbin,
+                               const std::vector<uint8_t>& commands) {
   const hrx_const_byte_span_t xclbin_span = {xclbin.data(), xclbin.size()};
   hrx_amdxdna_executable_run_t run = hrx_amdxdna_executable_run_default();
   run.transaction = {commands.data(), commands.size()};
@@ -54,8 +53,8 @@ std::vector<uint8_t> serialize(
   const hrx_host_allocator_t allocator = hrx_host_allocator_system();
   uint8_t* output = nullptr;
   size_t output_size = 0;
-  const hrx_status_t status = hrx_amdxdna_xadx_serialize(
-      &params, allocator, &output, &output_size);
+  const hrx_status_t status =
+      hrx_amdxdna_xadx_serialize(&params, allocator, &output, &output_size);
   if (status) {
     hrx_status_ignore(status);
     throw std::runtime_error("hrx_amdxdna_xadx_serialize failed");
@@ -79,7 +78,8 @@ struct Shape {
   uint32_t n;
 
   std::string label() const {
-    return std::to_string(m) + "x" + std::to_string(k) + "x" + std::to_string(n);
+    return std::to_string(m) + "x" + std::to_string(k) + "x" +
+           std::to_string(n);
   }
 };
 
@@ -88,31 +88,29 @@ struct Shape {
 // the generic one needs N >= 512. Builders abort the process on a shape they
 // reject rather than throwing, so one invocation emits exactly one builder at
 // one shape and the caller sweeps the grid across processes.
-std::string build_transaction(
-    const std::string& builder, const Shape& shape,
-    std::vector<uint8_t>& commands) {
+std::string build_transaction(const std::string& builder, const Shape& shape,
+                              std::vector<uint8_t>& commands) {
   LM_Config config = {};
   npu_sequence sequence(device_npu2);
   std::string kernel;
   if (builder == "q4_1") {
     kernel = "dequant";
-    Dequant(config).generate_dequant_q4_1_seq(
-        &sequence, shape.k, shape.m, 0, 0);
+    Dequant(config).generate_dequant_q4_1_seq(&sequence, shape.k, shape.m, 0,
+                                              0);
   } else if (builder == "q80nx") {
     kernel = "dequant";
-    Dequant(config).generate_dequant_q80_packed_in_q4nx_seq(
-        &sequence, shape.k, shape.m, 0, 0);
+    Dequant(config).generate_dequant_q80_packed_in_q4nx_seq(&sequence, shape.k,
+                                                            shape.m, 0, 0);
   } else if (builder == "gemma-dequant") {
     kernel = "dequant";
     GemmaTextDequant(config).generate_seq(&sequence, shape.k, shape.m, 0);
   } else if (builder == "gemm") {
     kernel = "mm";
-    Gemm(config).generate_seq(
-        &sequence, shape.m, shape.k, shape.n, 0, false, Gemm::NO_Activation, 0);
+    Gemm(config).generate_seq(&sequence, shape.m, shape.k, shape.n, 0, false,
+                              Gemm::NO_Activation, 0);
   } else if (builder == "gemma-gemm") {
     kernel = "mm";
-    GemmaTextGemm(config).generate_seq(
-        &sequence, shape.m, shape.k, shape.n, 0);
+    GemmaTextGemm(config).generate_seq(&sequence, shape.m, shape.k, shape.n, 0);
   } else {
     throw std::runtime_error("unknown builder: " + builder);
   }
@@ -128,10 +126,10 @@ Shape parse_shape(const std::string& item) {
   if (first == std::string::npos || second == std::string::npos) {
     throw std::runtime_error("shape must be m,k,n: " + item);
   }
-  return {
-      static_cast<uint32_t>(std::stoul(item.substr(0, first))),
-      static_cast<uint32_t>(std::stoul(item.substr(first + 1, second - first - 1))),
-      static_cast<uint32_t>(std::stoul(item.substr(second + 1)))};
+  return {static_cast<uint32_t>(std::stoul(item.substr(0, first))),
+          static_cast<uint32_t>(
+              std::stoul(item.substr(first + 1, second - first - 1))),
+          static_cast<uint32_t>(std::stoul(item.substr(second + 1)))};
 }
 
 }  // namespace
@@ -151,20 +149,21 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(output);
 
     std::vector<uint8_t> commands;
-    const std::string target_kernel = build_transaction(builder, shape, commands);
+    const std::string target_kernel =
+        build_transaction(builder, shape, commands);
     const std::string transaction_relative = "transaction-" + variant + ".bin";
-    std::ofstream transaction_stream(
-        output / transaction_relative, std::ios::binary);
-    transaction_stream.write(
-        reinterpret_cast<const char*>(commands.data()),
-        static_cast<std::streamsize>(commands.size()));
+    std::ofstream transaction_stream(output / transaction_relative,
+                                     std::ios::binary);
+    transaction_stream.write(reinterpret_cast<const char*>(commands.data()),
+                             static_cast<std::streamsize>(commands.size()));
     if (!transaction_stream) {
       throw std::runtime_error("cannot write " + transaction_relative);
     }
 
     // Identical xclbin bytes mean an identical kernel implementation, so the
     // qualification payload only needs one XADX per distinct blob.
-    std::map<std::pair<std::string, std::vector<uint8_t>>, Implementation> unique;
+    std::map<std::pair<std::string, std::vector<uint8_t>>, Implementation>
+        unique;
     std::vector<std::filesystem::path> directories;
     for (const auto& entry : std::filesystem::directory_iterator(root)) {
       if (entry.is_directory()) directories.push_back(entry.path());
@@ -204,9 +203,8 @@ int main(int argc, char** argv) {
       const auto xadx = serialize(contents, commands);
       const std::string relative = id + ".xadx";
       std::ofstream stream(output / relative, std::ios::binary);
-      stream.write(
-          reinterpret_cast<const char*>(xadx.data()),
-          static_cast<std::streamsize>(xadx.size()));
+      stream.write(reinterpret_cast<const char*>(xadx.data()),
+                   static_cast<std::streamsize>(xadx.size()));
       if (!stream) throw std::runtime_error("cannot write " + relative);
       if (!first) index << ',';
       first = false;
@@ -214,12 +212,11 @@ int main(int argc, char** argv) {
       index << "{\"id\":\"" << id << "\",\"implementation\":\""
             << implementation << "\",\"kernel\":\"" << kernel
             << "\",\"representative\":\"" << record.representative
-            << "\",\"builder\":\"" << builder
-            << "\",\"transaction\":\"" << transaction_relative
+            << "\",\"builder\":\"" << builder << "\",\"transaction\":\""
+            << transaction_relative
             << "\",\"xclbin_bytes\":" << record.xclbin_bytes
             << ",\"m\":" << shape.m << ",\"k\":" << shape.k
-            << ",\"n\":" << shape.n
-            << ",\"xadx\":\"" << relative
+            << ",\"n\":" << shape.n << ",\"xadx\":\"" << relative
             << "\",\"xadx_bytes\":" << xadx.size()
             << ",\"family_count\":" << record.families.size()
             << ",\"families\":[";
@@ -231,15 +228,13 @@ int main(int argc, char** argv) {
     }
     index << "]";
     if (!index) throw std::runtime_error("cannot write implementation index");
-    std::printf(
-        "%s: %zu of %zu %s implementations (from %zu families)\n",
-        variant.c_str(), emitted, unique.size(), target_kernel.c_str(),
-        directories.size());
+    std::printf("%s: %zu of %zu %s implementations (from %zu families)\n",
+                variant.c_str(), emitted, unique.size(), target_kernel.c_str(),
+                directories.size());
     return 0;
   } catch (const std::exception& error) {
-    std::fprintf(
-        stderr, "fastflowlm-xadx-implementation-probe: FAIL: %s\n",
-        error.what());
+    std::fprintf(stderr, "fastflowlm-xadx-implementation-probe: FAIL: %s\n",
+                 error.what());
     return 1;
   }
 }

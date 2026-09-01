@@ -119,7 +119,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "presubmit:" in workflow
         assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16" in workflow
         assert "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in workflow
-        assert "ruff==0.15.21" in workflow
+        assert "requirements/test.lock" in workflow
         assert "python -m ruff check" in workflow
         assert "python -m ruff format --check" in workflow
         assert "--select F821" not in workflow

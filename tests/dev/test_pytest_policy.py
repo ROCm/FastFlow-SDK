@@ -90,10 +90,12 @@ def test_test_profile_covers_presubmit_runtime_dependencies():
         if line.partition("#")[0].strip()
     }
     assert entries == {
+        "clang-format==22.1.3",
         "jsonschema==4.26.0",
         "ml-dtypes==0.6.0",
         "numpy==2.4.6",
         "pytest==8.4.2",
+        "ruff==0.15.21",
         "zstandard==0.25.0",
     }
 

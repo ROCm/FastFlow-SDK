@@ -22,6 +22,23 @@ python3 -m pytest -m presubmit
 By opening a pull request, you agree that the contribution is licensed under
 the [LICENSE](LICENSE).
 
+## Formatting and lint
+
+Presubmit formats first-party Python with Ruff (`ruff.toml`) and first-party
+C/C++ with `python dev.py clang-format`. Pins live in
+`requirements/test.txt`. Install that lock, then check before you push:
+
+```bash
+python3 -m pip install --require-hashes -r requirements/test.lock
+python3 -m ruff check
+python3 -m ruff format --check
+python3 dev.py clang-format --check
+python3 -m pytest -m presubmit
+```
+
+`python3 dev.py setup` also installs the format wheels into `.venv`.
+`python3 dev.py doctor` reports whether the current interpreter has the pins.
+
 ## Submodules
 
 Runtime, compiler, and model changes belong upstream. Bump the pin here after

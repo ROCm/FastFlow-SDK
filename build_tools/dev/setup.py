@@ -133,6 +133,7 @@ def cmd_setup(args) -> None:
     ]
     pip_args = ["--require-hashes"] if plan.require_hashes else []
     environment.sh(pip + pip_args + ["-r", str(plan.requirements)])
+    environment.sh(pip + doctor.format_pip_packages())
     patches.cmd_fetch(args, set(plan.submodules))
     if plan.install_iron_ops:
         install_iron_ops(

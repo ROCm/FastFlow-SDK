@@ -43,10 +43,9 @@ std::string WideToUtf8(const std::wstring& value) {
   if (value.empty()) {
     return {};
   }
-  const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-                                         value.data(),
-                                         static_cast<int>(value.size()), nullptr,
-                                         0, nullptr, nullptr);
+  const int length = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+      static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
   if (length <= 0) {
     return {};
   }
@@ -99,11 +98,13 @@ std::wstring QuoteWindowsArgument(const std::wstring& argument) {
   return result;
 }
 
-std::optional<std::wstring> DeviceStringProperty(
-    HDEVINFO devices, SP_DEVINFO_DATA& device, const DEVPROPKEY& key) {
+std::optional<std::wstring> DeviceStringProperty(HDEVINFO devices,
+                                                 SP_DEVINFO_DATA& device,
+                                                 const DEVPROPKEY& key) {
   DEVPROPTYPE type = 0;
   DWORD size = 0;
-  SetupDiGetDevicePropertyW(devices, &device, &key, &type, nullptr, 0, &size, 0);
+  SetupDiGetDevicePropertyW(devices, &device, &key, &type, nullptr, 0, &size,
+                            0);
   if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
     return std::nullopt;
   }
@@ -117,14 +118,15 @@ std::optional<std::wstring> DeviceStringProperty(
   return std::wstring(text);
 }
 
-std::optional<std::string> DeviceDateProperty(
-    HDEVINFO devices, SP_DEVINFO_DATA& device, const DEVPROPKEY& key) {
+std::optional<std::string> DeviceDateProperty(HDEVINFO devices,
+                                              SP_DEVINFO_DATA& device,
+                                              const DEVPROPKEY& key) {
   DEVPROPTYPE type = 0;
   FILETIME value = {};
   DWORD size = 0;
-  if (!SetupDiGetDevicePropertyW(
-          devices, &device, &key, &type, reinterpret_cast<BYTE*>(&value),
-          sizeof(value), &size, 0) ||
+  if (!SetupDiGetDevicePropertyW(devices, &device, &key, &type,
+                                 reinterpret_cast<BYTE*>(&value), sizeof(value),
+                                 &size, 0) ||
       type != DEVPROP_TYPE_FILETIME) {
     return std::nullopt;
   }
@@ -176,16 +178,14 @@ std::optional<std::wstring> ServiceBinaryPath(const std::wstring& service) {
         reinterpret_cast<const QUERY_SERVICE_CONFIGW*>(buffer.data());
     if (configuration->lpBinaryPathName != nullptr) {
       std::wstring path = configuration->lpBinaryPathName;
-      if (path.size() >= 2 && path.front() == L'"' &&
-          path.back() == L'"') {
+      if (path.size() >= 2 && path.front() == L'"' && path.back() == L'"') {
         path = path.substr(1, path.size() - 2);
       }
       constexpr wchar_t kSystemRootPrefix[] = L"\\SystemRoot\\";
       if (path.rfind(kSystemRootPrefix, 0) == 0) {
         std::vector<wchar_t> root(32768);
-        const DWORD root_size =
-            GetEnvironmentVariableW(L"SystemRoot", root.data(),
-                                    static_cast<DWORD>(root.size()));
+        const DWORD root_size = GetEnvironmentVariableW(
+            L"SystemRoot", root.data(), static_cast<DWORD>(root.size()));
         if (root_size > 0 && root_size < root.size()) {
           path = (std::filesystem::path(root.data()) /
                   path.substr(std::size(kSystemRootPrefix) - 1))
@@ -193,9 +193,8 @@ std::optional<std::wstring> ServiceBinaryPath(const std::wstring& service) {
         }
       }
       std::vector<wchar_t> expanded(32768);
-      DWORD expanded_size =
-          ExpandEnvironmentStringsW(path.c_str(), expanded.data(),
-                                    static_cast<DWORD>(expanded.size()));
+      DWORD expanded_size = ExpandEnvironmentStringsW(
+          path.c_str(), expanded.data(), static_cast<DWORD>(expanded.size()));
       result = expanded_size > 0 && expanded_size <= expanded.size()
                    ? std::wstring(expanded.data())
                    : path;
@@ -243,8 +242,8 @@ std::optional<std::string> Sha256(const std::filesystem::path& path) {
       return std::nullopt;
     }
   }
-  const NTSTATUS status =
-      BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+  const NTSTATUS status = BCryptFinishHash(
+      hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
   BCryptDestroyHash(hash);
   BCryptCloseAlgorithmProvider(algorithm, 0);
   if (status != 0) {
@@ -264,8 +263,8 @@ nlohmann::json FirmwareCandidates(const std::filesystem::path& driver_path) {
     return result;
   }
   std::error_code error;
-  for (std::filesystem::directory_iterator iterator(driver_path.parent_path(),
-                                                     error),
+  for (std::filesystem::directory_iterator
+           iterator(driver_path.parent_path(), error),
        end;
        !error && iterator != end; iterator.increment(error)) {
     if (!iterator->is_regular_file(error)) {
@@ -277,8 +276,7 @@ nlohmann::json FirmwareCandidates(const std::filesystem::path& driver_path) {
                    [](unsigned char character) {
                      return static_cast<char>(std::tolower(character));
                    });
-    if (lower.rfind("ipu", 0) != 0 ||
-        lower.size() < 11 ||
+    if (lower.rfind("ipu", 0) != 0 || lower.size() < 11 ||
         lower.substr(lower.size() - 11) != "_pasid.sbin") {
       continue;
     }
@@ -332,8 +330,8 @@ std::optional<std::filesystem::path::string_type> NativeEnvironmentVariable(
 
 std::filesystem::path ExecutablePath() {
   std::vector<wchar_t> buffer(32768);
-  const DWORD length =
-      GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+  const DWORD length = GetModuleFileNameW(nullptr, buffer.data(),
+                                          static_cast<DWORD>(buffer.size()));
   if (length == 0 || length == buffer.size()) {
     return {};
   }
@@ -376,10 +374,10 @@ std::optional<std::string> PluginExecutableName(
   if (!extension.empty() && extension != ".exe") {
     return std::nullopt;
   }
-  std::string name = filename.substr(
-      std::char_traits<char>::length(prefix),
-      filename.size() - std::char_traits<char>::length(prefix) -
-          extension.size());
+  std::string name =
+      filename.substr(std::char_traits<char>::length(prefix),
+                      filename.size() - std::char_traits<char>::length(prefix) -
+                          extension.size());
   if (name.empty()) {
     return std::nullopt;
   }
@@ -392,8 +390,7 @@ bool PluginEntryLess(const std::filesystem::path& left,
     const std::string extension =
         PluginDirectoryKey(PathToUtf8(path.extension()));
     const int rank = extension == ".exe" ? 0 : 1;
-    return std::make_pair(PluginDirectoryKey(PathToUtf8(path.stem())),
-                          rank);
+    return std::make_pair(PluginDirectoryKey(PathToUtf8(path.stem())), rank);
   };
   const auto left_key = sort_key(left);
   const auto right_key = sort_key(right);
@@ -420,19 +417,16 @@ int ExecutePluginProcess(
   }
   const auto restore_environment = [&]() {
     for (const SavedEnvironment& saved : saved_environment) {
-      SetEnvironmentVariableW(
-          saved.name.c_str(),
-          saved.value ? saved.value->c_str() : nullptr);
+      SetEnvironmentVariableW(saved.name.c_str(),
+                              saved.value ? saved.value->c_str() : nullptr);
     }
   };
   for (const auto& [name, value] : environment_overrides) {
     const std::wstring wide_name = Utf8ToWide(name);
     const std::wstring wide_value = Utf8ToWide(value);
     if (!SetEnvironmentVariableW(
-            wide_name.c_str(),
-            value.empty() ? nullptr : wide_value.c_str())) {
-      error =
-          std::system_category().message(static_cast<int>(GetLastError()));
+            wide_name.c_str(), value.empty() ? nullptr : wide_value.c_str())) {
+      error = std::system_category().message(static_cast<int>(GetLastError()));
       restore_environment();
       return 2;
     }
@@ -446,8 +440,8 @@ int ExecutePluginProcess(
   std::vector<wchar_t> mutable_command(command_line.begin(),
                                        command_line.end());
   mutable_command.push_back(L'\0');
-  const DWORD standard_handle_ids[] = {
-      STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+  const DWORD standard_handle_ids[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+                                       STD_ERROR_HANDLE};
   HANDLE inherited_handles[3] = {};
   for (std::size_t index = 0; index < 3; ++index) {
     const HANDLE source = GetStdHandle(standard_handle_ids[index]);
@@ -455,8 +449,7 @@ int ExecutePluginProcess(
         !DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
                          &inherited_handles[index], 0, TRUE,
                          DUPLICATE_SAME_ACCESS)) {
-      error =
-          std::system_category().message(static_cast<int>(GetLastError()));
+      error = std::system_category().message(static_cast<int>(GetLastError()));
       for (HANDLE handle : inherited_handles) {
         if (handle != nullptr) {
           CloseHandle(handle);
@@ -469,8 +462,7 @@ int ExecutePluginProcess(
   SIZE_T attribute_size = 0;
   InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_size);
   if (attribute_size == 0) {
-    error =
-        std::system_category().message(static_cast<int>(GetLastError()));
+    error = std::system_category().message(static_cast<int>(GetLastError()));
     for (HANDLE handle : inherited_handles) {
       CloseHandle(handle);
     }
@@ -478,16 +470,15 @@ int ExecutePluginProcess(
     return 2;
   }
   std::vector<unsigned char> attribute_storage(attribute_size);
-  auto* attributes = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(
-      attribute_storage.data());
+  auto* attributes =
+      reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data());
   const bool attributes_initialized =
       InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_size);
   if (!attributes_initialized ||
       !UpdateProcThreadAttribute(
-          attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-          inherited_handles, sizeof(inherited_handles), nullptr, nullptr)) {
-    error =
-        std::system_category().message(static_cast<int>(GetLastError()));
+          attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited_handles,
+          sizeof(inherited_handles), nullptr, nullptr)) {
+    error = std::system_category().message(static_cast<int>(GetLastError()));
     if (attributes_initialized) {
       DeleteProcThreadAttributeList(attributes);
     }
@@ -506,10 +497,10 @@ int ExecutePluginProcess(
   startup.StartupInfo.hStdError = inherited_handles[2];
   startup.lpAttributeList = attributes;
   PROCESS_INFORMATION process = {};
-  const BOOL created = CreateProcessW(
-      executable.c_str(), mutable_command.data(), nullptr, nullptr, TRUE,
-      EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo,
-      &process);
+  const BOOL created =
+      CreateProcessW(executable.c_str(), mutable_command.data(), nullptr,
+                     nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT, nullptr,
+                     nullptr, &startup.StartupInfo, &process);
   const DWORD create_error = created ? ERROR_SUCCESS : GetLastError();
   DeleteProcThreadAttributeList(attributes);
   for (HANDLE handle : inherited_handles) {
@@ -525,8 +516,7 @@ int ExecutePluginProcess(
   DWORD exit_code = 2;
   if (wait_result != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(process.hProcess, &exit_code)) {
-    error =
-        std::system_category().message(static_cast<int>(GetLastError()));
+    error = std::system_category().message(static_cast<int>(GetLastError()));
     exit_code = 2;
   }
   CloseHandle(process.hProcess);
@@ -568,13 +558,14 @@ void* OpenHrxLibrary(const std::filesystem::path& path, std::string& error) {
   }
   HMODULE handle = LoadLibraryExW(load_path.c_str(), nullptr, flags);
   if (handle == nullptr) {
-    error =
-        std::system_category().message(static_cast<int>(GetLastError()));
+    error = std::system_category().message(static_cast<int>(GetLastError()));
   }
   return static_cast<void*>(handle);
 }
 
-void CloseHrxLibrary(void* handle) { FreeLibrary(static_cast<HMODULE>(handle)); }
+void CloseHrxLibrary(void* handle) {
+  FreeLibrary(static_cast<HMODULE>(handle));
+}
 
 void* LookupHrxSymbol(void* handle, const char* name) {
   return reinterpret_cast<void*>(
@@ -649,10 +640,9 @@ ProbeResult EvaluateWindowsDeviceRecords(const nlohmann::json& records) {
   result.checks.push_back(
       {"device.access",
        result.usable_devices > 0 ? Status::kPass : Status::kFail,
-       result.usable_devices > 0
-           ? std::to_string(result.usable_devices) +
-                 " healthy AMD NPU device(s)"
-           : "no AMD NPU device has a healthy PnP state",
+       result.usable_devices > 0 ? std::to_string(result.usable_devices) +
+                                       " healthy AMD NPU device(s)"
+                                 : "no AMD NPU device has a healthy PnP state",
        {{"healthy_count", result.usable_devices}}});
   result.facts["target_family"] = result.target_family;
   return result;
@@ -665,17 +655,18 @@ ProbeResult CollectPlatformProbe(const ProbeOptions&) {
       {"architecture", ProcessArchitecture()},
       {"executable", ExecutablePath().u8string()},
       {"firmware_caveat",
-       "driver package contents do not prove which firmware image the KMD loaded"},
+       "driver package contents do not prove which firmware image the KMD "
+       "loaded"},
   };
   nlohmann::json records = nlohmann::json::array();
 
-  HDEVINFO devices = SetupDiGetClassDevsW(
-      &kComputeAcceleratorClass, nullptr, nullptr, DIGCF_PRESENT);
+  HDEVINFO devices = SetupDiGetClassDevsW(&kComputeAcceleratorClass, nullptr,
+                                          nullptr, DIGCF_PRESENT);
   if (devices == INVALID_HANDLE_VALUE) {
-    result.checks.push_back(
-        {"device.enumeration", Status::kError,
-         "SetupDiGetClassDevsW failed",
-         {{"win32_error", GetLastError()}}});
+    result.checks.push_back({"device.enumeration",
+                             Status::kError,
+                             "SetupDiGetClassDevsW failed",
+                             {{"win32_error", GetLastError()}}});
     return result;
   }
 
@@ -686,10 +677,10 @@ ProbeResult CollectPlatformProbe(const ProbeOptions&) {
       if (GetLastError() != ERROR_NO_MORE_ITEMS) {
         const DWORD enumeration_error = GetLastError();
         result.facts["enumeration_error"] = enumeration_error;
-        result.checks.push_back(
-            {"device.enumeration", Status::kError,
-             "SetupDiEnumDeviceInfo failed",
-             {{"win32_error", enumeration_error}}});
+        result.checks.push_back({"device.enumeration",
+                                 Status::kError,
+                                 "SetupDiEnumDeviceInfo failed",
+                                 {{"win32_error", enumeration_error}}});
       }
       break;
     }
@@ -699,8 +690,8 @@ ProbeResult CollectPlatformProbe(const ProbeOptions&) {
     std::wstring upper_instance = instance;
     std::transform(upper_instance.begin(), upper_instance.end(),
                    upper_instance.begin(), towupper);
-    if (upper_instance.rfind(L"PCI\\VEN_1022", 0) != 0 ||
-        !service || *service != L"IpuMcdmDriver") {
+    if (upper_instance.rfind(L"PCI\\VEN_1022", 0) != 0 || !service ||
+        *service != L"IpuMcdmDriver") {
       continue;
     }
 
@@ -708,13 +699,13 @@ ProbeResult CollectPlatformProbe(const ProbeOptions&) {
     ULONG problem = 0;
     const CONFIGRET configuration_status =
         CM_Get_DevNode_Status(&status, &problem, device.DevInst, 0);
-    const bool healthy =
-        configuration_status == CR_SUCCESS && (status & DN_STARTED) != 0 &&
-        problem == 0;
+    const bool healthy = configuration_status == CR_SUCCESS &&
+                         (status & DN_STARTED) != 0 && problem == 0;
     auto friendly =
         DeviceStringProperty(devices, device, DEVPKEY_Device_FriendlyName);
     if (!friendly) {
-      friendly = DeviceStringProperty(devices, device, DEVPKEY_Device_DeviceDesc);
+      friendly =
+          DeviceStringProperty(devices, device, DEVPKEY_Device_DeviceDesc);
     }
     const auto version =
         DeviceStringProperty(devices, device, DEVPKEY_Device_DriverVersion);

@@ -35,8 +35,8 @@ Report RunVersion(const Invocation& invocation) {
           {"version", manifest->value("version", "")},
       };
     } else {
-      report.data["package_manifest"] = {
-          {"path", PathToUtf8(*manifest_path)}, {"error", error}};
+      report.data["package_manifest"] = {{"path", PathToUtf8(*manifest_path)},
+                                         {"error", error}};
     }
   } else {
     report.data["package_manifest"] = nullptr;
@@ -52,10 +52,9 @@ Report RunVersion(const Invocation& invocation) {
       {"path", load.library ? PathToUtf8(load.library->path()) : ""},
       {"abi_version",
        load.library
-           ? nlohmann::json{
-                 {"major", load.library->runtime_version_major()},
-                 {"minor", load.library->runtime_version_minor()},
-                 {"patch", load.library->runtime_version_patch()}}
+           ? nlohmann::json{{"major", load.library->runtime_version_major()},
+                            {"minor", load.library->runtime_version_minor()},
+                            {"patch", load.library->runtime_version_patch()}}
            : nlohmann::json(nullptr)},
       {"candidates", std::move(candidates)},
       {"missing_symbols", load.missing_symbols},

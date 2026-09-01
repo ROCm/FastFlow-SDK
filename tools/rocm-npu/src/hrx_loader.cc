@@ -146,8 +146,7 @@ HrxLoadResult HrxLibrary::Load(
     ROCM_NPU_RESOLVE(buffer_map_with_mode, "hrx_buffer_map_with_mode");
     ROCM_NPU_RESOLVE(buffer_unmap, "hrx_buffer_unmap");
     ROCM_NPU_RESOLVE(buffer_flush_range, "hrx_buffer_flush_range");
-    ROCM_NPU_RESOLVE(buffer_invalidate_range,
-                     "hrx_buffer_invalidate_range");
+    ROCM_NPU_RESOLVE(buffer_invalidate_range, "hrx_buffer_invalidate_range");
     ROCM_NPU_RESOLVE(buffer_release, "hrx_buffer_release");
     ROCM_NPU_RESOLVE(executable_load_data, "hrx_executable_load_data");
     ROCM_NPU_RESOLVE(executable_export_info, "hrx_executable_export_info");
@@ -197,8 +196,7 @@ std::string HrxLibrary::ConsumeStatus(HrxStatus status,
   }
   char* message = nullptr;
   std::size_t length = 0;
-  HrxStatus formatting =
-      functions_.status_to_string(status, &message, &length);
+  HrxStatus formatting = functions_.status_to_string(status, &message, &length);
   const int code = functions_.status_code(status);
   std::string text =
       message == nullptr ? "unknown error" : std::string(message, length);

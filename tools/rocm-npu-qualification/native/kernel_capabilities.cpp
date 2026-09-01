@@ -31,8 +31,7 @@ std::string nonempty_string(const json& value, const char* label) {
   return result;
 }
 
-std::filesystem::path relative_path(
-    const json& value, const char* label) {
+std::filesystem::path relative_path(const json& value, const char* label) {
   const std::filesystem::path result = nonempty_string(value, label);
   if (result.is_absolute()) {
     throw std::runtime_error(
@@ -65,21 +64,18 @@ ZeroPointSemantics parse_zero_point(const std::string& value) {
 
 }  // namespace
 
-KernelCapabilities load_kernel_capabilities(
-    const std::filesystem::path& path) {
+KernelCapabilities load_kernel_capabilities(const std::filesystem::path& path) {
   std::ifstream input(path);
   if (!input) {
-    throw std::runtime_error(
-        "cannot open kernel capability manifest: " + path.string());
+    throw std::runtime_error("cannot open kernel capability manifest: " +
+                             path.string());
   }
   json document;
   input >> document;
   if (document.at("schema_version").get<int>() != 1 ||
       document.at("kind").get<std::string>() !=
           "rocm-npu-fastflowlm-kernel-qualification-capabilities" ||
-      document.at("provenance")
-          .at("public_fastflowlm_abi")
-          .get<bool>()) {
+      document.at("provenance").at("public_fastflowlm_abi").get<bool>()) {
     throw std::runtime_error(
         "invalid kernel capability manifest identity or provenance");
   }
@@ -104,9 +100,8 @@ KernelCapabilities load_kernel_capabilities(
       shape.at("k").get<size_t>(),
       shape.at("n").get<size_t>(),
       positive_float(policy.at("relative_tolerance"), "relative_tolerance"),
-      positive_float(
-          policy.at("structured_absolute_tolerance"),
-          "structured_absolute_tolerance"),
+      positive_float(policy.at("structured_absolute_tolerance"),
+                     "structured_absolute_tolerance"),
       {}};
   if (result.m != 1024 || result.k != 1024 || result.n != 128) {
     throw std::runtime_error(
@@ -120,28 +115,23 @@ KernelCapabilities load_kernel_capabilities(
     const auto& gemm = family.at("gemm_policy");
     FamilyCapability parsed{
         nonempty_string(family.at("name"), "family.name"),
-        relative_path(
-            family.at("xclbin_directory"), "family.xclbin_directory"),
+        relative_path(family.at("xclbin_directory"), "family.xclbin_directory"),
         relative_path(xclbins.at("dequant"), "xclbins.dequant"),
         relative_path(xclbins.at("mm"), "xclbins.mm"),
         nonempty_string(groups.at("dequant"), "groups.dequant"),
         nonempty_string(groups.at("mm"), "groups.mm"),
         nonempty_string(groups.at("shared_subset"), "groups.shared_subset"),
         parse_nibble(family.at("nibble_semantics").get<std::string>()),
-        parse_zero_point(
-            family.at("zero_point_semantics").get<std::string>()),
+        parse_zero_point(family.at("zero_point_semantics").get<std::string>()),
         {
-            positive_float(
-                gemm.at("full_nibble_absolute_tolerance"),
-                "full_nibble_absolute_tolerance"),
-            positive_float(
-                gemm.at("full_affine_absolute_tolerance"),
-                "full_affine_absolute_tolerance"),
+            positive_float(gemm.at("full_nibble_absolute_tolerance"),
+                           "full_nibble_absolute_tolerance"),
+            positive_float(gemm.at("full_affine_absolute_tolerance"),
+                           "full_affine_absolute_tolerance"),
         }};
     if (!family_names.insert(parsed.name).second) {
       throw std::runtime_error(
-          "duplicate family in kernel capability manifest: " +
-          parsed.name);
+          "duplicate family in kernel capability manifest: " + parsed.name);
     }
     result.families.push_back(std::move(parsed));
   }

@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Presubmit owns Python format/lint; expensive build jobs do not rerun ruff."""
+"""Presubmit Python format and lint policy."""
 
 from __future__ import annotations
 
@@ -42,11 +42,14 @@ def test_ruff_config_covers_first_party_python_only():
     assert "E402" in config["lint"]["ignore"]
     assert "build_tools" in config["lint"]["isort"]["known-first-party"]
     assert "rocm_npu_qualification" in config["lint"]["isort"]["known-first-party"]
+    assert f"ruff=={config['required-version'].lstrip('=')}" in (
+        ROOT / "requirements" / "test.txt"
+    ).read_text(encoding="utf-8")
 
 
 def test_presubmit_runs_config_driven_ruff_check_and_format():
     presubmit = workflow_job(read_workflow("ci.yml"), "presubmit")
-    assert "ruff==0.15.21" in presubmit
+    assert "requirements/test.lock" in presubmit
     assert "python -m ruff check" in presubmit
     assert "python -m ruff format --check" in presubmit
     assert "--select" not in presubmit

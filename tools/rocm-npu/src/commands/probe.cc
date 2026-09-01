@@ -31,10 +31,9 @@ Report RunProbe(const Invocation& invocation) {
        runtime.library ? PathToUtf8(runtime.library->path()) : std::string()},
       {"abi_version",
        runtime.library
-           ? nlohmann::json{
-                 {"major", runtime.library->runtime_version_major()},
-                 {"minor", runtime.library->runtime_version_minor()},
-                 {"patch", runtime.library->runtime_version_patch()}}
+           ? nlohmann::json{{"major", runtime.library->runtime_version_major()},
+                            {"minor", runtime.library->runtime_version_minor()},
+                            {"patch", runtime.library->runtime_version_patch()}}
            : nlohmann::json(nullptr)},
       {"missing_symbols", runtime.missing_symbols},
       {"load_errors", runtime.errors},

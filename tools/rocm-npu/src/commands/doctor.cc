@@ -16,15 +16,18 @@ Report RunDoctor(const Invocation& invocation) {
 
   const auto manifest_path = FindProductManifest();
   if (!manifest_path) {
-    AddCheck(report, {"package.manifest", Status::kFail,
-                      "product manifest was not found", {}});
+    AddCheck(report, {"package.manifest",
+                      Status::kFail,
+                      "product manifest was not found",
+                      {}});
   } else {
     std::string error;
     auto manifest = ReadJsonFile(*manifest_path, error);
     if (!manifest) {
-      AddCheck(report,
-               {"package.manifest", Status::kFail, error,
-                {{"path", PathToUtf8(*manifest_path)}}});
+      AddCheck(report, {"package.manifest",
+                        Status::kFail,
+                        error,
+                        {{"path", PathToUtf8(*manifest_path)}}});
     } else {
       const std::string version = manifest->value("version", "");
       nlohmann::json inventory_details;
@@ -45,7 +48,8 @@ Report RunDoctor(const Invocation& invocation) {
       const bool matches = version_matches && inventory_matches;
       AddCheck(
           report,
-          {"package.manifest", matches ? Status::kPass : Status::kFail,
+          {"package.manifest",
+           matches ? Status::kPass : Status::kFail,
            matches
                ? (development_manifest
                       ? "development manifest version matches; no packaged "
@@ -81,22 +85,22 @@ Report RunDoctor(const Invocation& invocation) {
                 ? "an HRX runtime candidate is present"
                 : "no HRX runtime candidate is present",
             {}});
-  AddCheck(report,
-           {"runtime.library.load",
-            load.library ? Status::kPass : Status::kFail,
-            load.library ? "HRX runtime loaded"
-                         : "HRX runtime could not be loaded",
-            {{"errors", load.errors}}});
-  AddCheck(report,
-           {"runtime.symbols",
-            load.library && load.missing_symbols.empty() ? Status::kPass
-                                                         : Status::kFail,
-            load.library && load.missing_symbols.empty()
-                ? "all required public HRX symbols resolved"
-                : (load.missing_symbols.empty()
-                       ? "symbols could not be resolved because HRX did not load"
-                       : "required public HRX symbols are missing"),
-            {{"missing", load.missing_symbols}}});
+  AddCheck(report, {"runtime.library.load",
+                    load.library ? Status::kPass : Status::kFail,
+                    load.library ? "HRX runtime loaded"
+                                 : "HRX runtime could not be loaded",
+                    {{"errors", load.errors}}});
+  AddCheck(
+      report,
+      {"runtime.symbols",
+       load.library && load.missing_symbols.empty() ? Status::kPass
+                                                    : Status::kFail,
+       load.library && load.missing_symbols.empty()
+           ? "all required public HRX symbols resolved"
+           : (load.missing_symbols.empty()
+                  ? "symbols could not be resolved because HRX did not load"
+                  : "required public HRX symbols are missing"),
+       {{"missing", load.missing_symbols}}});
   AddCheck(
       report,
       {"runtime.abi",
@@ -107,10 +111,9 @@ Report RunDoctor(const Invocation& invocation) {
          {{"major", HRX_VERSION_MAJOR}, {"minor", HRX_VERSION_MINOR}}},
         {"actual",
          load.library
-             ? nlohmann::json{
-                   {"major", load.library->runtime_version_major()},
-                   {"minor", load.library->runtime_version_minor()},
-                   {"patch", load.library->runtime_version_patch()}}
+             ? nlohmann::json{{"major", load.library->runtime_version_major()},
+                              {"minor", load.library->runtime_version_minor()},
+                              {"patch", load.library->runtime_version_patch()}}
              : nlohmann::json(nullptr)}}});
   if (!load.library) {
     return report;
@@ -122,10 +125,10 @@ Report RunDoctor(const Invocation& invocation) {
   const std::string initialize_error =
       library.ConsumeStatus(initialize, "hrx_gpu_initialize");
   const bool initialized = initialize_error.empty();
-  AddCheck(report,
-           {"runtime.initialize",
-            initialized ? Status::kPass : Status::kFail,
-            initialized ? "HRX initialized" : initialize_error, {}});
+  AddCheck(report, {"runtime.initialize",
+                    initialized ? Status::kPass : Status::kFail,
+                    initialized ? "HRX initialized" : initialize_error,
+                    {}});
   if (!initialized) {
     return report;
   }
@@ -134,14 +137,14 @@ Report RunDoctor(const Invocation& invocation) {
   HrxStatus count_status = functions.gpu_device_count(&count);
   const std::string count_error =
       library.ConsumeStatus(count_status, "hrx_gpu_device_count");
-  AddCheck(report,
-           {"runtime.device_count",
-            count_error.empty() && count > 0 ? Status::kPass : Status::kFail,
-            !count_error.empty()
-                ? count_error
-                : (count > 0 ? "HRX reports one or more devices"
-                             : "HRX reports zero devices"),
-            {{"count", count}}});
+  AddCheck(
+      report,
+      {"runtime.device_count",
+       count_error.empty() && count > 0 ? Status::kPass : Status::kFail,
+       !count_error.empty() ? count_error
+                            : (count > 0 ? "HRX reports one or more devices"
+                                         : "HRX reports zero devices"),
+       {{"count", count}}});
 
   HrxStatus shutdown = functions.gpu_shutdown();
   const std::string shutdown_error =

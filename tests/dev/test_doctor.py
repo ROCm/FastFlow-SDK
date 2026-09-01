@@ -120,6 +120,7 @@ class TestDoctorCommand:
             mock.patch.object(paths, "PATCHES", tmp_path / "patches"),
             mock.patch.object(paths, "PROJ", tmp_path / "projects"),
             mock.patch.object(doctor, "check_system", return_value=(True, [])),
+            mock.patch.object(doctor, "check_format_tools", return_value=True),
             mock.patch.object(
                 doctor.patches, "check_pins", return_value=[]
             ) as check_pins,
@@ -150,6 +151,7 @@ class TestDoctorCommand:
             mock.patch.object(
                 doctor, "check_system", return_value=(False, ["missing-system"])
             ),
+            mock.patch.object(doctor, "check_format_tools", return_value=True),
             mock.patch.object(doctor.patches, "check_pins", return_value=["hrx"]),
             mock.patch.object(
                 doctor.patches,
@@ -167,6 +169,29 @@ class TestDoctorCommand:
         assert "MISSING system deps" in text
         assert "SUBMODULE PIN problems in: hrx" in text
 
+    def test_missing_format_tools_produce_nonzero_return(self, tmp_path, capsys):
+        self._repository_layout(tmp_path)
+        with (
+            mock.patch.object(paths, "PATCHES", tmp_path / "patches"),
+            mock.patch.object(paths, "PROJ", tmp_path / "projects"),
+            mock.patch.object(doctor, "check_system", return_value=(True, [])),
+            mock.patch.object(doctor, "check_format_tools", return_value=False),
+            mock.patch.object(doctor.patches, "check_pins", return_value=[]),
+            mock.patch.object(
+                doctor.patches,
+                "doctor_patch_states",
+                return_value=["applied"],
+            ),
+        ):
+            result = doctor.cmd_doctor(
+                SimpleNamespace(profile="fastflowlm", deep=False)
+            )
+
+        assert result == 1
+        text = capsys.readouterr().out
+        assert "MISSING format tools" in text
+        assert doctor.format_tools_install_command() in text
+
     def test_compiler_stack_checks_prefetch_and_returns_success(self, tmp_path):
         patch_file = tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
         patch_file.parent.mkdir(parents=True)
@@ -175,6 +200,7 @@ class TestDoctorCommand:
             mock.patch.object(paths, "PATCHES", tmp_path / "patches"),
             mock.patch.object(paths, "PROJ", tmp_path / "projects"),
             mock.patch.object(doctor, "check_system", return_value=(True, [])),
+            mock.patch.object(doctor, "check_format_tools", return_value=True),
             mock.patch.object(doctor.patches, "check_pins", return_value=[]),
             mock.patch.object(
                 doctor.patches, "eudsl_cache_ok", return_value=True
@@ -207,6 +233,7 @@ class TestDoctorCommand:
             mock.patch.object(paths, "PATCHES", tmp_path / "patches"),
             mock.patch.object(paths, "PROJ", tmp_path / "projects"),
             mock.patch.object(doctor, "check_system", return_value=(True, [])),
+            mock.patch.object(doctor, "check_format_tools", return_value=True),
             mock.patch.object(doctor.patches, "check_pins", return_value=[]),
             mock.patch.object(doctor.patches, "eudsl_cache_ok", return_value=True),
             mock.patch.object(
