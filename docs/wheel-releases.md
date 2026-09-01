@@ -179,17 +179,19 @@ reviews the recorded policy satisfaction in `qualification-index.json`.
 
 The GitHub prerelease publication job is currently disabled. Download the
 complete collected Actions artifact, create the draft release and tag manually,
-then upload the complete prepared release payload (including runtime,
-FastFlowLM, qualification, compiler, and ops wheels, native archives, metadata, and
-indexes), `candidate-manifest.json`, `SHA256SUMS`,
-`candidate-SHA256SUMS`, the aggregate evidence ZIP, its external
-`.zip.sha256`, and `qualification-index.json`. Before publishing, recheck that
-every staged wheel still has the hash recorded in the candidate manifest. Any
+then run `rocm-npu qualify stage-release` to assemble a single flat upload
+directory from that payload plus the intake aggregate
+(`qualification-evidence-<version>.zip`), sidecar, and
+`qualification-index.json` into an empty output directory. Upload every
+top-level file from that directory (wheels including ops, native archives,
+metadata, checksums, candidate manifest, and the three evidence attachments).
+Do not upload nested `simple/` trees. Before publishing, recheck that every
+staged wheel still has the hash recorded in the candidate manifest. Any
 rebuilt or replaced wheel invalidates the evidence and requires a new candidate
 plus new runs.
-Verify the aggregate ZIP with `rocm-npu qualify verify` before manually
-publishing. No workflow creates or publishes the release, transfers manual
-evidence, or signs evidence.
+Verify the aggregate ZIP with `rocm-npu qualify verify` before staging or
+manually publishing. No workflow creates or publishes the release, transfers
+manual evidence, or signs evidence.
 
 `SHA256SUMS` covers the prepared top-level product assets.
 `candidate-SHA256SUMS` separately covers `candidate-manifest.json` and its

@@ -251,6 +251,27 @@ Artifact transfer and publication remain manual. See
 [wheel releases](wheel-releases.md) for the operator flow; rebuilding any
 candidate wheel invalidates all collected evidence.
 
+Stage the flat GitHub-upload directory from the CI release payload plus intake
+outputs. The command copies exactly the product files listed in payload
+`SHA256SUMS` (including `SHA256SUMS` itself), the separate
+`candidate-manifest.json` / `candidate-SHA256SUMS` pair, ignores nested trees
+such as `simple/`, adds the aggregate ZIP, its `.sha256` sidecar, and
+`qualification-index.json`, re-verifies the aggregate, and fails if anything is
+missing or unexpected. The aggregate basename must be
+`qualification-evidence-<version>.zip`, and `--output-dir` must be empty (or
+absent), matching intake:
+
+```bash
+rocm-npu qualify stage-release \
+  --payload-dir release \
+  --aggregate qualification-evidence-<version>.zip \
+  --index assembled/qualification-index.json \
+  --output-dir github-upload \
+  --json
+```
+
+Upload every top-level file from `github-upload/` to the draft prerelease.
+
 For a shared cache across worktrees:
 
 ```powershell
