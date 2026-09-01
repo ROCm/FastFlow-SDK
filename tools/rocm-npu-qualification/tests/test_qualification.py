@@ -20,18 +20,18 @@ from jsonschema import Draft202012Validator, ValidationError
 ROOT = Path(__file__).resolve().parents[3]
 QUALIFICATION_PYTHON = ROOT / "tools" / "rocm-npu-qualification" / "python"
 
-from rocm_npu_qualification import (  # noqa: E402
+from rocm_npu_qualification import (
     benchmark,
     cli,
     installation,
     models,
-    offline,  # noqa: E402
+    offline,
     power,
     prompts,
     report,
     runner,
 )
-from rocm_npu_qualification.commands import (  # noqa: E402
+from rocm_npu_qualification.commands import (
     CommandResult,
     _transcript_contains_phrase,
     _wav_duration_seconds,
@@ -40,19 +40,19 @@ from rocm_npu_qualification.commands import (  # noqa: E402
     run_command,
     serve_probe,
 )
-from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
-from rocm_npu_qualification.fastflowlm import (  # noqa: E402
+from rocm_npu_qualification.evidence import EvidenceWriter
+from rocm_npu_qualification.fastflowlm import (
     require_1k_checkpoint,
     require_benchmark_schedule,
     verify_xclbin_inventory,
 )
 from rocm_npu_qualification.hashing import (
-    canonical_json_sha256,  # noqa: E402
-    file_inventory,  # noqa: E402
+    canonical_json_sha256,
+    file_inventory,
 )
-from rocm_npu_qualification.numeric_runtime import NUMERIC_RUNTIME  # noqa: E402
-from rocm_npu_qualification.offline import EvidenceError, pack_evidence  # noqa: E402
-from rocm_npu_qualification.profiles import (  # noqa: E402
+from rocm_npu_qualification.numeric_runtime import NUMERIC_RUNTIME
+from rocm_npu_qualification.offline import EvidenceError, pack_evidence
+from rocm_npu_qualification.profiles import (
     ProfileError,
     load_profile,
     validate_profile,

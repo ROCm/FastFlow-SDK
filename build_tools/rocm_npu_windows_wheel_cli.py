@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from build_tools.fastflowlm_package import (  # noqa: E402
+from build_tools.fastflowlm_package import (
     FASTFLOWLM_ARTIFACTS,
     WINDOWS_WHEEL_VENV,
     package_fastflowlm_wheels,
@@ -21,7 +21,7 @@ from build_tools.fastflowlm_package import (  # noqa: E402
     smoke_fastflowlm,
     verify_fastflowlm_wheels,
 )
-from build_tools.package_version import PACKAGE_VERSION_ENV  # noqa: E402
+from build_tools.package_version import PACKAGE_VERSION_ENV
 
 
 def _is_windows_host() -> bool:

@@ -11,7 +11,7 @@ import json
 import re
 import shutil
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from build_tools import release_policy
@@ -90,10 +90,9 @@ def resolve_release_inputs(
         raise RuntimeError(f"unsupported wheel publish target: {publish_target}")
     base_version = release_policy.release_base_version(policy_path)
     if not package_version:
-        timestamp = now or datetime.now(timezone.utc)
+        timestamp = now or datetime.now(UTC)
         package_version = (
-            f"{base_version}.dev"
-            f"{timestamp.astimezone(timezone.utc):%Y%m%d}{run_number:04d}"
+            f"{base_version}.dev{timestamp.astimezone(UTC):%Y%m%d}{run_number:04d}"
         )
     package_version = validate_release_version(package_version, policy_path)
     is_prerelease = package_version != base_version

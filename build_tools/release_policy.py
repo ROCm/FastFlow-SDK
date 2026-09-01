@@ -34,9 +34,7 @@ def _wheel_release(path: Path) -> dict[str, object]:
         raise RuntimeError(f"unsupported release policy schema: {path}")
     release = policy.get("wheel_release")
     if not isinstance(release, dict):
-        raise RuntimeError(  # noqa: TRY004
-            f"release policy wheel_release table is missing: {path}"
-        )
+        raise RuntimeError(f"release policy wheel_release table is missing: {path}")
     return release
 
 

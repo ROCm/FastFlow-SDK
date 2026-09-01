@@ -29,7 +29,16 @@ def test_ruff_config_covers_first_party_python_only():
     assert config["required-version"] == "==0.15.21"
     assert config["target-version"] == "py312"
     assert "projects" in config["extend-exclude"]
-    assert config["lint"]["select"] == ["E4", "E7", "E9", "F", "I"]
+    assert config["lint"]["select"] == [
+        "E4",
+        "E7",
+        "E9",
+        "F",
+        "I",
+        "UP",
+        "B",
+        "RUF100",
+    ]
     assert "E402" in config["lint"]["ignore"]
     assert "build_tools" in config["lint"]["isort"]["known-first-party"]
     assert "rocm_npu_qualification" in config["lint"]["isort"]["known-first-party"]

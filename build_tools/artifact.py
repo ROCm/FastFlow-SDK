@@ -166,13 +166,11 @@ def verify_file_inventory(
     """Validates and verifies a complete portable file inventory."""
     root = Path(root)
     if not isinstance(records, list):
-        raise RuntimeError("file inventory must be a list")  # noqa: TRY004
+        raise RuntimeError("file inventory must be a list")
     expected: dict[str, Mapping[str, object]] = {}
     for entry in records:
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            raise RuntimeError(  # noqa: TRY004
-                "file inventory contains an invalid file record"
-            )
+            raise RuntimeError("file inventory contains an invalid file record")
         relative = PurePosixPath(entry["path"])
         if (
             relative.is_absolute()

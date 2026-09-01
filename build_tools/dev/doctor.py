@@ -252,7 +252,7 @@ def cmd_doctor(args):
         states = patches.doctor_patch_states(
             sub_dir.name, submodule_dir, patch_files, deep=deep
         )
-        for patch_file, state in zip(patch_files, states):
+        for patch_file, state in zip(patch_files, states, strict=True):
             print(
                 f"  [{'ok   ' if state == 'applied' else state.upper()}] "
                 f"{sub_dir.name}/{patch_file.name}"

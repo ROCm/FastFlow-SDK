@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
 
-from rocm_npu_qualification.fastflowlm import (  # noqa: E402
+from rocm_npu_qualification.fastflowlm import (
     extract_raw_outputs,
     smoke_phrase_matches,
     verify_xclbin_inventory,
@@ -26,7 +26,7 @@ from rocm_npu_qualification.fastflowlm import (  # noqa: E402
 from rocm_npu_qualification.fastflowlm import (
     require_1k_checkpoint as _require_1k_checkpoint,
 )
-from rocm_npu_qualification.profiles import load_profile  # noqa: E402
+from rocm_npu_qualification.profiles import load_profile
 
 IS_WINDOWS = os.name == "nt"
 
@@ -460,7 +460,7 @@ def main():
                 f"expected {len(smoke_turns)}: {run_output}"
             )
         for turn, (raw_text, (_, expected, expected_regex)) in enumerate(
-            zip(raw_texts, smoke_turns), start=1
+            zip(raw_texts, smoke_turns, strict=True), start=1
         ):
             if not re.search(r"[A-Za-z]{4,}", raw_text):
                 raise SmokeFailure(
@@ -536,4 +536,4 @@ if __name__ == "__main__":
         main()
     except SmokeFailure as error:
         print(f"FastFlowLM HRX smoke: FAIL: {error}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from error

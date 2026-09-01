@@ -675,7 +675,7 @@ def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
                 f"{path} has different lengths: "
                 f"canonical={len(left)}, candidate={len(right)}"
             )
-        for index, (left_item, right_item) in enumerate(zip(left, right)):
+        for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
             difference = _first_difference(left_item, right_item, f"{path}[{index}]")
             if difference is not None:
                 return difference

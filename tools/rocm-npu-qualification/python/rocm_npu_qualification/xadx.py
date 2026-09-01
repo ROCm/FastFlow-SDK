@@ -1298,12 +1298,12 @@ def run_recipe(
         for executable, ordinal, buffers, _, records in plan:
             immutable = {
                 builtins.id(allocation): bytes(allocation[1])
-                for record, allocation in zip(records, buffers)
+                for record, allocation in zip(records, buffers, strict=True)
                 if record["direction"] == "input"
                 and builtins.id(allocation) not in chained_allocations
             }
             runtime.run(executable, ordinal, buffers)
-            for record, allocation in zip(records, buffers):
+            for record, allocation in zip(records, buffers, strict=True):
                 if builtins.id(allocation) in chained_allocations:
                     if hasattr(runtime, "inspect_guards"):
                         prefix, suffix = runtime.inspect_guards(allocation)
@@ -1365,10 +1365,10 @@ def run_recipe(
             runtime = session.runtime
             variant = variants[round_index % len(variants)]
             plan = prepared[0]
-            for stage, (_, _, buffers, _, _) in zip(case["stages"], plan):
+            for stage, (_, _, buffers, _, _) in zip(case["stages"], plan, strict=True):
                 if stage["name"] != variant["stage"]:
                     continue
-                for record, allocation in zip(stage["buffers"], buffers):
+                for record, allocation in zip(stage["buffers"], buffers, strict=True):
                     if record["name"] != variant["buffer"]:
                         continue
                     handle, storage = allocation

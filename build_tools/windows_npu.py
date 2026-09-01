@@ -126,8 +126,7 @@ ConvertTo-Json -InputObject $devices -Compress
             "-Command",
             script,
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )

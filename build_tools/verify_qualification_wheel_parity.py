@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
 
-from rocm_npu_qualification.candidate import (  # noqa: E402
+from rocm_npu_qualification.candidate import (
     verify_qualification_wheel_parity,
 )
 

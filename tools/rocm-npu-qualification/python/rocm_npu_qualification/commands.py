@@ -18,9 +18,10 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization:\s*(?:bearer|basic))\s+\S+"),
@@ -259,8 +260,8 @@ def _post_audio_transcription(
         'Content-Disposition: form-data; name="file"; '
         f'filename="{audio_path.name}"\r\n'
         "Content-Type: application/octet-stream\r\n\r\n"
-    ).encode("utf-8")
-    closing = f"\r\n--{boundary}--\r\n".encode("utf-8")
+    ).encode()
+    closing = f"\r\n--{boundary}--\r\n".encode()
     body = preamble + audio_bytes + closing
     request = urllib.request.Request(
         f"{base_url}/v1/audio/transcriptions",

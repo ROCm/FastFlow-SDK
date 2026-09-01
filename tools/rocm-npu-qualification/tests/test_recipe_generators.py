@@ -55,7 +55,7 @@ def test_coordinate_probe_pairs_survive_bf16_without_aliasing():
     index = np.arange(blocks, dtype=np.int64)
     low = index & 0x7F
     high = index >> 7
-    assert len(set(zip(low.tolist(), high.tolist()))) == blocks
+    assert len(set(zip(low.tolist(), high.tolist(), strict=True))) == blocks
     assert np.array_equal(generators.widen(generators.bf16(low)).astype(np.int64), low)
     assert np.array_equal(
         generators.widen(generators.bf16(high)).astype(np.int64), high

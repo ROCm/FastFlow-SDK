@@ -16,12 +16,12 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[3]
 
-from rocm_npu_qualification import cli, installation  # noqa: E402
-from rocm_npu_qualification.candidate import (  # noqa: E402
+from rocm_npu_qualification import cli, installation
+from rocm_npu_qualification.candidate import (
     canonical_candidate_bytes,
 )
-from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
-from rocm_npu_qualification.offline import (  # noqa: E402
+from rocm_npu_qualification.evidence import EvidenceWriter
+from rocm_npu_qualification.offline import (
     CandidateMismatchError,
     EvidenceError,
     _reconcile_xadx_report,
@@ -30,7 +30,7 @@ from rocm_npu_qualification.offline import (  # noqa: E402
     verify_archive,
     verify_evidence,
 )
-from tests.support.qualification import (  # noqa: E402
+from tests.support.qualification import (
     make_candidate as _candidate,
 )
 from tests.support.qualification import (
