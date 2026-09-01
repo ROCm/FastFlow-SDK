@@ -62,15 +62,8 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
 
-      # Rule set lives in ruff.toml. Submodules under projects/ are excluded.
-      - name: Lint and format Python
-        run: |
-          python -m ruff check
-          python -m ruff format --check
-
-      # First-party C/C++ only (`python dev.py clang-format`).
-      - name: Format C/C++
-        run: python dev.py clang-format --check
+      - name: Format and lint
+        run: python dev.py format --check
 
       - name: Test developer command core
         run: python -m pytest --basetemp=.pytest-tmp -m presubmit

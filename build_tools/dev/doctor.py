@@ -5,13 +5,11 @@
 import os
 import re
 import shutil
-import subprocess
-import sys
 import time
 from pathlib import Path
 
 from build_tools import environment, paths
-from build_tools.dev import clang_format, patches
+from build_tools.dev import clang_format, format_tools, patches
 from build_tools.dev.profiles import profile
 from build_tools.fastflowlm_deps import (
     MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
@@ -52,7 +50,7 @@ def eudsl_version_from_patch(text: str) -> str | None:
 
 
 def ruff_pinned_version() -> str:
-    return clang_format.requirement_pin("ruff")
+    return format_tools.requirement_pin("ruff")
 
 
 def format_pip_packages() -> list[str]:
@@ -63,21 +61,12 @@ def format_pip_packages() -> list[str]:
 
 
 def format_tools_install_command() -> str:
-    return clang_format.install_command()
+    return format_tools.install_command()
 
 
 def _ruff_status() -> tuple[bool, str]:
-    expected = ruff_pinned_version()
-    try:
-        output = subprocess.check_output(
-            [sys.executable, "-m", "ruff", "--version"],
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return False, f"ruff {expected} is not installed"
-    if expected not in output:
-        return False, f"expected ruff {expected}, got: {output.strip()}"
-    return True, output.strip()
+    command, detail = format_tools.resolve_pinned_ruff()
+    return command is not None, detail
 
 
 def check_format_tools(*, verbose: bool = True) -> bool:

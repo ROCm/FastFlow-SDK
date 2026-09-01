@@ -29,7 +29,8 @@ def test_clang_format_config_uses_google_style():
 def test_presubmit_runs_pinned_clang_format_check():
     presubmit = workflow_job(read_workflow("ci.yml"), "presubmit")
     assert "requirements/test.lock" in presubmit
-    assert "python dev.py clang-format --check" in presubmit
+    assert "python dev.py format --check" in presubmit
+    assert "python dev.py clang-format --check" not in presubmit
     assert f"clang-format=={clang_format.PINNED_VERSION}" in (
         ROOT / "requirements" / "test.txt"
     ).read_text(encoding="utf-8")
@@ -86,11 +87,17 @@ def test_pinned_clang_format_accepts_first_party_cxx():
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stderr + result.stdout
+    output = result.stderr + result.stdout
+    assert result.returncode == 0, output
+    assert (
+        f"{len(clang_format.first_party_cxx_files())} C/C++ files already formatted"
+        in output
+    )
 
 
 def test_contributing_documents_pinned_format_tools():
     text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     assert "requirements/test.lock" in text
-    assert "python3 dev.py clang-format --check" in text
-    assert "python3 -m ruff format --check" in text
+    assert "python3 dev.py format --check" in text
+    assert "python3 -m ruff" not in text
+    assert "python3 dev.py clang-format --check" not in text
