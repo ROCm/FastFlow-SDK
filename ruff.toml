@@ -20,6 +20,9 @@ select = [
     "E9",  # pycodestyle runtime syntax errors
     "F",   # pyflakes
     "I",   # isort
+    "UP",  # pyupgrade
+    "B",  # flake8-bugbear
+    "RUF100",  # unused noqa directives
 ]
 ignore = [
     # Standalone tools and tests patch sys.path before importing local modules.

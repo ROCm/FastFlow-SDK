@@ -62,7 +62,7 @@ def load_capabilities(path=CAPABILITIES_SOURCE):
             or family.get("zero_point_semantics") not in {"add-after-scale", "ignored"}
             or any(
                 not value or parsed.is_absolute() or ".." in parsed.parts
-                for value, parsed in zip(paths_to_check, parsed_paths)
+                for value, parsed in zip(paths_to_check, parsed_paths, strict=True)
             )
         ):
             raise RuntimeError("invalid FastFlowLM family capability")

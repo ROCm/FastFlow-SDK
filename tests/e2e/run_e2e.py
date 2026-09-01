@@ -35,7 +35,7 @@ REPOSITORY_ROOT = HERE.parent.parent
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from build_tools import iron  # noqa: E402
+from build_tools import iron
 
 ROOT = iron.ROOT
 PROJ = iron.PROJ

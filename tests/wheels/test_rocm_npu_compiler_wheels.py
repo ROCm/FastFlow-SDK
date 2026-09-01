@@ -386,8 +386,8 @@ class TestRocmNpuCompilerWheels:
         metadata = self.metadata(wheel)
         with zipfile.ZipFile(wheel) as archive:
             names = archive.namelist()
-            assert not any((name.endswith("AIEAggregateCAPI.dll") for name in names))
-            assert not any((name.endswith(".lib") for name in names))
+            assert not any(name.endswith("AIEAggregateCAPI.dll") for name in names)
+            assert not any(name.endswith(".lib") for name in names)
         assert metadata["Requires-Python"] == ">=3.12,<3.15"
         assert set(metadata.get_all("Requires-Dist") or ()) == {
             "aiofiles ==25.1.0",
@@ -633,7 +633,7 @@ class TestRocmNpuCompilerWheels:
             ),
         ):
             graph = verify_windows_compiler_wheels(selected)
-        assert any((name.endswith("_mlir.pyd") for name in graph))
+        assert any(name.endswith("_mlir.pyd") for name in graph)
 
     def test_windows_closure_rejects_versioned_cpython_runtime(self, tmp_path):
         root = tmp_path

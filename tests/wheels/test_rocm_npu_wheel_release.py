@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -245,7 +245,7 @@ class TestRocmNpuWheelRelease:
             "main",
             "",
             7,
-            now=datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc),
+            now=datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
             policy_path=policy,
         )
 
@@ -398,7 +398,7 @@ class TestRocmNpuWheelRelease:
         }
         assert checksum_names == published_names
         assert "rocm-npu-release-manifest.json" in checksum_names
-        assert not any((name.startswith("simple/") for name in checksum_names))
+        assert not any(name.startswith("simple/") for name in checksum_names)
 
     def test_prepare_release_payload_rejects_version_outside_policy(self, tmp_path):
         root = tmp_path

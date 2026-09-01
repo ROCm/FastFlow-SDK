@@ -69,7 +69,10 @@ def benchmark_csv_checkpoint(
                 )
         parsed = {
             BENCHMARK_CSV_HEADER[0]: context_length,
-            **{name: value for name, value in zip(BENCHMARK_CSV_HEADER[1:], numeric)},
+            **{
+                name: value
+                for name, value in zip(BENCHMARK_CSV_HEADER[1:], numeric, strict=True)
+            },
         }
         parsed_rows.append((row, parsed))
 

@@ -23,10 +23,10 @@ sys.path[:0] = [
     str(ROOT / "tests" / "compiler"),
 ]
 
-import run_e2e  # noqa: E402
-import verify_compiler_bindings  # noqa: E402
+import run_e2e
+import verify_compiler_bindings
 
-from build_tools import (  # noqa: E402
+from build_tools import (
     compiler_product,
     compiler_wheels,
     hrx_runtime,
@@ -36,9 +36,9 @@ from build_tools import (  # noqa: E402
     npu_test_package,
     paths,
 )
-from build_tools.archive import extract_archive_atomic  # noqa: E402
-from build_tools.artifact import sha256_file  # noqa: E402
-from build_tools.dev import compiler_build as build  # noqa: E402
+from build_tools.archive import extract_archive_atomic
+from build_tools.artifact import sha256_file
+from build_tools.dev import compiler_build as build
 
 
 def write_file(path: Path, data: bytes = b"x", executable: bool = False) -> None:

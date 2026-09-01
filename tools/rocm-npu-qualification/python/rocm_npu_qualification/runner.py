@@ -13,7 +13,7 @@ import re
 import sys
 import time
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -267,7 +267,7 @@ def _select_benchmark_models(discovered: list[dict[str, Any]]) -> list[dict[str,
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _resolve_asr_sample(stack: ExitStack) -> Path | None:
@@ -1140,7 +1140,7 @@ def _test_model(
                 )
             else:
                 for turn_number, (raw, turn) in enumerate(
-                    zip(raw_outputs, turns), start=1
+                    zip(raw_outputs, turns, strict=True), start=1
                 ):
                     expected = turn.get("expected")
                     expected_regex = turn.get("expected_regex")

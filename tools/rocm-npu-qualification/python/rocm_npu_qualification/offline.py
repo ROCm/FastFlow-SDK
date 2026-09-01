@@ -338,7 +338,9 @@ def _validate_complete_execution(
     ]
     if observed_models != model_tags:
         raise EvidenceError("passing evidence does not contain every profile model")
-    for expected_model, observed_model in zip(profile["models"], evidence["models"]):
+    for expected_model, observed_model in zip(
+        profile["models"], evidence["models"], strict=True
+    ):
         expected_identity = {
             key: expected_model[key]
             for key in (
@@ -660,7 +662,7 @@ def _reconcile_xadx_report(
             for row in case_results
         ):
             raise EvidenceError("xadx-report.json unsupported results are invalid")
-    for test, name, measured in zip(tests, expected_names, case_results):
+    for test, name, measured in zip(tests, expected_names, case_results, strict=True):
         readback = attribution.get(name, 0)
         expected_dispatches = None
         expected_validated_bytes = None

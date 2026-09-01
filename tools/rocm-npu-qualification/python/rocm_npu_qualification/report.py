@@ -16,7 +16,7 @@ Status column distinguishes PASS, FAIL, and N/A (unavailable).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 _ENV_ORDER = (
@@ -418,9 +418,7 @@ def build_markdown_report(
 ) -> str:
     """Render the qualification evidence bundle as a Markdown report."""
     profile = evidence.get("profile", {})
-    stamp = generated_at or datetime.now(timezone.utc).isoformat().replace(
-        "+00:00", "Z"
-    )
+    stamp = generated_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
     lines = [
         f"# ROCm NPU qualification — {profile.get('name', 'run')} "
         f"({evidence.get('status', 'unknown')})",

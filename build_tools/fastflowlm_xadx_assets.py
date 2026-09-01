@@ -216,7 +216,7 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
             *facts.get("execution_variants", ()),
         ]
 
-    for id, facts in measured.items():
+    for _, facts in measured.items():
         for execution in executions(facts):
             shape = (
                 capabilities["shape"]

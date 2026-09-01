@@ -35,7 +35,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
 sys.path.insert(0, str(ROOT))
-from build_tools import iron  # noqa: E402
+from build_tools import iron
 
 # This gate must never open an NPU: it runs on the CPU build runners, and the device it
 # targets is a declared input, not something to detect. IRON_RUNTIME=cpu makes that
@@ -45,10 +45,10 @@ from build_tools import iron  # noqa: E402
 # exactly like Windows (where there is none).
 os.environ.setdefault("IRON_RUNTIME", "cpu")
 
-import aie.utils as aie_utils  # noqa: E402   (must follow IRON_RUNTIME)
-from aie.iron.device import NPU2, NPU1Col1  # noqa: E402
-from iron.common import AIEContext, AIEOperatorBase  # noqa: E402
-from iron.common.compilation import InstsBinArtifact, XclbinArtifact  # noqa: E402
+import aie.utils as aie_utils
+from aie.iron.device import NPU2, NPU1Col1
+from iron.common import AIEContext, AIEOperatorBase
+from iron.common.compilation import InstsBinArtifact, XclbinArtifact
 
 DEVICES = {"npu2": NPU2, "npu1": NPU1Col1}
 
