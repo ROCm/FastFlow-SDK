@@ -15,6 +15,7 @@ operator name that also appears here. dequant and rope stay compile-only until
 they get generators. MHA and SwiGLU are not in the CPU compile list (torch).
 """
 
+
 def _numpy():
     """Import NumPy only when numeric cases are generated."""
     import numpy
@@ -144,12 +145,12 @@ def gemv():
     np = _numpy()
     rows = np.arange(128, dtype=np.int32)[:, None]
     columns = np.arange(128, dtype=np.int32)[None, :]
-    matrix_values = (
-        ((rows * 3 + columns * 5) % 17) - 8
-    ).astype(np.float32) / np.float32(16)
-    vector_values = (
-        ((np.arange(128, dtype=np.int32) * 3) % 13) - 6
-    ).astype(np.float32) / np.float32(8)
+    matrix_values = (((rows * 3 + columns * 5) % 17) - 8).astype(
+        np.float32
+    ) / np.float32(16)
+    vector_values = (((np.arange(128, dtype=np.int32) * 3) % 13) - 6).astype(
+        np.float32
+    ) / np.float32(8)
     matrix_values[0, :] = 0
     vector_values[0] = 0
 
@@ -161,9 +162,7 @@ def gemv():
         "buffers": [
             _bf16_input("matrix", matrix_values, (128, 128)),
             _bf16_input("vector", vector_values, (128,)),
-            _bf16_output(
-                "output", expected, (128,), rtol=0.02, atol=0.125
-            ),
+            _bf16_output("output", expected, (128,), rtol=0.02, atol=0.125),
         ],
     }
 

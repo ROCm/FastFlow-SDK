@@ -48,7 +48,28 @@ MM_WEIGHT_BITS = (10, 11, 12, 3, 4, 5, 6, 7, 9, 0, 1, 2, 13, 14, 8, 16, 15, 17, 
 DEQUANT_OUTPUT_ORDERS = {
     "mm": MM_WEIGHT_BITS,
     "gpt-oss": (0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 7, 9, 8, 15, 16, 17, 18, 19),
-    "gemma-text": (0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 7, 8, 9, 15, 16, 17, 18, 19),
+    "gemma-text": (
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        10,
+        11,
+        12,
+        13,
+        14,
+        7,
+        8,
+        9,
+        15,
+        16,
+        17,
+        18,
+        19,
+    ),
 }
 
 # The physical activation layout belongs to the transaction, not the shape, so
@@ -58,10 +79,46 @@ MM_ACTIVATION_LAYOUTS = {
     ("gemm", 128): (0, 1, 2, 10, 11, 12, 13, 14, 15, 7, 8, 9, 3, 4, 5, 6, 16),
     ("gemm", 512): (0, 1, 2, 12, 13, 14, 15, 16, 17, 9, 10, 11, 3, 4, 5, 6, 18, 7, 8),
     ("gpt-oss-gemm", 512): (
-        9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 16, 17, 18, 7, 8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        16,
+        17,
+        18,
+        7,
+        8,
     ),
     ("gemma-gemm", 512): (
-        9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 16, 17, 18, 5, 6, 7, 8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        0,
+        1,
+        2,
+        3,
+        4,
+        16,
+        17,
+        18,
+        5,
+        6,
+        7,
+        8,
     ),
 }
 
@@ -125,28 +182,30 @@ def dequantize(quantized, scale, zero_point, semantics: str) -> np.ndarray:
     raise ValueError(f"unknown dequantization semantics: {semantics}")
 
 
-def pack_q4nx(quantized, scale, zero_point, row_block=None, col_block=None,
-              parallel=None) -> bytes:
+def pack_q4nx(
+    quantized, scale, zero_point, row_block=None, col_block=None, parallel=None
+) -> bytes:
     """Pack row-major quantization inputs into the Q4NX byte layout."""
-    row_block = row_block or Q4NX_BLOCKS['row_block']
-    col_block = col_block or Q4NX_BLOCKS['col_block']
-    parallel = parallel or Q4NX_BLOCKS['parallel']
+    row_block = row_block or Q4NX_BLOCKS["row_block"]
+    col_block = col_block or Q4NX_BLOCKS["col_block"]
+    parallel = parallel or Q4NX_BLOCKS["parallel"]
     rows, columns = quantized.shape
     if rows % row_block or columns % col_block or row_block % parallel:
         raise ValueError(
-            f'a {rows}x{columns} tensor does not divide into {row_block}x{col_block} '
-            f'chunks of {parallel} parallel rows'
+            f"a {rows}x{columns} tensor does not divide into {row_block}x{col_block} "
+            f"chunks of {parallel} parallel rows"
         )
     if col_block % GROUP_COLUMNS or parallel % 2:
-        raise ValueError(f'invalid Q4NX block shape {row_block}x{col_block}/{parallel}')
+        raise ValueError(f"invalid Q4NX block shape {row_block}x{col_block}/{parallel}")
     row_chunks, column_chunks = rows // row_block, columns // col_block
     chunks = row_chunks * column_chunks
 
     def fields(values):
         """Scales and zero points are block-major within a chunk."""
         return (
-            values.reshape(row_chunks, row_block, column_chunks,
-                           col_block // GROUP_COLUMNS)
+            values.reshape(
+                row_chunks, row_block, column_chunks, col_block // GROUP_COLUMNS
+            )
             .transpose(0, 2, 3, 1)
             .reshape(chunks, -1)
         )
@@ -163,14 +222,18 @@ def pack_q4nx(quantized, scale, zero_point, row_block=None, col_block=None,
     )
     nibbles = (paired[..., 0] | (paired[..., 1] << 4)).reshape(chunks, -1)
 
-    return np.concatenate(
-        [
-            fields(bf16(scale)).view(np.uint8),
-            fields(bf16(zero_point)).view(np.uint8),
-            nibbles,
-        ],
-        axis=1,
-    ).reshape(-1).tobytes()
+    return (
+        np.concatenate(
+            [
+                fields(bf16(scale)).view(np.uint8),
+                fields(bf16(zero_point)).view(np.uint8),
+                nibbles,
+            ],
+            axis=1,
+        )
+        .reshape(-1)
+        .tobytes()
+    )
 
 
 def dequant_expected(quantized, scale, zero_point, semantics, order) -> bytes:
@@ -229,7 +292,9 @@ def _product(weight: np.ndarray, k: int, n: int, salt: int) -> bytes:
 def gemm_reference(m: int, k: int, n: int, profile: str, salt: int) -> bytes:
     """The CPU GEMM the MM cases are compared against, within tolerance."""
     quantized, scale, zero_point = source_tensors(m, k, profile)
-    return _product(widen(dequantize(quantized, scale, zero_point, "logical")), k, n, salt)
+    return _product(
+        widen(dequantize(quantized, scale, zero_point, "logical")), k, n, salt
+    )
 
 
 def chained_reference(
@@ -330,11 +395,15 @@ def predicted_size(generator: str, parameters: dict) -> int:
             size = m * k * 5 // 8
         elif generator == "q4nx-dequant-expected":
             if m * k != 1 << len(DEQUANT_OUTPUT_ORDERS[order]):
-                raise ValueError("dequant output dimensions do not match measured order")
+                raise ValueError(
+                    "dequant output dimensions do not match measured order"
+                )
             size = 2 * m * k
         elif generator == "chained-weight":
             if m * k != 1 << len(DEQUANT_OUTPUT_ORDERS[order]):
-                raise ValueError("chained weight dimensions do not match measured order")
+                raise ValueError(
+                    "chained weight dimensions do not match measured order"
+                )
             size = 2 * m * k + WEIGHT_PADDING
         elif generator == "mm-weight":
             size = 2 * m * k + WEIGHT_PADDING
@@ -390,18 +459,13 @@ def materialize(generator: str, parameters: dict) -> bytes:
 
     if generator == "q4nx-dequant-expected":
         tensors = source_tensors(int(parameters["m"]), int(parameters["k"]), profile)
-        return dequant_expected(
-            *tensors, parameters["semantics"], parameters["order"]
-        )
+        return dequant_expected(*tensors, parameters["semantics"], parameters["order"])
 
     if generator == "chained-weight":
         tensors = source_tensors(int(parameters["m"]), int(parameters["k"]), profile)
-        return (
-            dequant_expected(
-                *tensors, parameters["semantics"], parameters["order"]
-            )
-            + bytes(WEIGHT_PADDING)
-        )
+        return dequant_expected(
+            *tensors, parameters["semantics"], parameters["order"]
+        ) + bytes(WEIGHT_PADDING)
 
     if generator == "mm-weight":
         return mm_weight(int(parameters["m"]), int(parameters["k"]), profile)

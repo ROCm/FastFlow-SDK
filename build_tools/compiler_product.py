@@ -54,12 +54,29 @@ COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27
 PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
 PEANO_INDEX = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
-NPU_PREREQ_TOOLS = ["aiecc", "aie-opt", "aie-translate", "bootgen", "target_model", "target_model_rtti", "register_database"]
-COMPILER_PRODUCT_LICENSES = ("rocm-npu-staging-LICENSE", "iron-tools-LICENSE", "hrx-xclbinutil-LICENSE", "llvm-LICENSE.txt", "aie-api-LICENSE", "aie-runtime-LICENSE.txt", "bootgen-LICENSE")
+NPU_PREREQ_TOOLS = [
+    "aiecc",
+    "aie-opt",
+    "aie-translate",
+    "bootgen",
+    "target_model",
+    "target_model_rtti",
+    "register_database",
+]
+COMPILER_PRODUCT_LICENSES = (
+    "rocm-npu-staging-LICENSE",
+    "iron-tools-LICENSE",
+    "hrx-xclbinutil-LICENSE",
+    "llvm-LICENSE.txt",
+    "aie-api-LICENSE",
+    "aie-runtime-LICENSE.txt",
+    "bootgen-LICENSE",
+)
 IS_WINDOWS = paths.is_windows()
 _EXE = ".exe" if IS_WINDOWS else ""
 sh = environment.sh
 venv_py = environment.venv_py
+
 
 def _tool(path):
     """`path`, or `path.exe` on Windows. Fails loudly rather than silently skipping."""
@@ -130,37 +147,50 @@ def _compiler_product_name(system=None, machine=None):
 def _assert_no_symlinks(root):
     links = [p for p in [root, *root.rglob("*")] if p.is_symlink()]
     if links:
-        raise RuntimeError("compiler product contains symlinks:\n  " +
-                           "\n  ".join(str(p) for p in links[:20]))
+        raise RuntimeError(
+            "compiler product contains symlinks:\n  "
+            + "\n  ".join(str(p) for p in links[:20])
+        )
 
 
 _BUILD_METADATA_NAMES = {
-    "__pycache__", "CMakeFiles", "CMakeCache.txt", "cmake_install.cmake",
-    "CTestTestfile.cmake", "build.ninja", "rules.ninja",
-    ".ninja_deps", ".ninja_log", "install_manifest.txt",
+    "__pycache__",
+    "CMakeFiles",
+    "CMakeCache.txt",
+    "cmake_install.cmake",
+    "CTestTestfile.cmake",
+    "build.ninja",
+    "rules.ninja",
+    ".ninja_deps",
+    ".ninja_log",
+    "install_manifest.txt",
 }
 _BUILD_INTERMEDIATE_SUFFIXES = {".obj", ".pdb", ".ilk", ".pyc", ".pyo"}
 
 
 def _is_build_metadata(path):
     path = Path(path)
-    return (any(
-                part == "CMakeFiles"
-                or part.startswith("objects-")
-                or part.endswith("Tmp")
-                for part in path.parts
-            ) or
-            path.name in _BUILD_METADATA_NAMES or
-            path.suffix.lower() in _BUILD_INTERMEDIATE_SUFFIXES)
+    return (
+        any(
+            part == "CMakeFiles" or part.startswith("objects-") or part.endswith("Tmp")
+            for part in path.parts
+        )
+        or path.name in _BUILD_METADATA_NAMES
+        or path.suffix.lower() in _BUILD_INTERMEDIATE_SUFFIXES
+    )
 
 
 def _stage_runtime_tree(src, dst):
     """Copy a mixed runtime build tree without CMake/Ninja intermediates."""
     shutil.copytree(
-        src, dst, symlinks=False, dirs_exist_ok=True,
+        src,
+        dst,
+        symlinks=False,
+        dirs_exist_ok=True,
         ignore=lambda _directory, names: [
             name for name in names if _is_build_metadata(Path(name))
-        ])
+        ],
+    )
 
 
 def _peano_prefix():
@@ -168,15 +198,13 @@ def _peano_prefix():
     if not peano.is_dir():
         raise RuntimeError(
             f"Peano is not installed in this Python environment: {peano}\n"
-            "run: python dev.py setup")
+            "run: python dev.py setup"
+        )
     return peano
 
 
 def _stage_compiler_openssl_license(product, copied):
-    if not any(
-        name.casefold().startswith(("libssl", "libcrypto"))
-        for name in copied
-    ):
+    if not any(name.casefold().startswith(("libssl", "libcrypto")) for name in copied):
         return
     openssl_root = Path(os.environ.get("OPENSSL_ROOT_DIR", "/usr"))
     license_candidates = (
@@ -185,9 +213,7 @@ def _stage_compiler_openssl_license(product, copied):
         Path("/usr/share/licenses/openssl/LICENSE.txt"),
         Path("/usr/share/doc/openssl/copyright"),
     )
-    license_path = next(
-        (path for path in license_candidates if path.is_file()), None
-    )
+    license_path = next((path for path in license_candidates if path.is_file()), None)
     if license_path:
         _stage(
             license_path,
@@ -231,8 +257,7 @@ def _stage_compiler_linux_native_dependencies(product):
     }
     copied = {}
     queue = [
-        path for path in product.rglob("*")
-        if path.is_file() and is_loadable_elf(path)
+        path for path in product.rglob("*") if path.is_file() and is_loadable_elf(path)
     ]
     while queue:
         path = queue.pop(0)
@@ -278,10 +303,7 @@ def _stage_compiler_native_dependencies(product):
         if path.is_file() and is_pe(path)
     }
     copied = {}
-    queue = [
-        path for path in product.rglob("*")
-        if path.is_file() and is_pe(path)
-    ]
+    queue = [path for path in product.rglob("*") if path.is_file() and is_pe(path)]
     while queue:
         path = queue.pop(0)
         for needed in pe_imports(path):
@@ -315,10 +337,7 @@ def _verify_compiler_native_dependencies(product):
     if not IS_WINDOWS:
         return {}
 
-    binaries = [
-        path for path in product.rglob("*")
-        if path.is_file() and is_pe(path)
-    ]
+    binaries = [path for path in product.rglob("*") if path.is_file() and is_pe(path)]
     provided = {path.name.casefold() for path in binaries}
     graph = {}
     missing = []
@@ -331,10 +350,7 @@ def _verify_compiler_native_dependencies(product):
             folded = name.casefold()
             if re.fullmatch(r"python3[0-9]{1,2}\.dll", folded):
                 versioned_python_imports.append(f"{relative} -> {name}")
-            if (
-                folded not in provided
-                and not windows_system_runtime(name)
-            ):
+            if folded not in provided and not windows_system_runtime(name):
                 missing.append(f"{relative} -> {name}")
     if versioned_python_imports:
         raise RuntimeError(
@@ -355,8 +371,9 @@ def _write_product_manifest(bundle, manifest):
     if manifest_path.exists():
         manifest_path.unlink()
     manifest = dict(manifest, files=file_inventory(bundle))
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                             encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     # _create_compiler_product_archive verifies this inventory immediately
     # before archiving. Avoid hashing the full product twice back-to-back here.
     return manifest
@@ -366,7 +383,9 @@ def stage_product():
     it_build = BUILD / "iron-tools"
     it = IRON_TOOLS_INSTALL
     if not it.is_dir():
-        raise RuntimeError("iron-tools is not installed - run: python dev.py build iron-tools")
+        raise RuntimeError(
+            "iron-tools is not installed - run: python dev.py build iron-tools"
+        )
 
     reset_directory(COMPILER_PRODUCT_STAGE, BUILD)
     product = COMPILER_PRODUCT_STAGE / _compiler_product_name()
@@ -425,11 +444,7 @@ def stage_product():
     _stage(_peano_prefix(), product / "peano" / "llvm-aie")
 
     native_dependencies = _stage_compiler_native_dependencies(product)
-    relocated_rpaths = (
-        {}
-        if IS_WINDOWS
-        else relocate_linux_compiler_rpaths(product)
-    )
+    relocated_rpaths = {} if IS_WINDOWS else relocate_linux_compiler_rpaths(product)
 
     license_sources = (
         (ROOT / "LICENSE", "rocm-npu-staging-LICENSE"),
@@ -458,36 +473,42 @@ def stage_product():
             _stage(source, product / "licenses" / name)
 
     _assert_no_symlinks(product)
-    manifest = _write_product_manifest(product, {
-        "schema_version": 1,
-        "product": "rocm-npu-compiler",
-        "artifact": product.name,
-        "platform": {"system": platform.system(), "machine": platform.machine()},
-        "required_tools": required_tools,
-        "peano": {"wheel": PEANO_WHEEL, "index": PEANO_INDEX,
-                  "path": "peano/llvm-aie"},
-        "sources": {
-            "rocm-npu-staging": git_source_state(ROOT),
-            "llvm-project": git_source_state(PROJ / "llvm-project"),
-            "iron-tools": git_source_state(PROJ / "iron-tools"),
-            "hrx-xclbinutil": _hrx_xclbinutil_source_state(),
+    manifest = _write_product_manifest(
+        product,
+        {
+            "schema_version": 1,
+            "product": "rocm-npu-compiler",
+            "artifact": product.name,
+            "platform": {"system": platform.system(), "machine": platform.machine()},
+            "required_tools": required_tools,
+            "peano": {
+                "wheel": PEANO_WHEEL,
+                "index": PEANO_INDEX,
+                "path": "peano/llvm-aie",
+            },
+            "sources": {
+                "rocm-npu-staging": git_source_state(ROOT),
+                "llvm-project": git_source_state(PROJ / "llvm-project"),
+                "iron-tools": git_source_state(PROJ / "iron-tools"),
+                "hrx-xclbinutil": _hrx_xclbinutil_source_state(),
+            },
+            "dependencies": {
+                "requirements": [
+                    file_record(ROOT, ROOT / "requirements" / "compiler-stack.txt"),
+                    file_record(ROOT, ROOT / "requirements" / "compiler-stack.lock"),
+                ],
+                "native_runtime_files": native_dependencies,
+                "relocated_elf_rpaths": relocated_rpaths,
+            },
+            "toolchain": {
+                "python": platform.python_version(),
+                "platform": platform.platform(),
+                "build_image": os.environ.get("RNS_BUILD_IMAGE"),
+                "runner_os": os.environ.get("RUNNER_OS"),
+                "runner_arch": os.environ.get("RUNNER_ARCH"),
+            },
         },
-        "dependencies": {
-            "requirements": [
-                file_record(ROOT, ROOT / "requirements" / "compiler-stack.txt"),
-                file_record(ROOT, ROOT / "requirements" / "compiler-stack.lock"),
-            ],
-            "native_runtime_files": native_dependencies,
-            "relocated_elf_rpaths": relocated_rpaths,
-        },
-        "toolchain": {
-            "python": platform.python_version(),
-            "platform": platform.platform(),
-            "build_image": os.environ.get("RNS_BUILD_IMAGE"),
-            "runner_os": os.environ.get("RUNNER_OS"),
-            "runner_arch": os.environ.get("RUNNER_ARCH"),
-        },
-    })
+    )
     return product, manifest
 
 
@@ -497,8 +518,9 @@ def resolve_product_root(location):
         return location
     if not location.is_dir():
         raise RuntimeError(f"compiler product directory not found: {location}")
-    candidates = [p for p in location.iterdir()
-                  if p.is_dir() and (p / "manifest.json").is_file()]
+    candidates = [
+        p for p in location.iterdir() if p.is_dir() and (p / "manifest.json").is_file()
+    ]
     if len(candidates) != 1:
         raise RuntimeError(f"expected exactly one compiler product under {location}")
     return candidates[0]
@@ -507,7 +529,9 @@ def resolve_product_root(location):
 def _create_compiler_product_archive(product, output_directory):
     verify_product_inventory(product)
     output_directory.mkdir(parents=True, exist_ok=True)
-    archive = output_directory / f"{product.name}{'.tar.zst' if IS_WINDOWS else '.tar.gz'}"
+    archive = (
+        output_directory / f"{product.name}{'.tar.zst' if IS_WINDOWS else '.tar.gz'}"
+    )
     for stale in output_directory.glob(f"{product.name}.*"):
         if stale != archive and stale != sha256_sidecar_path(archive):
             stale.unlink()
@@ -534,13 +558,18 @@ def _create_compiler_product_archive(product, output_directory):
 
 def _find_compiler_product_archive(directory):
     directory = Path(directory)
-    archives = sorted([*directory.glob("rocm-npu-compiler-*.zip"),
-                       *directory.glob("rocm-npu-compiler-*.tar.gz"),
-                       *directory.glob("rocm-npu-compiler-*.tar.zst")])
+    archives = sorted(
+        [
+            *directory.glob("rocm-npu-compiler-*.zip"),
+            *directory.glob("rocm-npu-compiler-*.tar.gz"),
+            *directory.glob("rocm-npu-compiler-*.tar.zst"),
+        ]
+    )
     if len(archives) != 1:
         raise RuntimeError(
             f"expected exactly one rocm-npu-compiler artifact in {directory}, "
-            f"found {len(archives)}")
+            f"found {len(archives)}"
+        )
     archive = archives[0]
     verify_sha256_sidecar(archive)
     return archive
@@ -552,15 +581,18 @@ def verify_product_inventory(product):
         raise RuntimeError(f"not a rocm-npu-compiler product: {product}")
     artifact = str(manifest.get("artifact", ""))
     if "staging" in artifact:
-        raise RuntimeError(f"compiler product artifact name must not include staging: {artifact}")
+        raise RuntimeError(
+            f"compiler product artifact name must not include staging: {artifact}"
+        )
     build_metadata = [
-        record["path"] for record in manifest.get("files", [])
+        record["path"]
+        for record in manifest.get("files", [])
         if _is_build_metadata(record["path"])
     ]
     if build_metadata:
         raise RuntimeError(
-            "compiler product contains build-system metadata: "
-            f"{build_metadata[0]}")
+            f"compiler product contains build-system metadata: {build_metadata[0]}"
+        )
     _assert_no_symlinks(product)
 
     required_files = [
@@ -594,18 +626,25 @@ def _smoke_compiler_product(prefix):
     env = _compiler_product_env(prefix)
     aieopt = prefix / "bin" / f"aie-opt{_EXE}"
     sh([aieopt, "--version"], env=env)
-    p = subprocess.run([str(aieopt)], input=b"module { aie.device(npu2) {} }\n",
-                       env=env, capture_output=True)
+    p = subprocess.run(
+        [str(aieopt)],
+        input=b"module { aie.device(npu2) {} }\n",
+        env=env,
+        capture_output=True,
+    )
     if p.returncode != 0:
         detail = p.stderr.decode(errors="replace")[:1000]
         raise RuntimeError(f"aie-opt relocation smoke failed: {detail}")
     p = subprocess.run(
         [str(venv_py()), "-c", "import aie.dialects.transform.interpreter"],
-        env=env, capture_output=True, text=True)
+        env=env,
+        capture_output=True,
+        text=True,
+    )
     if p.returncode != 0:
         raise RuntimeError(
-            "compiler Python extension import failed: "
-            f"{p.stderr[-1000:]}")
+            f"compiler Python extension import failed: {p.stderr[-1000:]}"
+        )
     return manifest
 
 
@@ -615,8 +654,16 @@ def _relocate_compiler_product(product):
     _stage(product, relocated)
     _smoke_compiler_product(relocated)
     env = dict(os.environ, ROCM_NPU_COMPILER_PREFIX=str(relocated))
-    rc = sh([venv_py(), ROOT / "tests" / "e2e" / "run_e2e.py",
-             "--compiler-prefix", relocated], env=env, check=False).returncode
+    rc = sh(
+        [
+            venv_py(),
+            ROOT / "tests" / "e2e" / "run_e2e.py",
+            "--compiler-prefix",
+            relocated,
+        ],
+        env=env,
+        check=False,
+    ).returncode
     if rc != 0:
         raise RuntimeError(f"relocated compiler product e2e failed: {relocated}")
     return relocated
@@ -659,7 +706,4 @@ def cmd_verify_compiler_product(args):
             print("  relocated:", relocated)
     except RuntimeError as error:
         sys.exit(str(error))
-    print(
-        f"verify compiler product: ok ({len(manifest['files'])} files) "
-        f"-> {product}"
-    )
+    print(f"verify compiler product: ok ({len(manifest['files'])} files) -> {product}")

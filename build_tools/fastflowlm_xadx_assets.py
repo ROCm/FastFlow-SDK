@@ -30,6 +30,7 @@ XADX_STAGE = paths.BUILD / "fastflowlm-xadx-assets"
 XADX_PRODUCT = "rocm-npu-fastflowlm-xadx"
 XADX_IMPLEMENTATION_PROBE_TARGET = "fastflowlm-xadx-implementation-probe"
 
+
 def build_xadx_generator(fresh=False):
     """Builds the implementation/transaction probe used by recipe generation."""
     configure_qualification_tools(fresh=fresh)
@@ -51,7 +52,6 @@ def build_xadx_generator(fresh=False):
     if not probe.is_file():
         raise RuntimeError(f"XADX build did not produce {probe}")
     return probe
-
 
 
 def _implementation_catalogue(xclbin_root):
@@ -87,9 +87,7 @@ def _recipe_materializer():
     generators = recipe_generators()
 
     def materialize(specification, expected_size):
-        data = generators.materialize(
-            specification["id"], specification["parameters"]
-        )
+        data = generators.materialize(specification["id"], specification["parameters"])
         if len(data) != expected_size:
             raise RuntimeError(
                 f"{specification['id']} produced {len(data)} bytes; "
@@ -118,14 +116,11 @@ def verify_kernel_recipe_assets(root):
             "api": "hrx_amdxdna_xadx_serialize",
             "revision": "hrx-amdxdna-v0",
         }
-        or manifest.get("recipe")
-        != file_record(root, recipe_path)
+        or manifest.get("recipe") != file_record(root, recipe_path)
     ):
         raise RuntimeError("invalid kernel recipe asset manifest")
     validate_recipe(recipe, KERNEL_RECIPE_SCHEMA)
-    expected_files = {
-        record["path"]: record for record in manifest.get("files", [])
-    }
+    expected_files = {record["path"]: record for record in manifest.get("files", [])}
     actual_files = {
         path.relative_to(root).as_posix()
         for path in root.rglob("*")
@@ -154,17 +149,12 @@ def verify_kernel_recipe_assets(root):
             if sha256_file(xadx_path) != executable["xadx_sha256"]:
                 suffix = "" if execution is None else f"/{execution}"
                 raise RuntimeError(
-                    "recipe XADX digest differs: "
-                    f"{implementation['id']}{suffix}"
+                    f"recipe XADX digest differs: {implementation['id']}{suffix}"
                 )
-            if (
-                sha256_file(transaction_path)
-                != executable["transaction_sha256"]
-            ):
+            if sha256_file(transaction_path) != executable["transaction_sha256"]:
                 suffix = "" if execution is None else f"/{execution}"
                 raise RuntimeError(
-                    "recipe transaction digest differs: "
-                    f"{implementation['id']}{suffix}"
+                    f"recipe transaction digest differs: {implementation['id']}{suffix}"
                 )
     return manifest, recipe
 
@@ -251,16 +241,11 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
                 ],
                 env=env,
             )
-            variant = (
-                f"{execution['builder']}-"
-                f"{shape['m']}x{shape['k']}x{shape['n']}"
-            )
+            variant = f"{execution['builder']}-{shape['m']}x{shape['k']}x{shape['n']}"
             index = json.loads(
                 (probe_root / f"index-{variant}.json").read_text(encoding="utf-8")
             )
-            runs[key] = {
-                record["representative"]: record for record in index
-            }
+            runs[key] = {record["representative"]: record for record in index}
 
     digests = {}
     for id, facts in measured.items():
@@ -289,22 +274,16 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
                     f"{id} did not accept measured builder/shape {key}"
                 ) from error
             source_xadx = probe_root / probe_record["xadx"]
-            suffix = (
-                "" if execution["id"] is None else f"-{execution['id']}"
-            )
+            suffix = "" if execution["id"] is None else f"-{execution['id']}"
             packaged_xadx = xadx_root / f"{id}{suffix}.xadx"
             shutil.copy2(source_xadx, packaged_xadx)
             transaction = probe_root / probe_record["transaction"]
             transaction_sha256 = sha256_file(transaction)
-            packaged_transaction = (
-                transaction_root / f"{transaction_sha256}.bin"
-            )
+            packaged_transaction = transaction_root / f"{transaction_sha256}.bin"
             if not packaged_transaction.exists():
                 shutil.copy2(transaction, packaged_transaction)
             identity = {
-                "transaction": packaged_transaction.relative_to(
-                    destination
-                ).as_posix(),
+                "transaction": packaged_transaction.relative_to(destination).as_posix(),
                 "transaction_sha256": transaction_sha256,
                 "xadx": packaged_xadx.relative_to(destination).as_posix(),
                 "xadx_sha256": sha256_file(packaged_xadx),

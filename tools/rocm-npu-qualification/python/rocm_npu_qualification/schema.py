@@ -157,9 +157,7 @@ def _validate(
         if schema.get("additionalProperties") is False:
             extra = sorted(set(value) - set(properties))
             if extra:
-                raise SchemaValidationError(
-                    f"{path} has unexpected properties {extra}"
-                )
+                raise SchemaValidationError(f"{path} has unexpected properties {extra}")
         elif isinstance(schema.get("additionalProperties"), dict):
             for key in set(value) - set(properties):
                 _validate(
@@ -187,7 +185,5 @@ def validate_schema(value: Any, schema: dict[str, Any]) -> None:
 
 
 def load_packaged_schema(name: str) -> dict[str, Any]:
-    resource = resources.files("rocm_npu_qualification").joinpath(
-        "schemas", name
-    )
+    resource = resources.files("rocm_npu_qualification").joinpath("schemas", name)
     return json.loads(resource.read_text(encoding="utf-8"))

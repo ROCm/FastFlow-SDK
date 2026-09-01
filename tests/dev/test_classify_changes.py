@@ -9,7 +9,6 @@ from unittest import mock
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / ".github" / "scripts" / "classify_changes.py"
 SPEC = importlib.util.spec_from_file_location("classify_changes", SCRIPT_PATH)
@@ -46,7 +45,5 @@ def test_pull_request_uses_base_to_head_diff():
         "changed_files_between",
         return_value=["README.md"],
     ) as changed_files_between:
-        assert not classify_changes.classify_changes(
-            "pull_request", "base", "head"
-        )
+        assert not classify_changes.classify_changes("pull_request", "base", "head")
     changed_files_between.assert_called_once_with("base", "head")

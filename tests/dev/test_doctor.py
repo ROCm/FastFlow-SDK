@@ -94,14 +94,13 @@ class TestSystemCheck:
                 "compilers",
                 return_value=(compiler, compiler),
             ),
-            mock.patch.object(
-                doctor.environment, "windows_msvc_env", return_value=env
-            ),
+            mock.patch.object(doctor.environment, "windows_msvc_env", return_value=env),
             mock.patch.object(doctor.environment, "which", side_effect=which),
         ):
-            assert doctor.check_compiler_stack_system(
-                verbose=False, windows=True
-            ) == (True, [])
+            assert doctor.check_compiler_stack_system(verbose=False, windows=True) == (
+                True,
+                [],
+            )
 
 
 class TestDoctorCommand:
@@ -169,9 +168,7 @@ class TestDoctorCommand:
         assert "SUBMODULE PIN problems in: hrx" in text
 
     def test_compiler_stack_checks_prefetch_and_returns_success(self, tmp_path):
-        patch_file = (
-            tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
-        )
+        patch_file = tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
         patch_file.parent.mkdir(parents=True)
         patch_file.write_text("+eudsl-python-extras==1.2.3\n")
         with (
@@ -199,9 +196,7 @@ class TestDoctorCommand:
     def test_compiler_stack_eudsl_in_sync_when_patch_only_rewrites_find_links(
         self, tmp_path
     ):
-        patch_file = (
-            tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
-        )
+        patch_file = tmp_path / "patches" / "iron-tools" / doctor.EUDSL_FIND_LINKS_PATCH
         patch_file.parent.mkdir(parents=True)
         patch_file.write_text(
             "--f https://llvm.github.io/eudsl\n"
@@ -230,10 +225,7 @@ class TestDoctorCommand:
 
 class TestEudslVersionFromPatch:
     def test_override_hunk_wins(self):
-        text = (
-            "-eudsl-python-extras==old \\\n"
-            "+eudsl-python-extras==1.2.3 \\\n"
-        )
+        text = "-eudsl-python-extras==old \\\n+eudsl-python-extras==1.2.3 \\\n"
         assert doctor.eudsl_version_from_patch(text) == "1.2.3"
 
     def test_unchanged_context_line_when_only_find_links_changes(self):
@@ -242,10 +234,9 @@ class TestEudslVersionFromPatch:
             "+-f ../../../.cache/find-links\n"
             " eudsl-python-extras==0.1.0.20260801.905+68a0d7a \\\n"
         )
-        assert (
-            doctor.eudsl_version_from_patch(text)
-            == "0.1.0.20260801.905+68a0d7a"
-        )
+        assert doctor.eudsl_version_from_patch(text) == "0.1.0.20260801.905+68a0d7a"
 
     def test_missing_version_is_none(self):
-        assert doctor.eudsl_version_from_patch("+-f ../../../.cache/find-links\n") is None
+        assert (
+            doctor.eudsl_version_from_patch("+-f ../../../.cache/find-links\n") is None
+        )

@@ -3,6 +3,7 @@
 
 import ctypes
 from pathlib import Path
+
 import pytest
 
 from build_tools import hrx_runtime as hrx
@@ -76,8 +77,8 @@ class FakeLibrary:
         )
         self.hrx_buffer_map_with_mode.implementation = self._map
         self.hrx_executable_load_data.implementation = (
-            lambda device, data, size, target_family, target_key, out: (
-                self._set_handle(out, 0x400)
+            lambda device, data, size, target_family, target_key, out: self._set_handle(
+                out, 0x400
             )
         )
         self.hrx_executable_lookup_export_by_name.implementation = self._lookup

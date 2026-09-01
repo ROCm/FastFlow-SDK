@@ -40,7 +40,6 @@ from .schema import (
     validate_schema,
 )
 
-
 MAX_ARCHIVE_FILES = 4096
 MAX_ARCHIVE_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 512 * 1024 * 1024
@@ -175,10 +174,14 @@ def _archive_members(path: Path | bytes) -> dict[str, bytes]:
                 raise EvidenceError(f"duplicate or case-colliding archive path: {name}")
             seen.add(folded)
             mode = (info.external_attr >> 16) & 0xFFFF
-            if stat.S_ISLNK(mode) or (mode and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
+            if stat.S_ISLNK(mode) or (
+                mode and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))
+            ):
                 raise EvidenceError(f"archive contains special member: {name}")
             if info.is_dir():
-                raise EvidenceError(f"archive contains unexpected directory entry: {name}")
+                raise EvidenceError(
+                    f"archive contains unexpected directory entry: {name}"
+                )
             if (
                 info.file_size > MAX_ARCHIVE_MEMBER_BYTES
                 or info.file_size < 0
@@ -346,9 +349,7 @@ def _validate_complete_execution(
                 "registry_sha256",
             )
         }
-        observed_identity = {
-            key: observed_model.get(key) for key in expected_identity
-        }
+        observed_identity = {key: observed_model.get(key) for key in expected_identity}
         expected_files = [
             {"path": record["path"], "sha256": record["sha256"]}
             for record in expected_model["files"]
@@ -360,10 +361,7 @@ def _validate_complete_execution(
         ]
         expected_files.sort(key=lambda record: (record["path"], record["sha256"]))
         observed_files.sort(key=lambda record: (record["path"], record["sha256"]))
-        if (
-            observed_identity != expected_identity
-            or observed_files != expected_files
-        ):
+        if observed_identity != expected_identity or observed_files != expected_files:
             raise EvidenceError(
                 f"passing evidence model identity does not match profile: "
                 f"{expected_model['tag']}"
@@ -376,9 +374,9 @@ def _validate_complete_execution(
         expected[("xadx", "fastflowlm-production-kernels", name)] = {}
     for model in profile["models"]:
         if model["xclbins"]:
-            expected[
-                ("xclbin", model["tag"], "production-xclbin-inventory")
-            ] = {"files_verified": len(model["xclbins"])}
+            expected[("xclbin", model["tag"], "production-xclbin-inventory")] = {
+                "files_verified": len(model["xclbins"])
+            }
         for test in model["tests"]:
             if test["kind"] == "serve":
                 expected[("serve", model["tag"], test["name"])] = {}
@@ -423,9 +421,7 @@ def _validate_complete_execution(
                 else record.get(field)
             )
             if observed_value != value:
-                raise EvidenceError(
-                    f"passing evidence has invalid {field} for {key}"
-                )
+                raise EvidenceError(f"passing evidence has invalid {field} for {key}")
 
     # Every coherence-capable case receives the declared readback depth. The
     # projected rows carry that attribution, so the total cannot be inferred
@@ -476,15 +472,16 @@ def _reconcile_native_reports(
         ):
             raise EvidenceError(f"{name} does not match the evidence subject")
         source_revision = evidence["subject"].get("source_revision")
-        if source_revision and report["product"].get("source_revision") != source_revision:
+        if (
+            source_revision
+            and report["product"].get("source_revision") != source_revision
+        ):
             raise EvidenceError(f"{name} source revision does not match the candidate")
         test = tests[command]
         report_passed = report["status"] == "pass"
-        if (
-            test.get("metrics") != {"report_status": report["status"]}
-            or (test.get("status") == "pass")
-            != (report_passed and test.get("returncode") == 0)
-        ):
+        if test.get("metrics") != {"report_status": report["status"]} or (
+            test.get("status") == "pass"
+        ) != (report_passed and test.get("returncode") == 0):
             raise EvidenceError(f"{name} does not match its native test record")
 
 
@@ -529,7 +526,9 @@ def _reconcile_xadx_report(
             "mismatch_count": row["mismatch_count"],
             "first_mismatch": row["first_mismatch"],
         }
-        expected_failure = [{"case": row["name"], **failure} for failure in row["failures"]]
+        expected_failure = [
+            {"case": row["name"], **failure} for failure in row["failures"]
+        ]
         if (
             len(tests) != 1
             or row["name"] != "package-validation"
@@ -547,20 +546,18 @@ def _reconcile_xadx_report(
             )
         return
     expected_names = (
-        contract["xadx_cases"] if contract is not None else [test.get("name") for test in tests]
+        contract["xadx_cases"]
+        if contract is not None
+        else [test.get("name") for test in tests]
     )
     if report.get("case_names") != expected_names:
         raise EvidenceError("xadx-report.json case inventory does not match tests.json")
     status = report.get("status")
     if status not in {"pass", "fail", "unsupported"}:
         raise EvidenceError("xadx-report.json status is invalid")
-    if (
-        status != "unsupported"
-        and report.get("numeric_runtime") != NUMERIC_RUNTIME
-    ):
+    if status != "unsupported" and report.get("numeric_runtime") != NUMERIC_RUNTIME:
         raise EvidenceError(
-            "xadx-report.json numeric runtime does not match the qualification "
-            "contract"
+            "xadx-report.json numeric runtime does not match the qualification contract"
         )
     rounds = {
         key: report.get(key)
@@ -570,8 +567,10 @@ def _reconcile_xadx_report(
         rounds = {key: 0 for key in rounds}
     if any(not isinstance(value, int) or value < 0 for value in rounds.values()):
         raise EvidenceError("xadx-report.json round counts are invalid")
-    if status != "unsupported" and contract is not None and rounds != _xadx_execution(
-        contract, evidence["profile"]["name"]
+    if (
+        status != "unsupported"
+        and contract is not None
+        and rounds != _xadx_execution(contract, evidence["profile"]["name"])
     ):
         raise EvidenceError(
             "xadx-report.json round counts do not match the qualification contract"
@@ -609,10 +608,7 @@ def _reconcile_xadx_report(
             for name in expected_names
             if case_contracts[name]["readback_capable"]
         }
-        if (
-            status == "pass"
-            and attribution != expected_attribution
-        ) or (
+        if (status == "pass" and attribution != expected_attribution) or (
             status == "fail"
             and (
                 set(attribution) - set(expected_attribution)
@@ -637,9 +633,8 @@ def _reconcile_xadx_report(
                 "candidate"
             )
     row_statuses = [row.get("status") for row in case_results]
-    if (
-        (status == "pass" and any(value != "pass" for value in row_statuses))
-        or (status == "fail" and "fail" not in row_statuses)
+    if (status == "pass" and any(value != "pass" for value in row_statuses)) or (
+        status == "fail" and "fail" not in row_statuses
     ):
         raise EvidenceError("xadx-report.json aggregate and case statuses disagree")
     if contract is not None:
@@ -653,19 +648,16 @@ def _reconcile_xadx_report(
                 "xadx-report.json execution provenance does not match the candidate"
             )
     if status == "unsupported":
-        if (
-            report["failures"]
-            or any(
-                row["status"] != "unsupported"
-                or row["dispatches"] != 0
-                or row["readbacks"] != 0
-                or row["validated_bytes"] != 0
-                or row["duration_seconds"] != 0
-                or row["mismatch_count"] != 0
-                or row["first_mismatch"] is not None
-                or row["failures"]
-                for row in case_results
-            )
+        if report["failures"] or any(
+            row["status"] != "unsupported"
+            or row["dispatches"] != 0
+            or row["readbacks"] != 0
+            or row["validated_bytes"] != 0
+            or row["duration_seconds"] != 0
+            or row["mismatch_count"] != 0
+            or row["first_mismatch"] is not None
+            or row["failures"]
+            for row in case_results
         ):
             raise EvidenceError("xadx-report.json unsupported results are invalid")
     for test, name, measured in zip(tests, expected_names, case_results):
@@ -678,9 +670,7 @@ def _reconcile_xadx_report(
             and measured.get("status") == "pass"
         ):
             expected_dispatches = (
-                rounds["lifecycle_rounds"]
-                + rounds["resident_rounds"]
-                + readback
+                rounds["lifecycle_rounds"] + rounds["resident_rounds"] + readback
             )
             expected_validated_bytes = (
                 expected_dispatches
@@ -688,9 +678,17 @@ def _reconcile_xadx_report(
             )
         if (
             not isinstance(measured, dict)
-            or set(measured) != {
-                "name", "status", "dispatches", "readbacks", "validated_bytes",
-                "duration_seconds", "mismatch_count", "first_mismatch", "failures",
+            or set(measured)
+            != {
+                "name",
+                "status",
+                "dispatches",
+                "readbacks",
+                "validated_bytes",
+                "duration_seconds",
+                "mismatch_count",
+                "first_mismatch",
+                "failures",
             }
             or measured["status"] not in {"pass", "fail", "unsupported"}
             or not isinstance(measured.get("dispatches"), int)
@@ -720,10 +718,7 @@ def _reconcile_xadx_report(
                     or measured["duration_seconds"] <= 0
                 )
             )
-            or (
-                measured["status"] == "unsupported"
-                and measured["failures"]
-            )
+            or (measured["status"] == "unsupported" and measured["failures"])
         ):
             raise EvidenceError(
                 f"xadx-report.json has invalid per-case metrics: {name}"
@@ -740,8 +735,7 @@ def _reconcile_xadx_report(
         if (
             test.get("name") != name
             or test.get("status") != measured["status"]
-            or test.get("rounds")
-            != measured["dispatches"]
+            or test.get("rounds") != measured["dispatches"]
             or test.get("duration_seconds") != measured["duration_seconds"]
             or test.get("metrics") != expected_metrics
             or test.get("log") != "xadx-report.json"
@@ -755,6 +749,7 @@ def _reconcile_xadx_report(
         for row in case_results
         for failure in row["failures"]
     ]
+
     def canonical_failure(failure):
         return (
             failure["case"],
@@ -762,12 +757,11 @@ def _reconcile_xadx_report(
             -1 if failure["round"] is None else failure["round"],
             failure["message"],
         )
+
     if sorted(report["failures"], key=canonical_failure) != sorted(
         flattened_failures, key=canonical_failure
     ):
-        raise EvidenceError(
-            "xadx-report.json top-level and per-case failures disagree"
-        )
+        raise EvidenceError("xadx-report.json top-level and per-case failures disagree")
 
 
 def _reconcile_reports(
@@ -800,9 +794,7 @@ def _validate_semantics(
 ) -> dict[str, Any]:
     evidence = _json_object(members["evidence.json"], "evidence.json")
     try:
-        validate_schema(
-            evidence, load_packaged_schema("evidence-v1.schema.json")
-        )
+        validate_schema(evidence, load_packaged_schema("evidence-v1.schema.json"))
     except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
         raise EvidenceError(
             f"evidence.json does not satisfy the v1 schema: {error}"
@@ -816,10 +808,9 @@ def _validate_semantics(
     profile = _json_object(members["profile.json"], "profile.json")
     if models != evidence["models"] or tests != evidence["tests"]:
         raise EvidenceError("evidence sidecars do not match evidence.json")
-    if (
-        profile.get("name") != evidence["profile"].get("name")
-        or profile.get("description") != evidence["profile"].get("description")
-    ):
+    if profile.get("name") != evidence["profile"].get("name") or profile.get(
+        "description"
+    ) != evidence["profile"].get("description"):
         raise EvidenceError("profile.json does not match evidence.json")
     if evidence["status"] == "pass":
         if (
@@ -862,9 +853,7 @@ def _validate_semantics(
     if "probe.json" in reports:
         probe_data = reports["probe.json"].get("data")
         if probe_data != evidence["observed_platform"]:
-            raise EvidenceError(
-                "evidence observed platform does not match probe.json"
-            )
+            raise EvidenceError("evidence observed platform does not match probe.json")
         _normalized_platform(probe_data)
     elif evidence["status"] == "pass":
         raise EvidenceError("passing evidence is missing probe.json")
@@ -898,9 +887,7 @@ def _validate_semantics(
             raise EvidenceError("candidate manifest digest does not match evidence")
         if canonical_candidate is not None:
             try:
-                normalized_canonical = normalize_candidate_manifest(
-                    canonical_candidate
-                )
+                normalized_canonical = normalize_candidate_manifest(canonical_candidate)
             except CandidateError as error:
                 raise CandidateMismatchError(str(error)) from error
             if normalized_embedded != normalized_canonical:
@@ -929,8 +916,7 @@ def _validate_semantics(
         subject = evidence["subject"]
         if (
             subject.get("version") != normalized_embedded["version"]
-            or subject.get("source_revision")
-            != normalized_embedded["source_revision"]
+            or subject.get("source_revision") != normalized_embedded["source_revision"]
             or subject.get("packages") != versions
             or {
                 distribution: identity["version"]
@@ -943,17 +929,15 @@ def _validate_semantics(
             )
     elif canonical_candidate is not None:
         raise CandidateMismatchError("candidate-bound intake rejects ad-hoc evidence")
-    _reconcile_reports(members, evidence, reports, contract if candidate_bound else None)
+    _reconcile_reports(
+        members, evidence, reports, contract if candidate_bound else None
+    )
     return evidence
 
 
-def _verify_available_candidate_wheels(
-    candidate: dict[str, Any], root: Path
-) -> None:
+def _verify_available_candidate_wheels(candidate: dict[str, Any], root: Path) -> None:
     identities = [
-        identity
-        for values in candidate["packages"].values()
-        for identity in values
+        identity for values in candidate["packages"].values() for identity in values
     ]
     expected_names = {identity["filename"] for identity in identities}
     available_names = {
@@ -981,9 +965,7 @@ def verify_evidence(
 ) -> dict[str, Any]:
     source = Path(source)
     members = (
-        _directory_members(source)
-        if source.is_dir()
-        else _archive_members(source)
+        _directory_members(source) if source.is_dir() else _archive_members(source)
     )
     _validate_layout(members)
     _parse_checksums(members)
@@ -1036,7 +1018,9 @@ def _verify_external_checksum(source: Path) -> str:
     try:
         value = sidecar.read_text(encoding="ascii")
     except (OSError, UnicodeDecodeError) as error:
-        raise EvidenceError(f"aggregate checksum sidecar is missing: {sidecar}") from error
+        raise EvidenceError(
+            f"aggregate checksum sidecar is missing: {sidecar}"
+        ) from error
     if value != f"{digest}  {source.name}\n":
         raise EvidenceError("aggregate checksum sidecar does not match the archive")
     return digest
@@ -1051,7 +1035,9 @@ def verify_aggregate(
     digest = _verify_external_checksum(source)
     members = _archive_members(source)
     if set(members) - {"SHA256SUMS", "qualification-index.json"} != {
-        name for name in members if re.fullmatch(r"runs/[0-9a-f]{64}\.evidence\.zip", name)
+        name
+        for name in members
+        if re.fullmatch(r"runs/[0-9a-f]{64}\.evidence\.zip", name)
     }:
         raise EvidenceError("qualification aggregate layout is invalid")
     _parse_checksums(members)
@@ -1070,10 +1056,10 @@ def verify_aggregate(
     canonical, canonical_path = _canonical_candidate_from_path(candidate_manifest)
     embedded_candidate = None
     run_paths = {run["bundle_path"] for run in index["runs"]}
-    if (
-        len(run_paths) != len(index["runs"])
-        or run_paths != set(members) - {"SHA256SUMS", "qualification-index.json"}
-    ):
+    if len(run_paths) != len(index["runs"]) or run_paths != set(members) - {
+        "SHA256SUMS",
+        "qualification-index.json",
+    }:
         raise EvidenceError("aggregate index does not exclusively list its runs")
     for run in index["runs"]:
         bundle = members[run["bundle_path"]]
@@ -1105,8 +1091,7 @@ def verify_aggregate(
             or evidence["started_at"] != run["started_at"]
             or evidence["finished_at"] != run["finished_at"]
             or evidence["subject"].get("source_revision") != run["source_revision"]
-            or _normalized_platform(evidence["observed_platform"])
-            != run["platform"]
+            or _normalized_platform(evidence["observed_platform"]) != run["platform"]
         ):
             raise EvidenceError("aggregate run metadata does not match its evidence")
     if embedded_candidate is None:
@@ -1163,9 +1148,7 @@ def verify_archive(
     if source.is_file():
         members = _archive_members(source)
         if "qualification-index.json" in members:
-            return verify_aggregate(
-                source, candidate_manifest=candidate_manifest
-            )
+            return verify_aggregate(source, candidate_manifest=candidate_manifest)
     return verify_evidence(source, candidate_manifest=candidate_manifest)
 
 
@@ -1200,11 +1183,11 @@ def load_qualification_policy(value: str | Path) -> dict[str, Any]:
             resource = resources.files("rocm_npu_qualification").joinpath(
                 "policies", f"{name}.json"
             )
-            policy = _json_object(
-                resource.read_bytes(), f"qualification policy {name}"
-            )
+            policy = _json_object(resource.read_bytes(), f"qualification policy {name}")
     except OSError as error:
-        raise IntakePolicyError(f"qualification policy cannot be read: {value}") from error
+        raise IntakePolicyError(
+            f"qualification policy cannot be read: {value}"
+        ) from error
     try:
         return normalize_policy(policy)
     except PolicyValidationError as error:
@@ -1236,8 +1219,7 @@ def _evaluate_policy(
             for entry in entries
             if entry["platform"].get("os") == requirement["platform_os"]
             and entry["profile"] == requirement["profile"]
-            and entry["platform"].get("target_family")
-            == requirement["target_family"]
+            and entry["platform"].get("target_family") == requirement["target_family"]
             and entry["status"] == "pass"
         ]
         satisfied = len(matches) >= requirement["minimum_runs"]
@@ -1350,9 +1332,7 @@ def intake_evidence(
                     "profile": evidence["profile"]["name"],
                     "started_at": evidence["started_at"],
                     "finished_at": evidence["finished_at"],
-                    "source_revision": evidence["subject"].get(
-                        "source_revision", ""
-                    ),
+                    "source_revision": evidence["subject"].get("source_revision", ""),
                     "candidate_manifest_sha256": candidate_digest,
                     "platform": platform,
                 }
@@ -1376,7 +1356,9 @@ def intake_evidence(
                 load_packaged_schema("qualification-index-v1.schema.json"),
             )
         except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
-            raise EvidenceError(f"generated intake index is invalid: {error}") from error
+            raise EvidenceError(
+                f"generated intake index is invalid: {error}"
+            ) from error
         (stage / "qualification-index.json").write_bytes(_json_bytes(index))
         write_sha256sums(stage)
         aggregate_members = _directory_members(stage)
@@ -1397,9 +1379,7 @@ def intake_evidence(
         try:
             staged_bundle.replace(bundle_output)
             staged_sidecar.replace(sidecar)
-            verify_aggregate(
-                bundle_output, candidate_manifest=Path(candidate_manifest)
-            )
+            verify_aggregate(bundle_output, candidate_manifest=Path(candidate_manifest))
         except Exception:
             shutil.rmtree(output_directory, ignore_errors=True)
             bundle_output.unlink(missing_ok=True)
@@ -1432,7 +1412,12 @@ def _parse_checksum_records(text: str, *, label: str) -> dict[str, str]:
         if match is None:
             raise EvidenceError(f"{label} has a malformed row")
         digest, name = match.group(1), match.group(2)
-        if name != Path(name).name or "/" in name or "\\" in name or name in {".", ".."}:
+        if (
+            name != Path(name).name
+            or "/" in name
+            or "\\" in name
+            or name in {".", ".."}
+        ):
             raise EvidenceError(f"{label} path must be a top-level file: {name}")
         if name in records:
             raise EvidenceError(f"{label} has a duplicate path: {name}")
@@ -1479,9 +1464,7 @@ def _verify_candidate_checksums(payload_directory: Path) -> None:
         ) from error
     records = _parse_checksum_records(text, label="candidate-SHA256SUMS")
     if "candidate-manifest.json" not in records:
-        raise EvidenceError(
-            "candidate-SHA256SUMS must list candidate-manifest.json"
-        )
+        raise EvidenceError("candidate-SHA256SUMS must list candidate-manifest.json")
     for name, digest in sorted(records.items()):
         path = payload_directory / name
         if not path.is_file():

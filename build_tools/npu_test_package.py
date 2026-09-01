@@ -95,13 +95,9 @@ def create_archive(stage, output_directory, codec):
         if other != archive:
             other.unlink()
     if codec == "zst":
-        create_deterministic_tar_zstd_cli(
-            stage, archive, arcname=".", level=6
-        )
+        create_deterministic_tar_zstd_cli(stage, archive, arcname=".", level=6)
     elif codec == "gz":
-        create_deterministic_tar_gz(
-            stage, archive, arcname=".", compresslevel=6
-        )
+        create_deterministic_tar_gz(stage, archive, arcname=".", compresslevel=6)
     else:
         raise ValueError(f"unsupported NPU test package codec: {codec}")
     return archive
@@ -129,7 +125,9 @@ def verify_tree(package, expected_cases, source_revision, system):
     if manifest.get("product") != "rocm-npu-test-package":
         raise RuntimeError("not a rocm-npu-test-package manifest")
     if manifest.get("source_revision") != source_revision:
-        raise RuntimeError("NPU test package source revision does not match this checkout")
+        raise RuntimeError(
+            "NPU test package source revision does not match this checkout"
+        )
     if manifest.get("platform", {}).get("system") != system:
         raise RuntimeError("NPU test package platform does not match this runner")
 
@@ -175,6 +173,7 @@ def verify_tree(package, expected_cases, source_revision, system):
                 )
     return manifest
 
+
 ROOT = paths.ROOT
 PROJ = paths.PROJ
 OUT = paths.OUT
@@ -219,9 +218,7 @@ def cmd_package_npu_test_package(args):
         write_case(
             NPU_TEST_PACKAGE_STAGE,
             npu_test_cases.generate_case(design),
-            serializer.serialize_xadx(
-                vector_xclbin, vector_transaction, "MLIR_AIE"
-            ),
+            serializer.serialize_xadx(vector_xclbin, vector_transaction, "MLIR_AIE"),
             {"kind": "iron-tools-design", "name": design, "device": "npu2"},
         )
     )

@@ -35,9 +35,7 @@ XADX_ROUNDS = {
     # They share the curated soak depth (5/20/32) but are named explicitly rather
     # than falling through to the default policy, so a sweep's XADX execution can
     # never drift silently.
-    for name in (
-        "fast", "default", "extended", "all-models", "bench-all", "bench-dev"
-    )
+    for name in ("fast", "default", "extended", "all-models", "bench-all", "bench-dev")
 }
 
 

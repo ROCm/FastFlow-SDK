@@ -90,16 +90,15 @@ def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
     return LINUX_WHEEL_TAG
 
 
-def fastflowlm_wheel_tag(
-    system: str | None = None, machine: str | None = None
-) -> str:
+def fastflowlm_wheel_tag(system: str | None = None, machine: str | None = None) -> str:
     wheel_tag(system, machine)
     return FASTFLOWLM_LINUX_WHEEL_TAG
 
 
 def _elf_files(package_root: Path) -> list[Path]:
-    return sorted(path for path in package_root.rglob("*")
-                  if path.is_file() and is_elf(path))
+    return sorted(
+        path for path in package_root.rglob("*") if path.is_file() and is_elf(path)
+    )
 
 
 def _copy_hrx_soname(source_bundle: Path, runtime_root: Path) -> str:
@@ -114,7 +113,8 @@ def _copy_hrx_soname(source_bundle: Path, runtime_root: Path) -> str:
             f"{source_bundle / 'lib'}"
         )
     sonames = {
-        soname for library in libraries
+        soname
+        for library in libraries
         if (soname := elf_soname(library, patchelf=patchelf))
     }
     if len(sonames) != 1:
@@ -135,7 +135,9 @@ def _provided_library_filenames(package_root: Path) -> set[str]:
     return {path.name for path in _elf_files(package_root)}
 
 
-def _source_linux_library_candidates(source_bundle: Path, patchelf: str) -> dict[str, Path]:
+def _source_linux_library_candidates(
+    source_bundle: Path, patchelf: str
+) -> dict[str, Path]:
     candidates: dict[str, Path] = {}
     for path in sorted((source_bundle / "lib").rglob("*.so*")):
         if not path.is_file() or not is_elf(path):
@@ -147,8 +149,9 @@ def _source_linux_library_candidates(source_bundle: Path, patchelf: str) -> dict
     return candidates
 
 
-def _copy_native_closure(source_bundle: Path, package_root: Path,
-                         external_roots: tuple[Path, ...] = ()) -> set[str]:
+def _copy_native_closure(
+    source_bundle: Path, package_root: Path, external_roots: tuple[Path, ...] = ()
+) -> set[str]:
     patchelf = shutil.which("patchelf")
     if not patchelf:
         raise RuntimeError("patchelf is required to prepare Linux rocm-npu wheels")
@@ -170,7 +173,8 @@ def _copy_native_closure(source_bundle: Path, package_root: Path,
                 relative = path.relative_to(package_root).as_posix()
                 raise RuntimeError(
                     f"{package_root.name} dependency is not present in the staged "
-                    f"FastFlowLM bundle: {relative} -> {needed}")
+                    f"FastFlowLM bundle: {relative} -> {needed}"
+                )
             destination = package_root / "lib" / needed
             if destination.exists():
                 continue
@@ -184,8 +188,9 @@ def _copy_runtime_native_closure(source_bundle: Path, runtime_root: Path) -> set
     return _copy_native_closure(source_bundle, runtime_root)
 
 
-def _copy_fastflowlm_native_closure(source_bundle: Path, fastflowlm_root: Path,
-                                    runtime_root: Path) -> set[str]:
+def _copy_fastflowlm_native_closure(
+    source_bundle: Path, fastflowlm_root: Path, runtime_root: Path
+) -> set[str]:
     return _copy_native_closure(source_bundle, fastflowlm_root, (runtime_root,))
 
 
@@ -206,9 +211,13 @@ def _strip_debug(package_roots: list[Path]) -> dict[str, int]:
     strip = shutil.which("strip")
     if not strip:
         raise RuntimeError("strip is required to prepare Linux rocm-npu wheels")
-    targets = [path for package_root in package_roots for path in _elf_files(package_root)]
+    targets = [
+        path for package_root in package_roots for path in _elf_files(package_root)
+    ]
     if targets:
-        subprocess.run([strip, "--strip-debug", *[str(path) for path in targets]], check=True)
+        subprocess.run(
+            [strip, "--strip-debug", *[str(path) for path in targets]], check=True
+        )
     return {"stripped": len(targets)}
 
 
@@ -216,24 +225,28 @@ def _patch_and_verify_linux_products(package_roots: list[Path]) -> dict[str, lis
     patchelf = shutil.which("patchelf")
     if not patchelf:
         raise RuntimeError("patchelf is required to prepare Linux rocm-npu wheels")
-    package_elf_files = {package_root: _elf_files(package_root) for package_root in package_roots}
+    package_elf_files = {
+        package_root: _elf_files(package_root) for package_root in package_roots
+    }
     if not any(package_elf_files.values()):
         raise RuntimeError("rocm-npu wheel payload contains no ELF files")
 
     for package_root, elf_files in package_elf_files.items():
         for path in elf_files:
-            set_elf_rpath(
-                path, _rpath_for(path, package_root), patchelf=patchelf
-            )
+            set_elf_rpath(path, _rpath_for(path, package_root), patchelf=patchelf)
             absolute_entries = [
-                entry for entry in elf_rpath(path, patchelf=patchelf).split(":")
+                entry
+                for entry in elf_rpath(path, patchelf=patchelf).split(":")
                 if entry.startswith("/")
             ]
             if absolute_entries:
-                relative = f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
+                relative = (
+                    f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
+                )
                 raise RuntimeError(
                     "rocm-npu wheel ELF RPATH/RUNPATH contains absolute paths: "
-                    f"{relative} -> {':'.join(absolute_entries)}")
+                    f"{relative} -> {':'.join(absolute_entries)}"
+                )
 
     provided_names = {
         package_root: _provided_library_filenames(package_root)
@@ -253,23 +266,31 @@ def _patch_and_verify_linux_products(package_roots: list[Path]) -> dict[str, lis
             allowed_names.update(runtime_names)
         for path in elf_files:
             needed = elf_needed(path, patchelf=patchelf)
-            relative = f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
+            relative = (
+                f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
+            )
             graph[relative] = sorted(needed)
-            missing.extend(f"{relative} -> {name}" for name in needed
-                           if name not in allowed_names and
-                           not _is_linux_system_runtime(name))
+            missing.extend(
+                f"{relative} -> {name}"
+                for name in needed
+                if name not in allowed_names and not _is_linux_system_runtime(name)
+            )
     if missing:
-        raise RuntimeError("rocm-npu wheel Linux dependency closure is incomplete "
-                           "within package boundaries:\n  " +
-                           "\n  ".join(sorted(missing)))
+        raise RuntimeError(
+            "rocm-npu wheel Linux dependency closure is incomplete "
+            "within package boundaries:\n  " + "\n  ".join(sorted(missing))
+        )
     return graph
 
 
-def stage_wheel_products(source_bundle: Path, destination: Path,
-                         version: str) -> dict[str, Path]:
+def stage_wheel_products(
+    source_bundle: Path, destination: Path, version: str
+) -> dict[str, Path]:
     """Stage split package roots from the combined FastFlowLM+HRX bundle."""
     if os.name == "nt":
-        raise RuntimeError("rocm-npu runtime/FastFlowLM wheel staging is Linux-only for now")
+        raise RuntimeError(
+            "rocm-npu runtime/FastFlowLM wheel staging is Linux-only for now"
+        )
     version = validate_version(version)
     source_manifest = verify_bundle(source_bundle)
     trees = prepare_runtime_wheel_trees(source_bundle, destination)
@@ -287,17 +308,26 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     if flm_lib_dir.is_dir():
         _copy_relative_tree(source_bundle, "lib/flm", fastflowlm_root)
     fastflowlm_license_names = _copy_fastflowlm_native_closure(
-        source_bundle, fastflowlm_root, runtime_root)
+        source_bundle, fastflowlm_root, runtime_root
+    )
 
     runtime_names = {path.name for path in runtime_root.rglob("*") if path.is_file()}
     runtime_names.update(runtime_license_names)
-    fastflowlm_names = {path.name for path in fastflowlm_root.rglob("*") if path.is_file()}
+    fastflowlm_names = {
+        path.name for path in fastflowlm_root.rglob("*") if path.is_file()
+    }
     fastflowlm_names.update(fastflowlm_license_names)
-    _copy_dependency_licenses(source_bundle, source_manifest, runtime_root, runtime_names)
-    _copy_dependency_licenses(source_bundle, source_manifest, fastflowlm_root, fastflowlm_names)
+    _copy_dependency_licenses(
+        source_bundle, source_manifest, runtime_root, runtime_names
+    )
+    _copy_dependency_licenses(
+        source_bundle, source_manifest, fastflowlm_root, fastflowlm_names
+    )
 
     strip_report = _strip_debug([runtime_root, fastflowlm_root])
-    binary_dependencies = _patch_and_verify_linux_products([runtime_root, fastflowlm_root])
+    binary_dependencies = _patch_and_verify_linux_products(
+        [runtime_root, fastflowlm_root]
+    )
 
     write_runtime_wheel_manifests(
         trees,
@@ -314,10 +344,17 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     }
 
 
-def build_wheel(tree_root: Path, distribution: str, version: str, output_directory: Path,
-                *, summary: str, requires: tuple[str, ...] = (),
-                console_scripts: dict[str, str] | None = None,
-                tag: str | None = None) -> Path:
+def build_wheel(
+    tree_root: Path,
+    distribution: str,
+    version: str,
+    output_directory: Path,
+    *,
+    summary: str,
+    requires: tuple[str, ...] = (),
+    console_scripts: dict[str, str] | None = None,
+    tag: str | None = None,
+) -> Path:
     return _build_wheel(
         tree_root,
         distribution,
@@ -330,9 +367,9 @@ def build_wheel(tree_root: Path, distribution: str, version: str, output_directo
     )
 
 
-def build_runtime_fastflowlm_wheels(source_bundle: Path, stage_directory: Path,
-                                    output_directory: Path,
-                                    version: str) -> dict[str, Path]:
+def build_runtime_fastflowlm_wheels(
+    source_bundle: Path, stage_directory: Path, output_directory: Path, version: str
+) -> dict[str, Path]:
     products = stage_wheel_products(source_bundle, stage_directory, version)
     remove_distribution_wheels(
         output_directory, (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION)
@@ -371,8 +408,9 @@ def _zip_member_is_elf(data: bytes) -> bool:
     return data.startswith(b"\x7fELF")
 
 
-def verify_wheels_do_not_have_text_path_references(wheels: dict[str, Path],
-                                                   forbidden_paths: tuple[Path, ...]) -> None:
+def verify_wheels_do_not_have_text_path_references(
+    wheels: dict[str, Path], forbidden_paths: tuple[Path, ...]
+) -> None:
     """Rejects local paths in text payloads and audits opaque native payloads."""
     references = find_wheel_path_references(wheels, forbidden_paths)
     text_references = []
@@ -390,11 +428,9 @@ def verify_wheels_do_not_have_text_path_references(wheels: dict[str, Path],
         )
     if text_references:
         details = "\n  ".join(
-            f"{reference.wheel.name}:{reference.member} -> "
-            f"{reference.forbidden_path}"
+            f"{reference.wheel.name}:{reference.member} -> {reference.forbidden_path}"
             for reference in text_references
         )
         raise RuntimeError(
-            "wheel text payload contains local checkout/build paths:\n  " +
-            details
+            "wheel text payload contains local checkout/build paths:\n  " + details
         )

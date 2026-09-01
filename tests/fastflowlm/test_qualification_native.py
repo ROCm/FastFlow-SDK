@@ -65,9 +65,7 @@ def test_file_record_is_relative_and_content_bound(tmp_path):
 
 
 def test_capability_loader_rejects_unsafe_family_paths(tmp_path):
-    document = json.loads(
-        qualification.CAPABILITIES_SOURCE.read_text(encoding="utf-8")
-    )
+    document = json.loads(qualification.CAPABILITIES_SOURCE.read_text(encoding="utf-8"))
     document["families"][0]["xclbin_directory"] = "../outside"
     path = tmp_path / "capabilities.json"
     path.write_text(json.dumps(document), encoding="utf-8")
@@ -88,7 +86,9 @@ def test_native_contract_tests_build_and_run_through_ctest(tmp_path):
         mock.patch.object(qualification, "QUALIFICATION_BUILD", tmp_path / "build"),
         mock.patch.object(qualification, "configure_qualification_tools"),
         mock.patch.object(qualification, "qualification_runtime_env", return_value={}),
-        mock.patch.object(qualification.environment, "cmake_bin", return_value=str(cmake)),
+        mock.patch.object(
+            qualification.environment, "cmake_bin", return_value=str(cmake)
+        ),
         mock.patch.object(qualification.environment, "cmake_env", return_value={}),
         mock.patch.object(qualification.environment, "sh") as sh,
     ):
@@ -112,9 +112,9 @@ def test_native_contract_tests_build_and_run_through_ctest(tmp_path):
     ]
     ctest_environment = sh.call_args_list[1].kwargs["env"]
     temporary_directory = Path(ctest_environment["TMPDIR"])
-    assert {
-        ctest_environment[name] for name in ("TEMP", "TMP", "TMPDIR")
-    } == {str(temporary_directory)}
+    assert {ctest_environment[name] for name in ("TEMP", "TMP", "TMPDIR")} == {
+        str(temporary_directory)
+    }
     assert temporary_directory.parent == tmp_path / "build"
     assert temporary_directory.name.startswith("ctest-")
     assert not temporary_directory.exists()

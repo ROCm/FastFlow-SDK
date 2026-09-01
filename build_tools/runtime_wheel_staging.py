@@ -42,7 +42,9 @@ class RuntimeWheelTrees:
 
 
 def _write_runtime_module(package_root: Path) -> None:
-    _write_file(package_root / "__init__.py", '''"""Package-local HRX runtime helpers."""
+    _write_file(
+        package_root / "__init__.py",
+        '''"""Package-local HRX runtime helpers."""
 
 from __future__ import annotations
 
@@ -137,15 +139,21 @@ def main() -> int:
         env=environment,
         check=False,
     ).returncode
-''')
-    _write_file(package_root / "__main__.py", '''from . import main
+''',
+    )
+    _write_file(
+        package_root / "__main__.py",
+        """from . import main
 
 raise SystemExit(main())
-''')
+""",
+    )
 
 
 def _write_fastflowlm_module(package_root: Path) -> None:
-    _write_file(package_root / "__init__.py", '''"""Package-local FastFlowLM runtime helpers."""
+    _write_file(
+        package_root / "__init__.py",
+        '''"""Package-local FastFlowLM runtime helpers."""
 
 from __future__ import annotations
 
@@ -203,15 +211,19 @@ def main(argv: list[str] | None = None) -> int:
         return subprocess.call([executable, *args], env=env)
     os.execvpe(executable, [executable, *args], env)
     raise RuntimeError("unreachable")
-''')
-    _write_file(package_root / "__main__.py", '''from __future__ import annotations
+''',
+    )
+    _write_file(
+        package_root / "__main__.py",
+        """from __future__ import annotations
 
 from . import main
 
 
 if __name__ == "__main__":
     main()
-''')
+""",
+    )
 
 
 def prepare_runtime_wheel_trees(
@@ -229,9 +241,7 @@ def prepare_runtime_wheel_trees(
     trees.fastflowlm_root.mkdir(parents=True)
     _write_runtime_module(trees.runtime_root)
     _write_fastflowlm_module(trees.fastflowlm_root)
-    _copy_relative_tree(
-        source_bundle, "share/rocm-npu/self-test", trees.runtime_root
-    )
+    _copy_relative_tree(source_bundle, "share/rocm-npu/self-test", trees.runtime_root)
     _copy_relative_tree(source_bundle, "share/flm", trees.fastflowlm_root)
 
     _copy_license_as(
@@ -244,9 +254,7 @@ def prepare_runtime_wheel_trees(
     _copy_license(
         source_bundle, "licenses/nlohmann-json-LICENSE.MIT", trees.runtime_root
     )
-    _copy_license(
-        source_bundle, "licenses/THIRD_PARTY_NOTICES.md", trees.runtime_root
-    )
+    _copy_license(source_bundle, "licenses/THIRD_PARTY_NOTICES.md", trees.runtime_root)
     _copy_license_as(
         source_bundle,
         "licenses/rocm-npu-staging-LICENSE",
@@ -258,9 +266,7 @@ def prepare_runtime_wheel_trees(
         "licenses/FastFlowLM-LICENSE_RUNTIME.txt",
         trees.fastflowlm_root,
     )
-    _copy_license(
-        source_bundle, "licenses/FastFlowLM-TERMS.md", trees.fastflowlm_root
-    )
+    _copy_license(source_bundle, "licenses/FastFlowLM-TERMS.md", trees.fastflowlm_root)
     return trees
 
 

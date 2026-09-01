@@ -22,10 +22,13 @@ from rocm_npu_qualification.offline import (
 )
 from tests.support.qualification import (
     make_candidate as _candidate,
+)
+from tests.support.qualification import (
     make_evidence as _evidence,
+)
+from tests.support.qualification import (
     make_policy as _policy,
 )
-
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
@@ -62,7 +65,9 @@ def _write_payload(root: Path, files: dict[str, bytes]) -> Path:
     )
     # Prefer an explicit candidate-SHA256SUMS when the caller supplies one.
     if "candidate-SHA256SUMS" not in files:
-        candidate_targets = {"candidate-manifest.json": files["candidate-manifest.json"]}
+        candidate_targets = {
+            "candidate-manifest.json": files["candidate-manifest.json"]
+        }
         for name, data in files.items():
             if name.startswith("rocm_npu_") and name.endswith(".whl"):
                 candidate_targets[name] = data
@@ -330,9 +335,7 @@ def test_stage_github_release_rejects_wrong_aggregate_basename(tmp_path):
     wrong.with_name(wrong.name + ".sha256").write_text(
         f"{sha256_file(wrong)}  {wrong.name}\n", encoding="ascii"
     )
-    with pytest.raises(
-        EvidenceError, match="qualification aggregate basename must be"
-    ):
+    with pytest.raises(EvidenceError, match="qualification aggregate basename must be"):
         stage_github_release(payload, wrong, tmp_path / "out", index=index)
 
 
@@ -383,8 +386,7 @@ def test_stage_github_release_layout_contract_matches_ci_split(tmp_path):
         ).encode("ascii"),
         "rocm_npu_ops-1.2.3-py3-none-any.whl": ops,
         "rocm_npu_ops-1.2.3-py3-none-any.whl.sha256": (
-            f"{hashlib.sha256(ops).hexdigest()}  "
-            "rocm_npu_ops-1.2.3-py3-none-any.whl\n"
+            f"{hashlib.sha256(ops).hexdigest()}  rocm_npu_ops-1.2.3-py3-none-any.whl\n"
         ).encode("ascii"),
     }
     payload = _write_payload(
@@ -465,7 +467,9 @@ def test_stage_github_release_cli_round_trip(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "pass"
     assert report["file_count"] == len(list(upload.iterdir()))
-    assert (upload / "rocm_npu_ops-0.1.0.devtest-py3-none-any.whl").read_bytes() == b"ops"
+    assert (
+        upload / "rocm_npu_ops-0.1.0.devtest-py3-none-any.whl"
+    ).read_bytes() == b"ops"
     assert (upload / aggregate.name).is_file()
 
 
@@ -497,4 +501,3 @@ def test_stage_github_release_cli_json_error_on_extra_file(tmp_path, capsys):
     payload_out = json.loads(capsys.readouterr().out)
     assert payload_out["status"] == "error"
     assert "EXTRA.txt" in payload_out["error"]
-

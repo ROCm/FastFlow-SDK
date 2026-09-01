@@ -4,8 +4,8 @@
 
 import locale
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import sysconfig
@@ -20,9 +20,7 @@ UV_VERSION = "0.11.33"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 2 * 60 * 60
 
 _WINDOWS_BUILD_ENV = None
-_CREATE_NEW_PROCESS_GROUP = getattr(
-    subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-)
+_CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -106,12 +104,13 @@ def run(
             raise ValueError(
                 "stdout and stderr arguments may not be used with capture_output"
             )
-    elif kwargs.get("stdout") == subprocess.PIPE or kwargs.get("stderr") == subprocess.PIPE:
+    elif (
+        kwargs.get("stdout") == subprocess.PIPE
+        or kwargs.get("stderr") == subprocess.PIPE
+    ):
         raise ValueError("use capture_output=True instead of PIPE")
 
-    text_mode = bool(
-        kwargs.get("text") or kwargs.get("universal_newlines")
-    )
+    text_mode = bool(kwargs.get("text") or kwargs.get("universal_newlines"))
     encoding = kwargs.get("encoding") or (
         "utf-8" if sys.flags.utf8_mode else locale.getencoding()
     )
@@ -125,9 +124,7 @@ def run(
             cwd=cwd,
             env=env,
             **(
-                {"stdout": stdout_file, "stderr": stderr_file}
-                if capture_output
-                else {}
+                {"stdout": stdout_file, "stderr": stderr_file} if capture_output else {}
             ),
             **kwargs,
             **_managed_process_kwargs(),
@@ -182,17 +179,13 @@ def sh(
     )
 
 
-def venv_py(
-    venv: Path | None = None, *, windows: bool | None = None
-) -> Path:
+def venv_py(venv: Path | None = None, *, windows: bool | None = None) -> Path:
     return paths.venv_bin(venv, windows=windows) / paths.executable_name(
         "python", windows=windows
     )
 
 
-def uv_bin(
-    venv: Path | None = None, *, windows: bool | None = None
-) -> Path:
+def uv_bin(venv: Path | None = None, *, windows: bool | None = None) -> Path:
     return paths.venv_bin(venv, windows=windows) / paths.executable_name(
         "uv", windows=windows
     )
@@ -230,9 +223,7 @@ def python_install(python, *arguments, refresh_packages=()):
     )
 
 
-def cmake_bin(
-    venv: Path | None = None, *, windows: bool | None = None
-) -> str:
+def cmake_bin(venv: Path | None = None, *, windows: bool | None = None) -> str:
     """cmake from the venv (pip, >=3.30) if set up, else system cmake."""
     candidate = paths.venv_bin(venv, windows=windows) / paths.executable_name(
         "cmake", windows=windows
@@ -281,10 +272,7 @@ def env_path(env=None, *, windows: bool | None = None):
     selected = env or os.environ
     if _selected_windows(windows):
         return (
-            selected.get("Path")
-            or selected.get("PATH")
-            or selected.get("path")
-            or ""
+            selected.get("Path") or selected.get("PATH") or selected.get("path") or ""
         )
     return selected.get("PATH", "")
 
@@ -347,9 +335,7 @@ def windows_msvc_env(*, windows: bool | None = None):
                 f'@echo off\r\ncall "{vcvars}" >nul\r\nset\r\n',
                 encoding="utf-8",
             )
-            result = subprocess.run(
-                [str(wrapper)], capture_output=True, text=True
-            )
+            result = subprocess.run([str(wrapper)], capture_output=True, text=True)
         if result.returncode == 0:
             for line in result.stdout.splitlines():
                 if "=" not in line:
@@ -374,9 +360,7 @@ def windows_msvc_env(*, windows: bool | None = None):
     return dict(env)
 
 
-def cmake_env(
-    venv: Path | None = None, *, windows: bool | None = None
-):
+def cmake_env(venv: Path | None = None, *, windows: bool | None = None):
     """PATH with the venv bin first so pip-provided cmake/ninja are used."""
     selected_windows = _selected_windows(windows)
     env = (
@@ -458,8 +442,6 @@ def have_perl_module(module):
     if not perl:
         return False
     return (
-        subprocess.run(
-            [perl, f"-M{module}", "-e", "1"], capture_output=True
-        ).returncode
+        subprocess.run([perl, f"-M{module}", "-e", "1"], capture_output=True).returncode
         == 0
     )

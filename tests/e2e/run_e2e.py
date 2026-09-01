@@ -37,7 +37,6 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from build_tools import iron  # noqa: E402
 
-
 ROOT = iron.ROOT
 PROJ = iron.PROJ
 OUT = iron.OUT
@@ -140,7 +139,9 @@ def main(argv: list[str]) -> int:
         design_dir = resolve_design_dir(pin, args.design)
 
         OUT.mkdir(exist_ok=True)
-        compiler_prefix = args.compiler_prefix.resolve() if args.compiler_prefix else None
+        compiler_prefix = (
+            args.compiler_prefix.resolve() if args.compiler_prefix else None
+        )
         xclbinutil = require_xclbinutil(compiler_prefix)
         env = toolchain_env(xclbinutil, compiler_prefix)
         artifacts = build_design(

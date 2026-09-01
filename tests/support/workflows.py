@@ -12,7 +12,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 

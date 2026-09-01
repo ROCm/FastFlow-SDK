@@ -22,7 +22,6 @@ from build_tools.rocm_npu_wheel_common import (
 from rocm_npu_qualification import candidate, cli, installation
 from tests.support.qualification import write_candidate_wheel as _write_wheel
 
-
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 
@@ -107,9 +106,7 @@ def _write_numeric_wheel(
     }
 
     def record(path: str, content: bytes) -> str:
-        digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(
-            b"="
-        )
+        digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=")
         return f"{path},sha256={digest.decode()},{len(content)}"
 
     record_name = f"{dist_info}/RECORD"
@@ -542,9 +539,7 @@ def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path
             for row in rows:
                 item = installation.metadata.PackagePath(row[0])
                 item.dist = self
-                item.hash = (
-                    installation.metadata.FileHash(row[1]) if row[1] else None
-                )
+                item.hash = installation.metadata.FileHash(row[1]) if row[1] else None
                 item.size = int(row[2]) if row[2] else None
                 result.append(item)
             return result

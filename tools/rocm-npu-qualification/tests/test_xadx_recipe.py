@@ -60,6 +60,8 @@ def test_importing_xadx_does_not_execute_numeric_extensions():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
 GENERATOR_VALUES = {"swapped": b"\x11" * SIZE}
 
 
@@ -93,16 +95,10 @@ class StagingRuntime:
     def allocate(self, data):
         self.resources.append(("buffer", len(self.resources)))
         handle = f"handle-{len(self.resources)}"
-        backing = bytearray([xadx._GUARD_VALUE]) * (
-            len(data) + 2 * xadx._GUARD_BYTES
-        )
-        storage = memoryview(backing)[
-            xadx._GUARD_BYTES : xadx._GUARD_BYTES + len(data)
-        ]
+        backing = bytearray([xadx._GUARD_VALUE]) * (len(data) + 2 * xadx._GUARD_BYTES)
+        storage = memoryview(backing)[xadx._GUARD_BYTES : xadx._GUARD_BYTES + len(data)]
         storage[:] = data
-        return xadx._GuardedBuffer(
-            handle, storage, backing, xadx._GUARD_BYTES
-        )
+        return xadx._GuardedBuffer(handle, storage, backing, xadx._GUARD_BYTES)
 
     def run(self, executable, ordinal, buffers):
         self.events.append(f"run:{executable}")
@@ -264,6 +260,7 @@ class Generators:
             return self.values[test_id]
         return bytes(int(parameters["size"]))
 
+
 def recipe(cases, implementations=("first", "second")):
     return {
         "schema_version": KERNEL_RECIPE_SCHEMA_VERSION,
@@ -278,9 +275,7 @@ def recipe(cases, implementations=("first", "second")):
                 "builder": alias,
                 "shape": {"m": 1, "k": 1, "n": 1},
                 "families": ["test"],
-                "xclbin_sha256": hashlib.sha256(
-                    f"xclbin-{alias}".encode()
-                ).hexdigest(),
+                "xclbin_sha256": hashlib.sha256(f"xclbin-{alias}".encode()).hexdigest(),
                 "xclbin_path": f"xclbins/{alias}.xclbin",
                 "transaction": "transactions/kernel.bin",
                 "transaction_sha256": TRANSACTION_SHA256,
@@ -367,9 +362,7 @@ def run(
 
 
 @pytest.mark.parametrize("runtime_type", [StagingRuntime, NoncoherentRuntime])
-def test_a_later_stage_reads_what_the_earlier_stage_wrote(
-    tmp_path, runtime_type
-):
+def test_a_later_stage_reads_what_the_earlier_stage_wrote(tmp_path, runtime_type):
     """The whole point of a chain: no host round trip between the stages."""
     signature = GENERATOR_VALUES["swapped"]
     cases = [
@@ -420,8 +413,7 @@ def test_a_later_stage_may_not_modify_its_chained_input(tmp_path):
     )
     assert report["status"] == "fail"
     assert any(
-        "input was modified" in failure["message"]
-        for failure in report["failures"]
+        "input was modified" in failure["message"] for failure in report["failures"]
     )
 
 
@@ -447,9 +439,7 @@ def test_the_compared_buffer_is_the_stage_that_declares_the_expectation(tmp_path
 
 
 @pytest.mark.parametrize("corruption", ["leading", "trailing"])
-def test_device_writes_outside_a_declared_buffer_are_rejected(
-    tmp_path, corruption
-):
+def test_device_writes_outside_a_declared_buffer_are_rejected(tmp_path, corruption):
     cases = [
         {
             "name": "guarded",
@@ -463,8 +453,7 @@ def test_device_writes_outside_a_declared_buffer_are_rejected(
     )
     assert report["status"] == "fail"
     assert any(
-        f"{corruption} guard" in failure["message"]
-        for failure in report["failures"]
+        f"{corruption} guard" in failure["message"] for failure in report["failures"]
     )
 
 
@@ -497,8 +486,7 @@ def test_device_modification_of_an_input_buffer_is_rejected(tmp_path):
     )
     assert report["status"] == "fail"
     assert any(
-        "input was modified" in failure["message"]
-        for failure in report["failures"]
+        "input was modified" in failure["message"] for failure in report["failures"]
     )
 
 
@@ -506,7 +494,9 @@ def test_binding_a_stage_output_that_was_never_written_is_refused(tmp_path):
     cases = [
         {
             "name": "chained",
-            "stages": [stage("mm", "second", expected=generator(), bind="absent.output")],
+            "stages": [
+                stage("mm", "second", expected=generator(), bind="absent.output")
+            ],
         }
     ]
     with pytest.raises(xadx.XadxError, match="which no earlier stage wrote"):
@@ -529,7 +519,9 @@ def test_a_case_with_no_expectation_is_refused(tmp_path):
 
 
 def test_a_case_naming_an_undescribed_implementation_is_refused(tmp_path):
-    cases = [{"name": "stray", "stages": [stage("only", "third", expected=generator())]}]
+    cases = [
+        {"name": "stray", "stages": [stage("only", "third", expected=generator())]}
+    ]
     with pytest.raises(xadx.XadxError, match="does not describe"):
         run(tmp_path, cases)
 
@@ -550,7 +542,9 @@ def test_a_recipe_of_another_schema_version_is_refused(tmp_path):
 
 
 def test_duplicate_implementation_ids_are_refused_before_device_open(tmp_path):
-    body = recipe([{"name": "case", "stages": [stage("only", "first", expected=generator())]}])
+    body = recipe(
+        [{"name": "case", "stages": [stage("only", "first", expected=generator())]}]
+    )
     body["implementations"].append(dict(body["implementations"][0]))
     with pytest.raises(xadx.XadxError, match="implementation IDs"):
         xadx.run_recipe(body, tmp_path, runtime_factory=StagingRuntime)
@@ -887,8 +881,7 @@ def test_failed_resident_preparation_rolls_back_partial_resources(tmp_path):
     assert report["status"] == "fail"
     assert runtimes[0].resource_counts_at_dispatch == [4, 4]
     assert any(
-        failure["case"] == "second"
-        and failure["phase"] == "resident-preparation"
+        failure["case"] == "second" and failure["phase"] == "resident-preparation"
         for failure in report["failures"]
     )
 
@@ -1036,9 +1029,7 @@ def test_report_binds_exact_recipe_bytes_and_flattened_executables(tmp_path):
 
 
 def test_unsupported_report_satisfies_v1_branch(tmp_path):
-    cases = [
-        {"name": "case", "stages": [stage("only", "first", expected=generator())]}
-    ]
+    cases = [{"name": "case", "stages": [stage("only", "first", expected=generator())]}]
     report, _ = run(tmp_path, cases, runtime={"architecture": "unknown"})
     assert xadx.validate_xadx_report(report) is report
     assert report["report_kind"] == "execution"

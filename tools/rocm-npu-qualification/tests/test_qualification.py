@@ -25,6 +25,7 @@ from rocm_npu_qualification import (  # noqa: E402
     cli,
     installation,
     models,
+    offline,  # noqa: E402
     power,
     prompts,
     report,
@@ -39,17 +40,18 @@ from rocm_npu_qualification.commands import (  # noqa: E402
     run_command,
     serve_probe,
 )
-from rocm_npu_qualification.hashing import canonical_json_sha256  # noqa: E402
-from rocm_npu_qualification import offline  # noqa: E402
-from rocm_npu_qualification.offline import EvidenceError, pack_evidence  # noqa: E402
 from rocm_npu_qualification.evidence import EvidenceWriter  # noqa: E402
 from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     require_1k_checkpoint,
     require_benchmark_schedule,
     verify_xclbin_inventory,
 )
-from rocm_npu_qualification.hashing import file_inventory  # noqa: E402
+from rocm_npu_qualification.hashing import (
+    canonical_json_sha256,  # noqa: E402
+    file_inventory,  # noqa: E402
+)
 from rocm_npu_qualification.numeric_runtime import NUMERIC_RUNTIME  # noqa: E402
+from rocm_npu_qualification.offline import EvidenceError, pack_evidence  # noqa: E402
 from rocm_npu_qualification.profiles import (  # noqa: E402
     ProfileError,
     load_profile,
@@ -775,9 +777,10 @@ def test_keep_going_after_doctor_and_model_failure(monkeypatch, tmp_path, capsys
     pull_log = tmp_path / "evidence" / "logs" / "pull" / "qwen3-0-6b.log"
     assert pull_log.is_file()
     assert "bad model" in pull_log.read_text(encoding="utf-8")
-    assert pack_evidence(tmp_path / "evidence", tmp_path / "failure.zip")[
-        "status"
-    ] == "pass"
+    assert (
+        pack_evidence(tmp_path / "evidence", tmp_path / "failure.zip")["status"]
+        == "pass"
+    )
     assert version_environments[0]["FLM_ENV"] == "installed"
 
 
@@ -843,9 +846,7 @@ def test_model_test_reports_expected_regex_before_generic_text_quality(
     monkeypatch, tmp_path
 ):
     model = _model()
-    model["tests"][0]["turns"] = [
-        {"prompt": "beta", "expected_regex": "beta"}
-    ]
+    model["tests"][0]["turns"] = [{"prompt": "beta", "expected_regex": "beta"}]
     transcript = "Model RAW Output:\n\u03b2\n>>>"
     monkeypatch.setattr(
         runner, "run_command", lambda *args, **kwargs: _result(stdout=transcript)
@@ -1464,9 +1465,7 @@ def test_termination_signal_finalizes_partial_evidence(monkeypatch, tmp_path):
         raise AssertionError("termination handler did not interrupt qualification")
 
     monkeypatch.setattr(cli, "run_qualification", terminate)
-    assert (
-        cli.main(["--output", str(output), "--json"]) == 128 + termination_signal
-    )
+    assert cli.main(["--output", str(output), "--json"]) == 128 + termination_signal
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["status"] == "interrupted"
     assert (output / "SHA256SUMS").is_file()
@@ -1699,9 +1698,7 @@ def test_shipped_runner_loads_and_executes_the_packaged_recipe(monkeypatch, tmp_
     assert records[0]["metrics"]["mismatch_count"] == 0
 
 
-def test_runner_writes_schema_valid_package_validation_report(
-    monkeypatch, tmp_path
-):
+def test_runner_writes_schema_valid_package_validation_report(monkeypatch, tmp_path):
     schemas = tmp_path / "schemas"
     schemas.mkdir()
     schemas.joinpath("xadx-report-v1.schema.json").write_text(
@@ -1714,15 +1711,11 @@ def test_runner_writes_schema_valid_package_validation_report(
     )
     monkeypatch.setattr(runner.resources, "files", lambda _: tmp_path)
     writer = EvidenceWriter(tmp_path / "evidence")
-    records = runner._test_xadx(
-        writer, target_family="npu2", profile_name="fast"
-    )
+    records = runner._test_xadx(writer, target_family="npu2", profile_name="fast")
     report = json.loads((writer.root / "xadx-report.json").read_text())
     assert report["report_kind"] == "package-validation"
     assert report["status"] == "fail"
-    assert report["case_results"][0]["failures"][0]["phase"] == (
-        "package-validation"
-    )
+    assert report["case_results"][0]["failures"][0]["phase"] == ("package-validation")
     assert records[0]["status"] == "fail"
 
 
@@ -1771,7 +1764,9 @@ def _sweep_config(root: Path) -> Path:
 
 def test_enumerate_registry_models_classifies_and_pins_identity(tmp_path):
     config = _sweep_config(tmp_path)
-    discovered = {model["tag"]: model for model in models.enumerate_registry_models(config)}
+    discovered = {
+        model["tag"]: model for model in models.enumerate_registry_models(config)
+    }
     assert set(discovered) == {"qwen3:0.6b", "embed-gemma:300m", "whisper-v3:turbo"}
     assert discovered["qwen3:0.6b"]["kind"] == "chat"
     assert discovered["qwen3:0.6b"]["identity_policy"] == "revision-sha256"
@@ -1993,8 +1988,18 @@ def test_build_markdown_report_renders_env_and_hrx_benchmark():
             {"tag": "embed-gemma:300m", "status": "pass"},
         ],
         "tests": [
-            {"model": "qwen3:0.6b", "name": "single-prompt", "kind": "run", "status": "pass"},
-            {"model": "qwen3:0.6b", "name": "multi-turn", "kind": "run", "status": "pass"},
+            {
+                "model": "qwen3:0.6b",
+                "name": "single-prompt",
+                "kind": "run",
+                "status": "pass",
+            },
+            {
+                "model": "qwen3:0.6b",
+                "name": "multi-turn",
+                "kind": "run",
+                "status": "pass",
+            },
             {
                 "model": "qwen3:0.6b",
                 "name": "context-8k",
@@ -2159,13 +2164,11 @@ def test_build_markdown_report_renders_hrx_vs_xrt_benchmark():
     )
     # Unavailable XRT: status N/A, metric cells N/A, HRX populated.
     assert (
-        "| `gpt-oss:20b` | N/A | N/A | 0.900 | N/A | 500.000 | N/A | 25.000 |"
-        in text
+        "| `gpt-oss:20b` | N/A | N/A | 0.900 | N/A | 500.000 | N/A | 25.000 |" in text
     )
     # Failing XRT: status FAIL, metric cells still N/A (does not flip the run).
     assert (
-        "| `llama3.2:1b` | FAIL | N/A | 0.400 | N/A | 900.000 | N/A | 45.000 |"
-        in text
+        "| `llama3.2:1b` | FAIL | N/A | 0.400 | N/A | 900.000 | N/A | 45.000 |" in text
     )
 
 
@@ -2248,8 +2251,12 @@ def test_run_xrt_serve_comparison_is_best_effort(monkeypatch, tmp_path):
     def ok_probe(*args, **kwargs):
         return (
             _result(stdout="served", returncode=0),
-            {"ok": True, "port": 9100, "detail": "served",
-             "metrics": {"encode_toks_per_s": 88.0}},
+            {
+                "ok": True,
+                "port": 9100,
+                "detail": "served",
+                "metrics": {"encode_toks_per_s": 88.0},
+            },
         )
 
     monkeypatch.setattr(runner, "serve_probe", ok_probe)
@@ -2329,7 +2336,7 @@ def test_transcript_contains_phrase_is_content_specific():
 
 # A minimal OpenAI-compatible stand-in for `flm serve`: it prints the port line
 # serve_probe scans for, then answers the embeddings / transcription endpoints.
-_FAKE_SERVE_SERVER = r'''
+_FAKE_SERVE_SERVER = r"""
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -2369,7 +2376,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print("WebServer started on port %d ready" % server.server_address[1], flush=True)
 server.serve_forever()
-'''
+"""
 
 
 def _fake_serve_argv(tmp_path):
@@ -2533,7 +2540,12 @@ def test_serve_branch_records_embed_probe(monkeypatch, tmp_path):
         Path(kwargs["log_path"]).write_text("served\n", encoding="utf-8")
         return (
             _result(returncode=0, stdout="WebServer started on port 11434\n"),
-            {"probe_kind": "embed", "port": 11434, "detail": "embedding dim=768", "ok": True},
+            {
+                "probe_kind": "embed",
+                "port": 11434,
+                "detail": "embedding dim=768",
+                "ok": True,
+            },
         )
 
     monkeypatch.setattr(runner, "serve_probe", fake_serve_probe)
@@ -2569,7 +2581,12 @@ def test_serve_branch_fails_on_probe_error(monkeypatch, tmp_path):
         Path(kwargs["log_path"]).write_text("no port\n", encoding="utf-8")
         return (
             _result(returncode=1, stdout=""),
-            {"probe_kind": "asr", "port": None, "detail": "server did not report a listening port", "ok": False},
+            {
+                "probe_kind": "asr",
+                "port": None,
+                "detail": "server did not report a listening port",
+                "ok": False,
+            },
         )
 
     monkeypatch.setattr(runner, "serve_probe", fake_serve_probe)
@@ -2680,9 +2697,7 @@ def _run_sweep(
     monkeypatch.setattr(runner, "resolve_model_dynamic", fake_resolve)
 
     def fake_test_model(model, **kwargs):
-        kwargs["writer"].path("logs/tests/x.log").write_text(
-            "ok\n", encoding="utf-8"
-        )
+        kwargs["writer"].path("logs/tests/x.log").write_text("ok\n", encoding="utf-8")
         records = []
         for test in model["tests"]:
             record = {
@@ -2749,9 +2764,9 @@ def _run_sweep(
         tmp_path,
         all_models=all_models,
         bench=bench,
-        bench_context=bench_context if bench_context is not None else (
-            "8k" if all_models else None
-        ),
+        bench_context=bench_context
+        if bench_context is not None
+        else ("8k" if all_models else None),
         bench_iterations=bench_iterations,
         models=models,
         xrt_flm=xrt_flm,
@@ -2790,9 +2805,7 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
     assert profile["kind"] == "diagnostic-sweep"
     assert profile["name"] == "all-models"
     assert profile["bench_context"] == "8k"
-    assert all(
-        set(model) == {"tag", "kind", "tests"} for model in profile["models"]
-    )
+    assert all(set(model) == {"tag", "kind", "tests"} for model in profile["models"])
     assert all(
         all(isinstance(name, str) for name in model["tests"])
         for model in profile["models"]
@@ -2829,9 +2842,7 @@ def test_all_models_with_candidate_manifest_stays_ad_hoc(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner,
         "_validate_versions",
-        lambda installed, core_version, candidate, *a, **k: validated.append(
-            candidate
-        ),
+        lambda installed, core_version, candidate, *a, **k: validated.append(candidate),
     )
     monkeypatch.setattr(
         runner, "_normalize_candidate_manifest", lambda candidate: candidate
@@ -2856,9 +2867,7 @@ def test_all_models_with_candidate_manifest_stays_ad_hoc(monkeypatch, tmp_path):
     assert evidence["subject"]["candidate_binding"]["present"] is False
     assert evidence["subject"]["candidate_binding"]["manifest_sha256"] is None
     embedded = json.loads(
-        (tmp_path / "evidence" / "candidate-manifest.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "evidence" / "candidate-manifest.json").read_text(encoding="utf-8")
     )
     # The embedded manifest is the ad-hoc placeholder, so candidate-bound intake
     # refuses this bundle (it never claims to equal a sealed wheel profile).
@@ -2895,7 +2904,10 @@ def test_all_models_is_mutually_exclusive_with_profile():
     # The parser leaves --bench-context unset; the runner resolves the per-mode
     # default (8k for --all-models). 1k/4k/8k are selectable.
     assert args.bench_context is None
-    assert parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context == "4k"
+    assert (
+        parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context
+        == "4k"
+    )
     with pytest.raises(SystemExit):
         parser.parse_args(["--all-models", "--bench-context", "16k"])
 
@@ -2922,7 +2934,9 @@ def test_bench_tuning_flag_parsing():
     # runner can pick the per-mode default.
     assert parser.parse_args([]).bench_context is None
     assert parser.parse_args([]).bench_iterations is None
-    parsed = parser.parse_args(["--bench", "--bench-context", "4k", "--bench-iterations", "20"])
+    parsed = parser.parse_args(
+        ["--bench", "--bench-context", "4k", "--bench-iterations", "20"]
+    )
     assert parsed.bench_context == "4k"
     assert parsed.bench_iterations == 20
     # Context choices are still validated; non-positive iterations are rejected
@@ -3009,9 +3023,7 @@ def test_resolve_xrt_flm_accepts_fhs_root_and_binary(tmp_path, monkeypatch):
     assert environment["FLM_MODELINFO_PATH"] == str(
         (root / "share" / "flm" / "model_info.json").resolve()
     )
-    assert environment["FLM_XCLBIN_PATH"] == str(
-        (root / "share" / "flm").resolve()
-    )
+    assert environment["FLM_XCLBIN_PATH"] == str((root / "share" / "flm").resolve())
     assert environment["XILINX_XRT"] == str(host)
     if os.name != "nt":
         assert str(host / "lib") in environment["LD_LIBRARY_PATH"]
@@ -3227,6 +3239,7 @@ def test_resolved_xrt_flm_is_recorded_on_sweep_profile(monkeypatch, tmp_path):
         "status": "resolved",
     }
 
+
 def test_benchmark_tests_for_chat_is_bench_only():
     tests = runner._benchmark_tests_for(
         {"kind": "chat", "footprint": 1.0}, bench_context="4k", iterations=20
@@ -3409,9 +3422,7 @@ def test_benchmark_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path):
     assert tests_by_tag["embed-gemma:300m"] == ["serve-probe"]
 
     model_test_kinds = {
-        test["kind"]
-        for test in evidence["tests"]
-        if test["model"] != "native-core"
+        test["kind"] for test in evidence["tests"] if test["model"] != "native-core"
     }
     assert model_test_kinds == {"bench", "serve"}
     assert "run" not in model_test_kinds

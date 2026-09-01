@@ -41,7 +41,9 @@ def driver_firmware_packages(driver_path) -> list[dict]:
         return []
     driver_dir = Path(driver_path).parent
     packages = []
-    for path in sorted(driver_dir.glob("ipu*_pasid.sbin"), key=lambda p: p.name.lower()):
+    for path in sorted(
+        driver_dir.glob("ipu*_pasid.sbin"), key=lambda p: p.name.lower()
+    ):
         try:
             digest = hashlib.sha256()
             with path.open("rb") as file:
@@ -223,7 +225,9 @@ def probe_runtime(library_path: Path) -> int:
             print(f"  [MISS] {message}")
             result = 1
         else:
-            print(f"  [{'ok ' if count.value else 'MISS'}] hrx gpu devices: {count.value}")
+            print(
+                f"  [{'ok ' if count.value else 'MISS'}] hrx gpu devices: {count.value}"
+            )
             if count.value == 0:
                 result = 1
         library.hrx_status_ignore(library.hrx_gpu_shutdown())

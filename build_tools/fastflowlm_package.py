@@ -60,6 +60,7 @@ def _wheel_implementation():
 
     return rocm_npu_linux_wheels
 
+
 def _verify_fastflowlm_fresh_installs():
     try:
         return verify_fastflowlm_fresh_installs(
@@ -77,11 +78,11 @@ def cmd_package_fastflowlm(args):
     """Create and independently re-extract the relocatable FLM + HRX runtime."""
     require_fastflowlm_linux_packaging_tools(archive=True)
     _verify_fastflowlm_fresh_installs()
-    bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
-                                  FASTFLOWLM_BUNDLE_STAGE)
+    bundle = stage_runtime_bundle(
+        ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL, FASTFLOWLM_BUNDLE_STAGE
+    )
     archive = create_archive(bundle, FASTFLOWLM_ARTIFACTS)
-    extracted = extract_archive(
-        archive, FASTFLOWLM_EXTRACTED, allowed_root=BUILD)
+    extracted = extract_archive(archive, FASTFLOWLM_EXTRACTED, allowed_root=BUILD)
     print("package fastflowlm: ok")
     print("  archive:  ", archive)
     print("  extracted:", extracted)
@@ -93,11 +94,13 @@ def package_fastflowlm_wheels(version: str | None) -> dict[str, Path]:
         require_fastflowlm_linux_packaging_tools()
     _verify_fastflowlm_fresh_installs()
     version = version or default_package_version(ROOT)
-    bundle = stage_runtime_bundle(ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL,
-                                  FASTFLOWLM_BUNDLE_STAGE)
+    bundle = stage_runtime_bundle(
+        ROOT, FASTFLOWLM_INSTALL, HRX_INSTALL, FASTFLOWLM_BUNDLE_STAGE
+    )
     wheel_stage = WINDOWS_WHEEL_STAGE if IS_WINDOWS else FASTFLOWLM_WHEEL_STAGE
     wheels = _wheel_implementation().build_runtime_fastflowlm_wheels(
-        bundle, wheel_stage, FASTFLOWLM_ARTIFACTS, version)
+        bundle, wheel_stage, FASTFLOWLM_ARTIFACTS, version
+    )
     return wheels
 
 
@@ -113,7 +116,9 @@ def _python_executable_tool(name):
     tool = shutil.which(name)
     if tool:
         return tool
-    candidate = Path(sys.executable).resolve().parent / (f"{name}.exe" if IS_WINDOWS else name)
+    candidate = Path(sys.executable).resolve().parent / (
+        f"{name}.exe" if IS_WINDOWS else name
+    )
     return str(candidate) if candidate.is_file() else None
 
 
@@ -229,14 +234,18 @@ def smoke_fastflowlm(iterations: int) -> int:
 def _find_fastflowlm_archive(directory):
     directory = Path(directory)
     # Match rocm-npu-{os}-{arch} only; do not pick up rocm-npu-compiler-*.
-    archives = sorted([
-        *directory.glob("rocm-npu-linux-*.zip"),
-        *directory.glob("rocm-npu-linux-*.tar.zst"),
-        *directory.glob("rocm-npu-windows-*.zip"),
-        *directory.glob("rocm-npu-windows-*.tar.zst"),
-    ])
+    archives = sorted(
+        [
+            *directory.glob("rocm-npu-linux-*.zip"),
+            *directory.glob("rocm-npu-linux-*.tar.zst"),
+            *directory.glob("rocm-npu-windows-*.zip"),
+            *directory.glob("rocm-npu-windows-*.tar.zst"),
+        ]
+    )
     if len(archives) != 1:
-        sys.exit(f"expected exactly one FastFlowLM artifact in {directory}, found {len(archives)}")
+        sys.exit(
+            f"expected exactly one FastFlowLM artifact in {directory}, found {len(archives)}"
+        )
     archive = archives[0]
     try:
         verify_sha256_sidecar(archive)
@@ -247,8 +256,7 @@ def _find_fastflowlm_archive(directory):
 
 def cmd_unpack_fastflowlm(args):
     archive = _find_fastflowlm_archive(args.dir)
-    bundle = extract_archive(
-        archive, FASTFLOWLM_EXTRACTED, allowed_root=BUILD)
+    bundle = extract_archive(archive, FASTFLOWLM_EXTRACTED, allowed_root=BUILD)
     print("unpack fastflowlm: ok ->", bundle)
 
 
@@ -256,9 +264,15 @@ def cmd_verify_fastflowlm(args):
     location = Path(args.dir)
     if not location.is_dir():
         sys.exit(f"extracted FastFlowLM bundle directory not found: {location}")
-    candidates = ([location] if (location / "manifest.json").is_file() else
-                  [path for path in location.iterdir()
-                   if path.is_dir() and (path / "manifest.json").is_file()])
+    candidates = (
+        [location]
+        if (location / "manifest.json").is_file()
+        else [
+            path
+            for path in location.iterdir()
+            if path.is_dir() and (path / "manifest.json").is_file()
+        ]
+    )
     if len(candidates) != 1:
         sys.exit(f"expected exactly one extracted FastFlowLM bundle in {location}")
     manifest = verify_bundle(candidates[0])
@@ -267,15 +281,23 @@ def cmd_verify_fastflowlm(args):
     except RuntimeError as error:
         sys.exit(str(error))
     current_revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
-        capture_output=True, text=True).stdout.strip()
-    source_revision = (manifest.get("sources", {})
-                       .get("rocm-npu-staging", {}).get("revision"))
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source_revision = (
+        manifest.get("sources", {}).get("rocm-npu-staging", {}).get("revision")
+    )
     if source_revision != current_revision:
         sys.exit("FastFlowLM artifact source revision does not match this checkout")
     for record in manifest.get("patches", []):
         patch_path = ROOT / record["path"]
-        if (not patch_path.is_file() or patch_path.stat().st_size != record["size"] or
-                sha256_file(patch_path) != record["sha256"]):
+        if (
+            not patch_path.is_file()
+            or patch_path.stat().st_size != record["size"]
+            or sha256_file(patch_path) != record["sha256"]
+        ):
             sys.exit(f"FastFlowLM artifact patch identity mismatch: {record['path']}")
     print(f"verify fastflowlm: ok ({len(manifest['files'])} files) -> {candidates[0]}")

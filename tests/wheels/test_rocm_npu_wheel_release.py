@@ -54,9 +54,7 @@ pytestmark = [
 ]
 
 
-def _write_release_archive(
-    directory, name, *, system, artifact, version, source_sha
-):
+def _write_release_archive(directory, name, *, system, artifact, version, source_sha):
     bundle = {
         "schema_version": 1,
         "version": version,
@@ -104,9 +102,7 @@ def _write_release_archive(
 
 
 class TestRocmNpuWheelRelease:
-    def test_resolve_cli_does_not_require_release_validation_packages(
-        self, tmp_path
-    ):
+    def test_resolve_cli_does_not_require_release_validation_packages(self, tmp_path):
         output = tmp_path / "github-output"
         result = subprocess.run(
             [
@@ -130,18 +126,14 @@ class TestRocmNpuWheelRelease:
         assert result.returncode == 0, result.stderr
         assert "package_version=0.1.0.dev1" in output.read_text(encoding="utf-8")
 
-    def test_copy_release_archives_requires_and_records_both_platforms(
-        self, tmp_path
-    ):
+    def test_copy_release_archives_requires_and_records_both_platforms(self, tmp_path):
         archives = tmp_path / "archives"
         output = tmp_path / "release"
         archives.mkdir()
         output.mkdir()
         archive_metadata = {
-            "rocm-npu-linux-x86_64.tar.zst":
-                ("Linux", "rocm-npu-linux-x86_64"),
-            "rocm-npu-windows-x86_64.zip":
-                ("Windows", "rocm-npu-windows-x86_64"),
+            "rocm-npu-linux-x86_64.tar.zst": ("Linux", "rocm-npu-linux-x86_64"),
+            "rocm-npu-windows-x86_64.zip": ("Windows", "rocm-npu-windows-x86_64"),
         }
         for name, (system, artifact) in archive_metadata.items():
             _write_release_archive(
@@ -322,9 +314,7 @@ class TestRocmNpuWheelRelease:
         assert manifest["source_ref"] == "main"
         assert manifest["source_sha"] == "abc123"
         wheel_artifacts = [
-            artifact
-            for artifact in manifest["artifacts"]
-            if "distribution" in artifact
+            artifact for artifact in manifest["artifacts"] if "distribution" in artifact
         ]
         archive_artifacts = [
             artifact
@@ -522,7 +512,9 @@ class TestRocmNpuWheelRelease:
     def test_prepare_release_payload_rejects_extra_allowed_variant(self, tmp_path):
         root = tmp_path
         version = "0.1.0.dev1"
-        self._build_release_wheels(root, version, output_directory=root / "dist/windows")
+        self._build_release_wheels(
+            root, version, output_directory=root / "dist/windows"
+        )
         self._build_release_wheels(
             root,
             version,

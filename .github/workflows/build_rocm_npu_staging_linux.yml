@@ -63,14 +63,6 @@ jobs:
           key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements/**/*.txt', 'requirements/**/*.lock', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
-      # F821 only: a rebase that keeps a call and drops its definition otherwise surfaces
-      # as a NameError on the NPU runner, an hour in. No style rules -- this is a
-      # correctness gate, not a formatter. Pinned; ruff is a single dependency-free wheel.
-      - name: Lint (undefined names)
-        run: |
-          python3 -m pip install --quiet --disable-pip-version-check ruff==0.15.21
-          python3 -m ruff check --select F821 dev.py build_tools tests
-
       # The manylinux image has the gcc-toolset but not OpenSSL dev headers, which
       # iron-tools' bootgen needs (find_package(OpenSSL)). Retry: this is the only step
       # that must reach the AlmaLinux mirrors. `yum` is a symlink to `dnf` here, so it

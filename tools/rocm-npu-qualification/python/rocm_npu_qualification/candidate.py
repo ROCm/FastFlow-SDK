@@ -26,7 +26,6 @@ from .profiles import ProfileError, materialize_profiles, validate_profile
 from .recipe_contract import recipe_materialization_requests
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
-
 QUALIFICATION_DISTRIBUTIONS = (
     "rocm-npu-runtime",
     "rocm-npu-fastflowlm",
@@ -89,8 +88,7 @@ def _normalize_qualification_contract(value: Any) -> dict[str, Any]:
         or set(case_contracts) != set(value["xadx_cases"])
         or any(
             not isinstance(contract, dict)
-            or set(contract)
-            != {"readback_capable", "validated_bytes_per_dispatch"}
+            or set(contract) != {"readback_capable", "validated_bytes_per_dispatch"}
             or not isinstance(contract["readback_capable"], bool)
             or not isinstance(contract["validated_bytes_per_dispatch"], int)
             or contract["validated_bytes_per_dispatch"] < 1
@@ -160,11 +158,9 @@ def _normalize_qualification_contract(value: Any) -> dict[str, Any]:
         "generator_version",
     }
     if (
-        set(provenance)
-        != expected_provenance_keys
+        set(provenance) != expected_provenance_keys
         or re.fullmatch(r"[0-9a-f]{64}", provenance.get("recipe_sha256", "")) is None
-        or re.fullmatch(r"[0-9a-f]{64}", provenance.get("manifest_sha256", ""))
-        is None
+        or re.fullmatch(r"[0-9a-f]{64}", provenance.get("manifest_sha256", "")) is None
         or serializer
         != {
             "api": "hrx_amdxdna_xadx_serialize",
@@ -220,13 +216,8 @@ def _normalize_qualification_contract(value: Any) -> dict[str, Any]:
             raise CandidateError("candidate XADX executable provenance is invalid")
         normalized_executables.append(dict(executable))
     if len(
-        {
-            (item["id"], item.get("execution"))
-            for item in normalized_executables
-        }
-    ) != len(
-        normalized_executables
-    ):
+        {(item["id"], item.get("execution")) for item in normalized_executables}
+    ) != len(normalized_executables):
         raise CandidateError("candidate XADX execution identities are not unique")
     return {
         "schema_version": QUALIFICATION_CONTRACT_SCHEMA_VERSION,
@@ -471,7 +462,9 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
     except (KeyError, json.JSONDecodeError) as error:
         raise CandidateError("qualification kernel recipe is missing") from error
     cases = recipe.get("cases") if isinstance(recipe, dict) else None
-    implementations = recipe.get("implementations") if isinstance(recipe, dict) else None
+    implementations = (
+        recipe.get("implementations") if isinstance(recipe, dict) else None
+    )
     if (
         xadx.get("schema_version") != 1
         or recipe.get("schema_version") != KERNEL_RECIPE_SCHEMA_VERSION
@@ -499,9 +492,8 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
             label = implementation.get("id")
             if execution is not None:
                 label += f"/{execution}"
-            xadx_path = (
-                "rocm_npu_qualification/xadx_assets/"
-                + executable.get("xadx", "")
+            xadx_path = "rocm_npu_qualification/xadx_assets/" + executable.get(
+                "xadx", ""
             )
             try:
                 xadx_bytes = archive.read(xadx_path)
@@ -509,15 +501,10 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
                 raise CandidateError(
                     f"qualification recipe XADX is missing: {label}"
                 ) from error
-            if hashlib.sha256(xadx_bytes).hexdigest() != executable.get(
-                "xadx_sha256"
-            ):
-                raise CandidateError(
-                    f"qualification recipe XADX is corrupt: {label}"
-                )
-            transaction_path = (
-                "rocm_npu_qualification/xadx_assets/"
-                + executable.get("transaction", "")
+            if hashlib.sha256(xadx_bytes).hexdigest() != executable.get("xadx_sha256"):
+                raise CandidateError(f"qualification recipe XADX is corrupt: {label}")
+            transaction_path = "rocm_npu_qualification/xadx_assets/" + executable.get(
+                "transaction", ""
             )
             try:
                 transaction_bytes = archive.read(transaction_path)
@@ -540,11 +527,7 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
                     "transaction_sha256": executable.get("transaction_sha256"),
                     "xadx": executable.get("xadx"),
                     "xadx_sha256": executable.get("xadx_sha256"),
-                    **(
-                        {}
-                        if execution is None
-                        else {"execution": execution}
-                    ),
+                    **({} if execution is None else {"execution": execution}),
                 }
             )
     return _normalize_qualification_contract(
@@ -554,15 +537,11 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
             "xadx_cases": [case.get("name") for case in cases],
             "xadx_case_contracts": _recipe_case_contracts(cases),
             "xadx_materializations": _recipe_materializations(cases),
-            "xadx_execution": {
-                name: xadx_rounds(name) for name in sorted(profiles)
-            },
+            "xadx_execution": {name: xadx_rounds(name) for name in sorted(profiles)},
             "xadx_provenance": {
                 "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
                 "manifest_sha256": hashlib.sha256(
-                    json.dumps(
-                        xadx, sort_keys=True, separators=(",", ":")
-                    ).encode()
+                    json.dumps(xadx, sort_keys=True, separators=(",", ":")).encode()
                 ).hexdigest(),
                 "serializer": xadx.get("serializer"),
                 "generator_version": recipe["generator_version"],
@@ -589,9 +568,7 @@ def _wheel_identity(
             metadata = email.parser.BytesParser().parsebytes(
                 archive.read(metadata_names[0])
             )
-            normalized_distribution = re.sub(
-                r"[-_.]+", "-", metadata["Name"]
-            ).lower()
+            normalized_distribution = re.sub(r"[-_.]+", "-", metadata["Name"]).lower()
             if normalized_distribution in NUMERIC_RUNTIME:
                 return None
             manifest_names = [
@@ -699,9 +676,7 @@ def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
                 f"canonical={len(left)}, candidate={len(right)}"
             )
         for index, (left_item, right_item) in enumerate(zip(left, right)):
-            difference = _first_difference(
-                left_item, right_item, f"{path}[{index}]"
-            )
+            difference = _first_difference(left_item, right_item, f"{path}[{index}]")
             if difference is not None:
                 return difference
         return None
@@ -729,9 +704,7 @@ def verify_qualification_wheel_parity(
         canonical_bytes, canonical_mode = canonical_members[name]
         candidate_bytes, candidate_mode = candidate_members[name]
         if canonical_bytes != candidate_bytes:
-            raise CandidateError(
-                f"qualification wheel member content differs: {name}"
-            )
+            raise CandidateError(f"qualification wheel member content differs: {name}")
         if canonical_mode != candidate_mode:
             raise CandidateError(f"qualification wheel member mode differs: {name}")
 
@@ -744,9 +717,8 @@ def _verify_recipe_source_xclbins(contract, fastflowlm_wheels):
         with zipfile.ZipFile(wheel) as archive:
             names = archive.namelist()
             for executable in provenance["executables"]:
-                suffix = (
-                    "/share/flm/xclbins/"
-                    + executable["xclbin_path"].replace("\\", "/")
+                suffix = "/share/flm/xclbins/" + executable["xclbin_path"].replace(
+                    "\\", "/"
                 )
                 matches = [name for name in names if name.endswith(suffix)]
                 if len(matches) != 1:
@@ -871,8 +843,7 @@ def write_candidate_manifest(
         temporary.write_bytes(manifest_bytes)
         checksum_temporary.write_text(
             "".join(
-                f"{digest}  {relative}\n"
-                for relative, digest in sorted(checksums)
+                f"{digest}  {relative}\n" for relative, digest in sorted(checksums)
             ),
             encoding="ascii",
         )

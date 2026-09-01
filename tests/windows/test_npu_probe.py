@@ -53,7 +53,11 @@ class TestWindowsDeviceQuery:
     def test_preserves_multiple_mcdm_devices(self):
         devices = [
             {"device_id": "PCI\\VEN_1022&DEV_17F0", "status": "OK", "problem": "0"},
-            {"device_id": "PCI\\VEN_1022&DEV_1502", "status": "OK", "problem": "CM_PROB_NONE"},
+            {
+                "device_id": "PCI\\VEN_1022&DEV_1502",
+                "status": "OK",
+                "problem": "CM_PROB_NONE",
+            },
         ]
         assert parse_device_query(json.dumps(devices)) == devices
         assert all(device_is_healthy(device) for device in devices)
@@ -99,17 +103,20 @@ class TestWindowsRuntimeProbe:
 
         path = tmp_path / "hrx.dll"
         path.write_bytes(b"MZ")
-        with mock.patch(
-            "build_tools.windows_npu.print_driver_info", return_value=0
-        ), mock.patch(
-            "build_tools.windows_npu.os.add_dll_directory",
-            return_value=contextlib.nullcontext(),
-        ), mock.patch(
-            "build_tools.windows_npu.ctypes.WinDLL", return_value=library
-        ) as load, mock.patch(
-            "build_tools.windows_npu.bind_libhrx",
-            wraps=shared_bind_libhrx,
-        ) as bind:
+        with (
+            mock.patch("build_tools.windows_npu.print_driver_info", return_value=0),
+            mock.patch(
+                "build_tools.windows_npu.os.add_dll_directory",
+                return_value=contextlib.nullcontext(),
+            ),
+            mock.patch(
+                "build_tools.windows_npu.ctypes.WinDLL", return_value=library
+            ) as load,
+            mock.patch(
+                "build_tools.windows_npu.bind_libhrx",
+                wraps=shared_bind_libhrx,
+            ) as bind,
+        ):
             assert probe_runtime(path) == expected_result
         load.assert_called_once_with(str(path.resolve()))
         bind.assert_called_once_with(library)

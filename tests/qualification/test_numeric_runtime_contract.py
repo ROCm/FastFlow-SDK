@@ -32,8 +32,7 @@ def test_numeric_runtime_contract_has_no_secondary_version_authority():
     assert shipping.NUMERIC_REQUIRES_PYTHON == contract["requires_python"]
     assert qualification_wheel.NUMERIC_RUNTIME == contract["packages"]
     assert (
-        qualification_wheel.QUALIFICATION_REQUIRES_PYTHON
-        == contract["requires_python"]
+        qualification_wheel.QUALIFICATION_REQUIRES_PYTHON == contract["requires_python"]
     )
     assert release_policy.numeric_package_versions() == contract["packages"]
     assert release_policy.numeric_python_abis() == tuple(contract["python_abis"])
@@ -60,9 +59,7 @@ def test_downloader_stages_every_attested_python_and_platform(monkeypatch, tmp_p
     }
 
 
-def test_dependency_verifier_uses_numeric_packages_from_contract(
-    monkeypatch, tmp_path
-):
+def test_dependency_verifier_uses_numeric_packages_from_contract(monkeypatch, tmp_path):
     contract = {
         "schema_version": 1,
         "requires_python": ">=3.11,<3.15",

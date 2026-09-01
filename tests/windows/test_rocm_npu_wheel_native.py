@@ -27,9 +27,7 @@ pytestmark = [
 
 
 class TestRocmNpuWheelNative:
-    def test_stage_products_partitions_payload_and_dependency_licenses(
-        self, tmp_path
-    ):
+    def test_stage_products_partitions_payload_and_dependency_licenses(self, tmp_path):
         source = tmp_path / "bundle"
         self._write_pe(source / "bin" / "hrx.dll")
         self._write_pe(source / "bin" / "Runtime.DLL")
@@ -43,9 +41,7 @@ class TestRocmNpuWheelNative:
         (source / "share" / "flm" / "model_list.json").write_text(
             "{}", encoding="utf-8"
         )
-        (source / "share" / "flm" / "xclbins" / "kernel.xclbin").write_bytes(
-            b"xclbin"
-        )
+        (source / "share" / "flm" / "xclbins" / "kernel.xclbin").write_bytes(b"xclbin")
         licenses = {
             "licenses/rocm-npu-staging-LICENSE": "staging",
             "licenses/hrx-LICENSE/LICENSE": "hrx",
@@ -81,26 +77,25 @@ class TestRocmNpuWheelNative:
                     "size": path.stat().st_size,
                     "sha256": sha256_file(path),
                 }
-                for path in sorted(
-                    item for item in source.rglob("*") if item.is_file()
-                )
+                for path in sorted(item for item in source.rglob("*") if item.is_file())
             ],
         }
-        (source / "manifest.json").write_text(
-            json.dumps(manifest), encoding="utf-8"
-        )
+        (source / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         imports = {
             "hrx.dll": ["runtime.dll"],
             "runtime.dll": ["kernel32.dll"],
             "flm.exe": ["runtime.dll"],
             "rocm-npu.exe": ["kernel32.dll"],
         }
-        with mock.patch(
-            "build_tools.rocm_npu_windows_wheels.pe_imports",
-            side_effect=lambda path: imports[Path(path).name.casefold()],
-        ), mock.patch(
-            "build_tools.rocm_npu_windows_wheels._is_windows_system_runtime",
-            side_effect=lambda name: name == "kernel32.dll",
+        with (
+            mock.patch(
+                "build_tools.rocm_npu_windows_wheels.pe_imports",
+                side_effect=lambda path: imports[Path(path).name.casefold()],
+            ),
+            mock.patch(
+                "build_tools.rocm_npu_windows_wheels._is_windows_system_runtime",
+                side_effect=lambda name: name == "kernel32.dll",
+            ),
         ):
             products = stage_wheel_products(source, tmp_path / "stage", "1.2.3")
 
@@ -109,28 +104,15 @@ class TestRocmNpuWheelNative:
         assert (runtime / "bin" / "Runtime.DLL").is_file()
         assert (runtime / "bin" / "rocm-npu.exe").is_file()
         assert (
-            runtime
-            / "share"
-            / "rocm-npu"
-            / "self-test"
-            / "case"
-            / "kernel.xadx"
+            runtime / "share" / "rocm-npu" / "self-test" / "case" / "kernel.xadx"
         ).is_file()
-        assert (
-            runtime / "licenses" / "nlohmann-json-LICENSE.MIT"
-        ).is_file()
+        assert (runtime / "licenses" / "nlohmann-json-LICENSE.MIT").is_file()
         assert not (fastflowlm / "bin" / "Runtime.DLL").exists()
         assert (
-            runtime
-            / "licenses"
-            / "vcpkg"
-            / "runtime-package"
-            / "copyright"
+            runtime / "licenses" / "vcpkg" / "runtime-package" / "copyright"
         ).is_file()
         assert (fastflowlm / "bin" / "flm.exe").is_file()
-        assert (
-            fastflowlm / "share" / "flm" / "xclbins" / "kernel.xclbin"
-        ).is_file()
+        assert (fastflowlm / "share" / "flm" / "xclbins" / "kernel.xclbin").is_file()
         runtime_manifest = json.loads(
             (runtime / "manifest.json").read_text(encoding="utf-8")
         )
@@ -178,8 +160,10 @@ class TestRocmNpuWheelNative:
         module = importlib.util.module_from_spec(spec)
         handle = object()
         library = object()
-        with mock.patch("os.add_dll_directory", return_value=handle) as add_dir, \
-             mock.patch("ctypes.WinDLL", return_value=library) as load_library:
+        with (
+            mock.patch("os.add_dll_directory", return_value=handle) as add_dir,
+            mock.patch("ctypes.WinDLL", return_value=library) as load_library,
+        ):
             assert spec.loader is not None
             spec.loader.exec_module(module)
             assert module.initialize_process() is library

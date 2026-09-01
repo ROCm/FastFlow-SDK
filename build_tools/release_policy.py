@@ -6,9 +6,8 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_POLICY_PATH = ROOT / "release.toml"
@@ -71,9 +70,7 @@ def compiler_python_versions(
         invalid = next(
             version for version in result if not re.fullmatch(r"3\.[0-9]+", version)
         )
-        raise RuntimeError(
-            f"invalid compiler Python minor in {policy_path}: {invalid}"
-        )
+        raise RuntimeError(f"invalid compiler Python minor in {policy_path}: {invalid}")
     if len(set(result)) != len(result):
         raise RuntimeError(f"duplicate compiler Python minor in {policy_path}")
     return result
@@ -103,9 +100,7 @@ def compiler_requires_python(
     """Derives Requires-Python from the validated compiler minor range."""
     versions = compiler_python_versions(policy_path)
     parsed = [tuple(map(int, version.split("."))) for version in versions]
-    expected = [
-        (parsed[0][0], parsed[0][1] + offset) for offset in range(len(parsed))
-    ]
+    expected = [(parsed[0][0], parsed[0][1] + offset) for offset in range(len(parsed))]
     if parsed != expected or versions[0] != compiler_python_stable_abi(policy_path):
         raise RuntimeError(
             "wheel_release.compiler_python_versions must be a contiguous, "

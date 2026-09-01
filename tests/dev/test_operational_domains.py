@@ -101,8 +101,12 @@ class TestBuildDomain:
         (source / "CMakeLists.txt").touch()
         with (
             mock.patch.object(compiler_build.paths, "PROJ", tmp_path / "projects"),
-            mock.patch.object(compiler_build.paths, "TOOLS_BIN", tmp_path / "tools-bin"),
-            mock.patch.object(compiler_build.environment, "cmake_bin", return_value="cmake"),
+            mock.patch.object(
+                compiler_build.paths, "TOOLS_BIN", tmp_path / "tools-bin"
+            ),
+            mock.patch.object(
+                compiler_build.environment, "cmake_bin", return_value="cmake"
+            ),
             mock.patch.object(
                 compiler_build.environment,
                 "cmake_path",
@@ -137,11 +141,32 @@ class TestSourceDomain:
         commands = [call.args[0] for call in run.call_args_list]
         assert commands == [
             ["git", "submodule", "sync", "projects/llvm-project"],
-            ["git", "submodule", "update", "--init", "--force",
-             "--depth", "1", "--jobs", "4", "projects/llvm-project"],
+            [
+                "git",
+                "submodule",
+                "update",
+                "--init",
+                "--force",
+                "--depth",
+                "1",
+                "--jobs",
+                "4",
+                "projects/llvm-project",
+            ],
             ["git", "submodule", "sync", "--recursive", "projects/iron-tools"],
-            ["git", "submodule", "update", "--init", "--force", "--recursive",
-             "--depth", "1", "--jobs", "4", "projects/iron-tools"],
+            [
+                "git",
+                "submodule",
+                "update",
+                "--init",
+                "--force",
+                "--recursive",
+                "--depth",
+                "1",
+                "--jobs",
+                "4",
+                "projects/iron-tools",
+            ],
         ]
         assert all(call.kwargs["cwd"] == paths.ROOT for call in run.call_args_list)
 
@@ -177,12 +202,8 @@ class TestTestingDomain:
         )
         stdout, stderr = io.StringIO(), io.StringIO()
         with (
-            mock.patch.object(
-                device_testing.paths, "HRX_CMAKE_BUILD", tmp_path
-            ),
-            mock.patch.object(
-                device_testing.environment, "run", side_effect=timeout
-            ),
+            mock.patch.object(device_testing.paths, "HRX_CMAKE_BUILD", tmp_path),
+            mock.patch.object(device_testing.environment, "run", side_effect=timeout),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -200,7 +221,9 @@ class TestTestingDomain:
         library = Path("hrx.dll")
         with (
             mock.patch.object(device_testing.paths, "is_windows", return_value=True),
-            mock.patch.object(device_testing.hrx_runtime, "libhrx_path", return_value=library),
+            mock.patch.object(
+                device_testing.hrx_runtime, "libhrx_path", return_value=library
+            ),
             mock.patch.object(
                 device_testing, "probe_windows_npu_runtime", return_value=7
             ) as probe,

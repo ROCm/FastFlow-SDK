@@ -30,9 +30,7 @@ def _derive_identity(url: str) -> tuple[str, str, str | None]:
     return "content-sha256", url, None
 
 
-def _classify_model_kind(
-    family: str, labels: list[str], details_family: str
-) -> str:
+def _classify_model_kind(family: str, labels: list[str], details_family: str) -> str:
     """Classify a registry model as chat, embed, or asr (mirrors the sweep harness)."""
     if (
         "embeddings" in labels
@@ -220,12 +218,8 @@ def resolve_model(
         )
         commands.append(check)
         if check.returncode != 0:
-            raise ModelError(
-                f"{model['tag']}: downloaded model failed flm check"
-            )
-    inventory = _verify_expected_files(
-        model, model_directory, required_files
-    )
+            raise ModelError(f"{model['tag']}: downloaded model failed flm check")
+    inventory = _verify_expected_files(model, model_directory, required_files)
     return (
         {
             "tag": model["tag"],
@@ -255,9 +249,7 @@ def enumerate_registry_models(config_path: Path) -> list[dict[str, Any]]:
         config = json.loads(config_path.read_text(encoding="utf-8"))
         families = config["models"]
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
-        raise ModelError(
-            "installed FLM registry is unavailable or invalid"
-        ) from error
+        raise ModelError("installed FLM registry is unavailable or invalid") from error
     if not isinstance(families, dict):
         raise ModelError("installed FLM registry model table is invalid")
     registry_digest = canonical_json_sha256(config)

@@ -45,9 +45,7 @@ FASTFLOWLM_ASR_SAMPLE = Path("projects/FastFlowLM/src/tb_files/Recording.wav")
 # out" (presubmit builds skip submodules) from "checked out but the pinned clip
 # is gone" (a pin bump that dropped or moved the file).
 FASTFLOWLM_SOURCE_MARKER = Path("projects/FastFlowLM/src")
-ASR_SAMPLE_SHA256 = (
-    "c0f16ef6b0a9053d9abccb603d1aa1445c62b2b35bbbb4eaa3996422c68df97a"
-)
+ASR_SAMPLE_SHA256 = "c0f16ef6b0a9053d9abccb603d1aa1445c62b2b35bbbb4eaa3996422c68df97a"
 
 
 def _stage_asr_sample(root: Path, package_root: Path) -> None:
@@ -87,6 +85,7 @@ def _stage_asr_sample(root: Path, package_root: Path) -> None:
         )
     shutil.copy2(upstream, package_root / "assets" / "asr_sample.wav")
 
+
 # The package computes its own qualification buffers and BF16 oracles rather
 # than shipping them. Keep these exact: qualification evidence must mean the
 # same arithmetic in an offline install as it did in CI.
@@ -116,18 +115,15 @@ def stage_qualification_tree(
     capabilities = json.loads(
         (xadx_assets / "capability-manifest.json").read_text(encoding="utf-8")
     )
-    if (
-        {entry["id"] for entry in recipe.get("implementations", [])}
-        != set(capabilities["implementations"]["entries"])
-        or {entry["id"] for entry in recipe.get("coverage_limits", [])}
-        != (
-            set(capabilities["implementations"]["unreached"])
-            | {
-                id
-                for id, facts in capabilities["implementations"]["entries"].items()
-                if facts.get("numeric_limit") is not None
-            }
-        )
+    if {entry["id"] for entry in recipe.get("implementations", [])} != set(
+        capabilities["implementations"]["entries"]
+    ) or {entry["id"] for entry in recipe.get("coverage_limits", [])} != (
+        set(capabilities["implementations"]["unreached"])
+        | {
+            id
+            for id, facts in capabilities["implementations"]["entries"].items()
+            if facts.get("numeric_limit") is not None
+        }
     ):
         raise RuntimeError(
             "qualification recipe coverage differs from its capability manifest"
@@ -192,13 +188,9 @@ def stage_qualification_tree(
                             "xadx": execution.get("xadx"),
                             "xadx_sha256": execution.get("xadx_sha256"),
                             "xclbin_path": implementation.get("xclbin_path"),
-                            "xclbin_sha256": implementation.get(
-                                "xclbin_sha256"
-                            ),
+                            "xclbin_sha256": implementation.get("xclbin_sha256"),
                             "transaction": execution.get("transaction"),
-                            "transaction_sha256": execution.get(
-                                "transaction_sha256"
-                            ),
+                            "transaction_sha256": execution.get("transaction_sha256"),
                             **(
                                 {}
                                 if execution_id is None
@@ -257,7 +249,10 @@ def build_qualification_wheel(
             Path(output_directory),
             summary="Installed-product model qualification for ROCm NPU",
             tag=QUALIFICATION_WHEEL_TAG,
-            requires=(f"{FASTFLOWLM_DISTRIBUTION} =={version}", *QUALIFICATION_REQUIRES),
+            requires=(
+                f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+                *QUALIFICATION_REQUIRES,
+            ),
             console_scripts={
                 "rocm-npu-qualify": f"{QUALIFICATION_PACKAGE}.cli:main",
             },

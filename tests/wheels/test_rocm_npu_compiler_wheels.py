@@ -468,7 +468,9 @@ class TestRocmNpuCompilerWheels:
             _write_runtime_module(package)
         return site
 
-    def _run_import_aie_probe(self, site: Path, probe: Path) -> subprocess.CompletedProcess:
+    def _run_import_aie_probe(
+        self, site: Path, probe: Path
+    ) -> subprocess.CompletedProcess:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(site)
         env["PYTHONNOUSERSITE"] = "1"

@@ -63,9 +63,7 @@ def _device_facts(platform_facts: dict[str, Any]) -> dict[str, str]:
     devices = platform_facts.get("devices")
     if not isinstance(devices, list) or not devices:
         return {}
-    device = next(
-        (entry for entry in devices if entry.get("healthy")), devices[0]
-    )
+    device = next((entry for entry in devices if entry.get("healthy")), devices[0])
     facts: dict[str, str] = {}
     name = device.get("device_name")
     if name:
@@ -83,9 +81,7 @@ def _device_facts(platform_facts: dict[str, Any]) -> dict[str, str]:
     )
     if releases:
         facts["npu_firmware"] = (
-            "candidates "
-            + ", ".join(releases)
-            + " (KMD-loaded not exposed by PnP)"
+            "candidates " + ", ".join(releases) + " (KMD-loaded not exposed by PnP)"
         )
     return facts
 
@@ -130,15 +126,11 @@ def _model_kind(
     return "chat"
 
 
-def _results_table(
-    evidence: dict[str, Any], kinds: dict[str, str] | None
-) -> list[str]:
+def _results_table(evidence: dict[str, Any], kinds: dict[str, str] | None) -> list[str]:
     # Measurement-only --bench runs never schedule the single-prompt / multi-turn
     # stages, so a run/verify matrix of dashes is noise. Skip it unless at least
     # one run test actually executed.
-    if not any(
-        test.get("kind") == "run" for test in evidence.get("tests", [])
-    ):
+    if not any(test.get("kind") == "run" for test in evidence.get("tests", [])):
         return []
     grouped = _tests_by_model(evidence)
     lines = [
@@ -170,9 +162,7 @@ def _results_table(
                 math_cell = "no"
             else:
                 math_cell = "—"
-        failing = _first(
-            tests, lambda test: test.get("status") not in ("pass", None)
-        )
+        failing = _first(tests, lambda test: test.get("status") not in ("pass", None))
         if model.get("status") != "pass" and model.get("error"):
             detail = f"resolution: {model['error']}"
         elif failing is not None and failing.get("error"):
@@ -205,9 +195,9 @@ def _benchmark_table(
         int(test.get("metrics", {}).get("iterations", 1)) for test in bench_tests
     }
     contexts = {
-        test.get("metrics", {}).get("csv_checkpoint_metrics", {}).get(
-            "context_length_k"
-        )
+        test.get("metrics", {})
+        .get("csv_checkpoint_metrics", {})
+        .get("context_length_k")
         for test in bench_tests
     }
     contexts.discard(None)
@@ -319,9 +309,7 @@ def _xrt_status_label(xrt: dict[str, Any]) -> str:
     return "FAIL"
 
 
-def _serve_has_xrt(
-    rows: list[tuple[str, dict[str, Any], dict[str, Any]]]
-) -> bool:
+def _serve_has_xrt(rows: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> bool:
     """Whether any serve row carries a metrics.xrt comparison object."""
     return any(isinstance(metrics.get("xrt"), dict) for _, _, metrics in rows)
 
@@ -337,10 +325,8 @@ def _embedding_table(
         lines = [
             "## Embedding probe (HRX vs XRT)",
             "",
-            "| Model | XRT Status | HRX Status | XRT Encode tok/s | "
-            "HRX Encode tok/s |",
-            "|-------|-----------|-----------|------------------|"
-            "------------------|",
+            "| Model | XRT Status | HRX Status | XRT Encode tok/s | HRX Encode tok/s |",
+            "|-------|-----------|-----------|------------------|------------------|",
         ]
         for tag, serve, metrics in rows:
             xrt = metrics.get("xrt") if isinstance(metrics.get("xrt"), dict) else {}
@@ -368,9 +354,7 @@ def _embedding_table(
     return lines
 
 
-def _asr_table(
-    evidence: dict[str, Any], kinds: dict[str, str] | None
-) -> list[str]:
+def _asr_table(evidence: dict[str, Any], kinds: dict[str, str] | None) -> list[str]:
     rows = _serve_metrics(evidence, kinds, "asr")
     if not rows:
         return []

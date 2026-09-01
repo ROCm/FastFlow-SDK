@@ -239,9 +239,7 @@ def test_unary_and_norm_references_match_rounded_inputs():
 
     rms = cases.rms_norm()["buffers"]
     rms_in = cases.bf16_to_float32(rms[0]["data"])
-    denom = np.sqrt(
-        np.mean(rms_in * rms_in, axis=-1, keepdims=True) + np.float32(1e-5)
-    )
+    denom = np.sqrt(np.mean(rms_in * rms_in, axis=-1, keepdims=True) + np.float32(1e-5))
     np.testing.assert_array_equal(
         rms[1]["expected"], cases.float32_to_bf16(rms_in / denom)
     )
@@ -251,5 +249,6 @@ def test_unary_and_norm_references_match_rounded_inputs():
     shifted = logits - logits.max(axis=-1, keepdims=True)
     expo = np.exp(shifted)
     np.testing.assert_array_equal(
-        softmax[1]["expected"], cases.float32_to_bf16(expo / expo.sum(axis=-1, keepdims=True))
+        softmax[1]["expected"],
+        cases.float32_to_bf16(expo / expo.sum(axis=-1, keepdims=True)),
     )

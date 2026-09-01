@@ -24,7 +24,9 @@ class TestRequirementsFile:
             root / "requirements/fastflowlm.lock",
             True,
         )
-        assert setup.requirements_file("npu-test-runtime", root=root, is_windows=False) == (
+        assert setup.requirements_file(
+            "npu-test-runtime", root=root, is_windows=False
+        ) == (
             root / "requirements/npu-test-runtime.lock",
             True,
         )
@@ -41,12 +43,12 @@ class TestRequirementsFile:
         ) == (lock, False)
 
     def test_compiler_lock_preserves_non_registry_sources(self):
-        source = (
-            paths.ROOT / "requirements" / "compiler-stack.txt"
-        ).read_text(encoding="utf-8")
-        lock = (
-            paths.ROOT / "requirements" / "compiler-stack.lock"
-        ).read_text(encoding="utf-8")
+        source = (paths.ROOT / "requirements" / "compiler-stack.txt").read_text(
+            encoding="utf-8"
+        )
+        lock = (paths.ROOT / "requirements" / "compiler-stack.lock").read_text(
+            encoding="utf-8"
+        )
         find_links = {
             line.strip()
             for line in source.splitlines()

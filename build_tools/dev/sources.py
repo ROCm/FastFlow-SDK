@@ -6,7 +6,6 @@ import sys
 
 from build_tools import environment, paths
 
-
 # Submodules with nested submodules of their own, and those a patch touches.
 RECURSIVE_SUBMODULES = ("iron-tools", "FastFlowLM")
 
@@ -41,7 +40,5 @@ def cmd_submodules(args):
     for name in args.clean:
         if name not in args.names:
             sys.exit(f"--clean {name}: not among the initialized submodules")
-        environment.sh(
-            ["git", "-C", str(paths.PROJ / name), "clean", "-qfdx"]
-        )
+        environment.sh(["git", "-C", str(paths.PROJ / name), "clean", "-qfdx"])
     print(f"submodules: ok ({', '.join(args.names)})")

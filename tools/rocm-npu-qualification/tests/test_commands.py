@@ -15,7 +15,6 @@ import pytest
 
 from rocm_npu_qualification import commands
 
-
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 

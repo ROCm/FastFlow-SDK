@@ -10,7 +10,6 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-
 _ES_SYSTEM_REQUIRED = 0x00000001
 _ES_CONTINUOUS = 0x80000000
 

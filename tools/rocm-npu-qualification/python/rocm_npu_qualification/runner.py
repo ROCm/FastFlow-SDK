@@ -27,25 +27,33 @@ from .contracts import (
     XADX_REPORT_SCHEMA_VERSION,
     xadx_rounds,
 )
-from .evidence import EvidenceWriter
 from .errors import QualificationError
+from .evidence import EvidenceWriter
 from .fastflowlm import (
     BENCHMARK_PASS_SENTINEL_PATTERN,
     MAX_LENGTH_PATTERN,
     extract_raw_outputs,
     fresh_benchmark_csvs,
     has_runtime_error,
-    require_benchmark_schedule,
     require_1k_checkpoint,
+    require_benchmark_schedule,
     smoke_phrase_matches,
     verify_xclbin_inventory,
 )
 from .hashing import canonical_json_sha256, sha256_file
 from .installation import (
-    numeric_runtime_identities as _numeric_runtime_identities,
     normalize_candidate as _normalize_candidate_manifest,
+)
+from .installation import (
+    numeric_runtime_identities as _numeric_runtime_identities,
+)
+from .installation import (
     package_versions as _package_versions,
+)
+from .installation import (
     validate_protocol as _validate_protocol,
+)
+from .installation import (
     validate_versions as _validate_versions,
 )
 from .models import (
@@ -59,7 +67,6 @@ from .profiles import load_profile, profile_names
 from .prompts import materialize_turn
 from .report import build_markdown_report
 from .xadx import XadxError, run_recipe, validate_xadx_report
-
 
 # Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
 # 2+2 turn is left open-ended: forcing "one short sentence" pushes some small
@@ -191,9 +198,7 @@ def _benchmark_tests_for(
     bench = _SWEEP_BENCH_CONFIGS.get(
         bench_context, _SWEEP_BENCH_CONFIGS[_SWEEP_BENCH_DEFAULT]
     )
-    bench_timeout = min(
-        7200, max(300, turn * bench["timeout_factor"] * iterations)
-    )
+    bench_timeout = min(7200, max(300, turn * bench["timeout_factor"] * iterations))
     return [
         {
             "name": bench["name"],
@@ -233,15 +238,11 @@ def _filter_models_by_tags(
             flush=True,
         )
     if not selected:
-        raise QualificationError(
-            f"none of the --models tags are present in the {pool}"
-        )
+        raise QualificationError(f"none of the --models tags are present in the {pool}")
     return selected
 
 
-def _select_benchmark_models(
-    discovered: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+def _select_benchmark_models(discovered: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Pick the curated --bench dev models from the discovered registry set.
 
     Preserves the curated order and warns (rather than fails) about any curated
@@ -260,8 +261,7 @@ def _select_benchmark_models(
         )
     if not selected:
         raise QualificationError(
-            "no curated --bench dev models are present in the installed FLM "
-            "registry"
+            "no curated --bench dev models are present in the installed FLM registry"
         )
     return selected
 
@@ -535,10 +535,13 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
         entrypoint = None
     if entrypoint is None:
         error = (
-            f"--xrt-flm path does not contain an '{executable}' "
-            f"executable ({xrt_flm})"
+            f"--xrt-flm path does not contain an '{executable}' executable ({xrt_flm})"
         )
-        print(f"qualify: {error}; recording XRT as unavailable", file=sys.stderr, flush=True)
+        print(
+            f"qualify: {error}; recording XRT as unavailable",
+            file=sys.stderr,
+            flush=True,
+        )
         return {"status": "unavailable", "requested": requested, "error": error}
     # FHS trees keep metadata under share/flm; a flat tree keeps it next to the
     # binary. Accept whichever layout the supplied build uses.
@@ -563,10 +566,13 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     ]
     if missing:
         error = (
-            "XRT FastFlowLM build is missing "
-            f"{', '.join(missing)} near {entrypoint}"
+            f"XRT FastFlowLM build is missing {', '.join(missing)} near {entrypoint}"
         )
-        print(f"qualify: {error}; recording XRT as unavailable", file=sys.stderr, flush=True)
+        print(
+            f"qualify: {error}; recording XRT as unavailable",
+            file=sys.stderr,
+            flush=True,
+        )
         return {"status": "unavailable", "requested": requested, "error": error}
     host_xrt = _host_xrt_prefix()
     if host_xrt is None:
@@ -575,7 +581,11 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
             "/opt/xilinx/xrt); the XRT comparison uses the host install rather "
             "than a bundled prefix"
         )
-        print(f"qualify: {error}; recording XRT as unavailable", file=sys.stderr, flush=True)
+        print(
+            f"qualify: {error}; recording XRT as unavailable",
+            file=sys.stderr,
+            flush=True,
+        )
         return {"status": "unavailable", "requested": requested, "error": error}
     environment = dict(os.environ)
     environment["FLM_CONFIG_PATH"] = str(config.resolve())
@@ -642,9 +652,7 @@ def _run_flm_bench(
     stamp = work / ".started"
     stamp.write_text("", encoding="utf-8")
     started_ns = stamp.stat().st_mtime_ns
-    config_resource = resources.files("rocm_npu_qualification").joinpath(
-        test["config"]
-    )
+    config_resource = resources.files("rocm_npu_qualification").joinpath(test["config"])
     if not config_resource.is_file():
         raise QualificationError(
             f"benchmark configuration is missing: {test['config']}"
@@ -712,12 +720,13 @@ def _run_flm_bench(
                 and BENCHMARK_PASS_SENTINEL_PATTERN.search(raw) is None
             ):
                 semantic_error = (
-                    f"FastFlowLM benchmark output {output_number} is not "
-                    "coherent text"
+                    f"FastFlowLM benchmark output {output_number} is not coherent text"
                 )
-            elif test["expected_regex"] and re.search(
-                test["expected_regex"], raw, re.IGNORECASE | re.DOTALL
-            ) is None:
+            elif (
+                test["expected_regex"]
+                and re.search(test["expected_regex"], raw, re.IGNORECASE | re.DOTALL)
+                is None
+            ):
                 semantic_error = (
                     f"FastFlowLM benchmark output {output_number} did not match"
                 )
@@ -801,12 +810,8 @@ def _run_xrt_comparison(
         "duration_seconds": result["duration_seconds"],
     }
     if not result["passed"]:
-        metrics["error"] = (
-            result["semantic_error"] or "FastFlowLM XRT benchmark failed"
-        )
-    artifacts = [result["config"]] + (
-        [] if result["csv"] is None else [result["csv"]]
-    )
+        metrics["error"] = result["semantic_error"] or "FastFlowLM XRT benchmark failed"
+    artifacts = [result["config"]] + ([] if result["csv"] is None else [result["csv"]])
     return metrics, artifacts
 
 
@@ -996,7 +1001,9 @@ def _test_model(
                     **(
                         {}
                         if passed
-                        else {"error": semantic_error or "FastFlowLM serve probe failed"}
+                        else {
+                            "error": semantic_error or "FastFlowLM serve probe failed"
+                        }
                     ),
                 }
             )
@@ -1027,9 +1034,7 @@ def _test_model(
             }
             if xrt_flm is not None or xrt_unavailable is not None:
                 metrics["backend"] = "hrx"
-            artifacts = [hrx["config"]] + (
-                [] if hrx["csv"] is None else [hrx["csv"]]
-            )
+            artifacts = [hrx["config"]] + ([] if hrx["csv"] is None else [hrx["csv"]])
             # XRT comparison is strictly best-effort: it is folded into this HRX
             # record's free-form metrics (never a separate test), so an
             # unavailable or failing XRT build reports as N/A and can never flip
@@ -1296,9 +1301,7 @@ def _test_xadx(
                 "name": name,
                 "kind": "xadx",
                 "status": status,
-                "duration_seconds": float(
-                    case_result.get("duration_seconds", 0.0)
-                ),
+                "duration_seconds": float(case_result.get("duration_seconds", 0.0)),
                 "log": "xadx-report.json",
                 "rounds": rounds,
                 "metrics": {
@@ -1306,9 +1309,7 @@ def _test_xadx(
                     "lifecycle_rounds": report.get("lifecycle_rounds", 0),
                     "resident_rounds": report.get("resident_rounds", 0),
                     "readback_rounds": readback_rounds,
-                    "validated_bytes": int(
-                        case_result.get("validated_bytes", 0)
-                    ),
+                    "validated_bytes": int(case_result.get("validated_bytes", 0)),
                     "mismatch_count": int(case_result.get("mismatch_count", 0)),
                     "first_mismatch": case_result.get("first_mismatch"),
                 },
@@ -1319,9 +1320,7 @@ def _test_xadx(
                     else {
                         "error": (
                             report.get("reason")
-                            or "; ".join(
-                                failure["message"] for failure in failures
-                            )
+                            or "; ".join(failure["message"] for failure in failures)
                             or "FastFlowLM XADX qualification failed"
                         )
                     }
@@ -1744,8 +1743,10 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     iterations=benchmark_iterations,
                 )
             mode = "bench-dev" if benchmark_dev else "bench-all"
-            selection = "selected" if model_filter else (
-                "curated" if benchmark_dev else "discovered"
+            selection = (
+                "selected"
+                if model_filter
+                else ("curated" if benchmark_dev else "discovered")
             )
             summary_note = (
                 f"{mode} sweep {selection} {len(execution_models)} models "
@@ -1754,9 +1755,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         else:
             bench_context = getattr(args, "bench_context", None) or _SWEEP_BENCH_DEFAULT
             for base in discovered:
-                base["tests"] = _default_tests_for(
-                    base, bench_context=bench_context
-                )
+                base["tests"] = _default_tests_for(base, bench_context=bench_context)
             execution_models = discovered
             summary_note = (
                 f"complete sweep discovered {len(discovered)} models from the "
@@ -1783,8 +1782,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         )
         pull_log = writer.path(f"logs/pull/{safe_tag}.log")
         print(
-            f"qualify: resolving model {model['tag']} "
-            "(missing files will be pulled)",
+            f"qualify: resolving model {model['tag']} (missing files will be pulled)",
             file=sys.stderr,
             flush=True,
         )
@@ -1893,10 +1891,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     writer.write_junit(evidence["tests"])
     writer.write_json("evidence.json", evidence)
     if is_sweep:
-        kinds = {
-            model["tag"]: model.get("kind", "chat")
-            for model in profile["models"]
-        }
+        kinds = {model["tag"]: model.get("kind", "chat") for model in profile["models"]}
         report_path = writer.path("report.md")
         report_path.write_text(
             build_markdown_report(evidence, kinds=kinds), encoding="utf-8"

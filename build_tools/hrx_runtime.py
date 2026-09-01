@@ -10,7 +10,6 @@ from pathlib import Path
 
 from build_tools import paths
 
-
 HRX_CTS_TESTS = ("core_tests", "buffer_tests", "command_buffer_tests", "queue_tests")
 HRX_CTS_DIR = ("runtime", "src", "iree", "hal", "drivers", "amdxdna", "cts")
 # Hermetic iree_cc_test targets under amdxdna/ (host-side; not the on-device cts/ suite).
@@ -53,9 +52,7 @@ def hrx_amdxdna_host_tests():
 
 def hrx_amdxdna_host_test_targets():
     """Returns the CMake target names generated for the host tests."""
-    targets = [
-        f"iree_hal_drivers_amdxdna_{name}" for name in hrx_amdxdna_host_tests()
-    ]
+    targets = [f"iree_hal_drivers_amdxdna_{name}" for name in hrx_amdxdna_host_tests()]
     if paths.is_windows():
         targets.extend(target for target, _ in HRX_AMDXDNA_MCDM_HOST_TESTS)
     return tuple(targets)
@@ -102,9 +99,7 @@ def add_hrx_install_env(env, install=None):
     env["HRX_INSTALL"] = str(selected_install)
     env["LIBHRX_DIR"] = str(lib_dir)
     loader_var = "PATH" if paths.is_windows() else "LD_LIBRARY_PATH"
-    env[loader_var] = (
-        str(lib_dir) + os.pathsep + env.get(loader_var, "")
-    )
+    env[loader_var] = str(lib_dir) + os.pathsep + env.get(loader_var, "")
     return env
 
 
@@ -115,14 +110,10 @@ def hrx_check(lib, status, what):
     message = ctypes.c_char_p()
     length = ctypes.c_size_t()
     lib.hrx_status_ignore(
-        lib.hrx_status_to_string(
-            status, ctypes.byref(message), ctypes.byref(length)
-        )
+        lib.hrx_status_to_string(status, ctypes.byref(message), ctypes.byref(length))
     )
     code = lib.hrx_status_code(status)
-    text = (
-        message.value.decode("utf-8", "replace") if message.value else "?"
-    )
+    text = message.value.decode("utf-8", "replace") if message.value else "?"
     if message.value:
         lib.hrx_status_free_message(message)
     lib.hrx_status_ignore(status)
@@ -162,9 +153,7 @@ def probe_libhrx(bundle=None, runtime_package=False):
     with contextlib.ExitStack() as stack:
         if paths.is_windows() and hasattr(os, "add_dll_directory"):
             stack.enter_context(os.add_dll_directory(str(lib_path.parent)))
-        load_args = (
-            {} if paths.is_windows() else {"mode": ctypes.RTLD_GLOBAL}
-        )
+        load_args = {} if paths.is_windows() else {"mode": ctypes.RTLD_GLOBAL}
         try:
             library = ctypes.CDLL(str(lib_path), **load_args)
         except OSError as error:
@@ -192,8 +181,7 @@ def probe_libhrx(bundle=None, runtime_package=False):
             rc = 1
         else:
             print(
-                f"  [{'ok ' if count.value else 'MISS'}] "
-                f"hrx gpu devices: {count.value}"
+                f"  [{'ok ' if count.value else 'MISS'}] hrx gpu devices: {count.value}"
             )
             if count.value == 0:
                 rc = 1
@@ -303,9 +291,7 @@ class HrxBufferRef(ctypes.Structure):
 class AmdxdnaExecutableDescription:
     """Owns all borrowed storage referenced by an amdxdna description."""
 
-    def __init__(
-        self, xclbin, transaction, entry_name, data_payload=b"", *, runs=None
-    ):
+    def __init__(self, xclbin, transaction, entry_name, data_payload=b"", *, runs=None):
         if not xclbin:
             raise ValueError("xclbin must not be empty")
         self.name_storage = entry_name.encode("utf-8")
@@ -320,9 +306,7 @@ class AmdxdnaExecutableDescription:
             raise ValueError("runs must not be empty")
 
         self.xclbin_storage = _byte_storage(xclbin)
-        self.xclbins = (HrxConstByteSpan * 1)(
-            _span(self.xclbin_storage, len(xclbin))
-        )
+        self.xclbins = (HrxConstByteSpan * 1)(_span(self.xclbin_storage, len(xclbin)))
         self.transaction_storages = []
         self.data_payload_storages = []
         self.runs = (HrxAmdxdnaExecutableRun * len(runs))()
@@ -331,17 +315,13 @@ class AmdxdnaExecutableDescription:
             if not transaction_bytes:
                 raise ValueError(f"run {index} transaction must not be empty")
             transaction_storage = _byte_storage(transaction_bytes)
-            payload_storage = (
-                _byte_storage(payload_bytes) if payload_bytes else None
-            )
+            payload_storage = _byte_storage(payload_bytes) if payload_bytes else None
             self.transaction_storages.append(transaction_storage)
             self.data_payload_storages.append(payload_storage)
             run = self.runs[index]
             run.record_length = ctypes.sizeof(run)
             run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0
-            run.transaction = _span(
-                transaction_storage, len(transaction_bytes)
-            )
+            run.transaction = _span(transaction_storage, len(transaction_bytes))
             if payload_storage is not None:
                 run.data_payload = _span(payload_storage, len(payload_bytes))
         # Compatibility aliases for callers and tests that inspect a single run.
@@ -351,21 +331,15 @@ class AmdxdnaExecutableDescription:
 
         self.entry_point = HrxAmdxdnaExecutableEntryPoint()
         self.entry_point.record_length = ctypes.sizeof(self.entry_point)
-        self.entry_point.abi_version = (
-            HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0
-        )
-        self.entry_point.name = HrxStringView(
-            self.name_storage, len(self.name_storage)
-        )
+        self.entry_point.abi_version = HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0
+        self.entry_point.name = HrxStringView(self.name_storage, len(self.name_storage))
         self.entry_point.context_mode = HRX_AMDXDNA_CONTEXT_MODE_CREATE
         self.entry_point.runs = self.runs
         self.entry_point.run_count = len(self.runs)
 
         self.params = HrxAmdxdnaExecutableCreateParams()
         self.params.record_length = ctypes.sizeof(self.params)
-        self.params.abi_version = (
-            HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0
-        )
+        self.params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0
         self.params.xclbins = self.xclbins
         self.params.xclbin_count = 1
         self.params.entry_points = ctypes.pointer(self.entry_point)
@@ -475,9 +449,7 @@ class HrxApi:
             [_Handle, ctypes.c_uint32, ctypes.POINTER(_Handle)],
         )
         self.stream_release = d("hrx_stream_release", None, [_Handle])
-        self.stream_synchronize = d(
-            "hrx_stream_synchronize", _Status, [_Handle]
-        )
+        self.stream_synchronize = d("hrx_stream_synchronize", _Status, [_Handle])
 
         self.buffer_allocate = d(
             "hrx_buffer_allocate",
@@ -573,8 +545,13 @@ class HrxApi:
         raise HrxError(f"{operation} failed (status {code}): {text}")
 
     def serialize_xadx(
-        self, xclbin, transaction=None, entry_name="MLIR_AIE", data_payload=b"",
-        *, runs=None
+        self,
+        xclbin,
+        transaction=None,
+        entry_name="MLIR_AIE",
+        data_payload=b"",
+        *,
+        runs=None,
     ):
         """Serializes one or more runs into an owned XADX byte string."""
         description = AmdxdnaExecutableDescription(
@@ -631,8 +608,8 @@ class HrxBuffer:
         self.nbytes = int(np.prod(self.shape, dtype=np.int64)) * self.dtype.itemsize
         self._mapped_pointer = mapped_pointer
         self._storage = (ctypes.c_uint8 * self.nbytes).from_address(mapped_pointer)
-        self.array = np.ctypeslib.as_array(self._storage).view(self.dtype).reshape(
-            self.shape
+        self.array = (
+            np.ctypeslib.as_array(self._storage).view(self.dtype).reshape(self.shape)
         )
 
     def flush(self, offset=0, size=None):
@@ -676,9 +653,7 @@ class HrxRuntime:
                 "hrx_gpu_device_get",
             )
             self.api.check(
-                self.api.stream_create(
-                    self.device, 0, ctypes.byref(self.stream)
-                ),
+                self.api.stream_create(self.device, 0, ctypes.byref(self.stream)),
                 "hrx_stream_create",
             )
         except Exception:

@@ -56,8 +56,7 @@ def verify(expected_python: str) -> dict[str, object]:
     extensions = sorted(
         path
         for path in (aie_root / "_mlir_libs").rglob("*")
-        if path.is_file()
-        and path.name.endswith((".pyd", ".abi3.so"))
+        if path.is_file() and path.name.endswith((".pyd", ".abi3.so"))
     )
     if not extensions:
         raise RuntimeError(

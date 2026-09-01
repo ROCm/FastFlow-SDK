@@ -46,11 +46,12 @@ from build_tools import iron  # noqa: E402
 os.environ.setdefault("IRON_RUNTIME", "cpu")
 
 import aie.utils as aie_utils  # noqa: E402   (must follow IRON_RUNTIME)
-from aie.iron.device import NPU1Col1, NPU2  # noqa: E402
+from aie.iron.device import NPU2, NPU1Col1  # noqa: E402
 from iron.common import AIEContext, AIEOperatorBase  # noqa: E402
 from iron.common.compilation import InstsBinArtifact, XclbinArtifact  # noqa: E402
 
 DEVICES = {"npu2": NPU2, "npu1": NPU1Col1}
+
 
 class BuildError(RuntimeError):
     """A fatal failure. main() turns this into a non-zero exit."""
@@ -108,7 +109,9 @@ def artifact_of(operator: AIEOperatorBase, kind: type) -> Path:
     found = [Path(a.filename) for a in operator.artifacts if isinstance(a, kind)]
     if len(found) != 1:
         got = ", ".join(str(f) for f in found) or "none"
-        raise BuildError(f"expected exactly one {kind.__name__}, got {len(found)}: {got}")
+        raise BuildError(
+            f"expected exactly one {kind.__name__}, got {len(found)}: {got}"
+        )
     return found[0]
 
 

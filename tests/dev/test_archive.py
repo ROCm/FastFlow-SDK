@@ -133,9 +133,7 @@ def test_safe_extraction_rejects_tar_special_files(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["zip", "tar"])
-def test_preflight_leaves_destination_unchanged_for_late_invalid_member(
-    tmp_path, kind
-):
+def test_preflight_leaves_destination_unchanged_for_late_invalid_member(tmp_path, kind):
     destination = tmp_path / "extract"
     destination.mkdir()
     existing = destination / "existing"
@@ -241,12 +239,8 @@ def test_zip_and_gzip_tar_are_deterministic_and_roundtrip(tmp_path):
 
     first_tar = tmp_path / "first.tar.gz"
     second_tar = tmp_path / "second.tar.gz"
-    create_deterministic_tar_gz(
-        tree, first_tar, arcname="tree", compresslevel=6
-    )
-    create_deterministic_tar_gz(
-        tree, second_tar, arcname="tree", compresslevel=6
-    )
+    create_deterministic_tar_gz(tree, first_tar, arcname="tree", compresslevel=6)
+    create_deterministic_tar_gz(tree, second_tar, arcname="tree", compresslevel=6)
     assert first_tar.read_bytes() == second_tar.read_bytes()
     extracted = tmp_path / "gzip-extracted"
     extract_archive(first_tar, extracted)

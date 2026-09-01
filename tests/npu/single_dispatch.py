@@ -10,11 +10,11 @@ separately (`dev.py test-npu --chain`) and does not gate this.
 
 Run from the design directory after `make all NPU2=1`.
 """
+
 import argparse
 import sys
 
 import numpy as np
-
 from aie.utils.hostruntime.hrxruntime.hostruntime import HRXHostRuntime
 from aie.utils.hostruntime.hrxruntime.tensor import HRXTensor
 from aie.utils.npukernel import NPUKernel
@@ -31,9 +31,9 @@ def main():
     rt = HRXHostRuntime()
     handle = rt.load(NPUKernel(opts.xclbin, opts.instr, kernel_name=opts.kernel))
 
-    src = np.arange(1, opts.size + 1, dtype=np.int32)   # in[i] = i + 1
+    src = np.arange(1, opts.size + 1, dtype=np.int32)  # in[i] = i + 1
     in_a = HRXTensor(src, dtype=np.int32)
-    out = HRXTensor((opts.size,), dtype=np.int32)       # zero-filled
+    out = HRXTensor((opts.size,), dtype=np.int32)  # zero-filled
 
     rt.run(handle, [in_a, out])
 
@@ -42,8 +42,10 @@ def main():
     if not np.array_equal(got, ref):
         bad = int(np.argmax(got != ref))
         count = int(np.count_nonzero(got != ref))
-        print(f"FAIL: {count}/{opts.size} mismatches; first at {bad}: "
-              f"got {got[bad]}, expected {ref[bad]}")
+        print(
+            f"FAIL: {count}/{opts.size} mismatches; first at {bad}: "
+            f"got {got[bad]}, expected {ref[bad]}"
+        )
         # An all-zero output means the dispatch reported success without writing.
         if not got.any():
             print("      output is entirely zero: the kernel did not write its result")

@@ -74,11 +74,7 @@ def test_pip_install_command_uses_wheel_file_and_abi3(tmp_path):
     assert "--only-binary=:all:" in command
     assert command[command.index("--python-version") + 1] == "3.12"
     assert command[command.index("--implementation") + 1] == "cp"
-    abis = [
-        command[index + 1]
-        for index, item in enumerate(command)
-        if item == "--abi"
-    ]
+    abis = [command[index + 1] for index, item in enumerate(command) if item == "--abi"]
     assert abis == [python_tag("3.12"), "abi3"]
     assert command[command.index("--platform") + 1] == "manylinux_2_28_x86_64"
     assert "linux_x86_64" not in command
@@ -150,12 +146,8 @@ def test_resolve_release_wheel_covers_policy_matrix(tmp_path, monkeypatch):
         work_dir=tmp_path,
     )
     assert len(calls) == 6
-    platforms = {
-        command[command.index("--platform") + 1] for command in calls
-    }
-    minors = {
-        command[command.index("--python-version") + 1] for command in calls
-    }
+    platforms = {command[command.index("--platform") + 1] for command in calls}
+    minors = {command[command.index("--python-version") + 1] for command in calls}
     assert platforms == {"manylinux_2_28_x86_64", "win_amd64"}
     assert minors == {"3.12", "3.13", "3.14"}
     assert all(command[-1] == str(wheel) for command in calls)

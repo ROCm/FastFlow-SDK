@@ -22,8 +22,8 @@ shape its packing uses, or which order it writes its output in.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 
 PRODUCTION_SHAPE_KEY = "production"
@@ -202,9 +202,7 @@ def _mm_stage(entry, profile, policy, salt=BASE_SALT, execution=None):
     }
 
 
-def _chained_case(
-    dequant, mm, profile, policy, mm_execution=None, salt=BASE_SALT
-):
+def _chained_case(dequant, mm, profile, policy, mm_execution=None, salt=BASE_SALT):
     """Binds a dequant output straight into the MM weight, with no host round trip.
 
     The dequant kernel writes its result permuted and the MM kernel reads its
@@ -222,22 +220,22 @@ def _chained_case(
     # expectation of its own: the chain is judged on the product it feeds.
     first_output = _buffer(first, "output")
     first_output.clear()
-    first_output.update({
-        **shared,
-        "direction": "output",
-        "preserved": _generator(
-            "chained-weight",
-            m=m,
-            k=k,
-            profile=profile,
-            semantics=dequant["facts"]["dequant_semantics"],
-            order=dequant["facts"]["dequant_output_order"],
-        ),
-    })
-
-    second = _mm_stage(
-        mm, profile, policy, salt=salt, execution=mm_execution
+    first_output.update(
+        {
+            **shared,
+            "direction": "output",
+            "preserved": _generator(
+                "chained-weight",
+                m=m,
+                k=k,
+                profile=profile,
+                semantics=dequant["facts"]["dequant_semantics"],
+                order=dequant["facts"]["dequant_output_order"],
+            ),
+        }
     )
+
+    second = _mm_stage(mm, profile, policy, salt=salt, execution=mm_execution)
     second_output = _buffer(second, "output")
     second_output["expected"] = _generator(
         "chained-reference",
@@ -256,11 +254,13 @@ def _chained_case(
     }
     second_weight = _buffer(second, "weight")
     second_weight.clear()
-    second_weight.update({
-        **shared,
-        "direction": "input",
-        "source": {"stage_output": "dequant.weight"},
-    })
+    second_weight.update(
+        {
+            **shared,
+            "direction": "input",
+            "source": {"stage_output": "dequant.weight"},
+        }
+    )
     return {
         "name": (
             f"{dequant['id']}+{mm['id']}"
@@ -271,9 +271,7 @@ def _chained_case(
 
 
 def _readback_variant(entry, policy, salt, execution=None):
-    stage = _mm_stage(
-        entry, "shared-subset", policy, salt=salt, execution=execution
-    )
+    stage = _mm_stage(entry, "shared-subset", policy, salt=salt, execution=execution)
     return {
         "stage": "mm",
         "buffer": "activation",
@@ -394,9 +392,7 @@ def build_recipe(capabilities, catalogue, digests):
             "families": record["families"],
             **digest,
             **(
-                {"execution_variants": execution_variants}
-                if execution_variants
-                else {}
+                {"execution_variants": execution_variants} if execution_variants else {}
             ),
         }
         entries[id] = {**entry, "facts": facts}
@@ -409,9 +405,7 @@ def build_recipe(capabilities, catalogue, digests):
                 return _dequant_stage(staged, profile)
             return _mm_stage(staged, profile, policy)
 
-        cases.append(
-            {"name": f"{id}/zero-baseline", "stages": [stage("zero")]}
-        )
+        cases.append({"name": f"{id}/zero-baseline", "stages": [stage("zero")]})
         if "numeric_limit" in facts:
             limits.append(
                 {
@@ -425,20 +419,15 @@ def build_recipe(capabilities, catalogue, digests):
                 }
             )
             continue
-        profiles = (
-            DEQUANT_PROFILES if record["kernel"] == "dequant" else MM_PROFILES
-        )
+        profiles = DEQUANT_PROFILES if record["kernel"] == "dequant" else MM_PROFILES
         for profile in profiles:
-            cases.append(
-                {"name": f"{id}/{profile}", "stages": [stage(profile)]}
-            )
+            cases.append({"name": f"{id}/{profile}", "stages": [stage(profile)]})
         if record["kernel"] == "mm":
             # Alternate inputs rewritten into a resident buffer between
             # dispatches, which is what the readback rounds exercise.
             shared_subset = _case(cases, f"{id}/shared-subset")
             shared_subset["readback_variants"] = [
-                _readback_variant(staged, policy, salt)
-                for salt in READBACK_SALTS
+                _readback_variant(staged, policy, salt) for salt in READBACK_SALTS
             ]
             for variant in staged.get("execution_variants", ()):
                 execution = variant["id"]
@@ -457,9 +446,7 @@ def build_recipe(capabilities, catalogue, digests):
                             ],
                         }
                     )
-                variant_shared = _case(
-                    cases, f"{id}/{execution}/shared-subset"
-                )
+                variant_shared = _case(cases, f"{id}/{execution}/shared-subset")
                 variant_shared["readback_variants"] = [
                     _readback_variant(staged, policy, salt, execution)
                     for salt in READBACK_SALTS
@@ -471,9 +458,7 @@ def build_recipe(capabilities, catalogue, digests):
         for profile in policy["chained_absolute_tolerance"]:
             if profile not in DEQUANT_PROFILES:
                 continue
-            cases.append(
-                _chained_case(entries[dequant], entries[mm], profile, policy)
-            )
+            cases.append(_chained_case(entries[dequant], entries[mm], profile, policy))
         for variant in entries[mm].get("execution_variants", ()):
             for profile in MM_PROFILES:
                 cases.append(
@@ -545,9 +530,7 @@ def attest_recipe_generators(recipe, materialize):
                 f"case {case['name']} must declare exactly one expected output"
             )
         for variant in case.get("readback_variants", ()):
-            buffer = buffers_by_identity.get(
-                (variant["stage"], variant["buffer"])
-            )
+            buffer = buffers_by_identity.get((variant["stage"], variant["buffer"]))
             if buffer is None:
                 raise RecipeError(
                     f"case {case['name']} readback names unknown buffer "
@@ -566,9 +549,7 @@ def validate_recipe(recipe, schema_path):
     ).validate(recipe)
     implementation_ids = [entry["id"] for entry in recipe["implementations"]]
     case_names = [case["name"] for case in recipe["cases"]]
-    limit_ids = [
-        (limit["id"], limit["scope"]) for limit in recipe["coverage_limits"]
-    ]
+    limit_ids = [(limit["id"], limit["scope"]) for limit in recipe["coverage_limits"]]
     if len(implementation_ids) != len(set(implementation_ids)):
         raise RecipeError("recipe implementation IDs are not unique")
     if len(case_names) != len(set(case_names)):

@@ -9,7 +9,6 @@ import pytest
 from tests.support.hrx import FakeBuffer, FakeExecutable
 from tests.support.modules import load_module
 
-
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
 
 

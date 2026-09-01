@@ -24,7 +24,6 @@ from .errors import QualificationError
 from .hashing import sha256_file
 from .numeric_runtime import NUMERIC_DISTRIBUTIONS, NUMERIC_RUNTIME
 
-
 PLUGIN_API = "1"
 PACKAGE_DISTRIBUTIONS = (
     "rocm-npu-runtime",
@@ -188,9 +187,7 @@ def verify_recorded_install_tree(
             generated_pyc = (
                 path.parent.name == "__pycache__"
                 and path.suffix == ".pyc"
-                and (
-                    path.parent.parent / f"{path.name.split('.', 1)[0]}.py"
-                ).resolve()
+                and (path.parent.parent / f"{path.name.split('.', 1)[0]}.py").resolve()
                 in recorded
             )
             installer_metadata = (
@@ -208,10 +205,15 @@ def verify_recorded_install_tree(
 def _installed_record_name(member_name: str) -> str:
     """Map wheel .data payloads to their installed site-packages RECORD path."""
     parts = member_name.replace("\\", "/").split("/")
-    if len(parts) >= 3 and parts[0].endswith(".data") and parts[1] in {
-        "purelib",
-        "platlib",
-    }:
+    if (
+        len(parts) >= 3
+        and parts[0].endswith(".data")
+        and parts[1]
+        in {
+            "purelib",
+            "platlib",
+        }
+    ):
         return "/".join(parts[2:])
     return member_name
 
@@ -244,14 +246,10 @@ def _verify_recorded_payload(
         )
 
 
-def verify_installed_wheel_metadata(
-    wheels: dict[str, Path | tuple[Path, str]]
-) -> None:
+def verify_installed_wheel_metadata(wheels: dict[str, Path | tuple[Path, str]]) -> None:
     for distribution, wheel_value in wheels.items():
         wheel, expected_record_sha256 = (
-            wheel_value
-            if isinstance(wheel_value, tuple)
-            else (wheel_value, None)
+            wheel_value if isinstance(wheel_value, tuple) else (wheel_value, None)
         )
         installed_distribution = metadata.distribution(distribution)
         with zipfile.ZipFile(wheel) as archive:
@@ -376,14 +374,10 @@ def verify_installed_wheel_metadata(
                 )
             if values and values[0]:
                 algorithm, encoded = values[0].split("=", 1)
-                installed_path = Path(
-                    installed_distribution.locate_file(member_name)
-                )
+                installed_path = Path(installed_distribution.locate_file(member_name))
                 actual = (
                     base64.urlsafe_b64encode(
-                        hashlib.new(
-                            algorithm, installed_path.read_bytes()
-                        ).digest()
+                        hashlib.new(algorithm, installed_path.read_bytes()).digest()
                     )
                     .rstrip(b"=")
                     .decode()
@@ -444,8 +438,7 @@ def numeric_runtime_identities() -> dict[str, dict[str, Any]]:
             )
         files = list(installed_distribution.files or ())
         records = [
-            item for item in files
-            if item.as_posix().endswith(".dist-info/RECORD")
+            item for item in files if item.as_posix().endswith(".dist-info/RECORD")
         ]
         if len(records) != 1:
             raise QualificationError(
@@ -491,9 +484,7 @@ def numeric_runtime_identities() -> dict[str, dict[str, Any]]:
             Path(installed_distribution.locate_file(name.split("/", 1)[0]))
             for item in files
             for name in [item.as_posix()]
-            if "/" in name
-            and not name.startswith("../")
-            and ".dist-info/" not in name
+            if "/" in name and not name.startswith("../") and ".dist-info/" not in name
         }
         verify_recorded_install_tree(
             distribution,

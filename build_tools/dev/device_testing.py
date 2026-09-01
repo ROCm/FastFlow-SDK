@@ -8,7 +8,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from build_tools import environment, hrx_runtime, iron, linux_npu, npu_test_package, paths
+from build_tools import (
+    environment,
+    hrx_runtime,
+    iron,
+    linux_npu,
+    npu_test_package,
+    paths,
+)
 from build_tools.windows_npu import probe_runtime as probe_windows_npu_runtime
 
 HRX_CTS_TIMEOUT_SECONDS = 30 * 60
@@ -83,11 +90,7 @@ def _gtest_counts(output):
 
 def cmd_test_hrx_cts(args):
     cts = paths.HRX_CMAKE_BUILD.joinpath(*hrx_runtime.HRX_CTS_DIR)
-    names = (
-        [args.suite]
-        if getattr(args, "suite", None)
-        else hrx_runtime.HRX_CTS_TESTS
-    )
+    names = [args.suite] if getattr(args, "suite", None) else hrx_runtime.HRX_CTS_TESTS
     executables = {}
     for name in names:
         candidate = cts / paths.executable_name(name)
@@ -190,7 +193,7 @@ def cmd_test_npu(args):
     if getattr(args, "chain", False):
         if not (design_dir / "test_chain_hrx.py").exists():
             sys.exit(
-                f"{design}: no chained testbench " "(only vector_scalar_add ships one)"
+                f"{design}: no chained testbench (only vector_scalar_add ships one)"
             )
         testbench = [environment.venv_py(), "test_chain_hrx.py"]
     else:
@@ -231,7 +234,11 @@ def cmd_test_npu_jit(args):
     environment.sh(command, env=env)
     print(
         "test-npu-jit: ok "
-        + ("(compiler + JIT, no dispatch)" if build_only else "(ran on the NPU via hrx)")
+        + (
+            "(compiler + JIT, no dispatch)"
+            if build_only
+            else "(ran on the NPU via hrx)"
+        )
     )
 
 
@@ -287,6 +294,4 @@ def cmd_test_npu_iron_ops(args):
     names = ", ".join(operator.name for operator in operators)
     if rc != 0:
         sys.exit(f"test-npu-iron-ops: FAIL ({names})")
-    print(
-        f"test-npu-iron-ops: ok ({names} ran on the NPU via hrx, " "numerics verified)"
-    )
+    print(f"test-npu-iron-ops: ok ({names} ran on the NPU via hrx, numerics verified)")

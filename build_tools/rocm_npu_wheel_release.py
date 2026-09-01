@@ -42,6 +42,8 @@ NUMERIC_RUNTIME = release_policy.numeric_package_versions()
 
 def _canonical_distribution(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
 RELEASE_DISTRIBUTIONS = (
     RUNTIME_DISTRIBUTION,
     FASTFLOWLM_DISTRIBUTION,
@@ -152,17 +154,13 @@ def _copy_release_wheel(
                 f"release wheel must contain one package manifest: {wheel}"
             )
         package_manifest_bytes = archive.read(manifests[0])
-        package_manifest_sha256 = hashlib.sha256(
-            package_manifest_bytes
-        ).hexdigest()
+        package_manifest_sha256 = hashlib.sha256(package_manifest_bytes).hexdigest()
     try:
         package_manifest = json.loads(package_manifest_bytes)
     except json.JSONDecodeError as error:
         raise RuntimeError(f"invalid wheel package manifest: {wheel}") from error
     embedded_revision = (
-        package_manifest.get("sources", {})
-        .get("rocm-npu-staging", {})
-        .get("revision")
+        package_manifest.get("sources", {}).get("rocm-npu-staging", {}).get("revision")
     )
     if embedded_revision != expected_source_sha:
         raise RuntimeError(
@@ -190,10 +188,8 @@ def _copy_release_archives(
     linux_artifact = standalone_artifact_name("linux", "x86_64")
     windows_artifact = standalone_artifact_name("windows", "x86_64")
     expected = {
-        f"{linux_artifact}.tar.zst":
-            ("linux-x86_64", "Linux", linux_artifact),
-        f"{windows_artifact}.zip":
-            ("windows-x86_64", "Windows", windows_artifact),
+        f"{linux_artifact}.tar.zst": ("linux-x86_64", "Linux", linux_artifact),
+        f"{windows_artifact}.zip": ("windows-x86_64", "Windows", windows_artifact),
     }
     archives = {
         path.name: path
@@ -230,7 +226,12 @@ def _copy_release_archives(
                     ).decode("utf-8")
                 )
             ]
-        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (
+            OSError,
+            RuntimeError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
             raise RuntimeError(
                 f"standalone archive manifest is invalid: {archive}"
             ) from error
@@ -323,7 +324,8 @@ def _find_release_wheels(
 
     manylinux = next(
         (
-            tag for tag in expected_tags
+            tag
+            for tag in expected_tags
             if tag.startswith("py3-none-manylinux_") and tag.endswith("_x86_64")
         ),
         None,
@@ -356,21 +358,17 @@ def _find_release_wheels(
     expected_keys.add(
         (COMPILER_BINDINGS_DISTRIBUTION, f"{abi}-abi3-{manylinux.split('-', 2)[2]}")
     )
-    expected_keys.add(
-        (COMPILER_BINDINGS_DISTRIBUTION, f"{abi}-abi3-win_amd64")
-    )
+    expected_keys.add((COMPILER_BINDINGS_DISTRIBUTION, f"{abi}-abi3-win_amd64"))
     missing = sorted(expected_keys.difference(wheels))
     if missing:
         details = ", ".join(
-            f"{distribution}[{tag or 'unspecified'}]"
-            for distribution, tag in missing
+            f"{distribution}[{tag or 'unspecified'}]" for distribution, tag in missing
         )
         raise RuntimeError(f"release wheel set is incomplete; missing {details}")
     extra = sorted(set(wheels).difference(expected_keys))
     if extra:
         details = ", ".join(
-            f"{distribution}[{tag or 'unspecified'}]"
-            for distribution, tag in extra
+            f"{distribution}[{tag or 'unspecified'}]" for distribution, tag in extra
         )
         raise RuntimeError(f"release wheel set contains unexpected variants: {details}")
     return [wheels[key] for key in sorted(expected_keys)]
@@ -515,12 +513,10 @@ def prepare_rocm_npu_release_payload(
             )
         if distribution == COMPILER_BINDINGS_DISTRIBUTION:
             tags = _wheel_tags(wheel)
-            stable_abi = (
-                "cp" + release_policy.compiler_python_stable_abi().replace(".", "")
+            stable_abi = "cp" + release_policy.compiler_python_stable_abi().replace(
+                ".", ""
             )
-            if not any(
-                re.fullmatch(rf"{stable_abi}-abi3-.+", tag) for tag in tags
-            ):
+            if not any(re.fullmatch(rf"{stable_abi}-abi3-.+", tag) for tag in tags):
                 raise RuntimeError(
                     f"{COMPILER_BINDINGS_DISTRIBUTION} must use the "
                     f"{stable_abi}-abi3 stable ABI tag: "

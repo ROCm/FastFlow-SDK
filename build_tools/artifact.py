@@ -104,7 +104,9 @@ def git_source_state(path: Path) -> dict[str, object]:
         source = path / relative
         record: dict[str, object] = {"path": relative.replace("\\", "/")}
         if source.is_file():
-            record.update({"size": source.stat().st_size, "sha256": sha256_file(source)})
+            record.update(
+                {"size": source.stat().st_size, "sha256": sha256_file(source)}
+            )
         else:
             record["deleted"] = True
         changed_files.append(record)
@@ -177,9 +179,13 @@ def verify_file_inventory(
             or ".." in relative.parts
             or str(relative) != entry["path"]
         ):
-            raise RuntimeError(f"file inventory contains an unsafe path: {entry['path']}")
+            raise RuntimeError(
+                f"file inventory contains an unsafe path: {entry['path']}"
+            )
         if entry["path"] in expected:
-            raise RuntimeError(f"file inventory contains a duplicate path: {entry['path']}")
+            raise RuntimeError(
+                f"file inventory contains a duplicate path: {entry['path']}"
+            )
         if (
             not isinstance(entry.get("size"), int)
             or entry["size"] < 0
@@ -187,7 +193,9 @@ def verify_file_inventory(
             or len(entry["sha256"]) != 64
             or any(character not in "0123456789abcdef" for character in entry["sha256"])
         ):
-            raise RuntimeError(f"file inventory contains invalid metadata: {entry['path']}")
+            raise RuntimeError(
+                f"file inventory contains invalid metadata: {entry['path']}"
+            )
         expected[entry["path"]] = entry
 
     excluded = {Path(path) for path in exclude_paths}
@@ -204,10 +212,7 @@ def verify_file_inventory(
         )
     for relative, entry in expected.items():
         path = actual[relative]
-        if (
-            path.stat().st_size != entry["size"]
-            or sha256_file(path) != entry["sha256"]
-        ):
+        if path.stat().st_size != entry["size"] or sha256_file(path) != entry["sha256"]:
             raise RuntimeError(f"file verification failed: {relative}")
 
 

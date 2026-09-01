@@ -7,21 +7,15 @@ from tests.support.modules import load_module
 from tests.support.wheels import make_package_tree
 from tests.support.workflows import workflow_job
 
-
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
+
 
 def test_workflow_job_returns_only_requested_top_level_job():
     workflow = (
-        "jobs:\n"
-        "  first:\n"
-        "    runs-on: linux\n"
-        "  second-job:\n"
-        "    runs-on: windows\n"
+        "jobs:\n  first:\n    runs-on: linux\n  second-job:\n    runs-on: windows\n"
     )
 
-    assert workflow_job(workflow, "first") == (
-        "  first:\n    runs-on: linux\n"
-    )
+    assert workflow_job(workflow, "first") == ("  first:\n    runs-on: linux\n")
     assert workflow_job(workflow, "second-job") == (
         "  second-job:\n    runs-on: windows\n"
     )

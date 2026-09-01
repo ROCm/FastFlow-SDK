@@ -87,11 +87,7 @@ def junit_bytes(tests: list[dict[str, Any]]) -> bytes:
 class EvidenceWriter:
     def __init__(self, root: Path, *, allow_existing: bool = False):
         self.root = root
-        if (
-            self.root.exists()
-            and any(self.root.iterdir())
-            and not allow_existing
-        ):
+        if self.root.exists() and any(self.root.iterdir()) and not allow_existing:
             raise FileExistsError(
                 f"qualification evidence output is not empty: {self.root}"
             )

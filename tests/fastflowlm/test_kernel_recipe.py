@@ -28,8 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _xadx_rounds():
     path = (
-        ROOT
-        / "tools/rocm-npu-qualification/python/rocm_npu_qualification/contracts.py"
+        ROOT / "tools/rocm-npu-qualification/python/rocm_npu_qualification/contracts.py"
     )
     return load_module("qualification_contracts", path).XADX_ROUNDS
 
@@ -153,9 +152,7 @@ def test_readback_rounds_evenly_cover_each_cases_actual_variants():
 
 def test_recipe_validates_and_covers_every_reachable_implementation():
     recipe = _recipe()
-    attest_recipe_generators(
-        recipe, lambda specification, size: bytes(size)
-    )
+    attest_recipe_generators(recipe, lambda specification, size: bytes(size))
     summary = validate_recipe(recipe, SCHEMA)
     capabilities = _capabilities()
     reached = capabilities["implementations"]["entries"]
@@ -238,7 +235,10 @@ def test_readback_variants_rewrite_the_activation_of_a_resident_case():
         assert salts == [46, 54]
         # Each variant must expect its own product, or a rewritten input would
         # be compared against the output of the one before it.
-        assert len({variant["expected"]["parameters"]["salt"] for variant in variants}) == 2
+        assert (
+            len({variant["expected"]["parameters"]["salt"] for variant in variants})
+            == 2
+        )
 
 
 def test_recipe_strictly_covers_legacy_populations_at_n128():
@@ -250,9 +250,7 @@ def test_recipe_strictly_covers_legacy_populations_at_n128():
         assert stage["buffers"][0]["size"] == 2 * 1024 * 128
         assert stage["buffers"][2]["size"] == 2 * 1024 * 128
         if profile != "zero":
-            assert (
-                stage["buffers"][2]["source"]["parameters"]["salt"] == 29
-            )
+            assert stage["buffers"][2]["source"]["parameters"]["salt"] == 29
 
     for dequant in (
         "dequant-122f128af9bdad35",
@@ -263,9 +261,7 @@ def test_recipe_strictly_covers_legacy_populations_at_n128():
             name = f"{dequant}+{generic}/production/{profile}"
             assert cases[name]["stages"][1]["execution"] == "production"
             assert (
-                cases[name]["stages"][1]["buffers"][0]["expected"][
-                    "parameters"
-                ]["salt"]
+                cases[name]["stages"][1]["buffers"][0]["expected"]["parameters"]["salt"]
                 == 29
             )
 

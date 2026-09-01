@@ -94,12 +94,12 @@ def _validate_member_structure(
     for member in members:
         key = _member_key(member.normalized)
         if key in entries:
-            raise RuntimeError(
-                f"duplicate normalized path in archive: {member.name}"
-            )
+            raise RuntimeError(f"duplicate normalized path in archive: {member.name}")
         parts = PurePosixPath(member.normalized).parts
         for index in range(1, len(parts)):
-            ancestor = entries.get(_member_key(PurePosixPath(*parts[:index]).as_posix()))
+            ancestor = entries.get(
+                _member_key(PurePosixPath(*parts[:index]).as_posix())
+            )
             if ancestor is not None and not ancestor.is_directory:
                 raise RuntimeError(
                     "file/directory normalized collision in archive: "
@@ -180,7 +180,9 @@ def open_tar(archive: Path) -> Iterator[tarfile.TarFile]:
     process = None
     try:
         try:
-            decoded_stream = zstandard_module().ZstdDecompressor().stream_reader(raw_stream)
+            decoded_stream = (
+                zstandard_module().ZstdDecompressor().stream_reader(raw_stream)
+            )
         except RuntimeError:
             zstd = shutil.which("zstd")
             if not zstd:
@@ -213,9 +215,7 @@ def extract_archive(archive: Path, destination: Path) -> None:
 
     if archive.suffix in (".zip", ".whl"):
         with zipfile.ZipFile(archive) as source:
-            _validate_member_structure(
-                _zip_members(source), destination=destination
-            )
+            _validate_member_structure(_zip_members(source), destination=destination)
         destination.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(archive) as source:
             for member in source.infolist():
@@ -225,7 +225,10 @@ def extract_archive(archive: Path, destination: Path) -> None:
                     target.mkdir(parents=True, exist_ok=True)
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with source.open(member) as input_stream, target.open("wb") as output_stream:
+                with (
+                    source.open(member) as input_stream,
+                    target.open("wb") as output_stream,
+                ):
                     shutil.copyfileobj(input_stream, output_stream)
                 if mode:
                     target.chmod(mode & 0o777)
@@ -234,9 +237,7 @@ def extract_archive(archive: Path, destination: Path) -> None:
     if not archive.name.endswith((".tar.gz", ".tar.zst")):
         raise RuntimeError(f"unsupported archive format: {archive}")
     with open_tar(archive) as source:
-        _validate_member_structure(
-            _tar_members(source), destination=destination
-        )
+        _validate_member_structure(_tar_members(source), destination=destination)
     destination.mkdir(parents=True, exist_ok=True)
     with open_tar(archive) as source:
         for member in source:
@@ -265,7 +266,9 @@ def extract_archive_atomic(
     allowed_root = Path(allowed_root).resolve()
     target = destination.resolve()
     if target == allowed_root or allowed_root not in target.parents:
-        raise RuntimeError(f"refusing to remove unsafe extraction target: {destination}")
+        raise RuntimeError(
+            f"refusing to remove unsafe extraction target: {destination}"
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}-extract-", dir=destination.parent)
@@ -292,7 +295,9 @@ def extract_archive_atomic(
         raise
 
 
-def read_member(archive: Path, member_name: str, *, size_limit: int | None = None) -> bytes:
+def read_member(
+    archive: Path, member_name: str, *, size_limit: int | None = None
+) -> bytes:
     """Validates the complete archive, then reads exactly one regular member."""
     archive = Path(archive)
     wanted = normalize_member_name(member_name)
@@ -387,12 +392,19 @@ def create_deterministic_tar_gz(
     arcname: str,
     compresslevel: int,
 ) -> None:
-    with Path(archive).open("wb") as raw_stream, gzip.GzipFile(
-        filename="", mode="wb", fileobj=raw_stream,
-        compresslevel=compresslevel, mtime=FIXED_MTIME,
-    ) as compressed, tarfile.open(
-        fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT
-    ) as output:
+    with (
+        Path(archive).open("wb") as raw_stream,
+        gzip.GzipFile(
+            filename="",
+            mode="wb",
+            fileobj=raw_stream,
+            compresslevel=compresslevel,
+            mtime=FIXED_MTIME,
+        ) as compressed,
+        tarfile.open(
+            fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT
+        ) as output,
+    ):
         write_deterministic_tar(root, output, arcname=arcname)
 
 
@@ -438,9 +450,12 @@ def create_deterministic_tar_zstd_cli(
     )
     if process.stdin is None:
         raise RuntimeError("zstd did not provide an input stream")
-    with process.stdin, tarfile.open(
-        fileobj=process.stdin, mode="w|", format=tarfile.PAX_FORMAT
-    ) as output:
+    with (
+        process.stdin,
+        tarfile.open(
+            fileobj=process.stdin, mode="w|", format=tarfile.PAX_FORMAT
+        ) as output,
+    ):
         write_deterministic_tar(root, output, arcname=arcname)
     if process.wait() != 0:
         raise RuntimeError(f"zstd failed (exit {process.returncode})")

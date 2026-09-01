@@ -29,7 +29,9 @@ class TestRocmNpuWindowsWheelCli:
         with (
             mock.patch.object(cli, "_is_windows_host", return_value=True),
             mock.patch.object(
-                sys, "argv", ["rocm_npu_windows_wheel_cli.py", "package", "--version", "1.2.3"]
+                sys,
+                "argv",
+                ["rocm_npu_windows_wheel_cli.py", "package", "--version", "1.2.3"],
             ),
             mock.patch.object(
                 cli, "package_fastflowlm_wheels", return_value=wheels

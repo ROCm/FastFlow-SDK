@@ -9,7 +9,6 @@ import pytest
 
 import conftest as repository_conftest
 
-
 pytestmark = pytest.mark.presubmit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,8 +91,8 @@ def test_test_profile_covers_presubmit_runtime_dependencies():
     }
     assert entries == {
         "jsonschema==4.26.0",
-            "ml-dtypes==0.6.0",
-            "numpy==2.4.6",
+        "ml-dtypes==0.6.0",
+        "numpy==2.4.6",
         "pytest==8.4.2",
         "zstandard==0.25.0",
     }
@@ -132,8 +131,7 @@ def test_compiler_workflows_install_runner_and_use_marker_selection(
     assert "-r requirements/test.lock" in workflow
     assert "hashFiles('requirements/**/*.txt', 'requirements/**/*.lock'" in workflow
     assert (
-        f"{python} -m pytest --basetemp=.pytest-tmp "
-        '-m "compiler_stack or presubmit"'
+        f'{python} -m pytest --basetemp=.pytest-tmp -m "compiler_stack or presubmit"'
     ) in workflow
 
 
@@ -153,7 +151,4 @@ def test_fastflowlm_workflows_install_runner_and_use_marker_selection(
     workflow = (ROOT / workflow_path).read_text(encoding="utf-8")
     assert f"{python} -m pip install" in workflow
     assert "-r requirements/test.lock" in workflow
-    assert (
-        f"{python} -m pytest --basetemp=.pytest-tmp "
-        "-m fastflowlm"
-    ) in workflow
+    assert (f"{python} -m pytest --basetemp=.pytest-tmp -m fastflowlm") in workflow

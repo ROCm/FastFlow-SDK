@@ -139,14 +139,16 @@ def _build_fastflowlm(args, *, backend):
         )
     use_hrx = backend == "hrx"
     build_dir = paths.FASTFLOWLM_BUILD if use_hrx else paths.FASTFLOWLM_XRT_BUILD
-    install_dir = (
-        paths.FASTFLOWLM_INSTALL if use_hrx else paths.FASTFLOWLM_XRT_INSTALL
-    )
+    install_dir = paths.FASTFLOWLM_INSTALL if use_hrx else paths.FASTFLOWLM_XRT_INSTALL
     env = environment.cmake_env()
     dependencies = _require_fastflowlm_deps(env)
     host_xrt = None
     xrt_include = None
-    if use_hrx and not paths.is_windows() and not environment.have_header("libdrm/drm.h"):
+    if (
+        use_hrx
+        and not paths.is_windows()
+        and not environment.have_header("libdrm/drm.h")
+    ):
         sys.exit(
             "missing libdrm/drm.h: FastFlowLM's amdxdna headers require "
             "libdrm (Ubuntu: sudo apt-get install libdrm-dev; "

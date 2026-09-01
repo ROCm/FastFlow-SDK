@@ -103,8 +103,7 @@ def cmd_smoke(args):
         ).returncode
     else:
         print(
-            "smoke: hrx-xclbinutil not built "
-            "(run: python dev.py build hrx-xclbinutil)"
+            "smoke: hrx-xclbinutil not built (run: python dev.py build hrx-xclbinutil)"
         )
         rc = 1
     aie_opt = paths.IRON_TOOLS_BUILD / "bin" / paths.executable_name("aie-opt")
@@ -117,12 +116,12 @@ def cmd_smoke(args):
             capture_output=True,
         )
         ok = result.returncode == 0
-        print("  aie-opt parses aie.device(npu2): " f"{'ok' if ok else 'FAIL'}")
+        print(f"  aie-opt parses aie.device(npu2): {'ok' if ok else 'FAIL'}")
         if not ok:
             print(result.stderr.decode()[:300])
             rc = 1
     else:
-        print("smoke: aie-opt not built " "(run: python dev.py build iron-tools)")
+        print("smoke: aie-opt not built (run: python dev.py build iron-tools)")
         rc = 1
     print("smoke: PASS" if rc == 0 else "smoke: FAIL")
     return rc

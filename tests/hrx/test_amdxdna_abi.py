@@ -24,15 +24,11 @@ def test_builder_retains_four_distinct_run_records():
     for index, (transaction, payload) in enumerate(runs):
         record = description.entry_point.runs[index]
         assert (
-            ctypes.string_at(
-                record.transaction.data, record.transaction.data_length
-            )
+            ctypes.string_at(record.transaction.data, record.transaction.data_length)
             == transaction
         )
         assert (
-            ctypes.string_at(
-                record.data_payload.data, record.data_payload.data_length
-            )
+            ctypes.string_at(record.data_payload.data, record.data_payload.data_length)
             == payload
         )
 

@@ -56,9 +56,7 @@ def test_coordinate_probe_pairs_survive_bf16_without_aliasing():
     low = index & 0x7F
     high = index >> 7
     assert len(set(zip(low.tolist(), high.tolist()))) == blocks
-    assert np.array_equal(
-        generators.widen(generators.bf16(low)).astype(np.int64), low
-    )
+    assert np.array_equal(generators.widen(generators.bf16(low)).astype(np.int64), low)
     assert np.array_equal(
         generators.widen(generators.bf16(high)).astype(np.int64), high
     )
@@ -96,7 +94,9 @@ def test_q4nx_packing_round_trips_through_the_chunk_shape(blocks):
     """The chunk shape alone must place every nibble, with no measured table."""
     row_block, col_block, parallel = blocks
     rows, columns = SHAPE
-    quantized, scale, zero_point = generators.source_tensors(rows, columns, "full-affine")
+    quantized, scale, zero_point = generators.source_tensors(
+        rows, columns, "full-affine"
+    )
     packed = generators.pack_q4nx(quantized, scale, zero_point, *blocks)
 
     chunk = row_block * col_block * 5 // 8
@@ -149,7 +149,9 @@ def test_chained_reference_multiplies_the_weight_as_it_was_written():
     want = generators.bf16(
         (written.astype(np.float64) @ right.astype(np.float64)).astype(np.float32)
     ).reshape(-1)
-    chained = generators.chained_reference(m, k, n, "full-affine", 41, "qwen-affine", "mm")
+    chained = generators.chained_reference(
+        m, k, n, "full-affine", 41, "qwen-affine", "mm"
+    )
     assert np.array_equal(np.frombuffer(chained, dtype=np.uint16), want)
     assert chained != generators.gemm_reference(m, k, n, "full-affine", 41)
 
