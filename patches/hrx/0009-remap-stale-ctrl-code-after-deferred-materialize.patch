@@ -1,0 +1,210 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+index 32e49c1..f044bff 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+@@ -774,12 +774,10 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_start_npu_cmd(
+         "amdxdna START_NPU cached control buffer is too small");
+   }
+ 
+-  void* mapped_ptr = cached->ctrl_code_mapped_ptr;
+-  if (!mapped_ptr) {
+-    IREE_RETURN_IF_ERROR(
+-        iree_hal_amdxdna_native_buffer_c_map(cached->ctrl_code, &mapped_ptr));
+-    cached->ctrl_code_mapped_ptr = mapped_ptr;
+-  }
++  void* mapped_ptr = NULL;
++  IREE_RETURN_IF_ERROR(iree_hal_amdxdna_remap_ctrl_code(
++      cached->ctrl_code, &cached->ctrl_code_mapped_ptr));
++  mapped_ptr = cached->ctrl_code_mapped_ptr;
+   uint32_t* dst = (uint32_t*)mapped_ptr;
+   memcpy(dst, txn->data, bytes);
+   IREE_RETURN_IF_ERROR(iree_hal_amdxdna_patch_dynamic_fields_from_template(
+@@ -814,11 +812,7 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_start_npu_cmd(
+   memcpy(cached->binding_lengths, fresh->binding_lengths,
+          fresh->binding_count * sizeof(*cached->binding_lengths));
+ 
+-  if (!command_buffer->device->native_caps
+-           .native_owns_control_code_publication) {
+-    IREE_RETURN_IF_ERROR(iree_hal_amdxdna_native_buffer_c_sync_all(
+-        cached->ctrl_code, IREE_HAL_AMDXDNA_NATIVE_BUFFER_SYNC_HOST_TO_DEVICE));
+-  }
++  IREE_RETURN_IF_ERROR(iree_hal_amdxdna_publish_ctrl_code(cached->ctrl_code));
+ 
+   const bool native_uses_dpu_regmap_args =
+       command_buffer->device->native_caps.default_dispatch_opcode ==
+@@ -905,12 +899,10 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_single_start_npu_cmd(
+         "amdxdna START_NPU cached single command signature shape changed "
+         "unexpectedly");
+   }
+-  void* mapped_ptr = cached->ctrl_code_mapped_ptr;
+-  if (!mapped_ptr) {
+-    IREE_RETURN_IF_ERROR(iree_hal_amdxdna_native_buffer_c_map(
+-        cached->ctrl_code_buffer, &mapped_ptr));
+-    cached->ctrl_code_mapped_ptr = mapped_ptr;
+-  }
++  void* mapped_ptr = NULL;
++  IREE_RETURN_IF_ERROR(iree_hal_amdxdna_remap_ctrl_code(
++      cached->ctrl_code_buffer, &cached->ctrl_code_mapped_ptr));
++  mapped_ptr = cached->ctrl_code_mapped_ptr;
+   uint32_t* dst = (uint32_t*)mapped_ptr;
+   memcpy(dst, txn->data, bytes);
+   IREE_RETURN_IF_ERROR(iree_hal_amdxdna_patch_dynamic_fields_from_template(
+@@ -930,12 +922,8 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_single_start_npu_cmd(
+   memcpy(cached->binding_lengths, fresh->binding_lengths,
+          fresh->binding_count * sizeof(*cached->binding_lengths));
+ 
+-  if (!command_buffer->device->native_caps
+-           .native_owns_control_code_publication) {
+-    IREE_RETURN_IF_ERROR(iree_hal_amdxdna_native_buffer_c_sync_all(
+-        cached->ctrl_code_buffer,
+-        IREE_HAL_AMDXDNA_NATIVE_BUFFER_SYNC_HOST_TO_DEVICE));
+-  }
++  IREE_RETURN_IF_ERROR(
++      iree_hal_amdxdna_publish_ctrl_code(cached->ctrl_code_buffer));
+ 
+   const bool native_uses_dpu_regmap_args =
+       command_buffer->device->native_caps.default_dispatch_opcode ==
+@@ -1005,12 +993,10 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_single_partial_elf_cmd(
+         "amdxdna PARTIAL_ELF single cache rewrite has incompatible shape");
+   }
+ 
+-  void* mapped_ptr = cached->ctrl_code_mapped_ptr;
+-  if (!mapped_ptr) {
+-    IREE_RETURN_IF_ERROR(iree_hal_amdxdna_native_buffer_c_map(
+-        cached->ctrl_code_buffer, &mapped_ptr));
+-    cached->ctrl_code_mapped_ptr = mapped_ptr;
+-  }
++  void* mapped_ptr = NULL;
++  IREE_RETURN_IF_ERROR(iree_hal_amdxdna_remap_ctrl_code(
++      cached->ctrl_code_buffer, &cached->ctrl_code_mapped_ptr));
++  mapped_ptr = cached->ctrl_code_mapped_ptr;
+   const size_t control_bytes =
+       fresh->src_asm_inst->count * sizeof(uint32_t);
+   uint32_t* prepared_words = NULL;
+@@ -1058,8 +1044,11 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_single_partial_elf_cmd(
+   }
+   if (control_changed) {
+     memcpy(mapped_ptr, prepared_words, control_bytes);
+-    status =
+-        iree_hal_amdxdna_native_command_c_mark_code_dirty(cached->command);
++    status = iree_hal_amdxdna_publish_ctrl_code(cached->ctrl_code_buffer);
++    if (iree_status_is_ok(status)) {
++      status =
++          iree_hal_amdxdna_native_command_c_mark_code_dirty(cached->command);
++    }
+     if (!iree_status_is_ok(status)) {
+       iree_hal_amdxdna_single_command_cache_entry_discard(cache, cached);
+       iree_allocator_free(command_buffer->host_allocator, prepared_words);
+@@ -1102,13 +1091,22 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_chain_partial_elf_cmd(
+         "amdxdna PARTIAL_ELF cached chain rewrite has incompatible shape");
+   }
+ 
+-  void* mapped_ptr = cached->ctrl_code_mapped_ptr;
+-  if (!mapped_ptr) {
+-    IREE_RETURN_IF_ERROR(
+-        iree_hal_amdxdna_native_buffer_c_map(cached->ctrl_code, &mapped_ptr));
+-    cached->ctrl_code_mapped_ptr = mapped_ptr;
+-  }
++  void* mapped_ptr = NULL;
++  IREE_RETURN_IF_ERROR(iree_hal_amdxdna_remap_ctrl_code(
++      cached->ctrl_code, &cached->ctrl_code_mapped_ptr));
++  mapped_ptr = cached->ctrl_code_mapped_ptr;
++  // FLM bakes immediates (e.g. GDN context length) into the TXN itself rather
++  // than the WRITE32 A1EC sentinel table. Constants/binding addrs can stay the
++  // same while the control program bytes change, so the template must be
++  // compared too — otherwise a PARTIAL_ELF reuse skips rewriting the immediate
++  // and the device keeps executing the first-token image.
++  const bool txn_changed =
++      cached->src_asm_inst &&
++      (cached->src_asm_inst->count != fresh->src_asm_inst->count ||
++       memcmp(cached->src_asm_inst->data, fresh->src_asm_inst->data,
++              fresh->src_asm_inst->count * sizeof(uint32_t)) != 0);
+   const bool code_changed =
++      txn_changed ||
+       (fresh->src_constant_count != 0 &&
+        memcmp(cached->src_constants, fresh->src_constants,
+               fresh->src_constant_count) != 0) ||
+@@ -1163,8 +1161,17 @@ static iree_status_t iree_hal_amdxdna_rewrite_cached_chain_partial_elf_cmd(
+   if (code_changed) {
+     memcpy(mapped_ptr, prepared_words, control_bytes);
+     memcpy(cached->ctrl_words, prepared_words, control_bytes);
+-    iree_status_t status =
+-        iree_hal_amdxdna_native_command_c_mark_code_dirty(cached->command);
++    if (cached->src_asm_inst == &cached->owned_src_asm_inst &&
++        cached->owned_src_asm_inst.data &&
++        cached->owned_src_asm_inst.count == fresh->src_asm_inst->count) {
++      memcpy(cached->owned_src_asm_inst.data, fresh->src_asm_inst->data,
++             control_bytes);
++    }
++    iree_status_t status = iree_hal_amdxdna_publish_ctrl_code(cached->ctrl_code);
++    if (iree_status_is_ok(status)) {
++      status =
++          iree_hal_amdxdna_native_command_c_mark_code_dirty(cached->command);
++    }
+     iree_allocator_free(host_allocator, prepared_words);
+     IREE_RETURN_IF_ERROR(status);
+   }
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c
+index 55709cb..2e722ac 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.c
+@@ -981,15 +981,12 @@ iree_status_t iree_hal_amdxdna_update_cached_chain_cmd(
+       device_bindings_changed || !cached->native_bindings_current;
+   if (code_changed) {
+     void* ctrl_ptr = NULL;
+-    if (cached->ctrl_code_mapped_ptr) {
+-      ctrl_ptr = cached->ctrl_code_mapped_ptr;
+-    } else {
+-      IREE_RETURN_IF_ERROR(
+-          iree_hal_amdxdna_native_buffer_c_map(cached->ctrl_code, &ctrl_ptr));
+-      cached->ctrl_code_mapped_ptr = ctrl_ptr;
+-    }
++    IREE_RETURN_IF_ERROR(iree_hal_amdxdna_remap_ctrl_code(
++        cached->ctrl_code, &cached->ctrl_code_mapped_ptr));
++    ctrl_ptr = cached->ctrl_code_mapped_ptr;
+     memcpy(ctrl_ptr, fresh->ctrl_words,
+            fresh->ctrl_word_count * sizeof(*fresh->ctrl_words));
++    IREE_RETURN_IF_ERROR(iree_hal_amdxdna_publish_ctrl_code(cached->ctrl_code));
+     IREE_RETURN_IF_ERROR(
+         iree_hal_amdxdna_native_command_c_mark_code_dirty(cached->command));
+     memcpy(cached->ctrl_words, fresh->ctrl_words,
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h
+index 07a1618..d4af56a 100644
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer_chain_cache.h
+@@ -284,6 +284,35 @@ void iree_hal_amdxdna_chain_command_cache_entry_discard(
+     iree_hal_amdxdna_device_chain_command_cache_t* cache,
+     iree_hal_amdxdna_chain_command_cache_entry_t* entry);
+ 
++// Always re-map a cached control-code BO before rewriting it.
++//
++// Windows instruction BOs start as deferred host storage. The first submit
++// materializes them into a KMT mapping and frees that temporary storage.
++// A `ctrl_code_mapped_ptr` captured before materialize then dangles, so later
++// in-place rewrites land in freed memory while the device keeps executing the
++// first-token image. The RTP context-length program is the pathological case:
++// same 28-word shape, only a WRITE32 immediate changes, so reuse is the
++// steady-state path and a stale mapping freezes the attended length at the
++// first decode step.
++static inline iree_status_t iree_hal_amdxdna_remap_ctrl_code(
++    iree_hal_amdxdna_native_buffer_t* buffer, void** io_mapped_ptr) {
++  void* mapped_ptr = NULL;
++  IREE_RETURN_IF_ERROR(
++      iree_hal_amdxdna_native_buffer_c_map(buffer, &mapped_ptr));
++  *io_mapped_ptr = mapped_ptr;
++  return iree_ok_status();
++}
++
++// Instruction BOs are Lock2-mapped. A process write barrier does not evict
++// dirty CPU cache lines from that mapping, so Path-B publication (which copies
++// from `buffer.cpu_ptr` into the command aperture) can restage the
++// pre-rewrite image unless the rewritten range is published first.
++static inline iree_status_t iree_hal_amdxdna_publish_ctrl_code(
++    iree_hal_amdxdna_native_buffer_t* buffer) {
++  return iree_hal_amdxdna_native_buffer_c_sync_all(
++      buffer, IREE_HAL_AMDXDNA_NATIVE_BUFFER_SYNC_HOST_TO_DEVICE);
++}
++
+ #ifdef __cplusplus
+ }  // extern "C"
+ #endif  // __cplusplus

@@ -1,0 +1,10 @@
+amdxdna: keep WRITE32-only RTP on the PARTIAL_ELF layer chain
+
+Empty host patch tables are valid: a TXN of npu.write32 has no DDR relocations.
+Requiring a non-empty table forced those programs onto START_NPU, which splits
+them out of the PARTIAL_ELF layer group. Windows Path-B then submits the
+context-length WRITE32 as a separate native command, so the first attention
+child of the next chain can observe the previous token's RTP.
+
+Treat an empty patch table as PARTIAL_ELF-eligible so FLM's gen_set_context
+run accumulates as child 0 of the same runlist as the layers that read it.

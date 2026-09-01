@@ -1,0 +1,17 @@
+amdxdna: remap cached control-code BOs after deferred materialize
+
+Windows instruction BOs start as deferred host storage. The first submit
+materializes them into a KMT mapping and frees that temporary storage, so a
+`ctrl_code_mapped_ptr` captured at `make_npu_cmd` time then dangles. In-place
+chain-cache rewrites memcpy into the freed storage while Path-B publication
+copies the live BO -- still the first-token image.
+
+This is a real in-place rewrite bug, not the qwen3.5 GDN decode mismatch.
+That RTP program has an empty patch table and never entered this PARTIAL_ELF
+chain rewrite (see patch 0010). Applying 0009 left the GDN hash unchanged.
+
+Always re-map before rewriting control code, treat TXN byte changes as
+`code_changed` in the PARTIAL_ELF chain rewrite, and publish the rewritten
+Lock2 range (`SyncBuffer`) even on Path-B. A process write barrier does not
+evict dirty CPU cache lines from that mapping, so aperture publication can
+otherwise restage the pre-rewrite image.

@@ -1,0 +1,35 @@
+diff --git a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+--- a/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
++++ b/runtime/src/iree/hal/drivers/amdxdna/direct_command_buffer.c
+@@ -28,6 +28,21 @@
+     const iree_hal_amdxdna_u32_list_t* patch_table) {
+   return patch_table && patch_table->count != 0 &&
+          (patch_table->count % 3 == 0);
++}
++
++// PARTIAL_ELF is the Windows Path-B opcode that layer kernels use. An empty
++// host patch table is still a table: WRITE32-only programs (FLM
++// `gen_set_context` RTP) have no DDR relocations. Requiring a non-empty table
++// forced those dispatches onto START_NPU, which splits them out of the layer
++// chain group (`native_partial_elf` mismatch). Windows then submits the
++// WRITE32 as a separate native command; the first PARTIAL_ELF attention child
++// can observe the previous token's context length. Empty tables must use the
++// same opcode so they accumulate as child 0 of the layer runlist.
++static bool iree_hal_amdxdna_patch_table_allows_partial_elf(
++    const iree_hal_amdxdna_u32_list_t* patch_table) {
++  if (!patch_table) return false;
++  if (patch_table->count == 0) return true;
++  return iree_hal_amdxdna_patch_table_is_valid(patch_table);
+ }
+ 
+ typedef struct iree_hal_amdxdna_direct_command_buffer {
+@@ -2893,7 +2908,8 @@
+       out_plan->data_payload_count == 0 &&
+       out_plan->xclbin_span.data_length > 0 &&
+       out_plan->patch_table_count != 0 &&
+-      iree_hal_amdxdna_patch_table_is_valid(&out_plan->patch_tables[0]);
++      iree_hal_amdxdna_patch_table_allows_partial_elf(
++          &out_plan->patch_tables[0]);
+   out_plan->has_host_patch_table =
+       out_plan->patch_table_count == out_plan->control_code_count;
+   out_plan->multi_control_code_or_pdi = kernel_params->n_pdi_loads > 1 ||

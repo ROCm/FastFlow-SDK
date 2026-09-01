@@ -232,6 +232,46 @@ of the MoE win.
 **Remove when:** upstream hrx applies its own sub-LLC synchronization policy to the
 command aperture, or confirms the KMT transition is required there.
 
+### 0009-remap-stale-ctrl-code-after-deferred-materialize.patch
+Always re-maps a cached control-code BO before an in-place rewrite, and treats a
+change in the TXN bytes themselves as `code_changed` on the PARTIAL_ELF chain path.
+
+**Why:** Windows instruction BOs start as deferred host storage. The first submit
+materializes them into a KMT mapping and frees that temporary storage, so a
+`ctrl_code_mapped_ptr` captured at `make_npu_cmd` time then dangles. Later rewrites
+memcpy into freed memory while Path-B publication copies the live BO — still the
+first-token image. Even after remapping, Path-B skipped `SyncBuffer` because
+`native_owns_control_code_publication` is true; Lock2 writes are not visible to the
+aperture copy without that publish. Same-shape PARTIAL_ELF reuse whose TXN bytes
+change (baked immediates, not the WRITE32 A1EC sentinel table) needs this remap
+and Lock2 publish. It is **not** the qwen3.5 GDN decode mismatch: that RTP
+program never entered this rewrite path (see 0010). `FLM_CTX_RTP_FREEZE=1`
+matching XRT was a red herring for 0009; the hash stayed `4c83b2954062`.
+
+**Remove when:** upstream hrx re-maps control-code BOs after deferred materialize
+(or stops caching the pre-materialize host pointer) and compares TXN bytes on
+PARTIAL_ELF chain reuse.
+
+### 0010-partial-elf-empty-patch-table-rtp-chain.patch
+Treat an empty host patch table as PARTIAL_ELF-eligible so WRITE32-only control
+programs stay in the same chain group as the layer kernels.
+
+**Why:** qwen3.5 `gen_set_context` is four `rtp_write`s of the context length `L`
+and therefore has **no DDR patch triples**. The dispatcher required a non-empty
+patch table for PARTIAL_ELF, so that run used START_NPU and opened a second
+chain group. Windows Path-B submits the two groups as separate native commands;
+the first attention child of the layer chain then reads the previous token's
+RTP. `FLM_CTX_RTP_FREEZE=1` is the positive control (the missed WRITE32 is a
+no-op). Prefill and the first decode still match XRT because `L` has not had to
+change yet, or the first WRITE32 lands before any attention that depends on a
+new value. GDN layers 0-2 do not read that register; layer 3 is the first
+attention. Putting the empty-table program on PARTIAL_ELF makes it child 0 of
+the same 24-slot runlist.
+
+**Remove when:** upstream hrx allows empty host patch tables on the PARTIAL_ELF
+path, or otherwise keeps WRITE32-only dispatches in the same native chain as
+the kernels that consume those registers.
+
 ## patches/FastFlowLM/
 
 ### 0001-support-redirected-windows-cli-input.patch
