@@ -13,8 +13,8 @@
 namespace rocm_npu {
 namespace {
 
-const std::unordered_set<std::string> kBuiltins = {
-    "version", "probe", "doctor", "self-test", "plugin"};
+const std::unordered_set<std::string> kBuiltins = {"version", "probe", "doctor",
+                                                   "self-test", "plugin"};
 
 }  // namespace
 
@@ -60,8 +60,7 @@ ParseResult ParseInvocation(const std::vector<std::string>& arguments) {
         return {std::nullopt, "--runtime requires a non-empty path"};
       }
       invocation.runtime_path = argument.substr(10);
-    } else if (argument.rfind("-", 0) == 0 &&
-               invocation.command.empty()) {
+    } else if (argument.rfind("-", 0) == 0 && invocation.command.empty()) {
       return {std::nullopt, "unknown option: " + argument};
     } else if (invocation.command.empty()) {
       invocation.command = argument;

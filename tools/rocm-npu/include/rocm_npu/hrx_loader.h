@@ -67,7 +67,8 @@ class HrxLibrary {
   int runtime_version_minor() const { return runtime_version_minor_; }
   int runtime_version_patch() const { return runtime_version_patch_; }
   bool valid() const { return handle_ != nullptr; }
-  std::string ConsumeStatus(HrxStatus status, const std::string& operation) const;
+  std::string ConsumeStatus(HrxStatus status,
+                            const std::string& operation) const;
 
  private:
   friend struct HrxLoadResult;

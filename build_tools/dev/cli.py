@@ -23,6 +23,7 @@ from build_tools import (
     iron as dev_iron,
 )
 from build_tools.dev import build as dev_build
+from build_tools.dev import clang_format as dev_clang_format
 from build_tools.dev import device_testing, host_testing
 from build_tools.dev import doctor as dev_doctor
 from build_tools.dev import patches as dev_patches
@@ -95,6 +96,17 @@ def create_parser():
         "the NPU job does, the build jobs do not",
     )
     _add_command(sub, "fetch", dev_patches.cmd_fetch)
+    cf = _add_command(
+        sub,
+        "clang-format",
+        dev_clang_format.cmd_clang_format,
+        exit_on_return=True,
+    )
+    cf.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if first-party C/C++ would change",
+    )
     b = _add_command(sub, "build", _dispatch_build)
     b.add_argument("what", choices=sorted(dev_build.BUILD_HANDLERS))
     b.add_argument(

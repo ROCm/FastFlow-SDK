@@ -91,10 +91,8 @@ struct AieMetadata {
   AieTileMetadata shim;
 };
 
-constexpr unsigned long kDrmIoctlVersion =
-    _IOWR('d', 0x00, DrmVersion);
-constexpr unsigned long kAmdxdnaGetInfo =
-    _IOWR('d', 0x40 + 7, AmdxdnaGetInfo);
+constexpr unsigned long kDrmIoctlVersion = _IOWR('d', 0x00, DrmVersion);
+constexpr unsigned long kAmdxdnaGetInfo = _IOWR('d', 0x40 + 7, AmdxdnaGetInfo);
 constexpr std::uint32_t kQueryAieMetadata = 1;
 constexpr std::uint32_t kQueryFirmwareVersion = 8;
 
@@ -106,9 +104,8 @@ std::optional<std::string> ReadText(const std::filesystem::path& path) {
   std::ostringstream content;
   content << input.rdbuf();
   std::string value = content.str();
-  while (!value.empty() &&
-         (value.back() == '\n' || value.back() == '\r' ||
-          value.back() == ' ' || value.back() == '\t')) {
+  while (!value.empty() && (value.back() == '\n' || value.back() == '\r' ||
+                            value.back() == ' ' || value.back() == '\t')) {
     value.pop_back();
   }
   return value.empty() ? std::nullopt
@@ -157,8 +154,7 @@ nlohmann::json QueryIoctls(int descriptor) {
   }
 
   FirmwareVersion firmware = {};
-  if (auto error =
-          QueryInfo(descriptor, kQueryFirmwareVersion, firmware)) {
+  if (auto error = QueryInfo(descriptor, kQueryFirmwareVersion, firmware)) {
     result["firmware_version_error"] = *error;
   } else {
     result["firmware_version"] = {
@@ -178,7 +174,8 @@ nlohmann::json QueryIoctls(int descriptor) {
         {"rows", metadata.rows},
         {"column_size", metadata.column_size},
         {"version",
-         {{"major", metadata.version.major}, {"minor", metadata.version.minor}}},
+         {{"major", metadata.version.major},
+          {"minor", metadata.version.minor}}},
     };
   }
   return result;
@@ -478,19 +475,18 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
   };
 
   auto sys_nodes = SortedDirectories(options.sys_accel_root, "accel");
-  sys_nodes.erase(
-      std::remove_if(sys_nodes.begin(), sys_nodes.end(),
-                     [](const std::filesystem::path& node) {
-                       return !IsAmdXdnaNode(node);
-                     }),
-      sys_nodes.end());
+  sys_nodes.erase(std::remove_if(sys_nodes.begin(), sys_nodes.end(),
+                                 [](const std::filesystem::path& node) {
+                                   return !IsAmdXdnaNode(node);
+                                 }),
+                  sys_nodes.end());
   result.detected_devices = static_cast<int>(sys_nodes.size());
   result.checks.push_back(
       {"device.present",
        sys_nodes.empty() ? Status::kFail : Status::kPass,
-       sys_nodes.empty() ? "no amdxdna accelerator sysfs node found"
-                         : std::to_string(sys_nodes.size()) +
-                               " accelerator node(s) found",
+       sys_nodes.empty()
+           ? "no amdxdna accelerator sysfs node found"
+           : std::to_string(sys_nodes.size()) + " accelerator node(s) found",
        {{"count", sys_nodes.size()}}});
 
   std::set<std::string> target_families;
@@ -501,8 +497,8 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
         {"sysfs_path", PathToUtf8(sys_node)},
     };
     const auto device_root = sys_node / "device";
-    for (const char* field : {"vendor", "device", "revision", "vbnv",
-                              "fw_version"}) {
+    for (const char* field :
+         {"vendor", "device", "revision", "vbnv", "fw_version"}) {
       device[field] = ReadText(device_root / field).value_or("");
     }
 
@@ -524,16 +520,15 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
     } else {
       const auto separator = expected->find(':');
       try {
-        const auto expected_major =
-            static_cast<unsigned int>(std::stoul(expected->substr(0, separator)));
+        const auto expected_major = static_cast<unsigned int>(
+            std::stoul(expected->substr(0, separator)));
         const auto expected_minor = static_cast<unsigned int>(
             std::stoul(expected->substr(separator + 1)));
         if (major(metadata.st_rdev) != expected_major ||
             minor(metadata.st_rdev) != expected_minor) {
           access_error = "character device major/minor does not match sysfs";
         } else if (options.open_devices) {
-          const int descriptor =
-              open(dev_node.c_str(), O_RDWR | O_CLOEXEC);
+          const int descriptor = open(dev_node.c_str(), O_RDWR | O_CLOEXEC);
           if (descriptor < 0) {
             access_error = std::strerror(errno);
             device["open_errno"] = errno;
@@ -582,18 +577,17 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
            : "no accelerator device can be opened read/write",
        {{"usable_count", result.usable_devices}}});
   if (options.open_devices && !sys_nodes.empty()) {
-    const bool complete =
-        complete_ioctl_devices > 0 &&
-        complete_ioctl_devices == result.usable_devices;
+    const bool complete = complete_ioctl_devices > 0 &&
+                          complete_ioctl_devices == result.usable_devices;
     const bool usable = result.usable_devices > 0;
     result.checks.push_back(
         {"device.ioctl",
          usable ? Status::kPass : Status::kFail,
          complete
              ? "all usable accelerator devices answered diagnostic ioctls"
-             : (usable
-                    ? "device is usable; optional diagnostic ioctls were unavailable"
-                    : "no accessible accelerator device accepted ioctls"),
+             : (usable ? "device is usable; optional diagnostic ioctls were "
+                         "unavailable"
+                       : "no accessible accelerator device accepted ioctls"),
          {{"complete_count", complete_ioctl_devices},
           {"usable_count", result.usable_devices},
           {"diagnostics_complete", complete}}});

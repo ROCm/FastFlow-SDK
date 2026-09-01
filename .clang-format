@@ -1,0 +1,9 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# First-party C/C++ follows Google style. Submodules under projects/ keep
+# their own configs. Do not sort includes: Windows SDK headers are order-
+# sensitive (windows.h and initguid.h must precede the rest).
+
+BasedOnStyle: Google
+SortIncludes: Never

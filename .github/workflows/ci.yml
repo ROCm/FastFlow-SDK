@@ -59,17 +59,18 @@ jobs:
             --run-number "${GITHUB_RUN_NUMBER}" \
             --github-output "${GITHUB_OUTPUT}"
 
-      # Rule set lives in ruff.toml. Pinned; ruff is a single dependency-free wheel.
-      # Submodules under projects/ are excluded. Linux/Windows build jobs do not
-      # rerun this: they already need this Presubmit job.
+      - name: Install Python dependencies
+        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
+
+      # Rule set lives in ruff.toml. Submodules under projects/ are excluded.
       - name: Lint and format Python
         run: |
-          python -m pip install --quiet --disable-pip-version-check ruff==0.15.21
           python -m ruff check
           python -m ruff format --check
 
-      - name: Install test runner
-        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/test.lock
+      # First-party C/C++ only (`python dev.py clang-format`).
+      - name: Format C/C++
+        run: python dev.py clang-format --check
 
       - name: Test developer command core
         run: python -m pytest --basetemp=.pytest-tmp -m presubmit

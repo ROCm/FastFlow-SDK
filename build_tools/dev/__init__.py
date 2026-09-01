@@ -7,6 +7,7 @@ Ownership is intentionally split by concern:
 * ``profiles`` owns declarative dependency-closure policy.
 * ``patches`` owns source pin, patch, and prefetch state.
 * ``doctor`` reports readiness without mutating the repository.
+* ``clang_format`` owns the first-party C/C++ format command.
 * ``setup`` resolves and executes dependency setup plans.
 * ``cli`` owns parser construction, command registration, and dispatch.
 * ``build`` coordinates the build graph; ``compiler_build``, ``runtime_build``,

@@ -38,5 +38,4 @@ struct KernelCapabilities {
   std::vector<FamilyCapability> families;
 };
 
-KernelCapabilities load_kernel_capabilities(
-    const std::filesystem::path& path);
+KernelCapabilities load_kernel_capabilities(const std::filesystem::path& path);

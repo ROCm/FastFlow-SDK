@@ -10,9 +10,9 @@
 
 namespace kernel_validation {
 
-inline std::string check_guards(
-    std::span<const uint8_t> storage, size_t logical_bytes,
-    size_t guard_bytes, uint8_t canary, const std::string& label) {
+inline std::string check_guards(std::span<const uint8_t> storage,
+                                size_t logical_bytes, size_t guard_bytes,
+                                uint8_t canary, const std::string& label) {
   if (storage.size() != logical_bytes + 2 * guard_bytes) {
     return label + " storage has an invalid size";
   }
@@ -25,11 +25,12 @@ inline std::string check_guards(
   return {};
 }
 
-inline std::string check_immutable(
-    std::span<const uint8_t> storage, std::span<const uint8_t> expected,
-    size_t guard_bytes, uint8_t canary, const std::string& label) {
-  const std::string guard_error = check_guards(
-      storage, expected.size(), guard_bytes, canary, label);
+inline std::string check_immutable(std::span<const uint8_t> storage,
+                                   std::span<const uint8_t> expected,
+                                   size_t guard_bytes, uint8_t canary,
+                                   const std::string& label) {
+  const std::string guard_error =
+      check_guards(storage, expected.size(), guard_bytes, canary, label);
   if (!guard_error.empty()) return guard_error;
   for (size_t i = 0; i < expected.size(); ++i) {
     if (storage[guard_bytes + i] != expected[i]) {
@@ -39,19 +40,20 @@ inline std::string check_immutable(
   return {};
 }
 
-inline void validate_guards(
-    std::span<const uint8_t> storage, size_t logical_bytes,
-    size_t guard_bytes, uint8_t canary, const std::string& label) {
-  const std::string error = check_guards(
-      storage, logical_bytes, guard_bytes, canary, label);
+inline void validate_guards(std::span<const uint8_t> storage,
+                            size_t logical_bytes, size_t guard_bytes,
+                            uint8_t canary, const std::string& label) {
+  const std::string error =
+      check_guards(storage, logical_bytes, guard_bytes, canary, label);
   if (!error.empty()) throw std::runtime_error(error);
 }
 
-inline void validate_immutable(
-    std::span<const uint8_t> storage, std::span<const uint8_t> expected,
-    size_t guard_bytes, uint8_t canary, const std::string& label) {
-  const std::string error = check_immutable(
-      storage, expected, guard_bytes, canary, label);
+inline void validate_immutable(std::span<const uint8_t> storage,
+                               std::span<const uint8_t> expected,
+                               size_t guard_bytes, uint8_t canary,
+                               const std::string& label) {
+  const std::string error =
+      check_immutable(storage, expected, guard_bytes, canary, label);
   if (!error.empty()) throw std::runtime_error(error);
 }
 

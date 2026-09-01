@@ -82,8 +82,7 @@ void RenderHuman(const Report& report, std::ostream& output) {
 void AddCheck(Report& report, Check check) {
   if (check.status == Status::kError) {
     report.status = Status::kError;
-  } else if (check.status == Status::kFail &&
-             report.status == Status::kPass) {
+  } else if (check.status == Status::kFail && report.status == Status::kPass) {
     report.status = Status::kFail;
   }
   report.checks.push_back(std::move(check));

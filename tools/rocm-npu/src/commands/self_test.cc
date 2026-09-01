@@ -53,8 +53,10 @@ const nlohmann::json* FindFixture(const std::filesystem::path& root,
                                   std::filesystem::path& fixture_root,
                                   std::string& error) {
   std::error_code filesystem_error;
-  for (std::filesystem::directory_iterator iterator(root, filesystem_error), end;
-       !filesystem_error && iterator != end; iterator.increment(filesystem_error)) {
+  for (std::filesystem::directory_iterator iterator(root, filesystem_error),
+       end;
+       !filesystem_error && iterator != end;
+       iterator.increment(filesystem_error)) {
     if (!iterator->is_directory()) {
       continue;
     }
@@ -274,11 +276,9 @@ bool HasValidSelfTestFixtureTypes(const nlohmann::json& fixture) {
     return kind == "add_i32_scalar" && is_string(*generator, "source") &&
            is_int32(*generator, "scalar");
   };
-  if (!fixture.is_object() ||
-      !is_unsigned(fixture, "schema_version") ||
-      !is_unsigned(fixture, "xadx_version") ||
-      !is_string(fixture, "name") || !is_string(fixture, "target") ||
-      !is_string(fixture, "export") ||
+  if (!fixture.is_object() || !is_unsigned(fixture, "schema_version") ||
+      !is_unsigned(fixture, "xadx_version") || !is_string(fixture, "name") ||
+      !is_string(fixture, "target") || !is_string(fixture, "export") ||
       !fixture.contains("producer") || !fixture["producer"].is_object() ||
       !fixture["producer"].contains("artifacts") ||
       !fixture["producer"]["artifacts"].is_object() ||
@@ -307,11 +307,10 @@ bool HasValidSelfTestFixtureTypes(const nlohmann::json& fixture) {
         !has_generator(descriptor, direction)) {
       return false;
     }
-    if (!std::all_of(
-            descriptor["shape"].begin(), descriptor["shape"].end(),
-            [](const nlohmann::json& value) {
-              return IsNonnegativeInteger(value);
-            })) {
+    if (!std::all_of(descriptor["shape"].begin(), descriptor["shape"].end(),
+                     [](const nlohmann::json& value) {
+                       return IsNonnegativeInteger(value);
+                     })) {
       return false;
     }
   }
@@ -341,25 +340,28 @@ Report RunSelfTest(const Invocation& invocation) {
   report.data["doctor"] = std::move(doctor.data);
   report.status = doctor.status;
   if (doctor.status != Status::kPass) {
-    AddCheck(report, {"self_test.prerequisites", Status::kFail,
-                      "required doctor checks did not pass", {}});
+    AddCheck(report, {"self_test.prerequisites",
+                      Status::kFail,
+                      "required doctor checks did not pass",
+                      {}});
     return report;
   }
 
   ProbeResult platform = CollectPlatformProbe();
   if (platform.target_family.empty()) {
-    AddCheck(report,
-             {"self_test.fixture", Status::kFail,
-              "detected device target family is unknown", {}});
+    AddCheck(report, {"self_test.fixture",
+                      Status::kFail,
+                      "detected device target family is unknown",
+                      {}});
     return report;
   }
   if (platform.target_family != "npu2") {
-    AddCheck(
-        report,
-        {"self_test.fixture", Status::kFail,
-         "the packaged self-test is supported only on NPU2 devices",
-         {{"detected_target", platform.target_family},
-          {"supported_targets", nlohmann::json::array({"npu2"})}}});
+    AddCheck(report,
+             {"self_test.fixture",
+              Status::kFail,
+              "the packaged self-test is supported only on NPU2 devices",
+              {{"detected_target", platform.target_family},
+               {"supported_targets", nlohmann::json::array({"npu2"})}}});
     return report;
   }
 
@@ -374,35 +376,37 @@ Report RunSelfTest(const Invocation& invocation) {
     return report;
   }
   if (!HasValidSelfTestFixtureTypes(*fixture)) {
-    AddCheck(report, {"self_test.fixture", Status::kError,
+    AddCheck(report, {"self_test.fixture",
+                      Status::kError,
                       "fixture manifest has invalid field types",
                       {{"path", PathToUtf8(fixture_root / "manifest.json")}}});
     return report;
   }
-  const auto unsigned_field_equals =
-      [](const nlohmann::json& object, const char* key,
-         std::uint64_t expected) {
-        const auto field = object.find(key);
-        return field != object.end() && IsNonnegativeInteger(*field) &&
-               field->get<std::uint64_t>() == expected;
-      };
-  const auto nonempty_string_field =
-      [](const nlohmann::json& object, const char* key) {
-        const auto field = object.find(key);
-        return field != object.end() && field->is_string() &&
-               !field->get_ref<const std::string&>().empty();
-      };
+  const auto unsigned_field_equals = [](const nlohmann::json& object,
+                                        const char* key,
+                                        std::uint64_t expected) {
+    const auto field = object.find(key);
+    return field != object.end() && IsNonnegativeInteger(*field) &&
+           field->get<std::uint64_t>() == expected;
+  };
+  const auto nonempty_string_field = [](const nlohmann::json& object,
+                                        const char* key) {
+    const auto field = object.find(key);
+    return field != object.end() && field->is_string() &&
+           !field->get_ref<const std::string&>().empty();
+  };
   if (!unsigned_field_equals(*fixture, "schema_version", 1) ||
       !unsigned_field_equals(*fixture, "xadx_version", 1) ||
       !fixture->contains("buffers") || !(*fixture)["buffers"].is_array() ||
-      (*fixture)["buffers"].size() != 2 ||
-      !fixture->contains("dispatch") || !(*fixture)["dispatch"].is_object() ||
+      (*fixture)["buffers"].size() != 2 || !fixture->contains("dispatch") ||
+      !(*fixture)["dispatch"].is_object() ||
       !nonempty_string_field(*fixture, "name") ||
       !nonempty_string_field(*fixture, "export") ||
       !fixture->contains("producer") || !(*fixture)["producer"].is_object() ||
       !(*fixture)["producer"].contains("artifacts") ||
       !(*fixture)["producer"]["artifacts"].is_object()) {
-    AddCheck(report, {"self_test.fixture", Status::kError,
+    AddCheck(report, {"self_test.fixture",
+                      Status::kError,
                       "fixture manifest has an invalid structure",
                       {{"path", PathToUtf8(fixture_root / "manifest.json")}}});
     return report;
@@ -410,19 +414,22 @@ Report RunSelfTest(const Invocation& invocation) {
 
   auto xadx = ReadBytes(fixture_root / "kernel.xadx", error);
   if (!xadx || xadx->empty()) {
-    AddCheck(report, {"self_test.load", Status::kError,
-                      error.empty() ? "kernel.xadx is empty" : error, {}});
+    AddCheck(report, {"self_test.load",
+                      Status::kError,
+                      error.empty() ? "kernel.xadx is empty" : error,
+                      {}});
     return report;
   }
-  const nlohmann::json& artifact_hashes =
-      (*fixture)["producer"]["artifacts"];
+  const nlohmann::json& artifact_hashes = (*fixture)["producer"]["artifacts"];
   if (!nonempty_string_field(artifact_hashes, "xadx_sha256") ||
       !nonempty_string_field(artifact_hashes, "input_sha256") ||
       !nonempty_string_field(artifact_hashes, "expected_sha256") ||
       artifact_hashes["xadx_sha256"].get_ref<const std::string&>() !=
           Sha256Hex(*xadx)) {
-    AddCheck(report, {"self_test.fixture", Status::kError,
-                      "kernel.xadx does not match fixture provenance", {}});
+    AddCheck(report, {"self_test.fixture",
+                      Status::kError,
+                      "kernel.xadx does not match fixture provenance",
+                      {}});
     return report;
   }
 
@@ -432,8 +439,10 @@ Report RunSelfTest(const Invocation& invocation) {
   int output_count = 0;
   for (const auto& descriptor : (*fixture)["buffers"]) {
     if (!descriptor.is_object()) {
-      AddCheck(report, {"self_test.fixture", Status::kError,
-                        "fixture buffer descriptor is not an object", {}});
+      AddCheck(report, {"self_test.fixture",
+                        Status::kError,
+                        "fixture buffer descriptor is not an object",
+                        {}});
       return report;
     }
     const auto byte_length_field = descriptor.find("byte_length");
@@ -445,20 +454,21 @@ Report RunSelfTest(const Invocation& invocation) {
         byte_length_field->get<std::uint64_t>() >
             std::numeric_limits<std::size_t>::max() ||
         !descriptor.contains("shape") || !descriptor["shape"].is_array()) {
-      AddCheck(report, {"self_test.fixture", Status::kError,
+      AddCheck(report, {"self_test.fixture",
+                        Status::kError,
                         "fixture buffer descriptor has invalid field types",
                         {}});
       return report;
     }
-    const std::string& name =
-        descriptor["name"].get_ref<const std::string&>();
+    const std::string& name = descriptor["name"].get_ref<const std::string&>();
     const std::string& direction =
         descriptor["direction"].get_ref<const std::string&>();
     if ((direction != "input" && direction != "output") ||
         descriptor.contains("input") || descriptor.contains("expected") ||
         !descriptor.contains("generator") ||
         !descriptor["generator"].is_object()) {
-      AddCheck(report, {"self_test.fixture", Status::kError,
+      AddCheck(report, {"self_test.fixture",
+                        Status::kError,
                         "fixture buffer direction or generator is invalid",
                         {{"buffer", name}}});
       return report;
@@ -470,27 +480,25 @@ Report RunSelfTest(const Invocation& invocation) {
       for (const auto& dimension : shape) {
         if (!IsNonnegativeInteger(dimension) ||
             dimension.get<std::uint64_t>() == 0 ||
-            element_count >
-                std::numeric_limits<std::uint64_t>::max() /
-                    dimension.get<std::uint64_t>()) {
+            element_count > std::numeric_limits<std::uint64_t>::max() /
+                                dimension.get<std::uint64_t>()) {
           valid_shape = false;
           break;
         }
         element_count *= dimension.get<std::uint64_t>();
       }
     }
-    const std::size_t byte_length =
-        byte_length_field->get<std::size_t>();
+    const std::size_t byte_length = byte_length_field->get<std::size_t>();
     const bool valid_descriptor =
         !name.empty() && buffer_names.insert(name).second &&
         descriptor["dtype"].get_ref<const std::string&>() == "int32" &&
         valid_shape &&
         element_count <=
-            std::numeric_limits<std::uint64_t>::max() /
-                sizeof(std::int32_t) &&
+            std::numeric_limits<std::uint64_t>::max() / sizeof(std::int32_t) &&
         element_count * sizeof(std::int32_t) == byte_length;
     if (!valid_descriptor) {
-      AddCheck(report, {"self_test.fixture", Status::kError,
+      AddCheck(report, {"self_test.fixture",
+                        Status::kError,
                         "fixture buffer descriptor is invalid",
                         {{"buffer", name}}});
       return report;
@@ -498,17 +506,18 @@ Report RunSelfTest(const Invocation& invocation) {
     input_count += direction == "input" ? 1 : 0;
     output_count += direction == "output" ? 1 : 0;
     std::string generator_error;
-    auto bytes =
-        GenerateFixtureBuffer(descriptor, generated_buffers, element_count,
-                              generator_error);
+    auto bytes = GenerateFixtureBuffer(descriptor, generated_buffers,
+                                       element_count, generator_error);
     const char* hash_name =
         direction == "input" ? "input_sha256" : "expected_sha256";
     if (!bytes || bytes->size() != byte_length ||
         artifact_hashes[hash_name].get_ref<const std::string&>() !=
             Sha256Hex(*bytes)) {
-      AddCheck(report, {"self_test.fixture", Status::kError,
-                        "fixture generated buffer does not match its provenance hash",
-                        {{"buffer", name}, {"error", generator_error}}});
+      AddCheck(report,
+               {"self_test.fixture",
+                Status::kError,
+                "fixture generated buffer does not match its provenance hash",
+                {{"buffer", name}, {"error", generator_error}}});
       return report;
     }
     generated_buffers.emplace(name, std::move(*bytes));
@@ -538,23 +547,26 @@ Report RunSelfTest(const Invocation& invocation) {
       !dispatch.contains("constant_byte_length") ||
       !IsNonnegativeInteger(dispatch["constant_byte_length"]) ||
       dispatch["constant_byte_length"].get<std::uint64_t>() != 0 ||
-      !binding_count_valid ||
-      !dispatch.contains("subgroup_size") ||
+      !binding_count_valid || !dispatch.contains("subgroup_size") ||
       !IsNonnegativeInteger(dispatch["subgroup_size"]) ||
       dispatch["subgroup_size"].get<std::uint64_t>() >
           std::numeric_limits<std::uint32_t>::max()) {
-    AddCheck(report, {"self_test.fixture", Status::kError,
-                      "fixture dispatch contract is invalid", {}});
+    AddCheck(report, {"self_test.fixture",
+                      Status::kError,
+                      "fixture dispatch contract is invalid",
+                      {}});
     return report;
   }
-  AddCheck(report, {"self_test.fixture", Status::kPass,
+  AddCheck(report, {"self_test.fixture",
+                    Status::kPass,
                     "matching packaged fixture and provenance validated",
                     {{"path", PathToUtf8(fixture_root)},
                      {"target", platform.target_family}}});
 
   HrxLoadResult load = HrxLibrary::Load(invocation.runtime_path);
   if (!load.library) {
-    AddCheck(report, {"self_test.load", Status::kFail,
+    AddCheck(report, {"self_test.load",
+                      Status::kFail,
                       "HRX runtime could not be loaded",
                       {{"errors", load.errors},
                        {"missing_symbols", load.missing_symbols}}});
@@ -586,9 +598,9 @@ Report RunSelfTest(const Invocation& invocation) {
       return;
     }
     cleaned = true;
-    const bool had_resources =
-        initialized || device != nullptr || stream != nullptr ||
-        executable != nullptr || !buffers.empty();
+    const bool had_resources = initialized || device != nullptr ||
+                               stream != nullptr || executable != nullptr ||
+                               !buffers.empty();
     std::vector<std::string> cleanup_errors;
     for (auto iterator = buffers.rbegin(); iterator != buffers.rend();
          ++iterator) {
@@ -631,21 +643,22 @@ Report RunSelfTest(const Invocation& invocation) {
   CleanupGuard cleanup_guard(cleanup);
   const auto fail = [&](const std::string& operation,
                         const std::string& detail) {
-    AddCheck(report,
-             {"self_test.dispatch", Status::kFail, detail,
-              {{"operation", operation}}});
+    AddCheck(report, {"self_test.dispatch",
+                      Status::kFail,
+                      detail,
+                      {{"operation", operation}}});
   };
 
-  std::string status_error = consume(functions.gpu_initialize(0),
-                                     "hrx_gpu_initialize");
+  std::string status_error =
+      consume(functions.gpu_initialize(0), "hrx_gpu_initialize");
   if (!status_error.empty()) {
     fail("initialize", status_error);
     cleanup();
     return report;
   }
   initialized = true;
-  status_error = consume(functions.gpu_device_get(0, &device),
-                         "hrx_gpu_device_get");
+  status_error =
+      consume(functions.gpu_device_get(0, &device), "hrx_gpu_device_get");
   if (!status_error.empty()) {
     fail("device_get", status_error);
     cleanup();
@@ -658,12 +671,11 @@ Report RunSelfTest(const Invocation& invocation) {
     cleanup();
     return report;
   }
-  status_error = consume(
-      functions.executable_load_data(
-          device, xadx->data(), xadx->size(),
-          HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY,
-          HRX_AMDXDNA_EXECUTABLE_TARGET_KEY, &executable),
-      "hrx_executable_load_data");
+  status_error = consume(functions.executable_load_data(
+                             device, xadx->data(), xadx->size(),
+                             HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY,
+                             HRX_AMDXDNA_EXECUTABLE_TARGET_KEY, &executable),
+                         "hrx_executable_load_data");
   if (!status_error.empty()) {
     fail("executable_load", status_error);
     cleanup();
@@ -682,9 +694,9 @@ Report RunSelfTest(const Invocation& invocation) {
     return report;
   }
   hrx_executable_export_info_t export_info = {};
-  status_error = consume(
-      functions.executable_export_info(executable, export_ordinal, &export_info),
-      "hrx_executable_export_info");
+  status_error = consume(functions.executable_export_info(
+                             executable, export_ordinal, &export_info),
+                         "hrx_executable_export_info");
   if (!status_error.empty()) {
     fail("export_info", status_error);
     cleanup();
@@ -699,27 +711,25 @@ Report RunSelfTest(const Invocation& invocation) {
       export_info.constant_byte_length !=
           dispatch["constant_byte_length"].get<std::uint32_t>() ||
       !std::equal(std::begin(export_info.workgroup_size),
-                  std::end(export_info.workgroup_size),
-                  workgroup_size.begin(),
+                  std::end(export_info.workgroup_size), workgroup_size.begin(),
                   [](std::uint32_t actual, const nlohmann::json& expected) {
                     return actual == expected.get<std::uint32_t>();
                   })) {
-    AddCheck(
-        report,
-        {"self_test.dispatch", Status::kFail,
-         "loaded export metadata does not match the fixture contract",
-         {{"operation", "export_info"},
-          {"actual",
-           {{"binding_count", export_info.binding_count},
-            {"constant_byte_length", export_info.constant_byte_length},
-            {"workgroup_size",
-             {export_info.workgroup_size[0], export_info.workgroup_size[1],
-              export_info.workgroup_size[2]}}}},
-          {"expected",
-           {{"binding_count", dispatch["export_binding_count"]},
-            {"constant_byte_length",
-             dispatch["constant_byte_length"]},
-            {"workgroup_size", workgroup_size}}}}});
+    AddCheck(report,
+             {"self_test.dispatch",
+              Status::kFail,
+              "loaded export metadata does not match the fixture contract",
+              {{"operation", "export_info"},
+               {"actual",
+                {{"binding_count", export_info.binding_count},
+                 {"constant_byte_length", export_info.constant_byte_length},
+                 {"workgroup_size",
+                  {export_info.workgroup_size[0], export_info.workgroup_size[1],
+                   export_info.workgroup_size[2]}}}},
+               {"expected",
+                {{"binding_count", dispatch["export_binding_count"]},
+                 {"constant_byte_length", dispatch["constant_byte_length"]},
+                 {"workgroup_size", workgroup_size}}}}});
     cleanup();
     return report;
   }
@@ -733,8 +743,7 @@ Report RunSelfTest(const Invocation& invocation) {
     }
     const std::string& direction =
         descriptor["direction"].get_ref<const std::string&>();
-    const std::string& name =
-        descriptor["name"].get_ref<const std::string&>();
+    const std::string& name = descriptor["name"].get_ref<const std::string&>();
     const auto bytes = generated_buffers.find(name);
     const std::size_t size = descriptor["byte_length"].get<std::size_t>();
     if (bytes == generated_buffers.end() || size == 0 ||
@@ -752,8 +761,8 @@ Report RunSelfTest(const Invocation& invocation) {
     }
     status_error = consume(
         functions.buffer_allocate(
-            stream, size, HRX_MEMORY_TYPE_HOST_LOCAL |
-                              HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+            stream, size,
+            HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
             HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
             &buffer.handle),
         "hrx_buffer_allocate");
@@ -777,9 +786,9 @@ Report RunSelfTest(const Invocation& invocation) {
     stored.mapped = true;
     if (direction == "input") {
       std::memcpy(stored.mapping, bytes->second.data(), bytes->second.size());
-      status_error = consume(
-          functions.buffer_flush_range(stored.handle, 0, stored.size),
-          "hrx_buffer_flush_range");
+      status_error =
+          consume(functions.buffer_flush_range(stored.handle, 0, stored.size),
+                  "hrx_buffer_flush_range");
       if (!status_error.empty()) {
         fail("buffer_flush", status_error);
         cleanup();
@@ -802,11 +811,10 @@ Report RunSelfTest(const Invocation& invocation) {
        workgroup_size[1].get<std::uint32_t>(),
        workgroup_size[2].get<std::uint32_t>()},
       dispatch["subgroup_size"].get<std::uint32_t>()};
-  status_error = consume(
-      functions.stream_dispatch(stream, executable, export_ordinal,
-                                &configuration, nullptr, 0, bindings.data(),
-                                bindings.size(), 0),
-      "hrx_stream_dispatch");
+  status_error = consume(functions.stream_dispatch(
+                             stream, executable, export_ordinal, &configuration,
+                             nullptr, 0, bindings.data(), bindings.size(), 0),
+                         "hrx_stream_dispatch");
   if (status_error.empty()) {
     status_error =
         consume(functions.stream_synchronize(stream), "hrx_stream_synchronize");
@@ -835,7 +843,8 @@ Report RunSelfTest(const Invocation& invocation) {
   }
   cleanup();
   AddCheck(report,
-           {"self_test.output", matches ? Status::kPass : Status::kFail,
+           {"self_test.output",
+            matches ? Status::kPass : Status::kFail,
             matches ? "output bytes match the packaged golden result"
                     : "output bytes do not match the packaged golden result",
             {{"fixture", (*fixture)["name"].get_ref<const std::string&>()},

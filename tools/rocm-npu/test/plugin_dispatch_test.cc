@@ -11,13 +11,13 @@
 #include "rocm_npu/command.h"
 #include "rocm_npu/platform.h"
 
-#define REQUIRE(condition)                                                   \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      std::cerr << "plugin dispatch check failed at line " << __LINE__       \
-                << ": " #condition << std::endl;                             \
-      return 1;                                                              \
-    }                                                                        \
+#define REQUIRE(condition)                                             \
+  do {                                                                 \
+    if (!(condition)) {                                                \
+      std::cerr << "plugin dispatch check failed at line " << __LINE__ \
+                << ": " #condition << std::endl;                       \
+      return 1;                                                        \
+    }                                                                  \
   } while (false)
 
 int main(int argc, char** argv) {
@@ -36,9 +36,10 @@ int main(int argc, char** argv) {
   rocm_npu::Invocation invocation;
   invocation.command = "echo";
   invocation.json = true;
-  invocation.arguments = {
-      "--require-json", "--verify-arguments", "space argument",
-      "unicode-\u00e9", "quote\"argument", "trailing\\", "--exit=37"};
+  invocation.arguments = {"--require-json",  "--verify-arguments",
+                          "space argument",  "unicode-\u00e9",
+                          "quote\"argument", "trailing\\",
+                          "--exit=37"};
   const rocm_npu::ExternalCommandResult result =
       rocm_npu::RunExternalCommand(invocation);
   if (!result.error.empty() || result.exit_code != 37) {
@@ -52,8 +53,7 @@ int main(int argc, char** argv) {
   const rocm_npu::ExternalCommandResult invalid_runtime =
       rocm_npu::RunExternalCommand(invocation);
   if (invalid_runtime.exit_code != 2 ||
-      invalid_runtime.error.find("explicit HRX runtime") ==
-          std::string::npos) {
+      invalid_runtime.error.find("explicit HRX runtime") == std::string::npos) {
     std::cerr << "invalid runtime result: exit=" << invalid_runtime.exit_code
               << " error=" << invalid_runtime.error << std::endl;
   }

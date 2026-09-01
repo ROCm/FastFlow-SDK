@@ -19,8 +19,7 @@ void Write(const std::filesystem::path& path, const std::string& value) {
 }
 
 void MarkDriver(const std::filesystem::path& root,
-                const std::filesystem::path& node,
-                const std::string& name) {
+                const std::filesystem::path& node, const std::string& name) {
   const std::filesystem::path driver = root / "drivers" / name;
   std::filesystem::create_directories(driver);
   std::filesystem::create_directories(node / "device");
@@ -60,8 +59,7 @@ int main() {
          "sysfs dev value is missing or malformed");
 
   Write(options.sys_accel_root / "accel0" / "dev", "1:2\n");
-  Write(options.sys_accel_root / "accel0" / "device" / "vbnv",
-        "NPU Strix\n");
+  Write(options.sys_accel_root / "accel0" / "device" / "vbnv", "NPU Strix\n");
   Write(options.dev_accel_root / "accel0", "not a device");
   Write(options.sys_accel_root / "accel1" / "dev", "3:4\n");
   MarkDriver(root, options.sys_accel_root / "accel1", "amdxdna");
@@ -89,17 +87,14 @@ int main() {
         std::to_string(major(null_metadata.st_rdev)) + ":" +
             std::to_string(minor(null_metadata.st_rdev)) + "\n");
   std::filesystem::create_directories(ioctl_options.dev_accel_root);
-  std::filesystem::create_symlink(
-      "/dev/null", ioctl_options.dev_accel_root / "accel0");
+  std::filesystem::create_symlink("/dev/null",
+                                  ioctl_options.dev_accel_root / "accel0");
   rocm_npu::ProbeResult incomplete_ioctls =
       rocm_npu::CollectPlatformProbe(ioctl_options);
   assert(incomplete_ioctls.usable_devices == 1);
-  const auto ioctl_check =
-      std::find_if(incomplete_ioctls.checks.begin(),
-                   incomplete_ioctls.checks.end(),
-                   [](const rocm_npu::Check& check) {
-                     return check.id == "device.ioctl";
-                   });
+  const auto ioctl_check = std::find_if(
+      incomplete_ioctls.checks.begin(), incomplete_ioctls.checks.end(),
+      [](const rocm_npu::Check& check) { return check.id == "device.ioctl"; });
   assert(ioctl_check != incomplete_ioctls.checks.end());
   assert(ioctl_check->status == rocm_npu::Status::kPass);
   assert(!ioctl_check->details.at("diagnostics_complete").get<bool>());

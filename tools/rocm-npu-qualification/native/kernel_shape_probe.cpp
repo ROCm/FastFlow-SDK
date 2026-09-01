@@ -22,8 +22,7 @@ int main(int argc, char** argv) {
   } else if (kernel == "mm" && argc == 5) {
     const uint32_t n = static_cast<uint32_t>(std::stoul(argv[4]));
     Gemm gemm(config);
-    gemm.generate_seq(
-        &sequence, m, k, n, 0, false, Gemm::NO_Activation, 0);
+    gemm.generate_seq(&sequence, m, k, n, 0, false, Gemm::NO_Activation, 0);
   } else {
     throw std::runtime_error("invalid shape-probe arguments");
   }

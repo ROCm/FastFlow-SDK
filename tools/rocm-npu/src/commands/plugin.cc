@@ -129,8 +129,7 @@ struct RuntimeResolution {
   std::string error;
 };
 
-RuntimeResolution ResolveRuntimePath(
-    const Invocation& invocation) {
+RuntimeResolution ResolveRuntimePath(const Invocation& invocation) {
   if (invocation.runtime_path) {
     HrxLoadResult loaded = HrxLibrary::Load(invocation.runtime_path);
     if (!loaded.library) {
@@ -143,12 +142,12 @@ RuntimeResolution ResolveRuntimePath(
     std::error_code error;
     std::filesystem::path resolved =
         std::filesystem::weakly_canonical(loaded.library->path(), error);
-    return {error ? std::optional<std::filesystem::path>(
-                        loaded.library->path())
+    return {error ? std::optional<std::filesystem::path>(loaded.library->path())
                   : std::optional<std::filesystem::path>(resolved),
             {}};
   }
-  for (const auto& candidate : HrxLibrary::Candidates(invocation.runtime_path)) {
+  for (const auto& candidate :
+       HrxLibrary::Candidates(invocation.runtime_path)) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(candidate, error)) {
       continue;
@@ -186,11 +185,11 @@ Report RunPluginList(const Invocation&) {
       {"plugins", std::move(discovered)},
       {"search_paths", std::move(rendered_paths)},
   };
-  AddCheck(report,
-           {"plugin.discovery", Status::kPass,
-            std::to_string(discovery.plugins.size()) +
-                " external plugin(s) discovered",
-            {{"count", discovery.plugins.size()}}});
+  AddCheck(report, {"plugin.discovery",
+                    Status::kPass,
+                    std::to_string(discovery.plugins.size()) +
+                        " external plugin(s) discovered",
+                    {{"count", discovery.plugins.size()}}});
   return report;
 }
 

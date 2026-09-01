@@ -56,9 +56,10 @@ int main() {
   assert(!ParseInvocation({"plugin", "run"}).invocation);
 
   rocm_npu::Report report = rocm_npu::MakeReport("doctor");
-  rocm_npu::AddCheck(
-      report, {"runtime.library.load", rocm_npu::Status::kFail,
-               "quote: \" slash: \\\\ newline:\n", {}});
+  rocm_npu::AddCheck(report, {"runtime.library.load",
+                              rocm_npu::Status::kFail,
+                              "quote: \" slash: \\\\ newline:\n",
+                              {}});
   assert(rocm_npu::ExitCode(report) == 1);
   const nlohmann::json value = rocm_npu::ToJson(report);
   assert(value.at("schema_version") == 1);
@@ -76,8 +77,7 @@ int main() {
       {"internal.error", rocm_npu::Status::kError, "synthetic failure", {}});
   assert(rocm_npu::ExitCode(error) == 2);
   assert(nlohmann::json::parse(rocm_npu::ToJson(error).dump()).is_object());
-  assert(rocm_npu::Sha256Hex(
-             std::vector<std::uint8_t>{'a', 'b', 'c'}) ==
+  assert(rocm_npu::Sha256Hex(std::vector<std::uint8_t>{'a', 'b', 'c'}) ==
          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   nlohmann::json fixture = {
       {"schema_version", 1U},

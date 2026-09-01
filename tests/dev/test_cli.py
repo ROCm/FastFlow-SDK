@@ -29,7 +29,9 @@ def _public_subparsers():
 
 
 class TestDevCli:
-    @pytest.mark.parametrize("arguments", [["--help"], ["setup", "--help"]])
+    @pytest.mark.parametrize(
+        "arguments", [["--help"], ["setup", "--help"], ["clang-format", "--help"]]
+    )
     def test_bootstrap_help_does_not_require_site_packages(self, arguments):
         root = Path(__file__).resolve().parents[2]
         completed = subprocess.run(
@@ -84,6 +86,10 @@ class TestDevCli:
         assert (
             choices["doctor"]._defaults["_handler"].__module__
             == "build_tools.dev.doctor"
+        )
+        assert (
+            choices["clang-format"]._defaults["_handler"].__module__
+            == "build_tools.dev.clang_format"
         )
         assert (
             choices["setup"]._defaults["_handler"].__module__ == "build_tools.dev.setup"
@@ -159,7 +165,14 @@ class TestDevCli:
             name
             for name, parser in _public_subparsers().items()
             if parser._defaults["_exit_on_return"]
-        } == {"doctor", "smoke", "verify-npu-prereqs", "npu-probe", "test-hrx-cts"}
+        } == {
+            "doctor",
+            "clang-format",
+            "smoke",
+            "verify-npu-prereqs",
+            "npu-probe",
+            "test-hrx-cts",
+        }
 
     def test_dispatch_exit_contract(self):
         regular = mock.Mock(return_value=7)
