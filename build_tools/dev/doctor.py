@@ -13,9 +13,15 @@ from build_tools.dev import patches
 from build_tools.dev.profiles import profile
 from build_tools.fastflowlm_deps import (
     MIN_RUSTC as FASTFLOWLM_MIN_RUSTC,
+)
+from build_tools.fastflowlm_deps import (
     check_fastflowlm_linux_host,
     check_fastflowlm_linux_packaging_tools,
+)
+from build_tools.fastflowlm_deps import (
     dependency_errors as fastflowlm_dependency_errors,
+)
+from build_tools.fastflowlm_deps import (
     dependency_paths as fastflowlm_dependency_paths,
 )
 
@@ -74,7 +80,9 @@ def check_compiler_stack_system(verbose, *, windows: bool | None = None):
                     "'C++ Clang tools' component"
                 )
             print(f"  [{'ok ' if has_git else 'MISS'}] git")
-            print("  [note] set CC=CXX=clang-cl so the builds dev.py drives pin the compiler")
+            print(
+                "  [note] set CC=CXX=clang-cl so the builds dev.py drives pin the compiler"
+            )
             print(
                 "  [note] OpenSSL (bootgen) comes from choco/vcpkg on Windows; "
                 "no apt package list"
@@ -119,17 +127,12 @@ def check_fastflowlm_system(verbose, *, windows: bool | None = None):
     dependency_config = fastflowlm_dependency_paths(paths.ROOT)
     native_errors = fastflowlm_dependency_errors(
         dependency_config,
-        cargo_available=bool(
-            environment.which("cargo", env, windows=selected_windows)
-        ),
-        rustc_version=environment.rustc_version(
-            env, windows=selected_windows
-        ),
+        cargo_available=bool(environment.which("cargo", env, windows=selected_windows)),
+        rustc_version=environment.rustc_version(env, windows=selected_windows),
     )
     if selected_windows:
-        compiler = (
-            environment.which("cl", env, windows=True)
-            or environment.which("clang-cl", env, windows=True)
+        compiler = environment.which("cl", env, windows=True) or environment.which(
+            "clang-cl", env, windows=True
         )
         has_git = bool(environment.which("git", env, windows=True))
         if verbose:
@@ -142,8 +145,7 @@ def check_fastflowlm_system(verbose, *, windows: bool | None = None):
                 print(f"  [MISS] {error}")
             if not native_errors:
                 print(
-                    f"  [ok ] Rust/Cargo >= "
-                    f"{'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}"
+                    f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}"
                 )
                 print(
                     "  [ok ] vcpkg FastFlowLM dependencies: "
@@ -156,10 +158,7 @@ def check_fastflowlm_system(verbose, *, windows: bool | None = None):
         for error in native_errors:
             print(f"  [MISS] {error}")
         if not native_errors:
-            print(
-                f"  [ok ] Rust/Cargo >= "
-                f"{'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}"
-            )
+            print(f"  [ok ] Rust/Cargo >= {'.'.join(map(str, FASTFLOWLM_MIN_RUSTC))}")
             print(
                 "  [ok ] vcpkg FastFlowLM dependencies: "
                 f"{dependency_config['triplet_root']}"
@@ -167,23 +166,17 @@ def check_fastflowlm_system(verbose, *, windows: bool | None = None):
     return (host_ok and not native_errors, missing)
 
 
-def check_fastflowlm_packaging_system(
-    verbose, *, windows: bool | None = None
-):
+def check_fastflowlm_packaging_system(verbose, *, windows: bool | None = None):
     """Checks the FastFlowLM build and artifact-packaging prerequisites."""
     selected_windows = paths.is_windows() if windows is None else windows
-    build_ok, build_missing = check_fastflowlm_system(
-        verbose, windows=selected_windows
-    )
+    build_ok, build_missing = check_fastflowlm_system(verbose, windows=selected_windows)
     if selected_windows:
         return build_ok, build_missing
     if verbose:
         print("  packaging:")
-    package_ok, package_missing = (
-        check_fastflowlm_linux_packaging_tools(
-            archive=True,
-            verbose=verbose,
-        )
+    package_ok, package_missing = check_fastflowlm_linux_packaging_tools(
+        archive=True,
+        verbose=verbose,
     )
     return (
         build_ok and package_ok,
@@ -196,9 +189,7 @@ def check_system(profile_name="compiler-stack", verbose=True):
     try:
         selected_profile = profile(profile_name)
     except KeyError as error:
-        raise ValueError(
-            f"unknown doctor profile: {profile_name}"
-        ) from error
+        raise ValueError(f"unknown doctor profile: {profile_name}") from error
     if not selected_profile.doctor:
         raise ValueError(f"unknown doctor profile: {profile_name}")
 
@@ -234,16 +225,14 @@ def cmd_doctor(args):
     section_started = time.perf_counter()
     system_ok, missing = check_system(profile_name)
     print(
-        f"  [time] system prerequisites: "
-        f"{time.perf_counter() - section_started:.2f}s"
+        f"  [time] system prerequisites: {time.perf_counter() - section_started:.2f}s"
     )
     print("\nsubmodule pins vs manifests/versions.toml:")
     section_started = time.perf_counter()
     pin_bad = patches.check_pins(selected_submodules)
     print(f"  [time] submodule pins: {time.perf_counter() - section_started:.2f}s")
     print(
-        "\ntemporary submodule patches "
-        "(patches/, applied by builds or `dev.py fetch`):"
+        "\ntemporary submodule patches (patches/, applied by builds or `dev.py fetch`):"
     )
     patch_bad = []
     patch_dirs = (
@@ -336,8 +325,6 @@ def cmd_doctor(args):
         print("\neudsl not prefetched — run: python dev.py fetch")
         rc = 1
     if rc == 0:
-        print(
-            f"\nall good: {profile_name} prerequisites, pins, and patches are ready."
-        )
+        print(f"\nall good: {profile_name} prerequisites, pins, and patches are ready.")
     print(f"doctor elapsed: {time.perf_counter() - started:.2f}s")
     return rc

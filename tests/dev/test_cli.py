@@ -213,9 +213,7 @@ class TestDevCli:
             targets = hrx_runtime.hrx_amdxdna_host_test_targets()
             pattern = re.compile(hrx_runtime.hrx_amdxdna_host_test_regex())
         assert "native_windows_mcdm_test" not in tests
-        assert targets == tuple(
-            f"iree_hal_drivers_amdxdna_{name}" for name in tests
-        )
+        assert targets == tuple(f"iree_hal_drivers_amdxdna_{name}" for name in tests)
         assert pattern.fullmatch("iree/hal/drivers/amdxdna/allocator_test")
         assert not pattern.fullmatch("iree/base/allocator_test")
 

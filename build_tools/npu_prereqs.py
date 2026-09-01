@@ -29,7 +29,6 @@ venv_py = environment.venv_py
 _add_hrx_install_env = hrx_runtime.add_hrx_install_env
 
 
-
 def archive_codec():
     """Codec for the run-prereqs archive: zstd when it is on PATH, gzip otherwise.
 
@@ -72,9 +71,7 @@ def _stage(source, destination):
     """Copy dereferenced so the artifact never contains source-tree symlinks."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
-        shutil.copytree(
-            source, destination, symlinks=False, dirs_exist_ok=True
-        )
+        shutil.copytree(source, destination, symlinks=False, dirs_exist_ok=True)
     else:
         shutil.copy2(source, destination, follow_symlinks=True)
 
@@ -96,7 +93,9 @@ def _strip(stage, cts_rel):
         if not f.is_file():
             continue
         rel = f.relative_to(stage).as_posix()
-        in_bindir = "/bin/" in f"/{rel}" or rel.startswith("tools-bin/") or cts_rel in rel
+        in_bindir = (
+            "/bin/" in f"/{rel}" or rel.startswith("tools-bin/") or cts_rel in rel
+        )
         if in_bindir or f.suffix == ".so" or ".so." in f.name:
             targets.append(f)
     if targets:
@@ -140,13 +139,9 @@ def cmd_package_npu_prereqs(args):
         if other != archive:
             other.unlink()
     if archive.suffix == ".zst":
-        create_deterministic_tar_zstd_cli(
-            stage, archive, arcname=".", level=6
-        )
+        create_deterministic_tar_zstd_cli(stage, archive, arcname=".", level=6)
     else:
-        create_deterministic_tar_gz(
-            stage, archive, arcname=".", compresslevel=6
-        )
+        create_deterministic_tar_gz(stage, archive, arcname=".", compresslevel=6)
     shutil.rmtree(stage)
     mb = archive.stat().st_size / 1e6
     print(f"package-npu-prereqs: ok -> {archive} ({mb:.0f} MB)")
@@ -200,9 +195,11 @@ def cmd_verify_npu_prereqs(args):
     cts_rel = "/".join(hrx_runtime.HRX_CTS_DIR)
     cts_root = f"projects/hrx/build/cmake/{cts_rel}"
     required = [
-        ("build/hrx-install/bin/hrx.dll"
-         if IS_WINDOWS else
-         "build/hrx-install/lib/libhrx.so"),
+        (
+            "build/hrx-install/bin/hrx.dll"
+            if IS_WINDOWS
+            else "build/hrx-install/lib/libhrx.so"
+        ),
         "build/hrx-install/include/hrx/hrx_runtime.h",
         "build/hrx-install/include/hrx/hrx_amdxdna.h",
         *(f"{cts_root}/{name}{_EXE}" for name in hrx_runtime.HRX_CTS_TESTS),
@@ -210,30 +207,40 @@ def cmd_verify_npu_prereqs(args):
     if args.extracted:
         # `find`/rglob over a missing root yields nothing, so assert the roots exist
         # before concluding anything from the absence of symlinks.
-        roots = [BUILD / "hrx-install", PROJ.joinpath(
-            "hrx", "build", "cmake", *hrx_runtime.HRX_CTS_DIR)]
+        roots = [
+            BUILD / "hrx-install",
+            PROJ.joinpath("hrx", "build", "cmake", *hrx_runtime.HRX_CTS_DIR),
+        ]
         for r in roots:
             if not r.is_dir():
                 sys.exit(f"{r} missing: did the artifact extract?")
         links = [p for r in roots for p in r.rglob("*") if p.is_symlink()]
         if links:
-            sys.exit("artifact has symlinks (staged without dereferencing?):\n  " +
-                     "\n  ".join(str(p) for p in links[:20]))
+            sys.exit(
+                "artifact has symlinks (staged without dereferencing?):\n  "
+                + "\n  ".join(str(p) for p in links[:20])
+            )
         for rel in required:
             if not (ROOT / rel).is_file():
                 sys.exit(f"missing from the artifact: {rel}")
-        print(f"verify-npu-prereqs: ok (runtime-only; no symlinks under {len(roots)} roots)")
+        print(
+            f"verify-npu-prereqs: ok (runtime-only; no symlinks under {len(roots)} roots)"
+        )
         return 0
 
     archive = _find_prereq_archive(NPU_PREREQ_DIR)
     if archive is None:
-        sys.exit(f"no npu-prereqs.tar.* under {NPU_PREREQ_DIR} — run: python dev.py package-npu-prereqs")
+        sys.exit(
+            f"no npu-prereqs.tar.* under {NPU_PREREQ_DIR} — run: python dev.py package-npu-prereqs"
+        )
     with open_tar(archive) as tar:
         members = tar.getmembers()
         links = [m.name for m in members if m.issym() or m.islnk()]
         if links:
-            sys.exit(f"archive holds {len(links)} link(s); it is not self-contained:\n  " +
-                     "\n  ".join(links[:20]))
+            sys.exit(
+                f"archive holds {len(links)} link(s); it is not self-contained:\n  "
+                + "\n  ".join(links[:20])
+            )
         names = {m.name.lstrip("./") for m in members}
         for rel in required:
             if rel not in names:
@@ -258,6 +265,8 @@ def cmd_unpack_npu_prereqs(args):
     src = Path(args.dir)
     archive = _find_prereq_archive(src)
     if archive is None:
-        sys.exit(f"no npu-prereqs.tar.* under {src} — did the download-artifact step run?")
+        sys.exit(
+            f"no npu-prereqs.tar.* under {src} — did the download-artifact step run?"
+        )
     extract_archive(archive, ROOT)
     print(f"unpack-npu-prereqs: ok ({archive.name} -> {ROOT})")

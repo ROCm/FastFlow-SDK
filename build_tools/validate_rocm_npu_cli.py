@@ -10,7 +10,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 CHECK_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 STATUSES = {"pass", "fail", "error"}
 
@@ -23,9 +22,7 @@ COMMANDS = {
 }
 
 
-def validate_report(
-    report: object, command: str, *, require_hardware: bool
-) -> None:
+def validate_report(report: object, command: str, *, require_hardware: bool) -> None:
     if not isinstance(report, dict):
         raise RuntimeError(f"{command}: report is not a JSON object")
     expected_command = "plugin list" if command == "plugin-list" else command
@@ -77,13 +74,10 @@ def validate_report(
             raise RuntimeError("probe: packaged HRX is not loadable")
         if data.get("os") == "Linux":
             usable_devices = [
-                device
-                for device in data.get("devices", [])
-                if device.get("usable")
+                device for device in data.get("devices", []) if device.get("usable")
             ]
             if not any(
-                isinstance(device.get("ioctl"), dict)
-                for device in usable_devices
+                isinstance(device.get("ioctl"), dict) for device in usable_devices
             ):
                 raise RuntimeError(
                     "probe: no usable device attempted ioctl diagnostics"
@@ -130,11 +124,7 @@ def run_reports(
     output_directory.mkdir(parents=True, exist_ok=True)
     hardware_target = None
     for name, arguments in COMMANDS.items():
-        if (
-            name == "self-test"
-            and require_hardware
-            and hardware_target != "npu2"
-        ):
+        if name == "self-test" and require_hardware and hardware_target != "npu2":
             continue
         result = subprocess.run(
             [

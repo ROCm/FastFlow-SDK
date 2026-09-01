@@ -22,14 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization:\s*(?:bearer|basic))\s+\S+"),
     re.compile(r"(?i)(\bbearer)\s+\S+"),
     re.compile(r"(?i)(cookie:\s*)[^\r\n]+"),
-    re.compile(
-        r"(?i)(--(?:access-)?token|--password|--secret|--api-key)(\s+)\S+"
-    ),
+    re.compile(r"(?i)(--(?:access-)?token|--password|--secret|--api-key)(\s+)\S+"),
     re.compile(r"(?i)([?&](?:access_)?token=)[^&\s]+"),
     re.compile(
         r"""(?ix)
@@ -220,9 +217,7 @@ def _word_error_rate(reference: str, hypothesis: str) -> float | None:
         current = [i]
         for j, hyp_word in enumerate(hyp, start=1):
             substitution = previous[j - 1] + (0 if ref_word == hyp_word else 1)
-            current.append(
-                min(previous[j] + 1, current[j - 1] + 1, substitution)
-            )
+            current.append(min(previous[j] + 1, current[j - 1] + 1, substitution))
         previous = current
     return previous[-1] / len(ref)
 

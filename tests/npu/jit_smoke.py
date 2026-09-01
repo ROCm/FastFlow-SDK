@@ -20,11 +20,10 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
-
 import aie.iron as iron
+import numpy as np
 from aie.iron import CompileTime, In, ObjectFifo, Out, Program, Runtime
-from aie.iron.device import AnyShimTile, NPU2
+from aie.iron.device import NPU2, AnyShimTile
 
 LINE = 1024
 SIZE = 4096

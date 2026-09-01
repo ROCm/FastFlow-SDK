@@ -12,6 +12,8 @@ from pathlib import Path
 
 from build_tools.rocm_npu_wheel_common import (
     FASTFLOWLM_DISTRIBUTION as _FASTFLOWLM_DISTRIBUTION,
+)
+from build_tools.rocm_npu_wheel_common import (
     QUALIFICATION_DISTRIBUTION as _QUALIFICATION_DISTRIBUTION,
 )
 from rocm_npu_qualification import installation

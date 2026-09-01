@@ -14,7 +14,6 @@ from typing import NamedTuple
 
 from build_tools import paths
 
-
 ROOT = paths.ROOT
 PROJ = paths.PROJ
 OUT = paths.OUT
@@ -131,9 +130,11 @@ def require_xclbinutil(compiler_prefix: Path | None = None) -> Path:
     test should not mutate shared state, and duplicating the symlink-vs-copy logic
     invites drift.
     """
-    xclbinutil = ((compiler_prefix / "bin" / f"xclbinutil{EXE}")
-                  if compiler_prefix else
-                  ROOT / "tools-bin" / f"xclbinutil{EXE}")
+    xclbinutil = (
+        (compiler_prefix / "bin" / f"xclbinutil{EXE}")
+        if compiler_prefix
+        else ROOT / "tools-bin" / f"xclbinutil{EXE}"
+    )
     if not xclbinutil.exists():
         raise E2EError(
             "xclbinutil not published (run: python dev.py build hrx-xclbinutil)\n"
@@ -142,8 +143,9 @@ def require_xclbinutil(compiler_prefix: Path | None = None) -> Path:
     return xclbinutil
 
 
-def toolchain_env(xclbinutil: Path,
-                  compiler_prefix: Path | None = None) -> dict[str, str]:
+def toolchain_env(
+    xclbinutil: Path, compiler_prefix: Path | None = None
+) -> dict[str, str]:
     """IRON toolchain env from either build trees or a relocated rocm-npu-compiler product."""
     if compiler_prefix:
         aie_bin = compiler_prefix / "bin"
@@ -179,8 +181,9 @@ def toolchain_env(xclbinutil: Path,
     path_entries = [xclbinutil.parent, aie_bin, VENV_BIN, cmake_candidate().parent]
     if compiler_prefix and os.name == "nt":
         path_entries.append(compiler_prefix / "lib")
-    env["PATH"] = os.pathsep.join([*(str(entry) for entry in path_entries),
-                                   env.get("PATH", "")])
+    env["PATH"] = os.pathsep.join(
+        [*(str(entry) for entry in path_entries), env.get("PATH", "")]
+    )
     if compiler_prefix and os.name != "nt":
         env["LD_LIBRARY_PATH"] = os.pathsep.join(
             [str(compiler_prefix / "lib"), env.get("LD_LIBRARY_PATH", "")]
@@ -193,7 +196,9 @@ def toolchain_env(xclbinutil: Path,
         # must not add unmanifested __pycache__ files to the product tree.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["ROCM_NPU_COMPILER_PREFIX"] = str(compiler_prefix)
-        print(f"== toolchain: relocated rocm-npu compiler product ({compiler_prefix}) ==")
+        print(
+            f"== toolchain: relocated rocm-npu compiler product ({compiler_prefix}) =="
+        )
     else:
         print(
             "== toolchain: SOURCE iron-tools (built against ROCm amd-llvm) + Peano wheel =="
@@ -287,12 +292,10 @@ def check_sections(
     print(f"  ok: sections present ({'/'.join(REQUIRED_SECTIONS)})")
 
 
-
 NPU_TARGETS = {
     "npu2": {"device": "npu2", "devgen": 4, "arch": "AIE2P (Strix)"},
     "npu1": {"device": "npu", "devgen": 3, "arch": "AIE2IPU (Phoenix)"},
 }
-
 
 
 class Operator(NamedTuple):
@@ -494,7 +497,9 @@ def select(name: str | None) -> tuple[Operator, ...]:
     chosen = [op for op in OPERATORS if op.name == name]
     if not chosen:
         known = ", ".join(op.name for op in OPERATORS)
-        raise KeyError(f"{name}: not in the iron-ops suite ({known}) -- add a row to OPERATORS")
+        raise KeyError(
+            f"{name}: not in the iron-ops suite ({known}) -- add a row to OPERATORS"
+        )
     return tuple(chosen)
 
 
@@ -513,9 +518,7 @@ def iron_env(compiler_prefix=None):
 def iron_ops_env(compiler_prefix=None):
     """Extend the selected IRON toolchain environment with iron-ops."""
     env = iron_env(compiler_prefix)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(PROJ / "iron-ops"), env["PYTHONPATH"]]
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(PROJ / "iron-ops"), env["PYTHONPATH"]])
     return env
 
 

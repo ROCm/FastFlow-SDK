@@ -57,8 +57,9 @@ def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
 
 
 def _pe_files(package_root: Path) -> list[Path]:
-    return sorted(path for path in package_root.rglob("*")
-                  if path.is_file() and is_pe(path))
+    return sorted(
+        path for path in package_root.rglob("*") if path.is_file() and is_pe(path)
+    )
 
 
 def _is_windows_system_runtime(name: str) -> bool:
@@ -87,16 +88,16 @@ def _copy_windows_runtime_closure(source_bundle: Path, runtime_root: Path) -> No
                 relative = path.relative_to(runtime_root).as_posix()
                 raise RuntimeError(
                     f"{RUNTIME_PACKAGE} dependency is not present in the staged "
-                    f"FastFlowLM bundle: {relative} -> {needed}")
+                    f"FastFlowLM bundle: {relative} -> {needed}"
+                )
             _copy_file(source, destination)
             queue.append(destination)
 
 
-def _copy_windows_fastflowlm_payload(source_bundle: Path, fastflowlm_root: Path,
-                                     runtime_root: Path) -> None:
-    runtime_names = {
-        path.name.lower() for path in (runtime_root / "bin").glob("*.dll")
-    }
+def _copy_windows_fastflowlm_payload(
+    source_bundle: Path, fastflowlm_root: Path, runtime_root: Path
+) -> None:
+    runtime_names = {path.name.lower() for path in (runtime_root / "bin").glob("*.dll")}
     _copy_relative_file(source_bundle, "bin/flm.exe", fastflowlm_root)
     for source in sorted((source_bundle / "bin").glob("*.dll")):
         if source.name.lower() not in runtime_names:
@@ -139,8 +140,11 @@ def _verify_windows_products(package_roots: list[Path]) -> dict[str, list[str]]:
         for package_root in package_roots
     }
     runtime_names = next(
-        (names for root, names in package_files.items()
-         if root.name == RUNTIME_PACKAGE),
+        (
+            names
+            for root, names in package_files.items()
+            if root.name == RUNTIME_PACKAGE
+        ),
         set(),
     )
     graph = {}
@@ -151,21 +155,26 @@ def _verify_windows_products(package_roots: list[Path]) -> dict[str, list[str]]:
             allowed_names.update(runtime_names)
         for path in _pe_files(package_root):
             imports = pe_imports(path)
-            relative = f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
+            relative = (
+                f"{package_root.name}/{path.relative_to(package_root).as_posix()}"
+            )
             graph[relative] = imports
             missing.extend(
-                f"{relative} -> {name}" for name in imports
+                f"{relative} -> {name}"
+                for name in imports
                 if name not in allowed_names and not _is_windows_system_runtime(name)
             )
     if missing:
         raise RuntimeError(
             "rocm-npu wheel Windows dependency closure is incomplete within "
-            "package boundaries:\n  " + "\n  ".join(sorted(missing)))
+            "package boundaries:\n  " + "\n  ".join(sorted(missing))
+        )
     return graph
 
 
-def stage_wheel_products(source_bundle: Path, destination: Path,
-                         version: str) -> dict[str, Path]:
+def stage_wheel_products(
+    source_bundle: Path, destination: Path, version: str
+) -> dict[str, Path]:
     """Stage split package roots from the combined FastFlowLM+HRX bundle."""
     if os.name != "nt":
         raise RuntimeError("Windows rocm-npu wheel staging requires a Windows host")
@@ -180,17 +189,21 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     _copy_relative_file(source_bundle, "bin/hrx.dll", runtime_root)
     _copy_relative_file(source_bundle, "bin/rocm-npu.exe", runtime_root)
     _copy_windows_runtime_closure(source_bundle, runtime_root)
-    _copy_windows_fastflowlm_payload(
-        source_bundle, fastflowlm_root, runtime_root)
+    _copy_windows_fastflowlm_payload(source_bundle, fastflowlm_root, runtime_root)
     runtime_names = {path.name for path in runtime_root.rglob("*") if path.is_file()}
-    fastflowlm_names = {path.name for path in fastflowlm_root.rglob("*") if path.is_file()}
-    _copy_dependency_licenses(source_bundle, source_manifest, runtime_root, runtime_names)
-    _copy_dependency_licenses(source_bundle, source_manifest, fastflowlm_root, fastflowlm_names)
+    fastflowlm_names = {
+        path.name for path in fastflowlm_root.rglob("*") if path.is_file()
+    }
+    _copy_dependency_licenses(
+        source_bundle, source_manifest, runtime_root, runtime_names
+    )
+    _copy_dependency_licenses(
+        source_bundle, source_manifest, fastflowlm_root, fastflowlm_names
+    )
     _copy_microsoft_runtime_notice(source_bundle, source_manifest, runtime_root)
     _copy_microsoft_runtime_notice(source_bundle, source_manifest, fastflowlm_root)
 
-    binary_dependencies = _verify_windows_products(
-        [runtime_root, fastflowlm_root])
+    binary_dependencies = _verify_windows_products([runtime_root, fastflowlm_root])
 
     write_runtime_wheel_manifests(
         trees,
@@ -207,10 +220,17 @@ def stage_wheel_products(source_bundle: Path, destination: Path,
     }
 
 
-def build_wheel(tree_root: Path, distribution: str, version: str, output_directory: Path,
-                *, summary: str, requires: tuple[str, ...] = (),
-                console_scripts: dict[str, str] | None = None,
-                tag: str | None = None) -> Path:
+def build_wheel(
+    tree_root: Path,
+    distribution: str,
+    version: str,
+    output_directory: Path,
+    *,
+    summary: str,
+    requires: tuple[str, ...] = (),
+    console_scripts: dict[str, str] | None = None,
+    tag: str | None = None,
+) -> Path:
     return _build_wheel(
         tree_root,
         distribution,
@@ -223,9 +243,9 @@ def build_wheel(tree_root: Path, distribution: str, version: str, output_directo
     )
 
 
-def build_runtime_fastflowlm_wheels(source_bundle: Path, stage_directory: Path,
-                                    output_directory: Path,
-                                    version: str) -> dict[str, Path]:
+def build_runtime_fastflowlm_wheels(
+    source_bundle: Path, stage_directory: Path, output_directory: Path, version: str
+) -> dict[str, Path]:
     products = stage_wheel_products(source_bundle, stage_directory, version)
     remove_distribution_wheels(
         output_directory, (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION)
@@ -284,11 +304,9 @@ def verify_wheels_do_not_have_text_path_references(
         )
     if text_references:
         details = "\n  ".join(
-            f"{reference.wheel.name}:{reference.member} -> "
-            f"{reference.forbidden_path}"
+            f"{reference.wheel.name}:{reference.member} -> {reference.forbidden_path}"
             for reference in text_references
         )
         raise RuntimeError(
-            "wheel text payload contains local checkout/build paths:\n  "
-            + details
+            "wheel text payload contains local checkout/build paths:\n  " + details
         )

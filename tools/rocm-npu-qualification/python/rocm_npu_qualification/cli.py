@@ -26,8 +26,8 @@ from .offline import (
     stage_github_release,
     verify_archive,
 )
-from .profiles import ProfileError, profile_names
 from .power import inhibit_system_sleep
+from .profiles import ProfileError, profile_names
 from .runner import (
     BENCHMARK_MODES,
     finalize_partial_evidence,
@@ -44,9 +44,7 @@ def _positive_int(value: str) -> int:
             f"must be a positive integer, got {value!r}"
         ) from error
     if parsed < 1:
-        raise argparse.ArgumentTypeError(
-            f"must be a positive integer, got {parsed}"
-        )
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {parsed}")
     return parsed
 
 
@@ -187,9 +185,7 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     return parser
 
 
-def _offline_parser(
-    command: str, *, json_errors: bool
-) -> argparse.ArgumentParser:
+def _offline_parser(command: str, *, json_errors: bool) -> argparse.ArgumentParser:
     parser = QualificationArgumentParser(
         prog=f"rocm-npu qualify {command}", json_errors=json_errors
     )
@@ -214,9 +210,7 @@ def _offline_parser(
             required=True,
             help="packaged policy name (for example 'release') or JSON path",
         )
-        parser.add_argument(
-            "--require-status", choices=("pass", "fail", "interrupted")
-        )
+        parser.add_argument("--require-status", choices=("pass", "fail", "interrupted"))
     elif command == "stage-release":
         parser.add_argument("--payload-dir", type=Path, required=True)
         parser.add_argument("--aggregate", type=Path, required=True)
@@ -265,9 +259,7 @@ def _error_summary(error: BaseException) -> dict[str, Any]:
     }
 
 
-def _run_offline_command(
-    command: str, argv: list[str], *, json_output: bool
-) -> int:
+def _run_offline_command(command: str, argv: list[str], *, json_output: bool) -> int:
     parser = _offline_parser(command, json_errors=json_output)
     if json_output and any(argument in ("--help", "-h") for argument in argv):
         _print_summary(
@@ -339,8 +331,7 @@ def _run_offline_command(
 def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
     json_output = bool(
-        "--json" in effective_argv
-        or os.environ.get("ROCM_NPU_OUTPUT_FORMAT") == "json"
+        "--json" in effective_argv or os.environ.get("ROCM_NPU_OUTPUT_FORMAT") == "json"
     )
     if effective_argv and effective_argv[0] in {
         "candidate",
@@ -355,9 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     if effective_argv and effective_argv[0] == "run":
         effective_argv = effective_argv[1:]
     parser = create_parser(json_errors=json_output)
-    if json_output and any(
-        argument in ("--help", "-h") for argument in effective_argv
-    ):
+    if json_output and any(argument in ("--help", "-h") for argument in effective_argv):
         print(
             json.dumps(
                 {

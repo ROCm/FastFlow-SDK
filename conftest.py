@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 PROFILE_MARKERS = frozenset({"presubmit", "compiler_stack", "fastflowlm"})
 ROOT = Path(__file__).resolve().parent
 TEST_IMPORT_ROOTS = (
@@ -42,9 +41,7 @@ def pytest_collection_modifyitems(items):
         for platform in ("linux", "windows"):
             if platform in markers and platform != host:
                 item.add_marker(
-                    pytest.mark.skip(
-                        reason=f"requires {platform} host semantics"
-                    )
+                    pytest.mark.skip(reason=f"requires {platform} host semantics")
                 )
     if unowned:
         raise pytest.UsageError(

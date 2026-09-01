@@ -14,9 +14,7 @@ class PolicyValidationError(ValueError):
     pass
 
 
-def normalize_policy(
-    value: Any, *, expected_name: str | None = None
-) -> dict[str, Any]:
+def normalize_policy(value: Any, *, expected_name: str | None = None) -> dict[str, Any]:
     if (
         not isinstance(value, dict)
         or set(value) != {"schema_version", "name", "requirements"}
@@ -41,9 +39,7 @@ def normalize_policy(
             or not isinstance(requirement.get("minimum_runs"), int)
             or requirement["minimum_runs"] < 1
         ):
-            raise PolicyValidationError(
-                "qualification policy requirement is invalid"
-            )
+            raise PolicyValidationError("qualification policy requirement is invalid")
         requirements.append(dict(requirement))
     return {
         "schema_version": POLICY_SCHEMA_VERSION,

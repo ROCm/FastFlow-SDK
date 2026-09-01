@@ -10,15 +10,15 @@ import pytest
 
 from build_tools import paths
 from build_tools.artifact import git_source_state
-from build_tools.release_policy import compiler_requires_python
 from build_tools.iron import OPERATORS
+from build_tools.release_policy import compiler_requires_python
 from build_tools.rocm_npu_ops_wheels import (
-    IRON_OPS_SOURCE,
-    OPS_SUMMARY,
-    OPS_WHEEL_TAG,
     _EXE,
     _TORCH_AT_IMPORT,
     _VBIN,
+    IRON_OPS_SOURCE,
+    OPS_SUMMARY,
+    OPS_WHEEL_TAG,
     _installed_ops_compile,
     _installed_ops_probe,
     _ops_compile_specs,
@@ -73,7 +73,9 @@ class TestRocmNpuOpsWheels:
         assert (tree / "aie_kernels" / "generic" / "add.cc").is_file()
         assert not (tree / "iron" / "tests").exists()
         assert not (tree / "iron" / "applications").exists()
-        assert not (tree / "iron" / "operators" / "elementwise_add" / "test.py").exists()
+        assert not (
+            tree / "iron" / "operators" / "elementwise_add" / "test.py"
+        ).exists()
         assert (tree / OPS_PACKAGE / "licenses" / "IRON-LICENSE").is_file()
         assert (tree / OPS_PACKAGE / "licenses" / "rocm-npu-LICENSE").is_file()
         init = (tree / OPS_PACKAGE / "__init__.py").read_text(encoding="utf-8")
@@ -120,13 +122,9 @@ class TestRocmNpuOpsWheels:
         assert wheel_info["Root-Is-Purelib"] == "true"
         assert wheel_info.get_all("Tag") == [OPS_WHEEL_TAG]
         revision = git_source_state(paths.ROOT)["revision"]
-        verify_wheel_source_revision(
-            [wheel], revision, product="ops wheel"
-        )
+        verify_wheel_source_revision([wheel], revision, product="ops wheel")
         with pytest.raises(RuntimeError, match="expected='wrong'"):
-            verify_wheel_source_revision(
-                [wheel], "wrong", product="ops wheel"
-            )
+            verify_wheel_source_revision([wheel], "wrong", product="ops wheel")
         verify_wheel_text_path_references(
             {OPS_DISTRIBUTION: wheel},
             (paths.ROOT, tmp_path),
@@ -166,7 +164,9 @@ class TestRocmNpuOpsWheels:
             sys.modules.pop("rocm_npu_ops", None)
 
 
-def _write_operators_catalog(root: Path, packages: dict[str, str], exports: dict[str, str]) -> Path:
+def _write_operators_catalog(
+    root: Path, packages: dict[str, str], exports: dict[str, str]
+) -> Path:
     site = root / "site"
     operators = site / "iron" / "operators"
     operators.mkdir(parents=True)
@@ -222,7 +222,7 @@ class TestOpsOperatorProbe:
         assert "kernels_root" in probe
         assert "ModuleNotFoundError" in probe
         assert 'current.name == "torch"' in probe
-        assert "(child / \"op.py\")" in probe or 'child / "op.py"' in probe
+        assert '(child / "op.py")' in probe or 'child / "op.py"' in probe
         assert _TORCH_AT_IMPORT == {
             "mha",
             "swiglu_decode",

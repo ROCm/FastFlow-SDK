@@ -20,17 +20,15 @@ def relocate_linux_compiler_rpaths(product: Path) -> dict[str, str]:
     product = Path(product)
     patchelf = shutil.which("patchelf")
     if not patchelf:
-        raise RuntimeError("patchelf is required to relocate the Linux compiler product")
+        raise RuntimeError(
+            "patchelf is required to relocate the Linux compiler product"
+        )
     library_roots = tuple(
-        path
-        for path in (product / "lib", product / "lib" / "aie")
-        if path.is_dir()
+        path for path in (product / "lib", product / "lib" / "aie") if path.is_dir()
     )
     rewritten = {}
     for path in sorted(
-        item
-        for item in product.rglob("*")
-        if item.is_file() and is_loadable_elf(item)
+        item for item in product.rglob("*") if item.is_file() and is_loadable_elf(item)
     ):
         current = elf_rpath(path, patchelf=patchelf)
         entries = current.split(":") if current else []
@@ -63,18 +61,14 @@ def windows_system_runtime(name: str) -> bool:
 
 def linux_system_runtime(name: str) -> bool:
     """Returns whether manylinux owns a compiler runtime library."""
-    return (
-        name.startswith(("ld-linux", "linux-vdso"))
-        or name
-        in {
-            "libc.so.6",
-            "libdl.so.2",
-            "libgcc_s.so.1",
-            "libm.so.6",
-            "libpthread.so.0",
-            "librt.so.1",
-            "libstdc++.so.6",
-            "libutil.so.1",
-            "libz.so.1",
-        }
-    )
+    return name.startswith(("ld-linux", "linux-vdso")) or name in {
+        "libc.so.6",
+        "libdl.so.2",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libpthread.so.0",
+        "librt.so.1",
+        "libstdc++.so.6",
+        "libutil.so.1",
+        "libz.so.1",
+    }

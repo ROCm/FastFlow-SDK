@@ -44,6 +44,7 @@ _VBIN = "Scripts" if IS_WINDOWS else "bin"
 _EXE = ".exe" if IS_WINDOWS else ""
 cmake_bin = environment.cmake_bin
 
+
 def _compiler_binding_root(value):
     root = Path(value) if value else IRON_TOOLS_INSTALL / "python"
     if not (root / "aie").is_dir():
@@ -62,14 +63,16 @@ def _compiler_wheel_files(directory):
         )
     )
     wheels = sorted(
-        path for path in directory.glob("*.whl")
-        if path.name.startswith(prefixes)
+        path for path in directory.glob("*.whl") if path.name.startswith(prefixes)
     )
     counts = {
-        distribution: len([
-            wheel for wheel in wheels
-            if wheel.name.startswith(distribution.replace("-", "_") + "-")
-        ])
+        distribution: len(
+            [
+                wheel
+                for wheel in wheels
+                if wheel.name.startswith(distribution.replace("-", "_") + "-")
+            ]
+        )
         for distribution in (
             COMPILER_DISTRIBUTION,
             COMPILER_CORE_DISTRIBUTION,
@@ -88,9 +91,7 @@ def _compiler_wheel_files(directory):
 
 
 def verify_compiler_wheel_source_revision(wheels, expected_revision):
-    verify_wheel_source_revision(
-        wheels, expected_revision, product="compiler wheel"
-    )
+    verify_wheel_source_revision(wheels, expected_revision, product="compiler wheel")
 
 
 def cmd_package_compiler_wheels(args):
@@ -104,10 +105,7 @@ def cmd_package_compiler_wheels(args):
         binding_root = _compiler_binding_root(args.binding)
         platform_tag = "win_amd64" if IS_WINDOWS else "manylinux_2_28_x86_64"
         report = compiler_product_report(product)
-        report_path = (
-            COMPILER_WHEEL_ARTIFACTS
-            / "rocm-npu-compiler-wheel-report.json"
-        )
+        report_path = COMPILER_WHEEL_ARTIFACTS / "rocm-npu-compiler-wheel-report.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -122,9 +120,7 @@ def cmd_package_compiler_wheels(args):
             platform_tag=platform_tag,
             include_meta=not args.no_meta,
         )
-        verify_compiler_binding_stable_abi(
-            wheels[COMPILER_BINDINGS_DISTRIBUTION]
-        )
+        verify_compiler_binding_stable_abi(wheels[COMPILER_BINDINGS_DISTRIBUTION])
     except RuntimeError as error:
         sys.exit(str(error))
     for name, wheel in wheels.items():
@@ -138,10 +134,9 @@ def cmd_audit_compiler_wheels(args):
     wheels = _compiler_wheel_files(args.dir)
     verify_linux_compiler_wheels(wheels)
     core_wheels = [
-        wheel for wheel in wheels
-        if wheel.name.startswith(
-            COMPILER_CORE_DISTRIBUTION.replace("-", "_") + "-"
-        )
+        wheel
+        for wheel in wheels
+        if wheel.name.startswith(COMPILER_CORE_DISTRIBUTION.replace("-", "_") + "-")
     ]
     if len(core_wheels) != 1:
         sys.exit("audit-compiler-wheels requires exactly one compiler core wheel")
@@ -151,9 +146,7 @@ def cmd_audit_compiler_wheels(args):
             continue
         distribution = (
             COMPILER_CORE_DISTRIBUTION
-            if wheel.name.startswith(
-                COMPILER_CORE_DISTRIBUTION.replace("-", "_") + "-"
-            )
+            if wheel.name.startswith(COMPILER_CORE_DISTRIBUTION.replace("-", "_") + "-")
             else COMPILER_BINDINGS_DISTRIBUTION
         )
         policy = auditwheel_policy(
@@ -246,10 +239,13 @@ def _export_compiler_consumer_root(python, destination):
         COMPILER_BINDINGS_DISTRIBUTION.replace("-", "_"),
     }
     sources = [
-        path for path in site_packages.iterdir()
+        path
+        for path in site_packages.iterdir()
         if path.name in names
-        or any(path.name.startswith(name + "-") and path.name.endswith(".dist-info")
-               for name in names)
+        or any(
+            path.name.startswith(name + "-") and path.name.endswith(".dist-info")
+            for name in names
+        )
     ]
     if not any(path.name == "aie" for path in sources):
         raise RuntimeError(f"installed compiler bindings missing from {site_packages}")
@@ -324,18 +320,17 @@ def cmd_verify_compiler_wheels(args):
     version = args.version
     if not version:
         meta = next(
-            wheel for wheel in wheels
+            wheel
+            for wheel in wheels
             if wheel.name.startswith(COMPILER_DISTRIBUTION.replace("-", "_") + "-")
         )
-        version = meta.name[
-            len(COMPILER_DISTRIBUTION.replace("-", "_")) + 1:
-        ].split("-py3-none-any.whl", 1)[0]
-    verify_wheel_checksums({
-        f"compiler-{index}": wheel for index, wheel in enumerate(wheels)
-    })
-    verify_compiler_wheel_source_revision(
-        wheels, git_source_state(ROOT)["revision"]
+        version = meta.name[len(COMPILER_DISTRIBUTION.replace("-", "_")) + 1 :].split(
+            "-py3-none-any.whl", 1
+        )[0]
+    verify_wheel_checksums(
+        {f"compiler-{index}": wheel for index, wheel in enumerate(wheels)}
     )
+    verify_compiler_wheel_source_revision(wheels, git_source_state(ROOT)["revision"])
     verify_compiler_wheel_path_references(wheels, (ROOT, BUILD))
     if IS_WINDOWS:
         graph = verify_windows_compiler_wheels(wheels)

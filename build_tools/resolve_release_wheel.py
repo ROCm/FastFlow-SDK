@@ -142,8 +142,7 @@ def resolve_release_wheel(
     for platform_name, platforms in PLATFORMS.items():
         for python_minor in minors:
             target = work_dir / (
-                f"{product}-release-install-{platform_name}-"
-                f"{python_tag(python_minor)}"
+                f"{product}-release-install-{platform_name}-{python_tag(python_minor)}"
             )
             if target.exists():
                 shutil.rmtree(target)

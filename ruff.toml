@@ -1,0 +1,30 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# First-party Python only. Submodules under projects/ stay upstream-owned.
+
+required-version = "==0.15.21"
+target-version = "py312"
+line-length = 88
+extend-exclude = ["projects", "patches"]
+src = [".", "tools/rocm-npu-qualification/python"]
+
+[format]
+quote-style = "double"
+docstring-code-format = true
+
+[lint]
+select = [
+    "E4",  # pycodestyle import/module errors
+    "E7",  # pycodestyle statement errors
+    "E9",  # pycodestyle runtime syntax errors
+    "F",   # pyflakes
+    "I",   # isort
+]
+ignore = [
+    # Standalone tools and tests patch sys.path before importing local modules.
+    "E402",
+]
+
+[lint.isort]
+known-first-party = ["build_tools", "rocm_npu_qualification"]

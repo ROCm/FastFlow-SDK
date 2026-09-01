@@ -102,12 +102,13 @@ def cmd_setup(args) -> None:
         ok, missing = doctor.check_system(plan.profile_name, verbose=False)
         if not ok:
             if missing:
-                print("WARNING: missing system deps (apt): " + " ".join(sorted(missing)))
+                print(
+                    "WARNING: missing system deps (apt): " + " ".join(sorted(missing))
+                )
             else:
                 print("WARNING: compiler-stack system prerequisites are missing")
             print(
-                "  install them, then re-run; "
-                "see `python dev.py doctor compiler-stack`"
+                "  install them, then re-run; see `python dev.py doctor compiler-stack`"
             )
     if not environment.venv_py().exists():
         environment.sh([sys.executable, "-m", "venv", str(paths.VENV)])

@@ -6,26 +6,31 @@
 ``manifest.json`` has this intentionally small schema::
 
     {
-      "cases": [{
-        "name": "vector_scalar_add",
-        "xadx": "vector_scalar_add/kernel.xadx",
-        "export": "MLIR_AIE",
-        "buffers": [{
-          "name": "input",
-          "direction": "input",
-          "dtype": "int32",
-          "shape": [1024],
-          "input": "vector_scalar_add/input.bin"
-        }, {
-          "name": "output",
-          "direction": "output",
-          "dtype": "int32",
-          "shape": [1024],
-          "expected": "vector_scalar_add/output.bin",
-          "rtol": 0.0,
-          "atol": 0.0
-        }]
-      }]
+        "cases": [
+            {
+                "name": "vector_scalar_add",
+                "xadx": "vector_scalar_add/kernel.xadx",
+                "export": "MLIR_AIE",
+                "buffers": [
+                    {
+                        "name": "input",
+                        "direction": "input",
+                        "dtype": "int32",
+                        "shape": [1024],
+                        "input": "vector_scalar_add/input.bin",
+                    },
+                    {
+                        "name": "output",
+                        "direction": "output",
+                        "dtype": "int32",
+                        "shape": [1024],
+                        "expected": "vector_scalar_add/output.bin",
+                        "rtol": 0.0,
+                        "atol": 0.0,
+                    },
+                ],
+            }
+        ]
     }
 
 Buffers are listed in kernel binding order. Data files are raw, contiguous
@@ -39,8 +44,8 @@ production-owned ``build_tools.hrx_runtime`` contract.
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -78,9 +83,7 @@ def _comparison_arrays(actual, expected, logical_dtype):
 def _compare(actual, expected, logical_dtype, rtol, atol):
     actual, expected = _comparison_arrays(actual, expected, logical_dtype)
     if np.issubdtype(actual.dtype, np.inexact):
-        matches = np.isclose(
-            actual, expected, rtol=rtol, atol=atol, equal_nan=False
-        )
+        matches = np.isclose(actual, expected, rtol=rtol, atol=atol, equal_nan=False)
     else:
         matches = actual == expected
     if bool(np.all(matches)):
@@ -140,9 +143,7 @@ def _prepare_case(runtime, package_root, case):
             buffer = runtime.allocate_buffer(shape, dtype)
             prepared.buffers.append(buffer)
             if direction == "input":
-                source = _read_array(
-                    package_root, descriptor["input"], dtype, shape
-                )
+                source = _read_array(package_root, descriptor["input"], dtype, shape)
                 np.copyto(buffer.array, source, casting="no")
             else:
                 buffer.array.fill(0)
@@ -161,9 +162,7 @@ def _dispatch_and_validate(runtime, prepared):
     for _, buffer, _ in prepared.output_records:
         buffer.array.fill(0)
         buffer.flush()
-    runtime.dispatch(
-        prepared.executable, prepared.export_ordinal, prepared.buffers
-    )
+    runtime.dispatch(prepared.executable, prepared.export_ordinal, prepared.buffers)
     runtime.synchronize()
 
     failures = []
@@ -232,9 +231,7 @@ def run_package(
             try:
                 resident.append(_prepare_case(runtime, package_root, case))
             except Exception as exc:
-                failures_by_name[case["name"]].append(
-                    f"resident setup: {exc}"
-                )
+                failures_by_name[case["name"]].append(f"resident setup: {exc}")
         try:
             for round_index in range(resident_rounds):
                 for prepared in resident:
@@ -242,9 +239,7 @@ def run_package(
                     try:
                         failures_by_name[name].extend(
                             f"resident round {round_index + 1}: {failure}"
-                            for failure in _dispatch_and_validate(
-                                runtime, prepared
-                            )
+                            for failure in _dispatch_and_validate(runtime, prepared)
                         )
                     except Exception as exc:
                         failures_by_name[name].append(
@@ -279,12 +274,16 @@ def main(argv=None):
     try:
         if arguments.lifecycle_rounds < 0 or arguments.resident_rounds < 0:
             raise ValueError("stress round counts must be nonnegative")
-        return 1 if run_package(
-            arguments.package_root,
-            arguments.cases,
-            lifecycle_rounds=arguments.lifecycle_rounds,
-            resident_rounds=arguments.resident_rounds,
-        ) else 0
+        return (
+            1
+            if run_package(
+                arguments.package_root,
+                arguments.cases,
+                lifecycle_rounds=arguments.lifecycle_rounds,
+                resident_rounds=arguments.resident_rounds,
+            )
+            else 0
+        )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -292,4 +291,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-

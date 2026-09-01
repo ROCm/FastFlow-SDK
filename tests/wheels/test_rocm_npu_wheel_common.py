@@ -70,9 +70,9 @@ class TestRocmNpuWheelCommon:
             trees.runtime_root / "share/rocm-npu/self-test/case/manifest.json"
         ).is_file()
         assert (trees.fastflowlm_root / "share/flm/model_list.json").is_file()
-        assert (
-            trees.runtime_root / "licenses/rocm-npu-LICENSE"
-        ).read_text(encoding="utf-8") == "staging"
+        assert (trees.runtime_root / "licenses/rocm-npu-LICENSE").read_text(
+            encoding="utf-8"
+        ) == "staging"
 
         write_runtime_wheel_manifests(
             trees,
@@ -102,9 +102,7 @@ class TestRocmNpuWheelCommon:
         assert runtime_manifest["binary_dependencies"] == {
             "rocm_npu_runtime/bin/runtime": ["system"]
         }
-        assert fastflowlm_manifest["requires"] == [
-            "rocm-npu-runtime ==1.2.3"
-        ]
+        assert fastflowlm_manifest["requires"] == ["rocm-npu-runtime ==1.2.3"]
         assert fastflowlm_manifest["binary_dependencies"] == {
             "rocm_npu_fastflowlm/bin/flm": ["runtime"]
         }
@@ -115,9 +113,7 @@ class TestRocmNpuWheelCommon:
         payload.parent.mkdir()
         payload.write_bytes(b"runtime")
 
-        manifest = wheel_payload.write_package_manifest(
-            package, {"schema_version": 1}
-        )
+        manifest = wheel_payload.write_package_manifest(package, {"schema_version": 1})
 
         assert manifest["files"] == [
             {"path": "bin/runtime.bin", "size": 7, "sha256": sha256_file(payload)}

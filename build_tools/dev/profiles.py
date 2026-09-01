@@ -43,9 +43,7 @@ _PINNED_SUBMODULES = (
 
 PIN_SECTION_TO_SUBMODULE = dict(_PINNED_SUBMODULES)
 
-_COMPILER_STACK = frozenset(
-    {"llvm-project", "iron-tools", "hrx", "iron-ops"}
-)
+_COMPILER_STACK = frozenset({"llvm-project", "iron-tools", "hrx", "iron-ops"})
 _FASTFLOWLM = frozenset({"hrx", "FastFlowLM"})
 
 PROFILE_SPECS = {
@@ -107,6 +105,7 @@ PROFILE_SPECS = {
         ),
     ),
 }
+
 
 def profile(name: str) -> ProfileSpec:
     return PROFILE_SPECS[name]

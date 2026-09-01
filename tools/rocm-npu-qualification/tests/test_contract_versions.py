@@ -10,27 +10,22 @@ from pathlib import Path
 
 import pytest
 
+from rocm_npu_qualification import recipe_generators
 from rocm_npu_qualification.contracts import (
     CANDIDATE_SCHEMA_VERSION,
-    KERNEL_RECIPE_SCHEMA_VERSION,
-    QUALIFICATION_CONTRACT_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
+    KERNEL_RECIPE_SCHEMA_VERSION,
     POLICY_SCHEMA_VERSION,
     PROFILE_SCHEMA_VERSION,
+    QUALIFICATION_CONTRACT_SCHEMA_VERSION,
     XADX_REPORT_SCHEMA_VERSION,
     XADX_ROUNDS,
     xadx_rounds,
 )
-from rocm_npu_qualification import recipe_generators
 from rocm_npu_qualification.schema import SchemaValidationError, validate_schema
 
-
-PACKAGE_ROOT = (
-    Path(__file__).resolve().parents[1]
-    / "python"
-    / "rocm_npu_qualification"
-)
+PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "python" / "rocm_npu_qualification"
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
 
@@ -52,15 +47,15 @@ def test_packaged_schema_versions_match_runtime_contracts():
         == QUALIFICATION_CONTRACT_SCHEMA_VERSION
     )
     assert (
-        _json("schemas/kernel-recipe-v1.schema.json")["properties"][
-            "schema_version"
-        ]["const"]
+        _json("schemas/kernel-recipe-v1.schema.json")["properties"]["schema_version"][
+            "const"
+        ]
         == KERNEL_RECIPE_SCHEMA_VERSION
     )
     assert (
-        _json("schemas/xadx-report-v1.schema.json")["properties"][
-            "schema_version"
-        ]["const"]
+        _json("schemas/xadx-report-v1.schema.json")["properties"]["schema_version"][
+            "const"
+        ]
         == XADX_REPORT_SCHEMA_VERSION
     )
     assert (
@@ -70,9 +65,7 @@ def test_packaged_schema_versions_match_runtime_contracts():
         == EVIDENCE_SCHEMA_VERSION
     )
     assert (
-        _json("schemas/profile-v1.schema.json")["properties"]["schema_version"][
-            "const"
-        ]
+        _json("schemas/profile-v1.schema.json")["properties"]["schema_version"]["const"]
         == PROFILE_SCHEMA_VERSION
     )
     assert (

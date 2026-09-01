@@ -68,7 +68,9 @@ def validate_compiler_auditwheel_policy(distribution: str, policy: str) -> str:
         COMPILER_CORE_DISTRIBUTION,
         COMPILER_BINDINGS_DISTRIBUTION,
     ):
-        raise RuntimeError(f"unexpected Linux compiler wheel distribution: {distribution}")
+        raise RuntimeError(
+            f"unexpected Linux compiler wheel distribution: {distribution}"
+        )
     try:
         return validate_manylinux_policy(policy, maximum_glibc=(2, 28))
     except RuntimeError as error:
@@ -145,7 +147,8 @@ def compiler_product_report(source_product: Path) -> dict[str, object]:
     files = sorted(path for path in source_product.rglob("*") if path.is_file())
     python_root = source_product / "python"
     binding_files = [
-        path for path in files
+        path
+        for path in files
         if path.is_relative_to(python_root) and not _is_core_aie_native(path)
     ]
     binding_set = set(binding_files)
@@ -180,7 +183,9 @@ def compiler_product_report(source_product: Path) -> dict[str, object]:
                 "path": path.relative_to(source_product).as_posix(),
                 "size": path.stat().st_size,
             }
-            for path in sorted(files, key=lambda item: item.stat().st_size, reverse=True)[:20]
+            for path in sorted(
+                files, key=lambda item: item.stat().st_size, reverse=True
+            )[:20]
         ],
     }
 
@@ -223,8 +228,7 @@ def _copy_product_licenses(source_product: Path, package_root: Path) -> None:
 
 def _core_module() -> str:
     functions = "\n\n".join(
-        f"def {name.replace('-', '_')}() -> int:\n"
-        f"    return _run_tool({name!r})"
+        f"def {name.replace('-', '_')}() -> int:\n    return _run_tool({name!r})"
         for name in COMPILER_TOOLS
     )
     return f'''"""Paths and launchers for the packaged ROCm NPU compiler."""
@@ -310,9 +314,7 @@ def _run_tool(name: str) -> int:
 
 def _is_core_aie_native(path: Path) -> bool:
     name = path.name
-    return (
-        path.suffix.casefold() == ".dll" or ".so" in name
-    ) and name.startswith(
+    return (path.suffix.casefold() == ".dll" or ".so" in name) and name.startswith(
         CORE_AIE_NATIVE_PREFIXES
     )
 
@@ -417,7 +419,9 @@ def stage_compiler_core(
             stage(child, package_root / child.name)
     source_mlir_libs = source_product / "python" / "aie" / "_mlir_libs"
     if source_mlir_libs.is_dir():
-        for path in sorted(item for item in source_mlir_libs.iterdir() if item.is_file()):
+        for path in sorted(
+            item for item in source_mlir_libs.iterdir() if item.is_file()
+        ):
             if _is_core_aie_native(path):
                 stage(path, package_root / "lib" / "aie" / path.name)
     _write_file(package_root / "__init__.py", _core_module())
@@ -443,7 +447,8 @@ def stage_compiler_core(
 
 def _binding_extensions(aie_root: Path) -> list[Path]:
     return [
-        path for path in aie_root.rglob("*")
+        path
+        for path in aie_root.rglob("*")
         if path.is_file()
         and (
             path.suffix.casefold() == ".pyd"
@@ -459,7 +464,9 @@ def _binding_extensions(aie_root: Path) -> list[Path]:
 def _validate_binding_abi(aie_root: Path) -> None:
     extensions = _binding_extensions(aie_root)
     if not extensions:
-        raise RuntimeError(f"compiler bindings contain no native extensions: {aie_root}")
+        raise RuntimeError(
+            f"compiler bindings contain no native extensions: {aie_root}"
+        )
     non_abi3 = []
     for path in extensions:
         name = path.name
@@ -531,9 +538,7 @@ def stage_compiler_bindings(
         )
         | {
             "python_stable_abi": release_policy.compiler_python_stable_abi(),
-            "supported_python_minors": list(
-                release_policy.compiler_python_versions()
-            ),
+            "supported_python_minors": list(release_policy.compiler_python_versions()),
         },
     )
     return tree
@@ -593,7 +598,11 @@ def build_compiler_wheel_family(
     remove_distribution_wheels(
         output_directory,
         (
-            *((COMPILER_DISTRIBUTION, COMPILER_CORE_DISTRIBUTION) if include_shared else ()),
+            *(
+                (COMPILER_DISTRIBUTION, COMPILER_CORE_DISTRIBUTION)
+                if include_shared
+                else ()
+            ),
             *((COMPILER_DISTRIBUTION,) if include_meta and not include_shared else ()),
             COMPILER_BINDINGS_DISTRIBUTION,
         ),
@@ -608,16 +617,19 @@ def build_compiler_wheel_family(
             version=version,
             platform_tag=platform_tag,
         )
-        print(f"package compiler core staging: "
-              f"{time.perf_counter() - stage_started:.2f}s")
+        print(
+            f"package compiler core staging: {time.perf_counter() - stage_started:.2f}s"
+        )
     meta_tree = None
     if include_meta:
         stage_started = time.perf_counter()
         meta_tree = stage_compiler_meta(
             source_product, Path(stage_directory) / "meta", version=version
         )
-        print(f"package compiler metadata staging: "
-              f"{time.perf_counter() - stage_started:.2f}s")
+        print(
+            f"package compiler metadata staging: "
+            f"{time.perf_counter() - stage_started:.2f}s"
+        )
     stage_started = time.perf_counter()
     tree = stage_compiler_bindings(
         source_product,
@@ -626,8 +638,9 @@ def build_compiler_wheel_family(
         version=version,
         platform_tag=platform_tag,
     )
-    print(f"package compiler bindings staging: "
-          f"{time.perf_counter() - stage_started:.2f}s")
+    print(
+        f"package compiler bindings staging: {time.perf_counter() - stage_started:.2f}s"
+    )
     requirements = (
         f"{COMPILER_CORE_DISTRIBUTION} =={version}",
         *COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
@@ -683,8 +696,10 @@ def build_compiler_wheel_family(
         if core_future is not None:
             built[COMPILER_CORE_DISTRIBUTION] = core_future.result()
         built[COMPILER_BINDINGS_DISTRIBUTION] = bindings_future.result()
-    print(f"package compiler wheel compression: "
-          f"{time.perf_counter() - build_started:.2f}s")
+    print(
+        f"package compiler wheel compression: "
+        f"{time.perf_counter() - build_started:.2f}s"
+    )
     print(f"package compiler wheels elapsed: {time.perf_counter() - started:.2f}s")
     return built
 
@@ -717,14 +732,14 @@ def current_python_minor() -> str:
 def _wheel_distribution(wheel: Path) -> str:
     with zipfile.ZipFile(wheel) as archive:
         names = [
-            name for name in archive.namelist()
-            if name.endswith(".dist-info/METADATA")
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
         ]
         if len(names) != 1:
             raise RuntimeError(f"expected one METADATA file in wheel: {wheel}")
         return str(
-            email.parser.Parser()
-            .parsestr(archive.read(names[0]).decode("utf-8"))["Name"]
+            email.parser.Parser().parsestr(archive.read(names[0]).decode("utf-8"))[
+                "Name"
+            ]
         )
 
 
@@ -743,15 +758,16 @@ def verify_windows_compiler_wheels(
         extracted = []
         for index, wheel in enumerate(wheels):
             distribution = _wheel_distribution(wheel)
-            extracted.append(
-                (distribution, _extract_wheel(wheel, root / str(index)))
-            )
+            extracted.append((distribution, _extract_wheel(wheel, root / str(index))))
         core_roots = [
-            tree for distribution, tree in extracted
+            tree
+            for distribution, tree in extracted
             if distribution == COMPILER_CORE_DISTRIBUTION
         ]
         if len(core_roots) != 1:
-            raise RuntimeError("Windows compiler wheel validation requires one core wheel")
+            raise RuntimeError(
+                "Windows compiler wheel validation requires one core wheel"
+            )
         core = core_roots[0]
         core_names = {
             path.name.casefold()
@@ -775,23 +791,25 @@ def verify_windows_compiler_wheels(
             }
             allowed = own_names | core_names
             for path in sorted(
-                item for item in tree.rglob("*")
-                if item.is_file() and is_pe(item)
+                item for item in tree.rglob("*") if item.is_file() and is_pe(item)
             ):
                 imports = pe_imports(path)
                 key = f"{distribution}/{path.relative_to(tree).as_posix()}"
                 graph[key] = imports
                 if distribution == COMPILER_BINDINGS_DISTRIBUTION:
                     versioned_python_imports.extend(
-                        f"{key} -> {name}" for name in imports
+                        f"{key} -> {name}"
+                        for name in imports
                         if re.fullmatch(r"python3[0-9]{1,2}\.dll", name.casefold())
                     )
                     stable_python_imports.extend(
-                        f"{key} -> {name}" for name in imports
+                        f"{key} -> {name}"
+                        for name in imports
                         if name.casefold() == "python3.dll"
                     )
                 missing.extend(
-                    f"{key} -> {name}" for name in imports
+                    f"{key} -> {name}"
+                    for name in imports
                     if name.casefold() not in allowed
                     and not windows_system_runtime(name)
                 )
@@ -824,17 +842,19 @@ def verify_linux_compiler_wheels(
         extracted = []
         for index, wheel in enumerate(wheels):
             distribution = _wheel_distribution(wheel)
-            extracted.append(
-                (distribution, _extract_wheel(wheel, root / str(index)))
-            )
+            extracted.append((distribution, _extract_wheel(wheel, root / str(index))))
         core_roots = [
-            tree for distribution, tree in extracted
+            tree
+            for distribution, tree in extracted
             if distribution == COMPILER_CORE_DISTRIBUTION
         ]
         if len(core_roots) != 1:
-            raise RuntimeError("Linux compiler wheel validation requires one core wheel")
+            raise RuntimeError(
+                "Linux compiler wheel validation requires one core wheel"
+            )
         core_names = {
-            path.name for path in core_roots[0].rglob("*")
+            path.name
+            for path in core_roots[0].rglob("*")
             if path.is_file() and is_loadable_elf(path)
         }
         graph: dict[str, list[str]] = {}
@@ -847,12 +867,14 @@ def verify_linux_compiler_wheels(
             ):
                 continue
             own_names = {
-                path.name for path in tree.rglob("*")
+                path.name
+                for path in tree.rglob("*")
                 if path.is_file() and is_loadable_elf(path)
             }
             allowed = own_names | core_names
             for path in sorted(
-                item for item in tree.rglob("*")
+                item
+                for item in tree.rglob("*")
                 if item.is_file() and is_loadable_elf(item)
             ):
                 key = f"{distribution}/{path.relative_to(tree).as_posix()}"
@@ -865,7 +887,8 @@ def verify_linux_compiler_wheels(
                     if entry.startswith("/")
                 )
                 missing.extend(
-                    f"{key} -> {name}" for name in needed
+                    f"{key} -> {name}"
+                    for name in needed
                     if name not in allowed and not linux_system_runtime(name)
                 )
         if absolute_rpaths:
@@ -900,7 +923,8 @@ def verify_compiler_wheel_path_references(
         ".yml",
     )
     text_references = [
-        reference for reference in references
+        reference
+        for reference in references
         if reference.member.casefold().endswith(text_suffixes)
     ]
     if text_references:
@@ -909,6 +933,5 @@ def verify_compiler_wheel_path_references(
             for item in text_references
         )
         raise RuntimeError(
-            "ROCm NPU compiler wheel text payload contains local paths:\n  "
-            + details
+            "ROCm NPU compiler wheel text payload contains local paths:\n  " + details
         )

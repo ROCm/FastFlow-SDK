@@ -31,7 +31,7 @@ def pe_imports(path: Path) -> list[str]:
         raise RuntimeError(f"not a PE binary: {path}")
     pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
     require(pe_offset, 24, "header")
-    if data[pe_offset:pe_offset + 4] != b"PE\0\0":
+    if data[pe_offset : pe_offset + 4] != b"PE\0\0":
         raise RuntimeError(f"invalid PE header: {path}")
     coff = pe_offset + 4
     section_count = struct.unpack_from("<H", data, coff + 2)[0]
@@ -103,12 +103,14 @@ def pe_imports(path: Path) -> list[str]:
         if not table_rva and not table_size:
             continue
         if not table_rva or table_size < descriptor_size:
-            raise RuntimeError(f"malformed PE import directory {directory_index}: {path}")
+            raise RuntimeError(
+                f"malformed PE import directory {directory_index}: {path}"
+            )
         offset = rva_offset(table_rva, table_size)
         limit = offset + table_size
         terminated = False
         while offset + descriptor_size <= limit:
-            descriptor = data[offset:offset + descriptor_size]
+            descriptor = data[offset : offset + descriptor_size]
             if not any(descriptor):
                 terminated = True
                 break
@@ -122,7 +124,9 @@ def pe_imports(path: Path) -> list[str]:
             imports.add(c_string(name_rva))
             offset += descriptor_size
         if not terminated:
-            raise RuntimeError(f"unterminated PE import directory {directory_index}: {path}")
+            raise RuntimeError(
+                f"unterminated PE import directory {directory_index}: {path}"
+            )
     return sorted(imports)
 
 

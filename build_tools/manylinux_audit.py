@@ -108,9 +108,7 @@ def auditwheel_policy(
     return wheel_info.overall_policy.name
 
 
-def validate_manylinux_policy(
-    policy: str, *, maximum_glibc: tuple[int, int]
-) -> str:
+def validate_manylinux_policy(policy: str, *, maximum_glibc: tuple[int, int]) -> str:
     """Requires an x86-64 manylinux policy no newer than the given glibc."""
     manylinux = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", policy)
     if not manylinux or tuple(map(int, manylinux.groups())) > maximum_glibc:

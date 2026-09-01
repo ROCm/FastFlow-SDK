@@ -32,10 +32,13 @@ from rocm_npu_qualification.offline import (  # noqa: E402
 )
 from tests.support.qualification import (  # noqa: E402
     make_candidate as _candidate,
+)
+from tests.support.qualification import (
     make_evidence as _evidence,
+)
+from tests.support.qualification import (
     make_policy as _policy,
 )
-
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
@@ -133,9 +136,7 @@ def test_report_without_v1_runtime_fields_is_rejected(tmp_path):
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     def remove_new_metric(evidence):
-        test = next(
-            record for record in evidence["tests"] if record["kind"] == "xadx"
-        )
+        test = next(record for record in evidence["tests"] if record["kind"] == "xadx")
         test["metrics"].pop("validated_bytes")
 
     _rewrite_evidence(source, remove_new_metric)
@@ -464,9 +465,7 @@ def test_report_cannot_redistribute_or_omit_case_execution(tmp_path):
     xadx_test["rounds"] = 56
     xadx_test["metrics"]["validated_bytes"] = 448
     with pytest.raises(EvidenceError, match="invalid per-case metrics"):
-        _reconcile_xadx_report(
-            report, evidence, _candidate()["qualification_contract"]
-        )
+        _reconcile_xadx_report(report, evidence, _candidate()["qualification_contract"])
 
 
 def test_passing_case_budget_is_exact_even_when_report_fails(tmp_path):
@@ -499,7 +498,9 @@ def test_passing_case_budget_is_exact_even_when_report_fails(tmp_path):
             "duration_seconds": 0,
             "mismatch_count": 0,
             "first_mismatch": None,
-            "failures": [{key: value for key, value in failure.items() if key != "case"}],
+            "failures": [
+                {key: value for key, value in failure.items() if key != "case"}
+            ],
         }
     )
     failed_test = dict(
@@ -520,9 +521,7 @@ def test_report_materializations_are_candidate_bound(tmp_path):
     evidence = json.loads((source / "evidence.json").read_text())
     report["materialized_buffers"] = []
     with pytest.raises(EvidenceError, match="materialization inventory"):
-        _reconcile_xadx_report(
-            report, evidence, _candidate()["qualification_contract"]
-        )
+        _reconcile_xadx_report(report, evidence, _candidate()["qualification_contract"])
 
 
 def test_verify_rejects_junit_not_derived_from_tests(tmp_path):

@@ -12,7 +12,6 @@ from unittest import mock
 
 import pytest
 
-
 SCRIPT = Path(__file__).with_name("run_fastflowlm_hrx_smoke.py")
 SPEC = importlib.util.spec_from_file_location("fastflowlm_smoke", SCRIPT)
 smoke = importlib.util.module_from_spec(SPEC)
@@ -101,8 +100,7 @@ class TestFastFlowLMSmoke:
     def test_parse_inference_iterations(self):
         assert smoke.parse_args([]).inference_iterations == 1
         assert (
-            smoke.parse_args(["--inference-iterations", "5"]).inference_iterations
-            == 5
+            smoke.parse_args(["--inference-iterations", "5"]).inference_iterations == 5
         )
 
     def test_csv_has_1k_row(self, tmp_path):
@@ -173,10 +171,13 @@ class TestFastFlowLMSmoke:
             xclbin_path=lambda: xclbins,
         )
         runtime = types.SimpleNamespace(libhrx_path=lambda: hrx)
-        with mock.patch.dict(sys.modules, {
+        with mock.patch.dict(
+            sys.modules,
+            {
                 "rocm_npu_fastflowlm": fastflowlm,
                 "rocm_npu_runtime": runtime,
-        }):
+            },
+        ):
             paths = smoke.installed_package_paths()
         assert paths["flm_bin"] == flm
         assert paths["hrx_runtime"] == hrx
@@ -203,10 +204,13 @@ class TestFastFlowLMSmoke:
         )
         runtime = types.SimpleNamespace(libhrx_path=lambda: hrx)
         with (
-            mock.patch.dict(sys.modules, {
+            mock.patch.dict(
+                sys.modules,
+                {
                     "rocm_npu_fastflowlm": fastflowlm,
                     "rocm_npu_runtime": runtime,
-            }),
+                },
+            ),
             mock.patch.object(smoke.sysconfig, "get_path", return_value=str(scripts)),
         ):
             paths = smoke.installed_package_paths()

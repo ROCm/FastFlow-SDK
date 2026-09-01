@@ -52,9 +52,7 @@ def test_native_cli_does_not_link_forbidden_product_dependencies():
 
 
 def test_native_cli_json_contract_documents_stable_v1_envelope():
-    contract = (
-        ROOT / "docs/contracts/runtime-cli-json.md"
-    ).read_text(encoding="utf-8")
+    contract = (ROOT / "docs/contracts/runtime-cli-json.md").read_text(encoding="utf-8")
     assert "schema_version" in contract
     assert "command" in contract
     assert "status" in contract
@@ -78,14 +76,10 @@ def test_self_test_fixture_hashes_match_provenance():
         / "self-test"
         / "npu2-vector-scalar-add"
     )
-    manifest = json.loads(
-        (fixture / "manifest.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((fixture / "manifest.json").read_text(encoding="utf-8"))
     hashes = manifest["producer"]["artifacts"]
     input_bytes = b"".join(struct.pack("<i", value) for value in range(1, 1025))
-    expected_bytes = b"".join(
-        struct.pack("<i", value) for value in range(2, 1026)
-    )
+    expected_bytes = b"".join(struct.pack("<i", value) for value in range(2, 1026))
     assert manifest["dispatch"] == {
         "workgroup_count": [1, 1, 1],
         "workgroup_size": [1, 1, 1],
@@ -117,17 +111,18 @@ def test_self_test_fixture_hashes_match_provenance():
     ]
     assert not (fixture / "input.bin").exists()
     assert not (fixture / "expected.bin").exists()
-    assert hashlib.sha256((fixture / "kernel.xadx").read_bytes()).hexdigest() == (
-        hashes["xadx_sha256"]
+    assert (
+        hashlib.sha256((fixture / "kernel.xadx").read_bytes()).hexdigest()
+        == (hashes["xadx_sha256"])
     )
     assert hashlib.sha256(input_bytes).hexdigest() == hashes["input_sha256"]
     assert hashlib.sha256(expected_bytes).hexdigest() == hashes["expected_sha256"]
 
 
 def test_self_test_is_explicitly_scoped_to_npu2():
-    source = (
-        ROOT / "tools/rocm-npu/src/commands/self_test.cc"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "tools/rocm-npu/src/commands/self_test.cc").read_text(
+        encoding="utf-8"
+    )
     docs = (ROOT / "docs/runtime-cli.md").read_text(encoding="utf-8")
     assert 'platform.target_family != "npu2"' in source
     assert "supported only on NPU2" in source
@@ -148,9 +143,7 @@ def test_hardware_report_runner_skips_npu1_self_test(monkeypatch, tmp_path):
             "checks": [],
             "data": {"target_family": "npu"} if command == "probe" else {},
         }
-        return SimpleNamespace(
-            stdout=json.dumps(report), stderr="", returncode=0
-        )
+        return SimpleNamespace(stdout=json.dumps(report), stderr="", returncode=0)
 
     monkeypatch.setattr(validate_rocm_npu_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(validate_rocm_npu_cli, "validate_report", lambda *a, **k: None)
@@ -243,9 +236,7 @@ def test_hardware_report_validator_rejects_duplicate_check_ids():
         ({"data": []}, "data must be an object"),
     ),
 )
-def test_hardware_report_validator_enforces_documented_envelope(
-    report_update, message
-):
+def test_hardware_report_validator_enforces_documented_envelope(report_update, message):
     report = {
         "schema_version": 1,
         "command": "plugin list",
@@ -315,8 +306,8 @@ def test_runtime_wheels_ship_native_cli(module):
 
 
 def test_runtime_wheel_staging_ships_fixture_and_license():
-    source = (
-        ROOT / "build_tools" / "runtime_wheel_staging.py"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "build_tools" / "runtime_wheel_staging.py").read_text(
+        encoding="utf-8"
+    )
     assert "share/rocm-npu/self-test" in source
     assert "nlohmann-json-LICENSE.MIT" in source

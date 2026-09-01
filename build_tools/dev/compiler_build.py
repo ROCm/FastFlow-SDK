@@ -35,7 +35,7 @@ def cmd_build_llvm(args):
     paths.OUT.mkdir(exist_ok=True)
     cc, cxx = environment.compilers()
     crt = (
-        ["-DCMAKE_MSVC_RUNTIME_LIBRARY=" "MultiThreaded$<$<CONFIG:Debug>:Debug>"]
+        ["-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>"]
         if paths.is_windows()
         else []
     )
@@ -95,7 +95,7 @@ def build_iron_tools(python_executable, build_dir, install_dir):
     install_dir = Path(install_dir)
     if not python_executable.is_file():
         raise RuntimeError(
-            "compiler binding Python executable missing: " f"{python_executable}"
+            f"compiler binding Python executable missing: {python_executable}"
         )
     cc, cxx = environment.compilers()
     env = environment.cmake_env()

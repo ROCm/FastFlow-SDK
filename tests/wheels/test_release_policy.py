@@ -55,9 +55,7 @@ def test_release_policy_loads_validated_wheel_release(tmp_path):
         ),
     ],
 )
-def test_release_policy_rejects_invalid_wheel_release(
-    tmp_path, wheel_release, message
-):
+def test_release_policy_rejects_invalid_wheel_release(tmp_path, wheel_release, message):
     policy = _write_policy(tmp_path, wheel_release)
     loader = (
         release_base_version

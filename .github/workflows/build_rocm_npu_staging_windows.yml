@@ -101,13 +101,6 @@ jobs:
             uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
       # VS Developer environment: puts the MSVC headers/libs + toolchain on PATH.
-      # F821 only: see the Linux workflow. `python`, not `python3`: this job uses the
-      # setup-python interpreter, which is only guaranteed to publish `python`.
-      - name: Lint (undefined names)
-        run: |
-          python -m pip install --quiet --disable-pip-version-check ruff==0.15.21
-          python -m ruff check --select F821 dev.py build_tools tests
-
       - name: Set up MSVC (VS Developer environment)
         uses: ilammy/msvc-dev-cmd@v1   # TODO: SHA-pin
         with:

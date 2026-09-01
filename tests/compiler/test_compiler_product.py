@@ -388,7 +388,9 @@ def test_npu_prerequisites_exclude_separate_compiler_product(tmp_path):
     npu_prereqs._stage_npu_runtime_prereqs(stage, hrx_install, cts_source)
 
     assert (stage / "build/hrx-install/include/hrx/hrx_runtime.h").is_file()
-    cts_stage = stage.joinpath("projects", "hrx", "build", "cmake", *hrx_runtime.HRX_CTS_DIR)
+    cts_stage = stage.joinpath(
+        "projects", "hrx", "build", "cmake", *hrx_runtime.HRX_CTS_DIR
+    )
     for name in hrx_runtime.HRX_CTS_TESTS:
         assert (cts_stage / f"{name}{compiler_product._EXE}").is_file()
     assert not (stage / "build/iron-tools").exists()
@@ -709,7 +711,9 @@ def test_relocated_toolchain_env_uses_installed_wheel_bindings(tmp_path):
     assert env["PYTHONPATH"] == str(site_packages)
 
 
-def test_hrx_xclbinutil_source_state_uses_nested_git_when_present(tmp_path, monkeypatch):
+def test_hrx_xclbinutil_source_state_uses_nested_git_when_present(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "iron-tools" / "third_party" / "hrx-xclbinutil"
     source.mkdir(parents=True)
     (source / ".git").mkdir()

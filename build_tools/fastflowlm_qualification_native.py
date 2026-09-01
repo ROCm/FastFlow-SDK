@@ -35,12 +35,13 @@ KERNEL_RECIPE_SCHEMA = (
     / "schemas"
     / "kernel-recipe-v1.schema.json"
 )
+
+
 def load_capabilities(path=CAPABILITIES_SOURCE):
     result = json.loads(Path(path).read_text(encoding="utf-8"))
     if (
         result.get("schema_version") != 1
-        or result.get("kind")
-        != "rocm-npu-fastflowlm-kernel-qualification-capabilities"
+        or result.get("kind") != "rocm-npu-fastflowlm-kernel-qualification-capabilities"
         or result.get("provenance", {}).get("public_fastflowlm_abi") is not False
         or result.get("shape") != {"m": 1024, "k": 1024, "n": 128}
         or not result.get("families")
@@ -160,10 +161,7 @@ def run_native_qualification_tests(*, configure=True):
     )
     runtime_env = qualification_runtime_env()
     runtime_env.update(
-        {
-            name: str(temporary_directory)
-            for name in ("TEMP", "TMP", "TMPDIR")
-        }
+        {name: str(temporary_directory) for name in ("TEMP", "TMP", "TMPDIR")}
     )
     try:
         environment.sh(
@@ -228,7 +226,9 @@ def verify_recipe_generator_parity(destination=VECTORS, *, configure=True):
     )
 
     generators = recipe_generators()
-    shape = json.loads((destination / "index.json").read_text(encoding="utf-8"))["shape"]
+    shape = json.loads((destination / "index.json").read_text(encoding="utf-8"))[
+        "shape"
+    ]
     m, k, n = shape["m"], shape["k"], shape["n"]
     checked = 0
     for profile in generators.PROFILES:
@@ -260,10 +260,8 @@ def verify_recipe_generator_parity(destination=VECTORS, *, configure=True):
             ("qwen-affine", "mm"),
             ("qwen-affine", "gemma-text"),
         ):
-            expected[
-                f"{profile}-chain-{semantics}-{order}-512.bin"
-            ] = generators.chained_reference(
-                m, k, 512, profile, 29, semantics, order
+            expected[f"{profile}-chain-{semantics}-{order}-512.bin"] = (
+                generators.chained_reference(m, k, 512, profile, 29, semantics, order)
             )
         for salt in (29, 41, 46, 54):
             expected[f"activation-{salt}-logical.bin"] = generators.activation(

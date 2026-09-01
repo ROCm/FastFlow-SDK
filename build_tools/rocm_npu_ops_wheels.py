@@ -147,7 +147,9 @@ def stage_ops_tree(
     if not (destination / "iron" / "operators" / "__init__.py").is_file():
         raise RuntimeError("staged IRON ops wheel is missing iron.operators")
     if not (destination / "aie_kernels" / "generic" / "add.cc").is_file():
-        raise RuntimeError("staged IRON ops wheel is missing aie_kernels/generic/add.cc")
+        raise RuntimeError(
+            "staged IRON ops wheel is missing aie_kernels/generic/add.cc"
+        )
 
     package_root = destination / OPS_PACKAGE
     write_file(package_root / "__init__.py", _ops_metadata_module())
@@ -175,9 +177,7 @@ def stage_ops_tree(
         },
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["files"] = file_inventory(
-        destination, exclude_paths=(manifest_path,)
-    )
+    manifest["files"] = file_inventory(destination, exclude_paths=(manifest_path,))
     manifest_path.write_bytes(
         (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     )
@@ -296,17 +296,13 @@ def probe_operator_modules(operators, *, torch_at_import: frozenset[str]):
             + ", ".join(missing_skips)
         )
     unused_skips = sorted(
-        pkg
-        for pkg in torch_at_import
-        if f"{operators.__name__}.{pkg}.op" in imported
+        pkg for pkg in torch_at_import if f"{operators.__name__}.{pkg}.op" in imported
     )
     if unused_skips:
         raise RuntimeError(
             "torch-at-import skip list is stale; drop: " + ", ".join(unused_skips)
         )
-    expected_skipped = {
-        f"{operators.__name__}.{pkg}.op" for pkg in torch_at_import
-    }
+    expected_skipped = {f"{operators.__name__}.{pkg}.op" for pkg in torch_at_import}
     if set(skipped) != expected_skipped:
         raise RuntimeError(
             f"torch-at-import skips mismatch: skipped={skipped} "
@@ -334,8 +330,7 @@ def probe_operator_modules(operators, *, torch_at_import: frozenset[str]):
                 sys.modules[name] for name in imported if name in sys.modules
             ]
             if any(
-                getattr(module, export, None) is not None
-                for module in imported_modules
+                getattr(module, export, None) is not None for module in imported_modules
             ):
                 raise
             continue
@@ -408,7 +403,7 @@ def compile_installed_operators(specs, build_root):
     from pathlib import Path
 
     import aie.utils as aie_utils
-    from aie.iron.device import NPU1Col1, NPU2
+    from aie.iron.device import NPU2, NPU1Col1
     from iron.common import AIEContext, AIEOperatorBase
     from iron.common.compilation import InstsBinArtifact, XclbinArtifact
 

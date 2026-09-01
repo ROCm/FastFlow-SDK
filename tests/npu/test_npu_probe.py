@@ -10,9 +10,7 @@ from unittest import mock
 
 import pytest
 
-
 from build_tools import linux_npu
-
 
 pytestmark = [
     pytest.mark.compiler_stack,
@@ -25,9 +23,7 @@ pytestmark = [
 class TestLinuxNpuProbeDiagnostic:
     def _mock_devnode_context(self, kernel_release: str, srcversion: str):
         sys_node = Path("/sys/class/accel/accel0")
-        device_stat = SimpleNamespace(
-            st_mode=stat.S_IFCHR | 0o660, st_rdev=123
-        )
+        device_stat = SimpleNamespace(st_mode=stat.S_IFCHR | 0o660, st_rdev=123)
 
         def read_sysfs(path: Path):
             text = str(path).replace("\\", "/")
@@ -40,12 +36,8 @@ class TestLinuxNpuProbeDiagnostic:
             return None
 
         return (
-            mock.patch.object(
-                linux_npu, "sys_accel_nodes", return_value=[sys_node]
-            ),
-            mock.patch.object(
-                linux_npu, "read_sysfs_text", side_effect=read_sysfs
-            ),
+            mock.patch.object(linux_npu, "sys_accel_nodes", return_value=[sys_node]),
+            mock.patch.object(linux_npu, "read_sysfs_text", side_effect=read_sysfs),
             mock.patch.object(Path, "exists", return_value=True),
             mock.patch.object(Path, "stat", return_value=device_stat),
             mock.patch.object(linux_npu.os, "access", return_value=True),
@@ -55,12 +47,8 @@ class TestLinuxNpuProbeDiagnostic:
                 return_value=SimpleNamespace(release=kernel_release),
                 create=True,
             ),
-            mock.patch.object(
-                linux_npu.os, "major", return_value=261, create=True
-            ),
-            mock.patch.object(
-                linux_npu.os, "minor", return_value=0, create=True
-            ),
+            mock.patch.object(linux_npu.os, "major", return_value=261, create=True),
+            mock.patch.object(linux_npu.os, "minor", return_value=0, create=True),
         )
 
     def test_known_ubuntu_617_sva_regression_tuple(self):

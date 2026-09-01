@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
+import email.parser
 import hashlib
 import importlib.metadata
-import email.parser
 import json
 import os
 import subprocess
@@ -33,7 +33,6 @@ from tests.support.qualification import (
     make_policy,
     write_candidate_wheel,
 )
-
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
@@ -150,12 +149,9 @@ def _fake_xadx_assets(root: Path) -> Path:
         json.dumps(
             {
                 "implementations": {
-                    "entries": {
-                        entry["id"]: {} for entry in executables
-                    },
+                    "entries": {entry["id"]: {} for entry in executables},
                     "unreached": {
-                        entry["id"]: {}
-                        for entry in recipe["coverage_limits"]
+                        entry["id"]: {} for entry in recipe["coverage_limits"]
                     },
                 }
             }
@@ -170,11 +166,7 @@ def _fake_xadx_assets(root: Path) -> Path:
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
 
-    records = [
-        record(path)
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    ]
+    records = [record(path) for path in sorted(root.rglob("*")) if path.is_file()]
     manifest = {
         "schema_version": 1,
         "product": "rocm-npu-fastflowlm-xadx",
@@ -267,8 +259,7 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "rocm_npu_qualification/schemas/qualification-index-v1.schema.json" in names
     assert "rocm_npu_qualification/schemas/candidate-v1.schema.json" in names
     assert (
-        "rocm_npu_qualification/schemas/qualification-contract-v1.schema.json"
-        in names
+        "rocm_npu_qualification/schemas/qualification-contract-v1.schema.json" in names
     )
     assert "rocm_npu_qualification/schemas/kernel-recipe-v1.schema.json" in names
     assert "rocm_npu_qualification/schemas/xadx-report-v1.schema.json" in names
@@ -286,9 +277,10 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
         assert "rocm_npu_qualification/assets/asr_sample.wav" in names
     provenance = package_manifest["embedded_binaries"]["fastflowlm_xadx"]
     assert provenance["target"] == "npu2"
-    assert provenance["recipe_sha256"] == hashlib.sha256(
-        (assets / "recipe.json").read_bytes()
-    ).hexdigest()
+    assert (
+        provenance["recipe_sha256"]
+        == hashlib.sha256((assets / "recipe.json").read_bytes()).hexdigest()
+    )
     assert len(provenance["executables"]) == len(
         json.loads((assets / "recipe.json").read_text(encoding="utf-8"))[
             "implementations"
@@ -352,10 +344,12 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
         ),
     ]
     environment_root = tmp_path / "venv"
-    venv.EnvBuilder(
-        with_pip=True, clear=True, system_site_packages=False
-    ).create(environment_root)
-    python = environment_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    venv.EnvBuilder(with_pip=True, clear=True, system_site_packages=False).create(
+        environment_root
+    )
+    python = environment_root / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
     numeric_wheels = [
         _repack_installed_wheel(distribution, tmp_path)
         for distribution in NUMERIC_RUNTIME
@@ -476,13 +470,9 @@ assert report["status"] == "pass", report
     canonical_root = tmp_path / "canonical"
     canonical_root.mkdir()
     canonical_candidate = canonical_root / "candidate.json"
-    canonical_candidate.write_bytes(
-        canonical_candidate_bytes(make_candidate())
-    )
+    canonical_candidate.write_bytes(canonical_candidate_bytes(make_candidate()))
     policy = tmp_path / "policy.json"
-    policy.write_text(
-        json.dumps(make_policy("windows")), encoding="utf-8"
-    )
+    policy.write_text(json.dumps(make_policy("windows")), encoding="utf-8")
     run_cli(
         "intake",
         "--input-dir",

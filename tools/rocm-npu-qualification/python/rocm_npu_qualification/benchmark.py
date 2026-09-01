@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import math
 
-
 BENCHMARK_CSV_HEADER = (
     "context_length_k",
     "ttft_avg_s",
@@ -70,10 +69,7 @@ def benchmark_csv_checkpoint(
                 )
         parsed = {
             BENCHMARK_CSV_HEADER[0]: context_length,
-            **{
-                name: value
-                for name, value in zip(BENCHMARK_CSV_HEADER[1:], numeric)
-            },
+            **{name: value for name, value in zip(BENCHMARK_CSV_HEADER[1:], numeric)},
         }
         parsed_rows.append((row, parsed))
 

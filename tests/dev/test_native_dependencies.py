@@ -38,7 +38,7 @@ def _write_pe(path: Path, *, malformed_delay_va: bool = False) -> Path:
     struct.pack_into("<II", data, directory + 1 * 8, 0x1000, 40)
     struct.pack_into("<II", data, directory + 13 * 8, 0x1040, 64)
     section = optional + 240
-    data[section:section + 8] = b".rdata\0\0"
+    data[section : section + 8] = b".rdata\0\0"
     struct.pack_into("<IIII", data, section + 8, 0x400, 0x1000, 0x400, 0x200)
 
     normal = 0x200

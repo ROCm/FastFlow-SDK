@@ -15,17 +15,16 @@ import threading
 import time
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(
-    0, str(ROOT / "tools" / "rocm-npu-qualification" / "python")
-)
+sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
 
 from rocm_npu_qualification.fastflowlm import (  # noqa: E402
     extract_raw_outputs,
-    require_1k_checkpoint as _require_1k_checkpoint,
     smoke_phrase_matches,
     verify_xclbin_inventory,
+)
+from rocm_npu_qualification.fastflowlm import (
+    require_1k_checkpoint as _require_1k_checkpoint,
 )
 from rocm_npu_qualification.profiles import load_profile  # noqa: E402
 
@@ -153,10 +152,18 @@ def run_tee(
     lines_sent = 0
     exit_sent = False
 
-    log = output_path.open("w", encoding="utf-8", errors="replace") if output_path else None
+    log = (
+        output_path.open("w", encoding="utf-8", errors="replace")
+        if output_path
+        else None
+    )
     try:
         while True:
-            if deadline is not None and time.monotonic() >= deadline and process.poll() is None:
+            if (
+                deadline is not None
+                and time.monotonic() >= deadline
+                and process.poll() is None
+            ):
                 timed_out = True
                 process.kill()
             try:
@@ -208,12 +215,17 @@ def run_tee(
             f"expected {len(input_lines)}: {' '.join(command)}"
         )
     if returncode != 0:
-        raise SmokeFailure(f"command exited with status {returncode}: {' '.join(command)}")
+        raise SmokeFailure(
+            f"command exited with status {returncode}: {' '.join(command)}"
+        )
     return text
 
 
 def fail_if_runtime_errors(text, label, path):
-    if re.search(r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+", text):
+    if re.search(
+        r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+",
+        text,
+    ):
         raise SmokeFailure(f"{label} emitted HRX runtime errors: {path}")
     if re.search(r"\[WARNING\].*Max length reached", text):
         raise SmokeFailure(f"{label} hit the generation length limit: {path}")
@@ -234,13 +246,10 @@ def verify_qwen3_xclbins(xclbin_prefix):
     ]
     if len(models) != 1:
         raise SmokeFailure("fast qualification profile must contain qwen3:0.6b")
-    errors = verify_xclbin_inventory(
-        xclbin_prefix / "xclbins", models[0]["xclbins"]
-    )
+    errors = verify_xclbin_inventory(xclbin_prefix / "xclbins", models[0]["xclbins"])
     if errors:
         raise SmokeFailure(
-            "FastFlowLM Qwen3 xclbin check failed:\n  - "
-            + "\n  - ".join(errors)
+            "FastFlowLM Qwen3 xclbin check failed:\n  - " + "\n  - ".join(errors)
         )
 
 
@@ -248,11 +257,10 @@ def csv_has_1k_row(path):
     with path.open(newline="", encoding="utf-8", errors="replace") as stream:
         return any(row and row[0].strip() == "1" for row in csv.reader(stream))
 
+
 def require_1k_checkpoint(text, minimum=950, maximum=1024):
     try:
-        return _require_1k_checkpoint(
-            text, minimum=minimum, maximum=maximum
-        )
+        return _require_1k_checkpoint(text, minimum=minimum, maximum=maximum)
     except ValueError as error:
         raise SmokeFailure(str(error)) from error
 
@@ -267,7 +275,9 @@ def installed_package_paths():
         import rocm_npu_fastflowlm
         import rocm_npu_runtime
     except ImportError as error:
-        raise SmokeFailure(f"installed rocm-npu wheel package is unavailable: {error}") from error
+        raise SmokeFailure(
+            f"installed rocm-npu wheel package is unavailable: {error}"
+        ) from error
     script = Path(sysconfig.get_path("scripts")) / ("flm.exe" if IS_WINDOWS else "flm")
     return {
         "flm_bin": script if script.is_file() else Path(rocm_npu_fastflowlm.flm_path()),
@@ -280,29 +290,60 @@ def installed_package_paths():
 def main():
     configure_standard_streams()
     args = parse_args()
-    bundle = Path(os.environ["FASTFLOWLM_BUNDLE"]) if os.environ.get("FASTFLOWLM_BUNDLE") else None
+    bundle = (
+        Path(os.environ["FASTFLOWLM_BUNDLE"])
+        if os.environ.get("FASTFLOWLM_BUNDLE")
+        else None
+    )
     installed_package = os.environ.get("FASTFLOWLM_INSTALLED_PACKAGE") == "1"
-    fastflowlm_dir = Path(os.environ.get("FASTFLOWLM_DIR") or (ROOT / "projects" / "FastFlowLM"))
+    fastflowlm_dir = Path(
+        os.environ.get("FASTFLOWLM_DIR") or (ROOT / "projects" / "FastFlowLM")
+    )
     flm_src = fastflowlm_dir / "src"
     library_name = "hrx.dll" if IS_WINDOWS else "libhrx.so"
-    default_install = Path(os.environ.get("HRX_INSTALL") or (ROOT / "build" / "hrx-install"))
-    runtime_dir = Path(os.environ.get("LIBHRX_DIR") or
-                       (default_install / ("bin" if IS_WINDOWS else "lib")))
+    default_install = Path(
+        os.environ.get("HRX_INSTALL") or (ROOT / "build" / "hrx-install")
+    )
+    runtime_dir = Path(
+        os.environ.get("LIBHRX_DIR")
+        or (default_install / ("bin" if IS_WINDOWS else "lib"))
+    )
     package_paths = installed_package_paths() if installed_package else {}
-    flm_bin = (package_paths["flm_bin"] if installed_package else
-               bundle / "bin" / ("flm.exe" if IS_WINDOWS else "flm") if bundle else
-               Path(os.environ.get("FLM_BIN") or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm"))))
-    hrx_runtime = (package_paths["hrx_runtime"] if installed_package else
-                   bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so") if bundle else
-                   Path(os.environ.get("HRX_LIBHRX") or (runtime_dir / library_name)))
+    flm_bin = (
+        package_paths["flm_bin"]
+        if installed_package
+        else bundle / "bin" / ("flm.exe" if IS_WINDOWS else "flm")
+        if bundle
+        else Path(
+            os.environ.get("FLM_BIN")
+            or (flm_src / "build" / ("flm.exe" if IS_WINDOWS else "flm"))
+        )
+    )
+    hrx_runtime = (
+        package_paths["hrx_runtime"]
+        if installed_package
+        else bundle / ("bin/hrx.dll" if IS_WINDOWS else "lib/libhrx.so")
+        if bundle
+        else Path(os.environ.get("HRX_LIBHRX") or (runtime_dir / library_name))
+    )
     model = os.environ.get("FLM_MODEL") or "qwen3:0.6b"
-    model_cache = Path(os.environ.get("FLM_MODEL_PATH") or (ROOT / "build" / "FastFlowLM-models"))
-    config_path = (package_paths["config_path"] if installed_package else
-                   bundle / "share" / "flm" / "model_list.json" if bundle else
-                   Path(os.environ.get("FLM_CONFIG_PATH") or (flm_src / "model_list.json")))
-    xclbin_prefix = (package_paths["xclbin_prefix"] if installed_package else
-                     bundle / "share" / "flm" if bundle else
-                     Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src))
+    model_cache = Path(
+        os.environ.get("FLM_MODEL_PATH") or (ROOT / "build" / "FastFlowLM-models")
+    )
+    config_path = (
+        package_paths["config_path"]
+        if installed_package
+        else bundle / "share" / "flm" / "model_list.json"
+        if bundle
+        else Path(os.environ.get("FLM_CONFIG_PATH") or (flm_src / "model_list.json"))
+    )
+    xclbin_prefix = (
+        package_paths["xclbin_prefix"]
+        if installed_package
+        else bundle / "share" / "flm"
+        if bundle
+        else Path(os.environ.get("FLM_XCLBIN_PATH") or flm_src)
+    )
     bench_config = Path(
         os.environ.get("FLM_BENCH_CONFIG")
         or (
@@ -315,20 +356,20 @@ def main():
             / "bench_1k_smoke.json"
         )
     )
-    work_dir = Path(os.environ.get("FLM_SMOKE_WORK_DIR") or (ROOT / "build" / "FastFlowLM-smoke"))
+    work_dir = Path(
+        os.environ.get("FLM_SMOKE_WORK_DIR") or (ROOT / "build" / "FastFlowLM-smoke")
+    )
     smoke_turns = [
         (
             os.environ.get("FLM_SMOKE_PROMPT")
             or "Repeat exactly: HRX runtime smoke test one.",
-            os.environ.get("FLM_SMOKE_EXPECTED")
-            or "HRX runtime smoke test one.",
+            os.environ.get("FLM_SMOKE_EXPECTED") or "HRX runtime smoke test one.",
             os.environ.get("FLM_SMOKE_EXPECTED_REGEX"),
         ),
         (
             os.environ.get("FLM_SMOKE_PROMPT_2")
             or "Repeat exactly: HRX runtime smoke test two.",
-            os.environ.get("FLM_SMOKE_EXPECTED_2")
-            or "HRX runtime smoke test two.",
+            os.environ.get("FLM_SMOKE_EXPECTED_2") or "HRX runtime smoke test two.",
             os.environ.get("FLM_SMOKE_EXPECTED_REGEX_2"),
         ),
     ]
@@ -358,9 +399,13 @@ def main():
     env["FLM_MODEL_PATH"] = str(model_cache)
     if not bundle and not installed_package:
         if IS_WINDOWS:
-            prepend_search_path(env, "PATH", [flm_bin.parent, hrx_runtime.parent, flm_src / "lib"])
+            prepend_search_path(
+                env, "PATH", [flm_bin.parent, hrx_runtime.parent, flm_src / "lib"]
+            )
         else:
-            prepend_search_path(env, "LD_LIBRARY_PATH", [hrx_runtime.parent, flm_src / "lib"])
+            prepend_search_path(
+                env, "LD_LIBRARY_PATH", [hrx_runtime.parent, flm_src / "lib"]
+            )
 
     print("FastFlowLM HRX smoke")
     print(f"  model:       {model}")
@@ -393,9 +438,7 @@ def main():
         print("== FastFlowLM inference transcript begin ==")
         input_lines = setup_commands + [prompt for prompt, _, _ in smoke_turns]
         if IS_WINDOWS:
-            input_kwargs = {
-                "input_text": "".join(f"{line}\n" for line in input_lines)
-            }
+            input_kwargs = {"input_text": "".join(f"{line}\n" for line in input_lines)}
         else:
             input_kwargs = {"input_lines": input_lines}
         run_text = run_tee(
@@ -453,9 +496,13 @@ def main():
     bench_raw_outputs = extract_raw_outputs(bench_text)
     bench_raw_text = bench_raw_outputs[0] if bench_raw_outputs else ""
     bench_raw_output = work_dir / f"bench_{safe_model}_raw.txt"
-    bench_raw_output.write_text(bench_raw_text + "\n", encoding="utf-8", errors="replace")
+    bench_raw_output.write_text(
+        bench_raw_text + "\n", encoding="utf-8", errors="replace"
+    )
     if len(re.findall(r"[A-Za-z]{2,}", bench_raw_text)) < 8:
-        raise SmokeFailure(f"FastFlowLM benchmark did not produce coherent text: {bench_raw_output}")
+        raise SmokeFailure(
+            f"FastFlowLM benchmark did not produce coherent text: {bench_raw_output}"
+        )
     if bench_regex and not re.search(
         bench_regex, bench_raw_text, re.IGNORECASE | re.DOTALL
     ):
@@ -470,10 +517,14 @@ def main():
         if path.stat().st_mtime_ns >= stamp_mtime
     ]
     if not csvs:
-        raise SmokeFailure("FastFlowLM benchmark completed but did not write a fresh CSV")
+        raise SmokeFailure(
+            "FastFlowLM benchmark completed but did not write a fresh CSV"
+        )
     result_csv = max(csvs, key=lambda path: path.stat().st_mtime_ns)
     if not csv_has_1k_row(result_csv):
-        raise SmokeFailure(f"FastFlowLM benchmark CSV does not contain a 1k result row: {result_csv}")
+        raise SmokeFailure(
+            f"FastFlowLM benchmark CSV does not contain a 1k result row: {result_csv}"
+        )
     print(
         "FastFlowLM HRX smoke: PASS "
         f"({actual_checkpoint} actual prompt tokens) -> {result_csv}"

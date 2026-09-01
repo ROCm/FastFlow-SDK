@@ -232,7 +232,8 @@ def validate_profile(profile: Any) -> dict[str, Any]:
                     "expected_regex",
                 }
                 _require(
-                    set(test) in (allowed_properties, allowed_properties | {"iterations"}),
+                    set(test)
+                    in (allowed_properties, allowed_properties | {"iterations"}),
                     f"{tag}/{name}: bench properties are invalid",
                 )
                 _require(
@@ -276,7 +277,9 @@ def profile_names() -> list[str]:
     )
 
 
-def merge_inherited_profile(value: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
+def merge_inherited_profile(
+    value: dict[str, Any], parent: dict[str, Any]
+) -> dict[str, Any]:
     """Materialize an `extends` profile, including `test_extensions`.
 
     Candidate contract generation must use this same merge so sealed evidence
@@ -290,8 +293,7 @@ def merge_inherited_profile(value: dict[str, Any], parent: dict[str, Any]) -> di
         "models",
     }
     _require(
-        set(value)
-        in (allowed_properties, allowed_properties | {"test_extensions"}),
+        set(value) in (allowed_properties, allowed_properties | {"test_extensions"}),
         "inherited profile properties are invalid",
     )
     _require(
@@ -341,9 +343,7 @@ def materialize_profiles(raw_profiles: dict[str, Any]) -> dict[str, dict[str, An
 
     def resolve(name: str) -> dict[str, Any]:
         if name in loading or name not in raw_profiles:
-            raise ProfileError(
-                f"qualification profile inheritance is invalid: {name}"
-            )
+            raise ProfileError(f"qualification profile inheritance is invalid: {name}")
         value = raw_profiles[name]
         if isinstance(value, dict) and "extends" in value:
             parent_name = value["extends"]

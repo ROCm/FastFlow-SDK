@@ -88,9 +88,7 @@ def check_fastflowlm_linux_packaging_tools(
     return not missing, missing
 
 
-def require_fastflowlm_linux_packaging_tools(
-    *, archive: bool = False
-) -> None:
+def require_fastflowlm_linux_packaging_tools(*, archive: bool = False) -> None:
     if paths.is_windows():
         return
     ok, missing = check_fastflowlm_linux_packaging_tools(archive=archive)
@@ -104,9 +102,12 @@ def require_fastflowlm_linux_packaging_tools(
 def vcpkg_commit(repo_root: Path) -> str:
     """Returns the curated-registry baseline that also pins the vcpkg checkout."""
     manifest = json.loads(
-        (repo_root / ".github/vcpkg/fastflowlm/vcpkg.json").read_text())
+        (repo_root / ".github/vcpkg/fastflowlm/vcpkg.json").read_text()
+    )
     commit = manifest.get("builtin-baseline", "")
-    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+    if len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
         raise RuntimeError("FastFlowLM vcpkg manifest has no valid builtin-baseline")
     return commit
 
@@ -119,7 +120,9 @@ def vcpkg_triplet(system_name: str | None = None) -> str:
         raise RuntimeError(f"FastFlowLM vcpkg is unsupported on {system_name}") from exc
 
 
-def dependency_policy(repo_root: Path, system_name: str | None = None) -> dict[str, str]:
+def dependency_policy(
+    repo_root: Path, system_name: str | None = None
+) -> dict[str, str]:
     """Returns the complete native-dependency policy and its stable identity."""
     system_name = system_name or platform.system()
     triplet = vcpkg_triplet(system_name)
@@ -128,8 +131,7 @@ def dependency_policy(repo_root: Path, system_name: str | None = None) -> dict[s
     manifest = manifest_path.read_bytes()
     triplet_contents = triplet_path.read_bytes()
     identity = hashlib.sha256(
-        b"rocm-npu-staging-fastflowlm-vcpkg-v1\0" + manifest + b"\0" +
-        triplet_contents
+        b"rocm-npu-staging-fastflowlm-vcpkg-v1\0" + manifest + b"\0" + triplet_contents
     ).hexdigest()
     return {
         "identity": identity,
@@ -141,15 +143,15 @@ def dependency_policy(repo_root: Path, system_name: str | None = None) -> dict[s
     }
 
 
-def dependency_paths(repo_root: Path, system_name: str | None = None) -> dict[str, Path | str]:
+def dependency_paths(
+    repo_root: Path, system_name: str | None = None
+) -> dict[str, Path | str]:
     """Returns the repository-managed, policy-isolated vcpkg installation."""
     policy = dependency_policy(repo_root, system_name)
     system_name = policy["system"]
     triplet = policy["triplet"]
     source = repo_root / ".cache" / "vcpkg-src"
-    install_root = (
-        repo_root / ".cache" / "vcpkg-installed" / policy["identity"][:16]
-    )
+    install_root = repo_root / ".cache" / "vcpkg-installed" / policy["identity"][:16]
     return {
         "system": system_name,
         "triplet": triplet,
@@ -222,13 +224,17 @@ def install_managed_vcpkg(
     ).stdout.strip()
     commit = vcpkg_commit(repo_root)
     if head != commit:
-        environment.sh(["git", "-C", str(source), "fetch", "--depth", "1", "origin", commit])
+        environment.sh(
+            ["git", "-C", str(source), "fetch", "--depth", "1", "origin", commit]
+        )
         environment.sh(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
         source_changed = True
 
     executable = Path(config["executable"])
     if source_changed or not executable.is_file():
-        bootstrap = source / ("bootstrap-vcpkg.bat" if is_windows else "bootstrap-vcpkg.sh")
+        bootstrap = source / (
+            "bootstrap-vcpkg.bat" if is_windows else "bootstrap-vcpkg.sh"
+        )
         command = (
             ["cmd.exe", "/d", "/c", str(bootstrap), "-disableMetrics"]
             if is_windows
@@ -275,7 +281,9 @@ def install_managed_vcpkg(
 
 
 def dependency_errors(
-    paths: dict[str, Path | str], *, cargo_available: bool,
+    paths: dict[str, Path | str],
+    *,
+    cargo_available: bool,
     rustc_version: tuple[int, ...] | None,
 ) -> list[str]:
     """Checks the capabilities supplied by the locked vcpkg installation."""
@@ -283,7 +291,11 @@ def dependency_errors(
     if not cargo_available:
         missing.append("Rust/Cargo (install with rustup; rustc >= 1.80 required)")
     if rustc_version is None or rustc_version < MIN_RUSTC:
-        got = ".".join(str(n) for n in rustc_version) if rustc_version else "missing/unknown"
+        got = (
+            ".".join(str(n) for n in rustc_version)
+            if rustc_version
+            else "missing/unknown"
+        )
         need = ".".join(str(n) for n in MIN_RUSTC)
         missing.append(f"rustc >= {need} (found {got})")
 

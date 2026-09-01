@@ -41,14 +41,11 @@ COMPILER_BINDINGS_PACKAGE = "rocm_npu_compiler_bindings"
 OPS_PACKAGE = "rocm_npu_ops"
 LICENSE_EXPRESSIONS = {
     RUNTIME_DISTRIBUTION: "MIT AND Apache-2.0",
-    FASTFLOWLM_DISTRIBUTION:
-        "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
-    QUALIFICATION_DISTRIBUTION:
-        "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
+    FASTFLOWLM_DISTRIBUTION: "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
+    QUALIFICATION_DISTRIBUTION: "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
     COMPILER_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
     COMPILER_CORE_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
-    COMPILER_BINDINGS_DISTRIBUTION:
-        "MIT AND (Apache-2.0 WITH LLVM-exception)",
+    COMPILER_BINDINGS_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
     OPS_DISTRIBUTION: "MIT AND Apache-2.0",
 }
 
@@ -76,7 +73,9 @@ def runtime_artifact_name(system: str | None = None, machine: str | None = None)
     return f"rocm-npu-runtime-{system}-{machine}"
 
 
-def fastflowlm_artifact_name(system: str | None = None, machine: str | None = None) -> str:
+def fastflowlm_artifact_name(
+    system: str | None = None, machine: str | None = None
+) -> str:
     system = (system or platform.system()).lower()
     machine = (machine or platform.machine()).lower().replace("amd64", "x86_64")
     return f"rocm-npu-fastflowlm-{system}-{machine}"
@@ -108,15 +107,11 @@ def _write_wheel_entry(
     mode: int = 0o100644,
     compression_level: int = 9,
 ) -> None:
-    output.writestr(
-        _zip_info(name, mode), data, compresslevel=compression_level
-    )
+    output.writestr(_zip_info(name, mode), data, compresslevel=compression_level)
     records.append((name, _wheel_hash(data), str(len(data))))
 
 
-def _wheel_file_mode(
-    relative: str, source_mode: int, *, root_is_purelib: bool
-) -> int:
+def _wheel_file_mode(relative: str, source_mode: int, *, root_is_purelib: bool) -> int:
     parts = PurePosixPath(relative).parts
     is_package_bin_payload = len(parts) >= 3 and parts[1] == "bin"
     if is_package_bin_payload or (not root_is_purelib and source_mode & 0o111):
@@ -166,10 +161,15 @@ def _dependency_components(
     if not isinstance(dependencies, dict):
         return []
     files = manifest.get("files")
-    shipped_names = {
-        PurePosixPath(str(record.get("path", ""))).name.casefold()
-        for record in files if isinstance(record, dict)
-    } if isinstance(files, list) else set()
+    shipped_names = (
+        {
+            PurePosixPath(str(record.get("path", ""))).name.casefold()
+            for record in files
+            if isinstance(record, dict)
+        }
+        if isinstance(files, list)
+        else set()
+    )
 
     provider = dependencies.get("provider")
     vcpkg = dependencies.get("vcpkg") if provider == "vcpkg+system" else dependencies
@@ -178,11 +178,15 @@ def _dependency_components(
 
     if isinstance(vcpkg, dict):
         runtime_files = vcpkg.get("runtime_file_packages")
-        selected = {
-            str(package)
-            for name, package in runtime_files.items()
-            if str(name).casefold() in shipped_names
-        } if isinstance(runtime_files, dict) else set()
+        selected = (
+            {
+                str(package)
+                for name, package in runtime_files.items()
+                if str(name).casefold() in shipped_names
+            }
+            if isinstance(runtime_files, dict)
+            else set()
+        )
         resolved = vcpkg.get("resolved_packages")
         records = resolved if isinstance(resolved, list) else []
         versions = {
@@ -204,45 +208,66 @@ def _dependency_components(
             components.append(component)
 
         microsoft_files = vcpkg.get("microsoft_runtime_files")
-        shipped_microsoft = sorted(
-            str(name) for name in microsoft_files
-            if str(name).casefold() in shipped_names
-        ) if isinstance(microsoft_files, list) else []
+        shipped_microsoft = (
+            sorted(
+                str(name)
+                for name in microsoft_files
+                if str(name).casefold() in shipped_names
+            )
+            if isinstance(microsoft_files, list)
+            else []
+        )
         if shipped_microsoft:
-            components.append({
-                "type": "framework",
-                "bom-ref": "microsoft:visual-cpp-runtime",
-                "name": "Microsoft Visual C++ Runtime",
-                "supplier": {"name": "Microsoft Corporation"},
-                "licenses": [{
-                    "license": {
-                        "name": "Microsoft Software License Terms",
-                        "url": str(vcpkg.get(
-                            "microsoft_runtime_license",
-                            "https://visualstudio.microsoft.com/license-terms/",
-                        )),
-                    },
-                }],
-                "externalReferences": [{
-                    "type": "license",
-                    "url": str(vcpkg.get(
-                        "microsoft_runtime_license",
-                        "https://visualstudio.microsoft.com/license-terms/",
-                    )),
-                }],
-                "properties": [{
-                    "name": "rocm-npu:runtime-files",
-                    "value": ",".join(shipped_microsoft),
-                }],
-            })
+            components.append(
+                {
+                    "type": "framework",
+                    "bom-ref": "microsoft:visual-cpp-runtime",
+                    "name": "Microsoft Visual C++ Runtime",
+                    "supplier": {"name": "Microsoft Corporation"},
+                    "licenses": [
+                        {
+                            "license": {
+                                "name": "Microsoft Software License Terms",
+                                "url": str(
+                                    vcpkg.get(
+                                        "microsoft_runtime_license",
+                                        "https://visualstudio.microsoft.com/license-terms/",
+                                    )
+                                ),
+                            },
+                        }
+                    ],
+                    "externalReferences": [
+                        {
+                            "type": "license",
+                            "url": str(
+                                vcpkg.get(
+                                    "microsoft_runtime_license",
+                                    "https://visualstudio.microsoft.com/license-terms/",
+                                )
+                            ),
+                        }
+                    ],
+                    "properties": [
+                        {
+                            "name": "rocm-npu:runtime-files",
+                            "value": ",".join(shipped_microsoft),
+                        }
+                    ],
+                }
+            )
 
     if isinstance(system, dict):
         library_packages = system.get("library_packages")
-        selected = {
-            str(package)
-            for name, package in library_packages.items()
-            if str(name).casefold() in shipped_names
-        } if isinstance(library_packages, dict) else set()
+        selected = (
+            {
+                str(package)
+                for name, package in library_packages.items()
+                if str(name).casefold() in shipped_names
+            }
+            if isinstance(library_packages, dict)
+            else set()
+        )
         packages = system.get("packages")
         records = packages if isinstance(packages, list) else []
         versions = {
@@ -257,10 +282,12 @@ def _dependency_components(
                 "type": "library",
                 "bom-ref": f"system:{name}@{version}",
                 "name": name,
-                "properties": [{
-                    "name": "rocm-npu:provider",
-                    "value": provider_name,
-                }],
+                "properties": [
+                    {
+                        "name": "rocm-npu:provider",
+                        "value": provider_name,
+                    }
+                ],
             }
             if version:
                 component["version"] = version
@@ -320,21 +347,27 @@ def _manifest_components(
         version = record.get("version")
         upstream = record.get("upstream")
         license_expression = record.get("license")
-        if not all(isinstance(value, str) and value
-                   for value in (name, version, upstream, license_expression)):
+        if not all(
+            isinstance(value, str) and value
+            for value in (name, version, upstream, license_expression)
+        ):
             raise RuntimeError(f"invalid wheel manifest component: {record}")
-        components.append({
-            "type": "library",
-            "bom-ref": f"generic:{name}@{version}",
-            "name": name,
-            "version": version,
-            "purl": _component_purl("generic", name, version),
-            "licenses": [{"expression": license_expression}],
-            "externalReferences": [{
-                "type": "distribution",
-                "url": upstream,
-            }],
-        })
+        components.append(
+            {
+                "type": "library",
+                "bom-ref": f"generic:{name}@{version}",
+                "name": name,
+                "version": version,
+                "purl": _component_purl("generic", name, version),
+                "licenses": [{"expression": license_expression}],
+                "externalReferences": [
+                    {
+                        "type": "distribution",
+                        "url": upstream,
+                    }
+                ],
+            }
+        )
     return components
 
 
@@ -356,16 +389,20 @@ def _file_components(manifest: dict[str, object]) -> list[dict[str, object]]:
             or size < 0
         ):
             raise RuntimeError(f"invalid wheel manifest file record: {record}")
-        components.append({
-            "type": "file",
-            "bom-ref": f"file:{path}",
-            "name": path,
-            "hashes": [{"alg": "SHA-256", "content": digest}],
-            "properties": [{
-                "name": "rocm-npu:size",
-                "value": str(size),
-            }],
-        })
+        components.append(
+            {
+                "type": "file",
+                "bom-ref": f"file:{path}",
+                "name": path,
+                "hashes": [{"alg": "SHA-256", "content": digest}],
+                "properties": [
+                    {
+                        "name": "rocm-npu:size",
+                        "value": str(size),
+                    }
+                ],
+            }
+        )
     return components
 
 
@@ -378,22 +415,28 @@ def _source_pedigree(manifest: dict[str, object]) -> dict[str, object] | None:
         if not isinstance(state, dict) or not state.get("revision"):
             continue
         revision = str(state["revision"])
-        properties = [{
-            "name": "rocm-npu:source-dirty",
-            "value": str(bool(state.get("dirty"))).lower(),
-        }]
+        properties = [
+            {
+                "name": "rocm-npu:source-dirty",
+                "value": str(bool(state.get("dirty"))).lower(),
+            }
+        ]
         if state.get("tracked_diff_sha256"):
-            properties.append({
-                "name": "rocm-npu:tracked-diff-sha256",
-                "value": str(state["tracked_diff_sha256"]),
-            })
-        ancestors.append({
-            "type": "application" if name == "rocm-npu-staging" else "library",
-            "bom-ref": f"source:{name}@{revision}",
-            "name": name,
-            "version": revision,
-            "properties": properties,
-        })
+            properties.append(
+                {
+                    "name": "rocm-npu:tracked-diff-sha256",
+                    "value": str(state["tracked_diff_sha256"]),
+                }
+            )
+        ancestors.append(
+            {
+                "type": "application" if name == "rocm-npu-staging" else "library",
+                "bom-ref": f"source:{name}@{revision}",
+                "name": name,
+                "version": revision,
+                "properties": properties,
+            }
+        )
     return {"ancestors": ancestors} if ancestors else None
 
 
@@ -403,8 +446,15 @@ def _tool_components(manifest: dict[str, object]) -> list[dict[str, str]]:
         return []
     tools = []
     for name in (
-        "python", "git", "cmake", "ninja", "rustc", "cargo",
-        "zstd", "patchelf", "ccache",
+        "python",
+        "git",
+        "cmake",
+        "ninja",
+        "rustc",
+        "cargo",
+        "zstd",
+        "patchelf",
+        "ccache",
     ):
         value = toolchain.get(name)
         if value:
@@ -417,31 +467,40 @@ def _verify_sbom_file_inventory(
     manifest: dict[str, object],
 ) -> None:
     files = manifest.get("files")
-    expected = {
-        str(record["path"]): str(record["sha256"])
-        for record in files
-        if isinstance(record, dict) and "path" in record and "sha256" in record
-    } if isinstance(files, list) else {}
+    expected = (
+        {
+            str(record["path"]): str(record["sha256"])
+            for record in files
+            if isinstance(record, dict) and "path" in record and "sha256" in record
+        }
+        if isinstance(files, list)
+        else {}
+    )
     actual = {}
     components = sbom.get("components")
     for component in components if isinstance(components, list) else []:
         if not isinstance(component, dict) or component.get("type") != "file":
             continue
         hashes = component.get("hashes")
-        sha256 = next(
-            (
-                str(item.get("content"))
-                for item in hashes
-                if isinstance(item, dict) and item.get("alg") == "SHA-256"
-            ),
-            "",
-        ) if isinstance(hashes, list) else ""
+        sha256 = (
+            next(
+                (
+                    str(item.get("content"))
+                    for item in hashes
+                    if isinstance(item, dict) and item.get("alg") == "SHA-256"
+                ),
+                "",
+            )
+            if isinstance(hashes, list)
+            else ""
+        )
         actual[str(component.get("name", ""))] = sha256
     if actual != expected:
         missing = sorted(set(expected) - set(actual))
         extra = sorted(set(actual) - set(expected))
         mismatched = sorted(
-            path for path in set(actual).intersection(expected)
+            path
+            for path in set(actual).intersection(expected)
             if actual[path] != expected[path]
         )
         raise RuntimeError(
@@ -476,10 +535,12 @@ def _cyclonedx_sbom(
         "purl": root_ref,
         "supplier": {"name": "Advanced Micro Devices, Inc."},
         "licenses": [{"expression": license_expression}],
-        "properties": [{
-            "name": "rocm-npu:wheel-tag",
-            "value": tag,
-        }],
+        "properties": [
+            {
+                "name": "rocm-npu:wheel-tag",
+                "value": tag,
+            }
+        ],
     }
     pedigree = _source_pedigree(manifest)
     if pedigree:
@@ -495,10 +556,12 @@ def _cyclonedx_sbom(
         "serialNumber": f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, identity)}",
         "version": 1,
         "metadata": metadata,
-        "dependencies": [{
-            "ref": root_ref,
-            "dependsOn": [str(component["bom-ref"]) for component in components],
-        }],
+        "dependencies": [
+            {
+                "ref": root_ref,
+                "dependsOn": [str(component["bom-ref"]) for component in components],
+            }
+        ],
     }
     if components:
         sbom["components"] = components
@@ -586,9 +649,7 @@ def build_wheel(
                 records,
                 relative,
                 path.read_bytes(),
-                _wheel_file_mode(
-                    relative, mode, root_is_purelib=root_is_purelib
-                ),
+                _wheel_file_mode(relative, mode, root_is_purelib=root_is_purelib),
                 compression_level,
             )
         for name, data in license_entries:
@@ -640,9 +701,7 @@ def build_wheel(
         )
         record_name = f"{dist_info}/RECORD"
         record = _record_csv([*records, (record_name, "", "")]).encode("utf-8")
-        output.writestr(
-            _zip_info(record_name), record, compresslevel=compression_level
-        )
+        output.writestr(_zip_info(record_name), record, compresslevel=compression_level)
     write_sha256_sidecar(wheel)
     return wheel
 
@@ -684,9 +743,7 @@ def verify_wheel_source_revision(
                 )
             manifest = json.loads(archive.read(manifests[0]))
         revision = (
-            manifest.get("sources", {})
-            .get("rocm-npu-staging", {})
-            .get("revision")
+            manifest.get("sources", {}).get("rocm-npu-staging", {}).get("revision")
         )
         if revision != expected_revision:
             raise RuntimeError(
@@ -695,9 +752,7 @@ def verify_wheel_source_revision(
             )
 
 
-def remove_distribution_wheels(
-    directory: Path, distributions: tuple[str, ...]
-) -> None:
+def remove_distribution_wheels(directory: Path, distributions: tuple[str, ...]) -> None:
     """Removes stale wheels and checksum sidecars for the requested products."""
     directory = Path(directory)
     for distribution in distributions:

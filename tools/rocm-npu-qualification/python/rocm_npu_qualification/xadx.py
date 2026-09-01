@@ -27,7 +27,6 @@ from .numeric_runtime import NUMERIC_DISTRIBUTIONS
 from .recipe_contract import recipe_materialization_requests
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
 
-
 _Handle = ctypes.c_void_p
 _Status = ctypes.c_void_p
 _TARGET_FAMILY = b"amdxdna"
@@ -47,10 +46,14 @@ def validate_xadx_report(report):
     try:
         validate_schema(report, load_packaged_schema("xadx-report-v1.schema.json"))
     except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
-        raise XadxError(f"XADX report does not satisfy the v1 schema: {error}") from error
+        raise XadxError(
+            f"XADX report does not satisfy the v1 schema: {error}"
+        ) from error
     if report.get("schema_version") != XADX_REPORT_SCHEMA_VERSION:
         raise XadxError("XADX report schema version is invalid")
     return report
+
+
 _BUFFER_USAGE = 0x00000C03 | 0x02000000
 _MAPPING_MODE = 0x00000002
 _ARCHITECTURE_PROPERTY = 1
@@ -351,9 +354,7 @@ class _Runtime:
             mapped = True
             backing = (ctypes.c_uint8 * allocation_size).from_address(pointer.value)
             backing[:] = bytes([_GUARD_VALUE]) * allocation_size
-            storage = memoryview(backing).cast("B")[
-                _GUARD_BYTES : _GUARD_BYTES + size
-            ]
+            storage = memoryview(backing).cast("B")[_GUARD_BYTES : _GUARD_BYTES + size]
             storage[:] = data
             self._check(
                 self._flush(handle, 0, allocation_size),
@@ -512,9 +513,7 @@ def _compare_details(actual, expected, comparison, atol, rtol):
     np, ml_dtypes = _ensure_numeric_runtime()
     got = np.frombuffer(actual, dtype="<u2").view(ml_dtypes.bfloat16).astype(np.float32)
     wanted = (
-        np.frombuffer(expected, dtype="<u2")
-        .view(ml_dtypes.bfloat16)
-        .astype(np.float32)
+        np.frombuffer(expected, dtype="<u2").view(ml_dtypes.bfloat16).astype(np.float32)
     )
     # isclose handles infinities by exact signed equality. Equal NaNs are
     # accepted because an expected NaN is a bit-level statement that the result
@@ -806,9 +805,7 @@ def _unsupported_report(recipe, recipe_bytes, cases, executables, architecture, 
 def _validate_recipe(recipe):
     """Rejects ambiguous or unsafe recipes before opening the device."""
     try:
-        validate_schema(
-            recipe, load_packaged_schema("kernel-recipe-v1.schema.json")
-        )
+        validate_schema(recipe, load_packaged_schema("kernel-recipe-v1.schema.json"))
     except (SchemaValidationError, OSError, json.JSONDecodeError) as error:
         raise XadxError(
             f"kernel recipe does not satisfy the v1 schema: {error}"
@@ -897,9 +894,7 @@ def _validate_recipe(recipe):
                     for value in shape.values()
                 )
             ):
-                raise XadxError(
-                    f"implementation {id}/{variant_id} has invalid shape"
-                )
+                raise XadxError(f"implementation {id}/{variant_id} has invalid shape")
             for path_field, suffix in (("xadx", ".xadx"), ("transaction", ".bin")):
                 value = variant.get(path_field)
                 parsed_variant = (
@@ -989,9 +984,7 @@ def _validate_recipe(recipe):
                 preserved = buffer.get("preserved")
                 comparison = buffer.get("comparison")
                 if direction == "input" and source is None:
-                    raise XadxError(
-                        f"{name}/{stage_name}.{buffer_name} has no source"
-                    )
+                    raise XadxError(f"{name}/{stage_name}.{buffer_name} has no source")
                 if direction == "output":
                     if source is not None:
                         raise XadxError(
@@ -1050,13 +1043,8 @@ def _validate_recipe(recipe):
                 ),
                 None,
             )
-            if (
-                not isinstance(variant.get("stage"), str)
-                or target is None
-            ):
-                raise XadxError(
-                    f"{name} readback names unknown buffer {identity!r}"
-                )
+            if not isinstance(variant.get("stage"), str) or target is None:
+                raise XadxError(f"{name} readback names unknown buffer {identity!r}")
             if target["direction"] != "input" or "stage_output" in target.get(
                 "source", {}
             ):
@@ -1103,9 +1091,9 @@ def run_recipe(
         except json.JSONDecodeError as error:
             raise XadxError(f"cannot parse kernel recipe: {error}") from error
     elif isinstance(recipe, dict):
-        recipe_bytes = (
-            json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
-        )
+        recipe_bytes = json.dumps(
+            recipe, sort_keys=True, separators=(",", ":")
+        ).encode()
     else:
         raise TypeError("recipe must be a mapping, bytes, or a path")
     if generators is None:
@@ -1130,16 +1118,18 @@ def run_recipe(
     ]
     if uneven:
         raise XadxError(
-            "readback rounds do not evenly cover variants for: "
-            + ", ".join(uneven)
+            "readback rounds do not evenly cover variants for: " + ", ".join(uneven)
         )
     materialized = _materialize_recipe_buffers(cases, generators)
     executable_data = {}
     for id, entry in implementations.items():
-        executions = [(None, entry), *[
-            (variant["id"], variant)
-            for variant in entry.get("execution_variants", ())
-        ]]
+        executions = [
+            (None, entry),
+            *[
+                (variant["id"], variant)
+                for variant in entry.get("execution_variants", ())
+            ],
+        ]
         for execution, executable in executions:
             label = id if execution is None else f"{id}/{execution}"
             try:
@@ -1156,9 +1146,7 @@ def run_recipe(
             try:
                 transaction = (root / executable["transaction"]).read_bytes()
             except OSError as error:
-                raise XadxError(
-                    f"cannot read {label} transaction: {error}"
-                ) from error
+                raise XadxError(f"cannot read {label} transaction: {error}") from error
             transaction_digest = hashlib.sha256(transaction).hexdigest()
             if transaction_digest != executable["transaction_sha256"]:
                 raise XadxError(
@@ -1199,9 +1187,7 @@ def run_recipe(
     }
 
     def materialize(specification, expected_size):
-        key = json.dumps(
-            specification, sort_keys=True, separators=(",", ":")
-        )
+        key = json.dumps(specification, sort_keys=True, separators=(",", ":"))
         data = materialized[key][0]
         if len(data) != expected_size:
             raise XadxError(
@@ -1217,13 +1203,17 @@ def run_recipe(
         for stage in case["stages"]:
             entry = implementations[stage["implementation"]]
             execution = stage.get("execution")
-            executable_entry = entry if execution is None else next(
-                (
-                    variant
-                    for variant in entry.get("execution_variants", ())
-                    if variant["id"] == execution
-                ),
-                None,
+            executable_entry = (
+                entry
+                if execution is None
+                else next(
+                    (
+                        variant
+                        for variant in entry.get("execution_variants", ())
+                        if variant["id"] == execution
+                    ),
+                    None,
+                )
             )
             if executable_entry is None:
                 raise XadxError(
@@ -1274,9 +1264,7 @@ def run_recipe(
                             record["comparison"],
                         )
                 else:
-                    allocation = runtime.allocate(
-                        materialize(source, record["size"])
-                    )
+                    allocation = runtime.allocate(materialize(source, record["size"]))
                 buffers.append(allocation)
             plan.append((executable, ordinal, buffers, outputs, stage["buffers"]))
         if comparison is None:
@@ -1336,7 +1324,12 @@ def run_recipe(
                     and payload != immutable[builtins.id(allocation)]
                 ):
                     return f"{record['name']} input was modified"
-        for name, preserved, preserved_size, allocation in preserved_allocations.values():
+        for (
+            name,
+            preserved,
+            preserved_size,
+            allocation,
+        ) in preserved_allocations.values():
             if hasattr(runtime, "inspect"):
                 prefix, payload, suffix = runtime.inspect(allocation)
             else:
@@ -1444,25 +1437,27 @@ def run_recipe(
                 "failures": case_failures,
             }
         )
-    return validate_xadx_report({
-        "schema_version": XADX_REPORT_SCHEMA_VERSION,
-        "report_kind": "execution",
-        "status": "pass" if not failures else "fail",
-        "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
-        "generator_version": recipe["generator_version"],
-        "executables": executable_identities,
-        "architecture": architecture,
-        "numeric_runtime": _numeric_runtime(),
-        "lifecycle_rounds": lifecycle_rounds,
-        "resident_rounds": resident_rounds,
-        "readback_rounds": readback_rounds,
-        "cases": len(cases),
-        "case_names": [case["name"] for case in cases],
-        "readback_by_case": readback_by_case,
-        "case_results": case_results,
-        "materialized_buffers": sorted(
-            (metadata for _, metadata in materialized.values()),
-            key=lambda item: item["contract_sha256"],
-        ),
-        "failures": failures,
-    })
+    return validate_xadx_report(
+        {
+            "schema_version": XADX_REPORT_SCHEMA_VERSION,
+            "report_kind": "execution",
+            "status": "pass" if not failures else "fail",
+            "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
+            "generator_version": recipe["generator_version"],
+            "executables": executable_identities,
+            "architecture": architecture,
+            "numeric_runtime": _numeric_runtime(),
+            "lifecycle_rounds": lifecycle_rounds,
+            "resident_rounds": resident_rounds,
+            "readback_rounds": readback_rounds,
+            "cases": len(cases),
+            "case_names": [case["name"] for case in cases],
+            "readback_by_case": readback_by_case,
+            "case_results": case_results,
+            "materialized_buffers": sorted(
+                (metadata for _, metadata in materialized.values()),
+                key=lambda item: item["contract_sha256"],
+            ),
+            "failures": failures,
+        }
+    )

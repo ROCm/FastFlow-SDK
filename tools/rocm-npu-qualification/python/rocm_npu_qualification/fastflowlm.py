@@ -10,7 +10,6 @@ from pathlib import Path
 
 from .hashing import sha256_file
 
-
 RUNTIME_ERROR_PATTERN = re.compile(
     r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+"
 )
@@ -37,9 +36,9 @@ def has_runtime_error(text: str) -> bool:
     :data:`_BENIGN_RUNTIME_ERROR_PATTERN`).
     """
     for line in text.splitlines():
-        if RUNTIME_ERROR_PATTERN.search(line) and not _BENIGN_RUNTIME_ERROR_PATTERN.search(
+        if RUNTIME_ERROR_PATTERN.search(
             line
-        ):
+        ) and not _BENIGN_RUNTIME_ERROR_PATTERN.search(line):
             return True
     return False
 
@@ -53,9 +52,7 @@ def extract_raw_outputs(text: str) -> list[str]:
                 outputs.append("\n".join(lines).strip())
             lines = []
             continue
-        if lines is not None and (
-            line.startswith(">>>") or line.startswith("[FLM]")
-        ):
+        if lines is not None and (line.startswith(">>>") or line.startswith("[FLM]")):
             outputs.append("\n".join(lines).strip())
             lines = None
             continue
@@ -103,16 +100,12 @@ def require_1k_checkpoint(
 ) -> int:
     values = [
         int(value)
-        for value in re.findall(
-            r"Creating checkpoint at context length\s+(\d+)", text
-        )
+        for value in re.findall(r"Creating checkpoint at context length\s+(\d+)", text)
     ]
     if not values:
         values = [
             int(value) * 1024
-            for value in re.findall(
-                r"Starting benchmark for\s+(\d+)k\b", text
-            )
+            for value in re.findall(r"Starting benchmark for\s+(\d+)k\b", text)
         ]
     matching = [value for value in values if minimum <= value <= maximum]
     # Require AT LEAST one checkpoint per scheduled iteration in the target
@@ -152,9 +145,7 @@ def require_benchmark_schedule(text: str, *, iterations: int) -> int:
     return len(expected)
 
 
-def fresh_benchmark_csvs(
-    directory: Path, model: str, *, started_ns: int
-) -> list[Path]:
+def fresh_benchmark_csvs(directory: Path, model: str, *, started_ns: int) -> list[Path]:
     safe_model = re.sub(r"[^A-Za-z0-9_.-]+", "_", model)
     return sorted(
         (

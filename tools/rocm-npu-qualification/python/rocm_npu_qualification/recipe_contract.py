@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-
 _MATERIALIZED_FIELDS = ("source", "expected", "preserved")
 
 
@@ -26,11 +25,7 @@ def recipe_materialization_requests(
     """Enumerate every generator specification and its required output size."""
     requests = []
     for case in cases:
-        records = [
-            record
-            for stage in case["stages"]
-            for record in stage["buffers"]
-        ]
+        records = [record for stage in case["stages"] for record in stage["buffers"]]
         buffers = {
             (stage["name"], record["name"]): record
             for stage in case["stages"]

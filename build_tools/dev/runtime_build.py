@@ -62,9 +62,7 @@ def _build_hrx_cts_binaries(env):
 def cmd_build_hrx(args):
     source = paths.PROJ / "hrx"
     if not (source / "CMakeLists.txt").exists():
-        sys.exit(
-            "missing projects/hrx " "(run: git submodule update --init projects/hrx)"
-        )
+        sys.exit("missing projects/hrx (run: git submodule update --init projects/hrx)")
     patches.apply_patches({"hrx"})
     fresh = getattr(args, "fresh", False)
     include_tests = getattr(args, "include_tests", False)
@@ -119,7 +117,6 @@ def cmd_build_hrx(args):
         env=env,
     )
     if include_tests:
-        host_tests = hrx_runtime.hrx_amdxdna_host_tests()
         environment.sh(
             [
                 environment.cmake_bin(),

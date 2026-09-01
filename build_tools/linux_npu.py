@@ -54,9 +54,7 @@ def sys_accel_nodes():
     return sorted(SYS_ACCEL_DIR.glob("accel*")) if SYS_ACCEL_DIR.is_dir() else []
 
 
-def known_amdxdna_sva_regression(
-    kernel_release: str, srcversion: str | None
-) -> bool:
+def known_amdxdna_sva_regression(kernel_release: str, srcversion: str | None) -> bool:
     return (
         kernel_release.startswith("6.17.0-22")
         and srcversion in KNOWN_AMDXDNA_SVA_REGRESSION_SRCVERSIONS
@@ -73,9 +71,7 @@ def _accel_open_failure_notes(err: OSError, sys_node: Path):
             "amdxdna refused userspace open with EOPNOTSUPP; check kernel log for "
             "'amdxdna_drm_open: SVA bind device failed, ret -95'"
         )
-        group_type = read_sysfs_text(
-            sys_node / "device" / "iommu_group" / "type"
-        )
+        group_type = read_sysfs_text(sys_node / "device" / "iommu_group" / "type")
         if group_type:
             notes.append(f"IOMMU group type: {group_type}")
         try:
@@ -145,15 +141,12 @@ def probe_npu_devnodes():
                 or os.minor(device_stat.st_rdev) != minor
             ):
                 have = (
-                    f"{os.major(device_stat.st_rdev)}:"
-                    f"{os.minor(device_stat.st_rdev)}"
+                    f"{os.major(device_stat.st_rdev)}:{os.minor(device_stat.st_rdev)}"
                 )
                 print(f"  [MISS] {target} has dev {have}, expected {dev_text}")
                 rc = 1
                 continue
-            if not (
-                os.access(target, os.R_OK) and os.access(target, os.W_OK)
-            ):
+            if not (os.access(target, os.R_OK) and os.access(target, os.W_OK)):
                 print(f"  [MISS] {target} exists but is not read+write for this user")
                 print(
                     "         runner host must grant read/write access before this job runs"
@@ -184,19 +177,13 @@ def print_npu_driver_info():
     print("== amdxdna driver / firmware ==")
     print(f"  [info] kernel: {kernel}")
     if AMDXDNA_MODULE_DIR.is_dir():
-        _print_probe_file(
-            "amdxdna module version", AMDXDNA_MODULE_DIR / "version"
-        )
+        _print_probe_file("amdxdna module version", AMDXDNA_MODULE_DIR / "version")
         _print_probe_file(
             "amdxdna module srcversion", AMDXDNA_MODULE_DIR / "srcversion"
         )
-        _print_probe_file(
-            "amdxdna module initstate", AMDXDNA_MODULE_DIR / "initstate"
-        )
+        _print_probe_file("amdxdna module initstate", AMDXDNA_MODULE_DIR / "initstate")
     else:
-        print(
-            f"  [MISS] no {AMDXDNA_MODULE_DIR} - is the amdxdna driver loaded?"
-        )
+        print(f"  [MISS] no {AMDXDNA_MODULE_DIR} - is the amdxdna driver loaded?")
     for field in ["filename", "version", "srcversion"]:
         value = _modinfo_field(field)
         if value:
@@ -222,6 +209,4 @@ def print_npu_driver_info():
         _print_probe_file("vbnv", node / "device" / "vbnv", indent="    ")
         _print_probe_file("vendor", node / "device" / "vendor", indent="    ")
         _print_probe_file("device", node / "device" / "device", indent="    ")
-        _print_probe_file(
-            "revision", node / "device" / "revision", indent="    "
-        )
+        _print_probe_file("revision", node / "device" / "revision", indent="    ")

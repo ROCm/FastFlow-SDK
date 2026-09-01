@@ -19,7 +19,9 @@ def _mentions_tests(node, test_path_names):
         return True
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value == "tests" or node.value.startswith(("tests/", "tests\\"))
-    return any(_mentions_tests(child, test_path_names) for child in ast.iter_child_nodes(node))
+    return any(
+        _mentions_tests(child, test_path_names) for child in ast.iter_child_nodes(node)
+    )
 
 
 def _imported_modules(node):
@@ -45,8 +47,7 @@ def test_production_modules_do_not_load_test_implementations():
             for target in (
                 node.targets if isinstance(node, ast.Assign) else [node.target]
             )
-            if isinstance(target, ast.Name)
-            and _mentions_tests(node.value, set())
+            if isinstance(target, ast.Name) and _mentions_tests(node.value, set())
         }
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -56,9 +57,13 @@ def test_production_modules_do_not_load_test_implementations():
             else:
                 imported = []
             if any(name == "tests" or name.startswith("tests.") for name in imported):
-                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: imports tests")
+                violations.append(
+                    f"{path.relative_to(ROOT)}:{node.lineno}: imports tests"
+                )
 
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
                 continue
             owner = node.func.value
             mutates_sys_path = (
@@ -135,8 +140,7 @@ def test_product_domains_do_not_import_sibling_orchestration_layers():
             violations_for_node = sorted(imported & forbidden_modules)
             for imported_module in violations_for_node:
                 violations.append(
-                    f"{path.relative_to(ROOT)}:{node.lineno}: "
-                    f"imports {imported_module}"
+                    f"{path.relative_to(ROOT)}:{node.lineno}: imports {imported_module}"
                 )
 
     package = build_tools / "fastflowlm_package.py"

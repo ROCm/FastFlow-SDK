@@ -8,9 +8,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 from build_tools import paths
 from build_tools.artifact import git_source_state, sha256_file
@@ -47,7 +46,16 @@ def _patch_state(patch, sub):
     """
     for options in ((), ("--ignore-space-change",)):
         rev = subprocess.run(
-            ["git", "-C", str(sub), "apply", "--reverse", "--check", *options, str(patch)],
+            [
+                "git",
+                "-C",
+                str(sub),
+                "apply",
+                "--reverse",
+                "--check",
+                *options,
+                str(patch),
+            ],
             capture_output=True,
         )
         if rev.returncode == 0:
@@ -72,13 +80,16 @@ def apply_patches(submodule_names=None):
             continue
         sub = paths.PROJ / sub_dir.name
         if not sub.exists():
-            sys.exit(f"submodule missing for patches/{sub_dir.name} (run: git submodule update --init projects/{sub_dir.name})")
+            sys.exit(
+                f"submodule missing for patches/{sub_dir.name} (run: git submodule update --init projects/{sub_dir.name})"
+            )
         patches = sorted(sub_dir.glob("*.patch"))
         states = [_patch_state(patch, sub) for patch in patches]
         if any(state == "broken" for state, _ in states):
             try:
                 exact = git_source_state(sub) == declared_patch_expected_state(
-                    sub_dir.name, sub)
+                    sub_dir.name, sub
+                )
             except RuntimeError:
                 exact = False
             if exact:
@@ -93,7 +104,9 @@ def apply_patches(submodule_names=None):
                 sh(["git", "-C", str(sub), "apply", *options, str(patch)])
                 print(f"patch: applied {sub_dir.name}/{patch.name}")
             else:
-                sys.exit(f"patch does not apply cleanly: {patch} (submodule moved? regenerate it)")
+                sys.exit(
+                    f"patch does not apply cleanly: {patch} (submodule moved? regenerate it)"
+                )
 
 
 def declared_patch_expected_state(component, source):
@@ -116,8 +129,17 @@ def declared_patch_expected_state(component, source):
             resolved = False
             for options in ((), ("--ignore-space-change",)):
                 reverse = subprocess.run(
-                    ["git", "-C", str(source), "apply", "--cached", "--reverse",
-                     "--check", *options, str(patch)],
+                    [
+                        "git",
+                        "-C",
+                        str(source),
+                        "apply",
+                        "--cached",
+                        "--reverse",
+                        "--check",
+                        *options,
+                        str(patch),
+                    ],
                     env=env,
                     capture_output=True,
                 )
@@ -125,16 +147,31 @@ def declared_patch_expected_state(component, source):
                     resolved = True
                     break
                 result = subprocess.run(
-                    ["git", "-C", str(source), "apply", "--cached", "--check",
-                     *options, str(patch)],
+                    [
+                        "git",
+                        "-C",
+                        str(source),
+                        "apply",
+                        "--cached",
+                        "--check",
+                        *options,
+                        str(patch),
+                    ],
                     env=env,
                     capture_output=True,
                 )
                 if result.returncode:
                     continue
                 subprocess.run(
-                    ["git", "-C", str(source), "apply", "--cached",
-                     *options, str(patch)],
+                    [
+                        "git",
+                        "-C",
+                        str(source),
+                        "apply",
+                        "--cached",
+                        *options,
+                        str(patch),
+                    ],
                     check=True,
                     env=env,
                     capture_output=True,
@@ -145,37 +182,60 @@ def declared_patch_expected_state(component, source):
                 raise RuntimeError(f"declared patch does not apply: {patch}")
 
         changed_output = subprocess.run(
-            ["git", "-C", str(source), "diff", "--cached", "--name-only",
-             "--diff-filter=ACDMRTUXB", "-z", "HEAD"],
+            [
+                "git",
+                "-C",
+                str(source),
+                "diff",
+                "--cached",
+                "--name-only",
+                "--diff-filter=ACDMRTUXB",
+                "-z",
+                "HEAD",
+            ],
             check=True,
             env=env,
             capture_output=True,
         ).stdout
         changed_paths = sorted(
             item.decode("utf-8", errors="surrogateescape")
-            for item in changed_output.split(b"\0") if item
+            for item in changed_output.split(b"\0")
+            if item
         )
         tracked_paths = []
         changed_files = []
         for relative in changed_paths:
-            existed = subprocess.run(
-                ["git", "-C", str(source), "cat-file", "-e", f"HEAD:{relative}"],
-                capture_output=True,
-            ).returncode == 0
+            existed = (
+                subprocess.run(
+                    ["git", "-C", str(source), "cat-file", "-e", f"HEAD:{relative}"],
+                    capture_output=True,
+                ).returncode
+                == 0
+            )
             if existed:
                 tracked_paths.append(relative)
             else:
-                ignored = subprocess.run(
-                    ["git", "-C", str(source), "check-ignore", "--no-index",
-                     "--quiet", "--", relative],
-                    capture_output=True,
-                ).returncode == 0
+                ignored = (
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(source),
+                            "check-ignore",
+                            "--no-index",
+                            "--quiet",
+                            "--",
+                            relative,
+                        ],
+                        capture_output=True,
+                    ).returncode
+                    == 0
+                )
                 if ignored:
                     continue
 
             staged = subprocess.run(
-                ["git", "-C", str(source), "ls-files", "--stage", "-z",
-                 "--", relative],
+                ["git", "-C", str(source), "ls-files", "--stage", "-z", "--", relative],
                 check=True,
                 env=env,
                 capture_output=True,
@@ -191,15 +251,23 @@ def declared_patch_expected_state(component, source):
                     check=True,
                     capture_output=True,
                 ).stdout
-                record.update({
-                    "size": len(data),
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                })
+                record.update(
+                    {
+                        "size": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
             changed_files.append(record)
 
         diff_command = [
-            "git", "-C", str(source), "diff", "--cached", "--binary",
-            "--no-ext-diff", "HEAD",
+            "git",
+            "-C",
+            str(source),
+            "diff",
+            "--cached",
+            "--binary",
+            "--no-ext-diff",
+            "HEAD",
         ]
         if tracked_paths:
             diff_command.extend(["--", *tracked_paths])
@@ -232,11 +300,14 @@ def validate_declared_patch_state(component, source):
         expected_files = {item["path"]: item for item in expected["changed_files"]}
         actual_files = {item["path"]: item for item in actual["changed_files"]}
         differing = sorted(
-            path for path in set(expected_files) | set(actual_files)
-            if expected_files.get(path) != actual_files.get(path))
+            path
+            for path in set(expected_files) | set(actual_files)
+            if expected_files.get(path) != actual_files.get(path)
+        )
         raise RuntimeError(
             f"{component} source differs from its pin plus declared patches: "
-            f"{', '.join(differing) or 'tracked diff metadata'}")
+            f"{', '.join(differing) or 'tracked diff metadata'}"
+        )
 
 
 def cmd_fetch(args, submodule_names=None):
@@ -245,7 +316,9 @@ def cmd_fetch(args, submodule_names=None):
     hash-verified cache. Idempotent."""
     apply_patches(submodule_names)
     if submodule_names is not None and "iron-tools" not in submodule_names:
-        print("fetch: selected source patches are ready (no compiler-stack prefetch needed)")
+        print(
+            "fetch: selected source patches are ready (no compiler-stack prefetch needed)"
+        )
         return
     path, pin = eudsl_sdist()
     if not pin:
@@ -255,12 +328,28 @@ def cmd_fetch(args, submodule_names=None):
         return
     paths.FETCH_CACHE.mkdir(parents=True, exist_ok=True)
     print(f"fetch: downloading {pin['package']}=={pin['version']}")
-    sh([str(venv_py()), "-m", "pip", "download", f"{pin['package']}=={pin['version']}",
-        "-f", pin["find_links"], "--no-deps", "--no-binary", ":all:", "-d", str(paths.FETCH_CACHE)])
+    sh(
+        [
+            str(venv_py()),
+            "-m",
+            "pip",
+            "download",
+            f"{pin['package']}=={pin['version']}",
+            "-f",
+            pin["find_links"],
+            "--no-deps",
+            "--no-binary",
+            ":all:",
+            "-d",
+            str(paths.FETCH_CACHE),
+        ]
+    )
     got = sha256_file(path) if path.exists() else "<missing>"
     if got != pin["sha256"]:
         path.unlink(missing_ok=True)
-        sys.exit(f"fetch: sha256 mismatch for {path.name}\n  expected {pin['sha256']}\n  got      {got}")
+        sys.exit(
+            f"fetch: sha256 mismatch for {path.name}\n  expected {pin['sha256']}\n  got      {got}"
+        )
     print(f"fetch: ok -> {path} (sha256 verified)")
 
 
@@ -275,15 +364,22 @@ def check_pins(submodules):
         if not pinned:
             continue
         sub_dir = paths.PROJ / sub
-        if not (sub_dir / ".git").exists():   # not checked out — rev-parse here would walk up to the superproject
+        if not (
+            sub_dir / ".git"
+        ).exists():  # not checked out — rev-parse here would walk up to the superproject
             print(f"  [ABSENT] {sub}: required by this doctor profile")
             problems.append(sub)
             continue
-        r = subprocess.run(["git", "-C", str(sub_dir), "rev-parse", "HEAD"],
-                           capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "-C", str(sub_dir), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
         head = r.stdout.strip()
         match = head == pinned
-        print(f"  [{'ok  ' if match else 'DRIFT'}] {sub}: manifest {pinned[:12]} vs HEAD {(head[:12] or '?')}")
+        print(
+            f"  [{'ok  ' if match else 'DRIFT'}] {sub}: manifest {pinned[:12]} vs HEAD {(head[:12] or '?')}"
+        )
         if not match:
             problems.append(sub)
     return problems
@@ -296,7 +392,8 @@ def doctor_patch_states(component, source, patches, *, deep=False):
         return states
     try:
         exact = git_source_state(source) == declared_patch_expected_state(
-            component, source)
+            component, source
+        )
         series_valid = True
     except RuntimeError:
         exact = False
