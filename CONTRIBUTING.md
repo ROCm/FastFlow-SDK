@@ -24,20 +24,18 @@ the [LICENSE](LICENSE).
 
 ## Formatting and lint
 
-Presubmit formats first-party Python with Ruff (`ruff.toml`) and first-party
-C/C++ with `python dev.py clang-format`. Pins live in
-`requirements/test.txt`. Install that lock, then check before you push:
+Presubmit runs `python3 dev.py format --check` on first-party Python and C/C++.
+Pins live in `requirements/test.txt`:
 
 ```bash
 python3 -m pip install --require-hashes -r requirements/test.lock
-python3 -m ruff check
-python3 -m ruff format --check
-python3 dev.py clang-format --check
+python3 dev.py format --check
 python3 -m pytest -m presubmit
 ```
 
-`python3 dev.py setup` also installs the format wheels into `.venv`.
-`python3 dev.py doctor` reports whether the current interpreter has the pins.
+`python3 dev.py format` rewrites. Use `python3 dev.py ruff` or
+`python3 dev.py clang-format` to run one tool. `python3 dev.py setup`
+installs the wheels into `.venv`; `python3 dev.py doctor` reports them.
 
 ## Submodules
 

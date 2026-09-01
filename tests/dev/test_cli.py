@@ -30,7 +30,14 @@ def _public_subparsers():
 
 class TestDevCli:
     @pytest.mark.parametrize(
-        "arguments", [["--help"], ["setup", "--help"], ["clang-format", "--help"]]
+        "arguments",
+        [
+            ["--help"],
+            ["setup", "--help"],
+            ["clang-format", "--help"],
+            ["ruff", "--help"],
+            ["format", "--help"],
+        ],
     )
     def test_bootstrap_help_does_not_require_site_packages(self, arguments):
         root = Path(__file__).resolve().parents[2]
@@ -90,6 +97,14 @@ class TestDevCli:
         assert (
             choices["clang-format"]._defaults["_handler"].__module__
             == "build_tools.dev.clang_format"
+        )
+        assert (
+            choices["ruff"]._defaults["_handler"].__module__
+            == "build_tools.dev.format_tools"
+        )
+        assert (
+            choices["format"]._defaults["_handler"].__module__
+            == "build_tools.dev.format_tools"
         )
         assert (
             choices["setup"]._defaults["_handler"].__module__ == "build_tools.dev.setup"
@@ -168,6 +183,8 @@ class TestDevCli:
         } == {
             "doctor",
             "clang-format",
+            "ruff",
+            "format",
             "smoke",
             "verify-npu-prereqs",
             "npu-probe",

@@ -120,8 +120,8 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16" in workflow
         assert "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12" in workflow
         assert "requirements/test.lock" in workflow
-        assert "python -m ruff check" in workflow
-        assert "python -m ruff format --check" in workflow
+        assert "python dev.py format --check" in workflow
+        assert "python -m ruff check" not in workflow
         assert "--select F821" not in workflow
         assert "rocm_npu_wheel_release_cli.py resolve" in workflow
         assert "--publish-target none" in workflow

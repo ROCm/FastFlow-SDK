@@ -26,6 +26,7 @@ from build_tools.dev import build as dev_build
 from build_tools.dev import clang_format as dev_clang_format
 from build_tools.dev import device_testing, host_testing
 from build_tools.dev import doctor as dev_doctor
+from build_tools.dev import format_tools as dev_format_tools
 from build_tools.dev import patches as dev_patches
 from build_tools.dev import setup as dev_setup
 from build_tools.dev import sources as dev_sources
@@ -106,6 +107,28 @@ def create_parser():
         "--check",
         action="store_true",
         help="fail if first-party C/C++ would change",
+    )
+    rf = _add_command(
+        sub,
+        "ruff",
+        dev_format_tools.cmd_ruff,
+        exit_on_return=True,
+    )
+    rf.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if first-party Python lint or format would change",
+    )
+    fmt = _add_command(
+        sub,
+        "format",
+        dev_format_tools.cmd_format,
+        exit_on_return=True,
+    )
+    fmt.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if first-party Python or C/C++ would change",
     )
     b = _add_command(sub, "build", _dispatch_build)
     b.add_argument("what", choices=sorted(dev_build.BUILD_HANDLERS))

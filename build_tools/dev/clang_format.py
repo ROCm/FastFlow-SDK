@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from build_tools import paths
+from build_tools.dev import format_tools
 
 CXX_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp"}
 FIRST_PARTY_PREFIXES = (
@@ -17,23 +18,8 @@ FIRST_PARTY_PREFIXES = (
     "tools/rocm-npu-qualification/native/",
     "tests/hal-contract/",
 )
-TEST_REQUIREMENTS = paths.ROOT / "requirements" / "test.txt"
-
-
-def requirement_pin(package: str) -> str:
-    prefix = f"{package}=="
-    for line in TEST_REQUIREMENTS.read_text(encoding="utf-8").splitlines():
-        entry = line.partition("#")[0].strip()
-        if entry.startswith(prefix):
-            return entry.removeprefix(prefix)
-    raise ValueError(f"requirements/test.txt does not pin {package}")
-
-
-PINNED_VERSION = requirement_pin("clang-format")
-
-
-def install_command() -> str:
-    return "python -m pip install --require-hashes -r requirements/test.lock"
+PINNED_VERSION = format_tools.requirement_pin("clang-format")
+install_command = format_tools.install_command
 
 
 def first_party_cxx_files() -> list[str]:
@@ -74,15 +60,10 @@ def resolve_pinned_executable() -> tuple[str | None, str | None]:
     return executable, None
 
 
-def _fail(message: str) -> int:
-    print(f"{message}\nInstall with:\n  {install_command()}", file=sys.stderr)
-    return 1
-
-
 def run_clang_format(*, check: bool) -> int:
     executable, error = resolve_pinned_executable()
     if error:
-        return _fail(error)
+        return format_tools.fail(error)
     files = first_party_cxx_files()
     if not files:
         print("no first-party C/C++ files to format", file=sys.stderr)
@@ -93,7 +74,11 @@ def run_clang_format(*, check: bool) -> int:
     else:
         command.append("-i")
     command.extend(files)
-    return subprocess.call(command, cwd=paths.ROOT)
+    status = subprocess.call(command, cwd=paths.ROOT)
+    if status == 0:
+        word = "already formatted" if check else "formatted"
+        print(f"{len(files)} C/C++ files {word}", flush=True)
+    return status
 
 
 def cmd_clang_format(args):
