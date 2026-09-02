@@ -31,7 +31,9 @@ _Handle = ctypes.c_void_p
 _Status = ctypes.c_void_p
 _TARGET_FAMILY = b"amdxdna"
 _TARGET_KEY = b"amdxdna"
-_MEMORY_TYPE = 0x00000042 | 0x00000010  # HOST_LOCAL|DEVICE_VISIBLE
+_MEMORY_TYPE = (
+    0x00000002 | 0x00000008 | 0x00000010
+)  # HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE
 
 
 def _numeric_runtime():

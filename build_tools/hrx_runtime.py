@@ -194,7 +194,12 @@ HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0 = 0
 HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0 = 0
 HRX_AMDXDNA_CONTEXT_MODE_CREATE = 0
 
-HRX_MEMORY_TYPE_HOST_LOCAL = 0x00000042
+# Canonical amdxdna heap: HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A).
+# HIP HOST_LOCAL (0x42) is a placement extra bit; staging callers do not
+# request it. Prebuilt FastFlowLM engines still pass 0x52/0x56; that alias
+# lives in patches/hrx/0004-accept-fastflowlm-host-local-device-visible-alias.patch.
+HRX_MEMORY_TYPE_HOST_VISIBLE = 0x00000002
+HRX_MEMORY_TYPE_HOST_CACHED = 0x00000008
 HRX_MEMORY_TYPE_DEVICE_VISIBLE = 0x00000010
 HRX_BUFFER_USAGE_DEFAULT = 0x00000C03
 HRX_BUFFER_USAGE_MAPPING_PERSISTENT = 0x02000000
@@ -698,7 +703,9 @@ class HrxRuntime:
             self.api.buffer_allocate(
                 self.stream,
                 nbytes,
-                HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+                HRX_MEMORY_TYPE_HOST_VISIBLE
+                | HRX_MEMORY_TYPE_HOST_CACHED
+                | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
                 HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
                 ctypes.byref(handle),
             ),

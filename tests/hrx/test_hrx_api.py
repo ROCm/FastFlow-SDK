@@ -208,7 +208,9 @@ def test_runtime_loads_maps_dispatches_and_releases():
     assert allocate_call[1] == 16
     assert (
         allocate_call[2]
-        == hrx.HRX_MEMORY_TYPE_HOST_LOCAL | hrx.HRX_MEMORY_TYPE_DEVICE_VISIBLE
+        == hrx.HRX_MEMORY_TYPE_HOST_VISIBLE
+        | hrx.HRX_MEMORY_TYPE_HOST_CACHED
+        | hrx.HRX_MEMORY_TYPE_DEVICE_VISIBLE
     )
     map_call = library.hrx_buffer_map_with_mode.calls[0]
     assert map_call[1] == hrx.HRX_MAPPING_MODE_PERSISTENT
