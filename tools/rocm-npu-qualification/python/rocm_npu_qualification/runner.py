@@ -68,6 +68,19 @@ from .prompts import materialize_turn
 from .report import build_markdown_report
 from .xadx import XadxError, run_recipe, validate_xadx_report
 
+_PMODE_CHOICES = ("default", "powersaver", "balanced", "performance", "turbo")
+
+
+def _flm_pmode_argv(pmode: str | None) -> list[str]:
+    """CLI suffix that forwards ``--pmode`` to FastFlowLM, or empty if unset."""
+    if not pmode:
+        return []
+    if pmode not in _PMODE_CHOICES:
+        raise QualificationError(
+            f"invalid NPU power mode {pmode!r}; expected one of {_PMODE_CHOICES}"
+        )
+    return ["--pmode", pmode]
+
 # Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
 # 2+2 turn must stay explicit: "What is 2+2?" is echoed as "2 + 2" by
 # qwen3:0.6b after prior turns, and "reply with only the number" makes it copy
@@ -704,6 +717,7 @@ def _run_flm_bench(
     log: Path,
     benchmark_iterations: int,
     runtime_label: str = "HRX",
+    pmode: str | None = None,
 ) -> dict[str, Any]:
     """Run a single ``flm bench`` and parse it into a backend-agnostic result.
 
@@ -740,7 +754,7 @@ def _run_flm_bench(
             encoding="utf-8",
         )
         result = run_command(
-            [flm, "bench", model_tag, "-i", config.resolve()],
+            [flm, "bench", model_tag, "-i", config.resolve(), *_flm_pmode_argv(pmode)],
             log_path=log,
             env=environment,
             timeout=test["timeout_seconds"],
@@ -839,6 +853,7 @@ def _run_xrt_comparison(
     writer: EvidenceWriter,
     safe_tag: str,
     benchmark_iterations: int,
+    pmode: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Benchmark one model through the XRT build, tolerating any failure.
 
@@ -860,6 +875,7 @@ def _run_xrt_comparison(
             log=log,
             benchmark_iterations=benchmark_iterations,
             runtime_label="XRT",
+            pmode=pmode,
         )
     except (QualificationError, OSError) as error:
         return {"status": "unavailable", "error": str(error)}, []
@@ -891,6 +907,7 @@ def _run_xrt_serve_comparison(
     probe_kind: str,
     audio_sample: Path | None,
     reference_text: str | None,
+    pmode: str | None = None,
 ) -> dict[str, Any]:
     """Serve-probe one embed/ASR model through the XRT build, tolerating failure.
 
@@ -901,6 +918,7 @@ def _run_xrt_serve_comparison(
     """
     log = writer.path(f"logs/tests/{safe_tag}-{test['name']}-xrt.log")
     serve_argv: list[str | os.PathLike[str]] = [xrt_flm, "serve", model_tag]
+    serve_argv += _flm_pmode_argv(pmode)
     if probe_kind == "embed":
         serve_argv += ["-e", "1"]
     elif probe_kind == "asr":
@@ -953,6 +971,7 @@ def _test_model(
     xrt_flm: Path | None = None,
     xrt_environment: dict[str, str] | None = None,
     xrt_unavailable: dict[str, Any] | None = None,
+    pmode: str | None = None,
 ) -> list[dict[str, Any]]:
     environment = fastflow_environment(
         model_cache, offline=offline, base_environment=environment
@@ -996,6 +1015,7 @@ def _test_model(
             log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
             probe_kind = test.get("probe_kind", "embed")
             serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
+            serve_argv += _flm_pmode_argv(pmode)
             with ExitStack() as sample_stack:
                 audio_sample: Path | None = None
                 reference_text: str | None = None
@@ -1035,6 +1055,7 @@ def _test_model(
                         probe_kind=probe_kind,
                         audio_sample=audio_sample,
                         reference_text=reference_text,
+                        pmode=pmode,
                     )
             transcript = result.stdout
             semantic_error = ""
@@ -1087,6 +1108,7 @@ def _test_model(
                 work=writer.path(f"bench/{safe_tag}/{test['name']}"),
                 log=writer.path(f"logs/tests/{safe_tag}-{test['name']}.log"),
                 benchmark_iterations=benchmark_iterations,
+                pmode=pmode,
             )
             metrics: dict[str, Any] = {
                 "checkpoint_tokens": hrx["checkpoint"],
@@ -1117,6 +1139,7 @@ def _test_model(
                     writer=writer,
                     safe_tag=safe_tag,
                     benchmark_iterations=benchmark_iterations,
+                    pmode=pmode,
                 )
                 metrics["xrt"] = xrt_metrics
                 artifacts += xrt_artifacts
@@ -1170,6 +1193,7 @@ def _test_model(
                         model["tag"],
                         "--ctx-len",
                         str(test["ctx_len"]),
+                        *_flm_pmode_argv(pmode),
                     ],
                     log_path=log,
                     env=environment,
@@ -1185,6 +1209,7 @@ def _test_model(
                         model["tag"],
                         "--ctx-len",
                         str(test["ctx_len"]),
+                        *_flm_pmode_argv(pmode),
                     ],
                     log_path=log,
                     env=environment,
@@ -1606,6 +1631,10 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 file=sys.stderr,
                 flush=True,
             )
+    pmode = getattr(args, "pmode", None)
+    if pmode:
+        profile["pmode"] = pmode
+        print(f"qualify: NPU power mode {pmode}", file=sys.stderr, flush=True)
     candidate = None
     if args.candidate_manifest is not None:
         try:
@@ -1986,6 +2015,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     xrt_flm=xrt_flm,
                     xrt_environment=xrt_environment,
                     xrt_unavailable=xrt_unavailable,
+                    pmode=pmode,
                 )
             except OSError as error:
                 tests = [

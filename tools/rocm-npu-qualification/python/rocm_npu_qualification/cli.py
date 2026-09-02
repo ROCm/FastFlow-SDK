@@ -165,6 +165,16 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--pmode",
+        choices=("default", "powersaver", "balanced", "performance", "turbo"),
+        default=None,
+        help=(
+            "NPU power mode forwarded to `flm --pmode` for run/serve/bench "
+            "(default: omit the flag and keep FastFlowLM's own default, "
+            "performance). Use turbo for max-boost measurement sweeps."
+        ),
+    )
+    parser.add_argument(
         "--output",
         "--output-dir",
         dest="output",
