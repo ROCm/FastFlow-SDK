@@ -37,14 +37,7 @@ is already applied, so a patch that does not reverse cleanly breaks `setup`.
 
 ## patches/hrx/
 
-### 0001-surface-semaphore-failure-status.patch
-A failed device dispatch reached callers as a bare `INTERNAL` with no detail.
-`iree_async_semaphore_multi_wait` reports failures as `iree_status_from_code(code)`,
-dropping the annotation, and leaves the original status owned by the semaphore.
-`hrx_semaphore_wait` now queries it back, so the amdxdna HAL's `did not complete: ert
-state N (error_index M, submit_index K)` reaches `dev.py test-npu` and the CTS.
-
-**Remove when:** fixed upstream in hrx (`libhrx/src/libhrx/semaphore.c`).
+The native Linux KMQ command-chain capability gate is already pin-resident.
 
 ### 0004-accept-fastflowlm-host-local-device-visible-alias.patch
 Restores the historical FastFlowLM `hrx_buffer_allocate` memory-type alias in the
@@ -52,26 +45,14 @@ amdxdna allocator: `HOST_LOCAL|DEVICE_VISIBLE` (`0x52`) and the older
 `HOST_LOCAL|HOST_COHERENT|DEVICE_VISIBLE` (`0x56`, from `HOST_LOCAL=0x46`)
 canonicalize to non-coherent HOST_ONLY (`HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE`,
 `0x1A`). Bare `HOST_LOCAL` or real `HOST_COHERENT` without `DEVICE_VISIBLE` stay
-rejected. Honest HRX (Ben) does not carry this rewrite.
+rejected. This compatibility stays in rocm-npu's patch queue rather than the
+pinned HRX branch.
 
 **Why:** prebuilt FastFlowLM engine `.dll`/`.so` files bake those HIP-style
 immediates. Rebuilding `flm.exe` or editing `hrx_cpp.hpp` does not change them.
 Staging ctypes, XADX, and tests request `0x1A` directly.
 
 **Remove when:** FastFlowLM engine binaries are rebuilt against `0x1A`.
-
-### 0003-disable-command-chain-on-old-amdxdna-stacks.patch
-Extends the amdxdna native DDI caps with driver-stack identity and command-chain
-policy status, then disables parent `ERT_CMD_CHAIN` on known-problem Linux KMQ
-stacks. The exact stock Ubuntu 6.17 amdxdna `srcversion`
-`2DBDA75956CAFA9D029EA89` is denied regardless of firmware, and otherwise XDNA2
-stacks keep command chains disabled until the reported firmware reaches `1.1.0.0`.
-The HAL still records the host-patched runlist path and falls back to direct
-child submissions, so FastFlowLM can run on those stacks while newer validated
-firmware keeps command chains enabled by default.
-
-**Remove when:** Linux KMQ command chains are validated on stock Ubuntu firmware,
-or upstream hrx carries equivalent driver/firmware capability gating.
 
 ## patches/FastFlowLM/
 
