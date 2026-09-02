@@ -262,6 +262,46 @@ class TestIronPolicy:
             iron.require_txn_devgen(transaction, "npu2")
 
 
+class TestNpuIronOpsSelection:
+    def test_compile_only_rows_are_not_collected(self, tmp_path):
+        ops = tmp_path / "iron-ops"
+        for name in ("relu", "swiglu_decode"):
+            directory = ops / "iron" / "operators" / name
+            directory.mkdir(parents=True)
+            (directory / "test.py").write_text("def test_x():\n    pass\n")
+        operators = (
+            iron.Operator(
+                name="relu",
+                build_kwargs={"size": 1},
+                hrx_pytest_filter="test_relu",
+            ),
+            iron.Operator(
+                name="swiglu_decode",
+                build_kwargs={"embedding_dim": 8},
+            ),
+        )
+        ran, dirs, filters, skipped = device_testing.npu_iron_ops_pytest_selection(
+            operators, ops
+        )
+        assert ran == ["relu"]
+        assert skipped == ["swiglu_decode"]
+        assert filters == ["test_relu"]
+        assert dirs == [str(ops / "iron" / "operators" / "relu")]
+
+    def test_missing_test_py_with_filter_is_an_error(self, tmp_path):
+        ops = tmp_path / "iron-ops"
+        (ops / "iron" / "operators" / "relu").mkdir(parents=True)
+        operators = (
+            iron.Operator(
+                name="relu",
+                build_kwargs={"size": 1},
+                hrx_pytest_filter="test_relu",
+            ),
+        )
+        with pytest.raises(RuntimeError, match="test.py is missing"):
+            device_testing.npu_iron_ops_pytest_selection(operators, ops)
+
+
 class TestNpuTestPackageCommand:
     def test_extracted_verification_uses_package_owner(self):
         args = SimpleNamespace(extracted=True)

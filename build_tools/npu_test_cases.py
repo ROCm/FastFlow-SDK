@@ -11,8 +11,10 @@ BF16 is represented as raw ``numpy.uint16`` storage. No optional NumPy dtype
 extensions are required.
 
 ``package-npu-test-package`` includes an iron-ops compile artifact for every
-operator name that also appears here. dequant and rope stay compile-only until
-they get generators. MHA and SwiGLU are not in the CPU compile list (torch).
+operator name that also appears here. That is the NPU CI surface
+(``test-npu-package``): prebuilt XADX plus these NumPy oracles. dequant, rope,
+mha, and strided_copy are still CPU-compiled; they are omitted from the package
+until they have generators. SwiGLU fused ELF is not compiled on this stack.
 """
 
 

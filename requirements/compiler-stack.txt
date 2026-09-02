@@ -45,5 +45,5 @@ llvm-aie==21.0.0.2026061501+acc2a72c
 # wheel-built `aie` package in site-packages would shadow the source-built one this whole
 # stack exists to test. Its runtime deps are numpy + ml_dtypes, both already pinned above.
 #
-# What its own TESTS need (torch, pytest) is NOT here: see iron-ops-test.txt, which
-# only the NPU job installs.
+# What its own pytest suite needs (torch, pytest) is NOT here: see iron-ops-test.txt,
+# used only by local `dev.py setup --iron-ops-tests`. CI NPU e2e does not install it.

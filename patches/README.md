@@ -94,29 +94,18 @@ upstream.
 
 ## patches/iron-ops/
 
-### 0001-xrt-free-host-stack.patch
-Keeps the operator test path importable without XRT by making `pyxrt` optional,
-using the active `IRON_RUNTIME` tensor class in `run_test`, and failing only the
-XRT-specific sequence dispatch policies when they are constructed.
+### 0001-mha-bind-get-current-device.patch
+Binds MHA's compile-time `dev` to `aie_utils.get_current_device()`, matching
+GEMM, softmax, and the other operators. The pin still uses
+`DefaultNPURuntime.device()`, which is `None` under `IRON_RUNTIME=cpu`, so the
+CPU compile gate cannot build MHA without this patch.
 
-**Remove when:** iron-ops supports non-XRT host runtimes upstream.
+**Remove when:** IRON devel uses `get_current_device()` for MHA compile.
 
-### 0002-lazy-operator-imports.patch
-Makes `iron.operators` re-export operator classes lazily. This prevents importing
-one operator, such as `ElementwiseAdd`, from importing sequence-only operators
-that require XRT.
-
-**Remove when:** iron-ops avoids eager cross-operator imports upstream.
-
-The former 0003 (adapt aiecc native CLI) was dropped at the iron-ops `aab8083`
-pin: IRON #145/#150 now compile through mlir-aie's `compile_mlir_module()`,
-which already emits native `aiecc --get-*` flags.
-
-### 0004-windows-link-fallback.patch
-Copies aiecc work-dir inputs when `pathlib.Path.symlink_to` is denied. Windows
-without Developer Mode cannot create symlinks; CI runners typically can.
-
-**Remove when:** iron-ops copies (or hard-links) those work-dir inputs upstream.
+The former XRT-free host stack, lazy operator imports, and Windows aiecc copy
+fallback landed upstream as IRON #165, #163, and #162. The former aiecc native
+CLI patch was dropped earlier: IRON #145/#150 compile through mlir-aie's
+`compile_mlir_module()`, which already emits native `aiecc --get-*` flags.
 
 ## patches/llvm-project/
 

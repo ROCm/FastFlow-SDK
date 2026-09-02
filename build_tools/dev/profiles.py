@@ -84,7 +84,8 @@ PROFILE_SPECS = {
         system_checks=("compiler-stack", "fastflowlm"),
         needs_eudsl=True,
     ),
-    # Device test preparation does not need the full compiler-stack closure.
+    # Local on-device work that still compiles (iron-ops checkout + compiler-stack
+    # deps). CI NPU e2e does not use this; it is execute-only (`npu-test-runtime`).
     "npu-e2e": ProfileSpec(
         submodules=frozenset({"hrx", "iron-tools", "iron-ops"}),
         setup=True,
@@ -95,7 +96,7 @@ PROFILE_SPECS = {
         ),
         install_iron_ops=True,
     ),
-    # Execute-only NPU test setup has no source submodule requirement.
+    # CI NPU e2e: numpy/ml-dtypes only. No submodules, no iron-ops, no torch.
     "npu-test-runtime": ProfileSpec(
         submodules=frozenset(),
         setup=True,

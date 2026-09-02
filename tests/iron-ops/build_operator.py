@@ -7,6 +7,7 @@ Proves the chain the operator library actually walks:
 
     IRON operator -> MLIR -> Peano (the operator's C++ kernel AND the cores)
                   -> bootgen PDI -> hrx-xclbinutil(.xclbin) + insts.bin
+                     or a full ELF (OperatorSequence fused dispatch)
 
 `run_e2e.py` proves the same toolchain against an iron-tools programming example. This
 proves it against projects/iron-ops, and the difference is the point: iron-ops is developed
@@ -28,7 +29,9 @@ import importlib
 import inspect
 import os
 import shutil
+import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -48,7 +51,6 @@ os.environ.setdefault("IRON_RUNTIME", "cpu")
 import aie.utils as aie_utils
 from aie.iron.device import NPU2, NPU1Col1
 from iron.common import AIEContext, AIEOperatorBase
-from iron.common.compilation import InstsBinArtifact, XclbinArtifact
 
 DEVICES = {"npu2": NPU2, "npu1": NPU1Col1}
 
@@ -100,19 +102,21 @@ def instantiate(
     return cls(**operator_spec.build_kwargs, context=context)
 
 
-def artifact_of(operator: AIEOperatorBase, kind: type) -> Path:
-    """The single compiled artifact of type `kind`.
-
-    By artifact TYPE, not by filename: IRON names the instruction stream
-    `<Operator>_sz..._npu2.bin`, so matching on an `insts.bin` suffix silently finds nothing.
-    """
-    found = [Path(a.filename) for a in operator.artifacts if isinstance(a, kind)]
-    if len(found) != 1:
-        got = ", ".join(str(f) for f in found) or "none"
-        raise BuildError(
-            f"expected exactly one {kind.__name__}, got {len(found)}: {got}"
+def check_runtime_images(operator: AIEOperatorBase, device: str) -> None:
+    """Require a full ELF or the xclbin+insts pair, then the matching checks."""
+    try:
+        kind, produced = iron.classify_compiled_images(operator.artifacts)
+        for path in produced:
+            iron.require_runtime_image(path, elf=(kind == "elf"))
+            print(f"  ok: {path.name} ({path.stat().st_size} bytes)")
+    except RuntimeError as error:
+        raise BuildError(str(error)) from error
+    if kind == "xclbin":
+        iron.check_sections(
+            iron.require_xclbinutil(iron.compiler_prefix_from_env()),
+            produced[0],
         )
-    return found[0]
+        iron.require_txn_devgen(produced[1], device)
 
 
 def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
@@ -137,22 +141,26 @@ def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
         AIEContext(build_dir=build_dir),
     )
     operator.compile()
+    check_runtime_images(operator, device)
 
-    xclbin = artifact_of(operator, XclbinArtifact)
-    insts = artifact_of(operator, InstsBinArtifact)
-    for produced in (xclbin, insts):
-        if not produced.is_file():
-            raise BuildError(f"{produced} was not produced by the build")
-        print(f"  ok: {produced.name} ({produced.stat().st_size} bytes)")
 
-    # The same two checks run_e2e makes of an iron-tools design: hrx-xclbinutil really
-    # packaged the NPU sections, and the instruction stream targets the device we asked for
-    # (a mismatched DevGen is accepted by the driver and then never completes).
-    iron.check_sections(
-        iron.require_xclbinutil(iron.compiler_prefix_from_env()),
-        xclbin,
-    )
-    iron.require_txn_devgen(insts, device)
+def _compile_one_subprocess(
+    name: str, device: str | None, build_dir: Path
+) -> tuple[str, subprocess.CompletedProcess]:
+    """One operator in its own process: aie.utils device state is process-global."""
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--operator",
+        name,
+        "--build-dir",
+        str(build_dir),
+        "--jobs",
+        "1",
+    ]
+    if device:
+        command += ["--device", device]
+    return name, subprocess.run(command, capture_output=True, text=True)
 
 
 def main(argv: list[str]) -> int:
@@ -171,12 +179,63 @@ def main(argv: list[str]) -> int:
         default=ROOT / "out" / "iron-ops",
         help="where the artifacts land (default: out/iron-ops)",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="parallel operator compiles (0 = min(8, CPUs); 1 = this process)",
+    )
     args = parser.parse_args(argv)
 
     try:
-        operators = iron.select(args.operator)
-        for operator_spec in operators:
-            build(operator_spec, args.device or operator_spec.device, args.build_dir)
+        selected = iron.select(args.operator)
+        operators = iron.host_compile_suite(selected)
+        for skipped in selected:
+            if not skipped.host_compile:
+                why = (
+                    "local test-npu-iron-ops still collects this operator"
+                    if skipped.hrx_pytest_filter
+                    else "not built on this stack"
+                )
+                print(f"{skipped.name}: skipped host compile ({why})")
+        if not operators:
+            print("\niron-ops build: PASS (0 host-compile operators)")
+            return 0
+        jobs = iron.compile_job_count(len(operators), args.jobs)
+        if jobs == 1:
+            for operator_spec in operators:
+                build(
+                    operator_spec,
+                    args.device or operator_spec.device,
+                    args.build_dir,
+                )
+        else:
+            print(f"iron-ops build: {len(operators)} operators, jobs={jobs}")
+            failures = []
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
+                futures = [
+                    pool.submit(
+                        _compile_one_subprocess,
+                        operator_spec.name,
+                        args.device or operator_spec.device,
+                        args.build_dir,
+                    )
+                    for operator_spec in operators
+                ]
+                for future in as_completed(futures):
+                    name, completed = future.result()
+                    if completed.stdout:
+                        sys.stdout.write(completed.stdout)
+                    if completed.stderr:
+                        sys.stderr.write(completed.stderr)
+                    if completed.returncode != 0:
+                        failures.append(name)
+            if failures:
+                print(
+                    f"IRON-OPS BUILD FAIL: {', '.join(failures)}",
+                    file=sys.stderr,
+                )
+                return 1
     except (BuildError, iron.E2EError) as e:
         print(f"IRON-OPS BUILD FAIL: {e}", file=sys.stderr)
         return 1

@@ -367,8 +367,11 @@ jobs:
       # Same iron-ops operator build as Linux, same driver. This is the only place the
       # operator library is compiled on Windows at all, so it is also what would catch a
       # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).
+      # Auto jobs (0 = min(8, CPUs)), one process per operator.
+      # NPU e2e later dispatches a CASE_GENERATORS subset via test-npu-package;
+      # it does not run iron-ops pytest.
       - name: iron-ops (build operators off-device)
-        run: .venv/Scripts/python.exe dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-windows-x86_64
+        run: .venv/Scripts/python.exe dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-windows-x86_64 --jobs 0
 
       - name: Set up Python 3.13 for compiler wheel validation
         id: python313
@@ -418,7 +421,8 @@ jobs:
           .venv/Scripts/python.exe dev.py package-ops-wheels
           .venv/Scripts/python.exe dev.py verify-ops-wheels \
             --venv build/compiler-wheel-verify-312 \
-            --reuse-venv
+            --reuse-venv \
+            --jobs 0
 
       - name: Attest Windows compiler wheels
         if: ${{ inputs.attest_wheels }}
@@ -444,6 +448,7 @@ jobs:
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/Scripts/python.exe dev.py package-npu-prereqs
 
+      # XADX + NumPy oracles for CASE_GENERATORS (not the full host_compile catalog).
       - name: Package prebuilt NPU tests
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/Scripts/python.exe dev.py package-npu-test-package
@@ -483,6 +488,8 @@ jobs:
           # The product tar.zst and checksum are already compressed/opaque.
           compression-level: 0
 
+  # Execute-only: npu-test-runtime (numpy/ml-dtypes), HRX CTS, prebuilt XADX.
+  # No Peano, no torch, no iron-ops pytest (that is local test-npu-iron-ops).
   npu_e2e:
     name: NPU e2e (Windows ${{ matrix.runner_label }})
     if: ${{ inputs.run_npu_e2e }}

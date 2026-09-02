@@ -1,6 +1,11 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""On-device NPU test and probe commands."""
+"""On-device NPU test and probe commands.
+
+CI NPU e2e uses ``npu-probe``, ``test-hrx-cts``, and ``test-npu-package``.
+``test-npu-iron-ops`` is a local extra (IRON pytest under HRX); it is not a
+workflow step.
+"""
 
 import os
 import re
@@ -29,6 +34,10 @@ def _select_hrx_runtime(env):
 
 
 def cmd_test_npu_package(args):
+    """Dispatch the prebuilt XADX package produced by package-npu-test-package.
+
+    This is the CI NPU operator gate: no Peano, no iron-ops pytest.
+    """
     try:
         npu_test_package.verify_npu_test_package(
             npu_test_package.NPU_TEST_PACKAGE_EXTRACTED
@@ -242,38 +251,68 @@ def cmd_test_npu_jit(args):
     )
 
 
+def npu_iron_ops_pytest_selection(operators, ops_dir: Path):
+    """Dirs and -k clauses for operators that have an HRX pytest filter.
+
+    ``hrx_pytest_filter is None`` means local test-npu-iron-ops must not
+    collect that operator's test.py. An empty -k would otherwise run every
+    test in the directory, including XRT fused-ELF cases that fail on HRX.
+    CI does not call this helper.
+    """
+    test_dirs = []
+    filters = []
+    ran = []
+    skipped = []
+    for operator in operators:
+        test_dir = ops_dir / "iron" / "operators" / operator.name
+        if operator.hrx_pytest_filter is None:
+            skipped.append(operator.name)
+            continue
+        if not (test_dir / "test.py").is_file():
+            raise RuntimeError(
+                f"{operator.name}: hrx_pytest_filter is set but "
+                f"{test_dir / 'test.py'} is missing"
+            )
+        ran.append(operator.name)
+        test_dirs.append(str(test_dir))
+        filters.append(operator.hrx_pytest_filter)
+    return ran, test_dirs, filters, skipped
+
+
 def cmd_test_npu_iron_ops(args):
+    """Run iron-ops' own pytest on a machine with an NPU (local, not CI).
+
+    Recompiles inside each ``run_test``. Needs ``setup --iron-ops-tests``.
+    """
     try:
         operators = iron.select(getattr(args, "operator", None))
     except KeyError as error:
         sys.exit(error.args[0])
     compiler_prefix = getattr(args, "compiler_prefix", None)
     _require_hrx_runtime(compiler_prefix)
+    ops_dir = paths.PROJ / "iron-ops"
+    try:
+        ran, test_dirs, filters, skipped = npu_iron_ops_pytest_selection(
+            operators, ops_dir
+        )
+    except RuntimeError as error:
+        sys.exit(str(error))
+    for name in skipped:
+        print(
+            f"{name}: compile-only (no hrx_pytest_filter); skipped by test-npu-iron-ops"
+        )
+    if not ran:
+        names = ", ".join(operator.name for operator in operators)
+        print(f"test-npu-iron-ops: ok (nothing to run on the NPU: {names})")
+        return
     pytest = paths.venv_bin() / paths.executable_name("pytest")
     if not pytest.exists():
         sys.exit(
-            "pytest not in the venv — the NPU job installs the iron-ops "
-            "test deps: python dev.py setup --iron-ops-tests"
+            "pytest not in the venv — install iron-ops test deps: "
+            "python dev.py setup --iron-ops-tests"
         )
-    ops_dir = paths.PROJ / "iron-ops"
-    test_dirs = []
-    for operator in operators:
-        test_dir = ops_dir / "iron" / "operators" / operator.name
-        if not (test_dir / "test.py").exists():
-            print(f"{operator.name}: no test.py; compile-only, skipping on-device")
-            continue
-        test_dirs.append(str(test_dir))
-    if not test_dirs:
-        sys.exit("test-npu-iron-ops: no operator in the suite has a test.py")
     env = _select_hrx_runtime(iron.iron_ops_env(compiler_prefix))
-    filters = [
-        operator.hrx_pytest_filter
-        for operator in operators
-        if operator.hrx_pytest_filter
-    ]
-    pytest_filter = (
-        ["-k", " or ".join(f"({value})" for value in filters)] if filters else []
-    )
+    pytest_filter = ["-k", " or ".join(f"({value})" for value in filters)]
     rc = subprocess.run(
         [
             str(environment.venv_py()),
@@ -291,7 +330,7 @@ def cmd_test_npu_iron_ops(args):
         cwd=ops_dir,
         env=env,
     ).returncode
-    names = ", ".join(operator.name for operator in operators)
+    names = ", ".join(ran)
     if rc != 0:
         sys.exit(f"test-npu-iron-ops: FAIL ({names})")
     print(f"test-npu-iron-ops: ok ({names} ran on the NPU via hrx, numerics verified)")

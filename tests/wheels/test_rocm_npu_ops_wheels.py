@@ -10,7 +10,7 @@ import pytest
 
 from build_tools import paths
 from build_tools.artifact import git_source_state
-from build_tools.iron import OPERATORS
+from build_tools.iron import OPERATORS, host_compile_suite
 from build_tools.release_policy import compiler_requires_python
 from build_tools.rocm_npu_ops_wheels import (
     _EXE,
@@ -223,12 +223,7 @@ class TestOpsOperatorProbe:
         assert "ModuleNotFoundError" in probe
         assert 'current.name == "torch"' in probe
         assert '(child / "op.py")' in probe or 'child / "op.py"' in probe
-        assert _TORCH_AT_IMPORT == {
-            "mha",
-            "swiglu_decode",
-            "swiglu_prefill",
-            "swiglu_prefill_stream",
-        }
+        assert _TORCH_AT_IMPORT == {"swiglu_prefill_stream"}
         for name in _TORCH_AT_IMPORT:
             assert repr(name) in probe
 
@@ -237,18 +232,31 @@ class TestOpsOperatorProbe:
         compile(script, "<ops-compile>", "exec")
         specs = _ops_compile_specs()
         names = [spec["name"] for spec in specs]
-        assert names == [operator.name for operator in OPERATORS]
+        assert names == [operator.name for operator in host_compile_suite()]
         assert not _TORCH_AT_IMPORT.intersection(names)
         assert "gemm" in names
         assert "relu" in names
         assert "elementwise_add" in names
+        assert "mha" in names
+        assert "swiglu_decode" not in names
+        assert "swiglu_prefill" not in names
+        assert "strided_copy" in names
         for spec in specs:
             assert spec["device"] == "npu2"
             assert spec["kwargs"]
         for package in _TORCH_AT_IMPORT:
             assert f"'name': {package!r}" not in script
-        assert "compile_installed_operators" in script
+        assert "def compile_one(" in script
+        assert "ThreadPoolExecutor" in script
+        assert "subprocess.run" in script
+        assert "--operator" in script
+        assert "ProcessPoolExecutor" not in script
+        assert "compile_job_count" in script
+        assert 'if __name__ == "__main__"' in script
+        assert "def require_runtime_image" in script
+        assert "def classify_compiled_images" in script
         assert "tile_m" in script
+        assert "FullElfArtifact" in script
         assert "activate_toolchain_env" in script
         assert "compiler prefix has no include" in script
 
@@ -262,7 +270,7 @@ class TestOpsOperatorProbe:
             if child.is_dir() and (child / "op.py").is_file()
         }
         leftover = packages - {op.name for op in OPERATORS} - set(_TORCH_AT_IMPORT)
-        assert leftover == {"strided_copy"}
+        assert leftover == set()
 
     def test_reuse_venv_keeps_existing_interpreter(self, tmp_path, monkeypatch):
         monkeypatch.setattr("build_tools.rocm_npu_ops_wheels.paths.BUILD", tmp_path)

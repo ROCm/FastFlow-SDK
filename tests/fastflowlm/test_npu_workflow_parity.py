@@ -45,6 +45,8 @@ def _runner_labels(filename):
 
 class TestNpuWorkflowParity:
     def test_compiler_npu_matrices_use_identical_hrx_and_xadx_commands(self):
+        # Execute-only XADX + HRX CTS. Do not add test-npu-iron-ops: that is
+        # local IRON pytest and is not part of NPU CI.
         expected = {"test-hrx-cts", "test-npu-package"}
         assert _logical_test_commands("build_rocm_npu_staging_linux.yml") == expected
         assert _logical_test_commands("build_rocm_npu_staging_windows.yml") == expected

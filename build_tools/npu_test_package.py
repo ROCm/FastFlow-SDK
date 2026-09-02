@@ -1,6 +1,10 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Artifact helpers for compiler-free NPU XADX test packages."""
+"""Artifact helpers for compiler-free NPU XADX test packages.
+
+CI NPU e2e unpacks this archive and runs ``dev.py test-npu-package``. That is
+not ``test-npu-iron-ops`` (IRON pytest, local only).
+"""
 
 import json
 import os
