@@ -46,17 +46,19 @@ state N (error_index M, submit_index K)` reaches `dev.py test-npu` and the CTS.
 
 **Remove when:** fixed upstream in hrx (`libhrx/src/libhrx/semaphore.c`).
 
-### 0002-add-buffer-map-persistent-compat.patch
-Restores the removed `hrx_buffer_map_persistent` export as a compatibility wrapper
-around `hrx_buffer_map_with_mode(..., HRX_MAPPING_MODE_PERSISTENT, ...)`.
+### 0004-accept-fastflowlm-host-local-device-visible-alias.patch
+Restores the historical FastFlowLM `hrx_buffer_allocate` memory-type alias in the
+amdxdna allocator: `HOST_LOCAL|DEVICE_VISIBLE` (`0x52`) and the older
+`HOST_LOCAL|HOST_COHERENT|DEVICE_VISIBLE` (`0x56`, from `HOST_LOCAL=0x46`)
+canonicalize to non-coherent HOST_ONLY (`HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE`,
+`0x1A`). Bare `HOST_LOCAL` or real `HOST_COHERENT` without `DEVICE_VISIBLE` stay
+rejected. Honest HRX (Ben) does not carry this rewrite.
 
-**Why:** the pinned FastFlowLM PR's bundled engine libraries were built against the
-older libhrx ABI and still import `hrx_buffer_map_persistent`. The current pinned
-HRX has the generalized mapping API, so this keeps the staging stack link/runtime
-compatible without rebuilding all engine libraries.
+**Why:** prebuilt FastFlowLM engine `.dll`/`.so` files bake those HIP-style
+immediates. Rebuilding `flm.exe` or editing `hrx_cpp.hpp` does not change them.
+Staging ctypes, XADX, and tests request `0x1A` directly.
 
-**Remove when:** FastFlowLM's bundled engine libraries are rebuilt against the
-current HRX mapping API, or HRX carries this compatibility wrapper upstream.
+**Remove when:** FastFlowLM engine binaries are rebuilt against `0x1A`.
 
 ### 0003-disable-command-chain-on-old-amdxdna-stacks.patch
 Extends the amdxdna native DDI caps with driver-stack identity and command-chain
