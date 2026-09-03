@@ -1841,11 +1841,7 @@ def test_resolve_model_dynamic_resumes_undersized_q4nx(monkeypatch, tmp_path):
     model_info = tmp_path / "model_info.json"
     model_info.write_text(
         json.dumps(
-            {
-                "qwen3:0.6b": [
-                    {"path": "model.q4nx", "size": len(b"complete-weights")}
-                ]
-            }
+            {"qwen3:0.6b": [{"path": "model.q4nx", "size": len(b"complete-weights")}]}
         ),
         encoding="utf-8",
     )
@@ -2984,7 +2980,10 @@ def test_all_models_is_mutually_exclusive_with_profile():
     # The parser leaves --bench-context unset; the runner resolves the per-mode
     # default (8k for --all-models). 1k/4k/8k are selectable.
     assert args.bench_context is None
-    assert parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context == "4k"
+    assert (
+        parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context
+        == "4k"
+    )
     restricted = parser.parse_args(
         ["--all-models", "--models", "qwen3:0.6b,qwen3:4b", "--skip-xadx"]
     )

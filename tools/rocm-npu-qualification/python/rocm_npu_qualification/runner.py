@@ -299,9 +299,7 @@ def _resolve_asr_sample(stack: ExitStack) -> Path | None:
     import site
 
     for base in (*site.getsitepackages(), site.getusersitepackages()):
-        wheel_wav = (
-            Path(base) / "rocm_npu_qualification" / "assets" / "asr_sample.wav"
-        )
+        wheel_wav = Path(base) / "rocm_npu_qualification" / "assets" / "asr_sample.wav"
         if wheel_wav.is_file():
             return wheel_wav
     return None
@@ -344,9 +342,7 @@ def _sweep_timeouts(footprint: float) -> tuple[int, int]:
     return boot, turn
 
 
-def _sweep_setup_commands(
-    model: dict[str, Any], base: tuple[str, ...]
-) -> list[str]:
+def _sweep_setup_commands(model: dict[str, Any], base: tuple[str, ...]) -> list[str]:
     """Greedy decode setup, plus /think to disable reasoning when it is on.
 
     ``/think`` is a toggle. Models that ship with thinking enabled and a working
@@ -360,9 +356,7 @@ def _sweep_setup_commands(
     return commands
 
 
-def _upsert_model_record(
-    models: list[dict[str, Any]], record: dict[str, Any]
-) -> None:
+def _upsert_model_record(models: list[dict[str, Any]], record: dict[str, Any]) -> None:
     """Replace an existing catalog row with the same tag, or append."""
     tag = record.get("tag")
     for index, existing in enumerate(models):
@@ -1893,9 +1887,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         evidence["models"] = list(prior_models)
     if prior_tests:
         evidence["tests"] = [
-            test
-            for test in evidence["tests"]
-            if test.get("kind") in ("native", "xadx")
+            test for test in evidence["tests"] if test.get("kind") in ("native", "xadx")
         ] + [
             test
             for test in prior_tests

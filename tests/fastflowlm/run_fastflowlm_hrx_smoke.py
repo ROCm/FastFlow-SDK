@@ -401,11 +401,22 @@ def main():
         # lib/hrx holds the HRX-native engine libraries (lib/ keeps the older
         # XRT-era third-party ones); prepend_search_path skips absent entries.
         if IS_WINDOWS:
-            prepend_search_path(env, "PATH", [flm_bin.parent, hrx_runtime.parent,
-                                              flm_src / "lib" / "hrx", flm_src / "lib"])
+            prepend_search_path(
+                env,
+                "PATH",
+                [
+                    flm_bin.parent,
+                    hrx_runtime.parent,
+                    flm_src / "lib" / "hrx",
+                    flm_src / "lib",
+                ],
+            )
         else:
-            prepend_search_path(env, "LD_LIBRARY_PATH", [hrx_runtime.parent,
-                                                         flm_src / "lib" / "hrx", flm_src / "lib"])
+            prepend_search_path(
+                env,
+                "LD_LIBRARY_PATH",
+                [hrx_runtime.parent, flm_src / "lib" / "hrx", flm_src / "lib"],
+            )
 
     print("FastFlowLM HRX smoke")
     print(f"  model:       {model}")

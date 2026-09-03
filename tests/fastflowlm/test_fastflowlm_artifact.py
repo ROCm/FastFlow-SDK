@@ -22,10 +22,10 @@ from build_tools.artifact import (
 )
 from build_tools.fastflowlm_artifact import (
     _copy_windows_redistributable_closure,
-    _strip_windows_system_dlls,
     _is_linux_system_runtime,
     _linux_dependencies_and_licenses,
     _linux_package_owner_candidates,
+    _strip_windows_system_dlls,
     _system_license_destination,
     artifact_name,
     create_archive,

@@ -140,9 +140,7 @@ def _cache_is_stale(model_directory: Path, min_version: str | None) -> bool:
     return _parse_dotted_version(cached) < _parse_dotted_version(min_version)
 
 
-def _expected_file_sizes(
-    tag: str, environment: Mapping[str, str]
-) -> dict[str, int]:
+def _expected_file_sizes(tag: str, environment: Mapping[str, str]) -> dict[str, int]:
     """Map registry filenames to byte sizes from FLM model_info.json, if present."""
     raw = environment.get("FLM_MODELINFO_PATH")
     if not raw:
@@ -421,9 +419,7 @@ def resolve_model_dynamic(
     commands: list[CommandResult] = []
     min_version = registry.get("flm_min_version")
     min_version_s = min_version if isinstance(min_version, str) else None
-    present_files = all(
-        (model_directory / path).is_file() for path in required_files
-    )
+    present_files = all((model_directory / path).is_file() for path in required_files)
     incomplete = _incomplete_required_files(
         model_directory, required_files, expected_sizes
     )
