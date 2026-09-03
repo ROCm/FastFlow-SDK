@@ -40,6 +40,11 @@ from rocm_npu_qualification.commands import (
     run_command,
     serve_probe,
 )
+from rocm_npu_qualification.contracts import (
+    POWER_MODE_ROUNDTRIP,
+    POWER_MODE_ROUNDTRIP_ARTIFACTS,
+    POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
+)
 from rocm_npu_qualification.evidence import EvidenceWriter
 from rocm_npu_qualification.fastflowlm import (
     require_1k_checkpoint,
@@ -59,6 +64,14 @@ from rocm_npu_qualification.profiles import (
 )
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
+
+_POWER_MODE_VALUES = {
+    "default": 0,
+    "powersaver": 1,
+    "balanced": 2,
+    "performance": 3,
+    "turbo": 4,
+}
 
 
 def test_inhibit_system_sleep_is_noop_off_windows(monkeypatch):
@@ -118,6 +131,356 @@ def _result(returncode=0, stdout="ok\n"):
         timed_out=False,
         log="log",
     )
+
+
+def _powermode_report(
+    mode: str,
+    *,
+    requested_mode: str | None = None,
+    updated_count: int = 0,
+    status: str = "pass",
+    source_revision: str = "abc",
+) -> dict[str, object]:
+    data: dict[str, object] = {
+        "detected_device_count": 1,
+        "reported_device_count": 1,
+        "updated_device_count": updated_count,
+        "devices": [
+            {
+                "device_name": "NPU fixture",
+                "source": "fixture",
+                "power_mode": mode,
+                "power_mode_value": _POWER_MODE_VALUES[mode],
+            }
+        ],
+    }
+    if requested_mode is not None:
+        data["requested_power_mode"] = requested_mode
+    return {
+        "schema_version": 1,
+        "command": "powermode",
+        "status": status,
+        "product": {"version": "1.2.3", "source_revision": source_revision},
+        "checks": [],
+        "data": data,
+    }
+
+
+def _powermode_stdout(*args, **kwargs) -> str:
+    return json.dumps(_powermode_report(*args, **kwargs)) + "\n"
+
+
+def _write_powermode_roundtrip_fixture(
+    writer: EvidenceWriter, *, source_revision: str = "abc"
+) -> None:
+    writer.path("logs/tests/powermode-roundtrip.log").write_text(
+        "powermode roundtrip passed\n", encoding="utf-8"
+    )
+    reports = [("default", None, 0)]
+    for mode, _, _ in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS:
+        reports.extend(((mode, mode, 1), (mode, None, 0)))
+    reports.extend((("default", "default", 1), ("default", None, 0)))
+    for artifact, (mode, requested_mode, updated_count) in zip(
+        POWER_MODE_ROUNDTRIP_ARTIFACTS, reports, strict=True
+    ):
+        writer.write_json(
+            artifact,
+            _powermode_report(
+                mode,
+                requested_mode=requested_mode,
+                updated_count=updated_count,
+                source_revision=source_revision,
+            ),
+        )
+
+
+def _powermode_roundtrip_fixture(core, **kwargs):
+    writer = kwargs["writer"]
+    source_revision = kwargs.get("source_revision", "abc")
+    core_version = writer.path("core-version.json")
+    if core_version.is_file():
+        source_revision = json.loads(core_version.read_text(encoding="utf-8"))[
+            "product"
+        ]["source_revision"]
+    _write_powermode_roundtrip_fixture(writer, source_revision=source_revision)
+    return {
+        "model": "native-core",
+        "name": POWER_MODE_ROUNDTRIP,
+        "kind": "native",
+        "status": "pass",
+        "returncode": 0,
+        "duration_seconds": 0,
+        "log": "logs/tests/powermode-roundtrip.log",
+        "metrics": {
+            "baseline_power_mode": "default",
+            "requested_power_modes": ["balanced", "performance", "turbo"],
+            "confirmed_power_modes": ["balanced", "performance", "turbo"],
+            "restored_power_mode": "default",
+            "detected_device_count": 1,
+            "reported_device_count": 1,
+        },
+        "artifacts": list(POWER_MODE_ROUNDTRIP_ARTIFACTS),
+    }
+
+
+def _fake_powermode_run(responses, calls):
+    remaining = iter(responses)
+
+    def fake_run(argv, **kwargs):
+        calls.append(tuple(map(str, argv)))
+        log_path = Path(kwargs["log_path"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("powermode command log\n", encoding="utf-8")
+        returncode, stdout = next(remaining)
+        return CommandResult(
+            argv=tuple(map(str, argv)),
+            returncode=returncode,
+            stdout=stdout,
+            stderr="",
+            duration_seconds=0.1,
+            timed_out=False,
+            log=log_path.as_posix(),
+        )
+
+    return fake_run
+
+
+def _powermode_invocation(call):
+    tail = list(call[2:])
+    if "--runtime" in tail:
+        tail = tail[: tail.index("--runtime")]
+    return tuple(tail)
+
+
+def test_powermode_roundtrip_sets_queries_and_restores(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "run_command",
+        _fake_powermode_run(
+            (
+                (0, _powermode_stdout("default")),
+                (
+                    0,
+                    _powermode_stdout(
+                        "balanced", requested_mode="balanced", updated_count=1
+                    ),
+                ),
+                (0, _powermode_stdout("balanced")),
+                (
+                    0,
+                    _powermode_stdout(
+                        "performance", requested_mode="performance", updated_count=1
+                    ),
+                ),
+                (0, _powermode_stdout("performance")),
+                (
+                    0,
+                    _powermode_stdout("turbo", requested_mode="turbo", updated_count=1),
+                ),
+                (0, _powermode_stdout("turbo")),
+                (
+                    0,
+                    _powermode_stdout(
+                        "default", requested_mode="default", updated_count=1
+                    ),
+                ),
+                (0, _powermode_stdout("default")),
+            ),
+            calls,
+        ),
+    )
+    writer = EvidenceWriter(tmp_path / "evidence")
+    record = runner._run_powermode_roundtrip(
+        tmp_path / "rocm-npu",
+        runtime="runtime.dll",
+        writer=writer,
+        core_version="1.2.3",
+    )
+
+    assert record["status"] == "pass"
+    assert record["metrics"] == {
+        "baseline_power_mode": "default",
+        "requested_power_modes": ["balanced", "performance", "turbo"],
+        "confirmed_power_modes": ["balanced", "performance", "turbo"],
+        "restored_power_mode": "default",
+        "detected_device_count": 1,
+        "reported_device_count": 1,
+    }
+    assert record["artifacts"] == list(POWER_MODE_ROUNDTRIP_ARTIFACTS)
+    assert all((writer.root / artifact).is_file() for artifact in record["artifacts"])
+    assert [_powermode_invocation(call) for call in calls] == [
+        ("powermode",),
+        ("powermode", "balanced"),
+        ("powermode",),
+        ("powermode", "performance"),
+        ("powermode",),
+        ("powermode", "turbo"),
+        ("powermode",),
+        ("powermode", "default"),
+        ("powermode",),
+    ]
+    assert all("--runtime" in call for call in calls)
+
+
+def test_powermode_roundtrip_skips_mutating_set_on_linux(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "run_command",
+        _fake_powermode_run(((0, _powermode_stdout("default")),), calls),
+    )
+    writer = EvidenceWriter(tmp_path / "evidence")
+    record = runner._run_powermode_roundtrip(
+        tmp_path / "rocm-npu",
+        runtime="",
+        writer=writer,
+        core_version="1.2.3",
+        platform_os="Linux 7.0.0",
+    )
+
+    assert record["status"] == "unsupported"
+    assert record["returncode"] == 0
+    assert record["artifacts"] == [POWER_MODE_ROUNDTRIP_ARTIFACTS[0]]
+    assert record["metrics"] == {
+        "baseline_power_mode": "default",
+        "requested_power_modes": ["balanced", "performance", "turbo"],
+        "confirmed_power_modes": [],
+        "detected_device_count": 1,
+        "reported_device_count": 1,
+    }
+    assert "skipped on Linux" in record["error"]
+    assert [_powermode_invocation(call) for call in calls] == [("powermode",)]
+    assert (writer.root / POWER_MODE_ROUNDTRIP_ARTIFACTS[0]).is_file()
+    assert not (writer.root / POWER_MODE_ROUNDTRIP_ARTIFACTS[1]).exists()
+
+
+def test_only_linux_powermode_skip_counts_as_success():
+    passing = {
+        "status": "pass",
+        "kind": "native",
+        "model": "native-core",
+        "name": "probe",
+    }
+    powermode_skip = {
+        "status": "unsupported",
+        "kind": "native",
+        "model": "native-core",
+        "name": POWER_MODE_ROUNDTRIP,
+    }
+    evidence = {
+        "observed_platform": {"os": "Linux 7.0"},
+        "tests": [passing, powermode_skip],
+    }
+
+    assert runner._evidence_tests_succeeded(evidence)
+    for mutation in (
+        {"observed_platform": {"os": "Windows 11"}, "tests": [passing, powermode_skip]},
+        {
+            "observed_platform": {"os": "Linux 7.0"},
+            "tests": [{**powermode_skip, "name": "doctor"}],
+        },
+        {
+            "observed_platform": {"os": "Linux 7.0"},
+            "tests": [{**passing, "status": "fail"}],
+        },
+    ):
+        assert not runner._evidence_tests_succeeded(mutation)
+
+
+def test_powermode_roundtrip_restores_after_set_failure(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "run_command",
+        _fake_powermode_run(
+            (
+                (0, _powermode_stdout("default")),
+                (
+                    1,
+                    _powermode_stdout(
+                        "default",
+                        requested_mode="balanced",
+                        updated_count=0,
+                        status="fail",
+                    ),
+                ),
+                (
+                    0,
+                    _powermode_stdout(
+                        "default", requested_mode="default", updated_count=1
+                    ),
+                ),
+                (0, _powermode_stdout("default")),
+            ),
+            calls,
+        ),
+    )
+    writer = EvidenceWriter(tmp_path / "evidence")
+    record = runner._run_powermode_roundtrip(
+        tmp_path / "rocm-npu",
+        runtime="",
+        writer=writer,
+        core_version="1.2.3",
+    )
+
+    assert record["status"] == "fail"
+    assert record["returncode"] == 1
+    assert "did not pass" in record["error"]
+    assert "artifacts/native/powermode-restore.json" in record["artifacts"]
+    assert "artifacts/native/powermode-final.json" in record["artifacts"]
+    assert [call[2:] for call in calls] == [
+        ("powermode",),
+        ("powermode", "balanced"),
+        ("powermode", "default"),
+        ("powermode",),
+    ]
+
+
+def test_powermode_roundtrip_rejects_nonzero_pass_report(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "run_command",
+        _fake_powermode_run(
+            (
+                (0, _powermode_stdout("default")),
+                (
+                    7,
+                    _powermode_stdout(
+                        "balanced", requested_mode="balanced", updated_count=1
+                    ),
+                ),
+                (
+                    0,
+                    _powermode_stdout(
+                        "default", requested_mode="default", updated_count=1
+                    ),
+                ),
+                (0, _powermode_stdout("default")),
+            ),
+            calls,
+        ),
+    )
+    writer = EvidenceWriter(tmp_path / "evidence")
+    record = runner._run_powermode_roundtrip(
+        tmp_path / "rocm-npu",
+        runtime="",
+        writer=writer,
+        core_version="1.2.3",
+    )
+
+    assert record["status"] == "fail"
+    assert record["returncode"] == 7
+    assert "powermode set-balanced exited with 7" in record["error"]
+    assert "artifacts/native/powermode-restore.json" in record["artifacts"]
+    assert "artifacts/native/powermode-final.json" in record["artifacts"]
+    assert [call[2:] for call in calls] == [
+        ("powermode",),
+        ("powermode", "balanced"),
+        ("powermode", "default"),
+        ("powermode",),
+    ]
 
 
 def _model():
@@ -707,6 +1070,9 @@ def _patch_qualification(monkeypatch, tmp_path, *, doctor_exit):
         return report, doctor_exit if command == "doctor" else 0
 
     monkeypatch.setattr(runner, "_run_core_report", core_report)
+    monkeypatch.setattr(
+        runner, "_run_powermode_roundtrip", _powermode_roundtrip_fixture
+    )
 
 
 def test_native_doctor_failure_preserves_partial_evidence(monkeypatch, tmp_path):
@@ -1441,6 +1807,9 @@ def test_interruption_preserves_completed_core_and_model_identity(
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["status"] == "interrupted"
     assert evidence["subject"]["source_revision"] == "abc"
+    assert [
+        test["name"] for test in evidence["tests"] if test["model"] == "native-core"
+    ] == ["version", "probe", "doctor", "self-test", POWER_MODE_ROUNDTRIP]
     assert evidence["models"][0]["files"][0]["sha256"] == "b" * 64
 
 

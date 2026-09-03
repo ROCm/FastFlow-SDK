@@ -32,8 +32,10 @@ Qwen3 0.6B, content-pinned Qwen3.5 0.8B, and LFM2 1.2B multi-turn,
 bounded-soak, and 1k/4k benchmark cases. Its measured warm-cache NPU2 runtime
 is kept below 15 minutes. `--fast` runs the CI gate: five fresh
 Qwen3 processes with two deterministic turns each, the production XCLBIN
-inventory, the 1k benchmark/CSV checkpoint, native self-test, and the embedded
-FastFlowLM XADX stress set. `--profile extended` is an opt-in default-suite
+  inventory, the 1k benchmark/CSV checkpoint, native self-test, the native
+  powermode set/query checks for `balanced`, `performance`, and `turbo` with
+  baseline restore, and the embedded FastFlowLM XADX stress set. `--profile
+  extended` is an opt-in default-suite
 superset adding revision-pinned Llama 3.1 8B multi-turn, soak, and 1k/4k
 coverage. CI selects only `--fast`; default and extended are explicit
 qualification profiles for broader local or release validation.
@@ -114,8 +116,15 @@ heading rather than repeated per row. Profile runs (`--fast`,
 (`evidence.json`, `tests.json`, `junit.xml`, and the summary).
 
 Qualification first validates plugin protocol and exact package versions, then
-runs native `version`, `probe`, `doctor`, and `self-test` through the absolute executable
-provided by the core. It inspects the configured model cache and runs
+runs native `version`, `probe`, `doctor`, and `self-test` through the absolute
+executable provided by the core. After those passive native checks pass, it
+records the baseline NPU powermode. On non-Linux hosts, qualification sets and
+queries back `balanced`, `performance`, and `turbo`, restores the baseline mode,
+and queries again. On Linux, qualification skips the mutating roundtrip by
+default because current AMDXDNA drivers require root privileges for power-mode
+sets; the passive `powermode` report still has to pass and is written as
+`artifacts/native/powermode-before.json`. It inspects the
+configured model cache and runs
 `flm pull <tag>` when a model is missing. Pull and test output is captured in
 the evidence logs. `--no-pull` fails instead of downloading. `--offline` never
 invokes the network-backed `flm check` or `flm pull`. It resolves the
@@ -123,13 +132,20 @@ model-specific directory and required files from the installed registry,
 applies offline and proxy-denial controls to inference, and fails if that local
 contract is incomplete.
 
+Linux powermode roundtrip records appear as `unsupported` in `tests.json` and
+as skipped in `junit.xml`; this is the only native skip that can coexist with an
+overall passing qualification run. Use `rocm-npu powermode <mode>` manually, or
+run a non-Linux qualification host, when the mutating roundtrip itself must be
+exercised.
+
 The output directory is a complete report bundle. `evidence.json` records the
 overall result, package and candidate identity, source revision, observed
 driver/firmware/platform provenance, content-pinned model inventories, and every
 native, XADX, run, soak, and benchmark result. Successful native checks are
 recorded as tests, not merely omitted. `junit.xml` mirrors test outcomes;
-`core-version.json`, `probe.json`, `doctor.json`, `self-test.json`, benchmark
-CSVs, per-command logs, and `SHA256SUMS` retain the underlying details.
+`core-version.json`, `probe.json`, `doctor.json`, `self-test.json`,
+`artifacts/native/powermode-*.json`, benchmark CSVs, per-command logs, and
+`SHA256SUMS` retain the underlying details.
 
 Useful options include:
 

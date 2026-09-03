@@ -98,6 +98,14 @@ int main() {
   assert(ioctl_check != incomplete_ioctls.checks.end());
   assert(ioctl_check->status == rocm_npu::Status::kPass);
   assert(!ioctl_check->details.at("diagnostics_complete").get<bool>());
+  const auto& ioctl_facts =
+      incomplete_ioctls.facts.at("devices").at(0).at("ioctl");
+  assert(ioctl_facts.contains("power_mode_error"));
+  rocm_npu::PowerModeResult power_mode =
+      rocm_npu::QueryPlatformPowerMode(ioctl_options);
+  assert(power_mode.detected_devices == 1);
+  assert(power_mode.reported_devices == 0);
+  assert(power_mode.devices.at(0).contains("query_error"));
 
   std::filesystem::remove_all(root);
   return 0;

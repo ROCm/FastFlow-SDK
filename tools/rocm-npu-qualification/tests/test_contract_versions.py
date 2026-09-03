@@ -16,6 +16,7 @@ from rocm_npu_qualification.contracts import (
     EVIDENCE_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
     KERNEL_RECIPE_SCHEMA_VERSION,
+    NATIVE_CHECKS,
     POLICY_SCHEMA_VERSION,
     PROFILE_SCHEMA_VERSION,
     QUALIFICATION_CONTRACT_SCHEMA_VERSION,
@@ -74,6 +75,20 @@ def test_packaged_schema_versions_match_runtime_contracts():
         ]["const"]
         == INDEX_SCHEMA_VERSION
     )
+
+
+def test_qualification_contract_schema_pins_native_checks():
+    native_schema = _json("schemas/qualification-contract-v1.schema.json")[
+        "properties"
+    ]["native_checks"]
+    validate_schema(list(NATIVE_CHECKS), native_schema)
+    for invalid in (
+        list(NATIVE_CHECKS[:-1]),
+        [*NATIVE_CHECKS[1:], NATIVE_CHECKS[0]],
+        [*NATIVE_CHECKS, "invented-native-check"],
+    ):
+        with pytest.raises(SchemaValidationError):
+            validate_schema(invalid, native_schema)
 
 
 def test_packaged_profiles_and_policies_use_owned_versions():

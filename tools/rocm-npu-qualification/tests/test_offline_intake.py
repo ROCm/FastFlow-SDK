@@ -20,6 +20,10 @@ from rocm_npu_qualification import cli, installation
 from rocm_npu_qualification.candidate import (
     canonical_candidate_bytes,
 )
+from rocm_npu_qualification.contracts import (
+    POWER_MODE_ROUNDTRIP,
+    POWER_MODE_ROUNDTRIP_ARTIFACTS,
+)
 from rocm_npu_qualification.evidence import EvidenceWriter
 from rocm_npu_qualification.offline import (
     CandidateMismatchError,
@@ -72,6 +76,37 @@ def _rewrite_evidence(root: Path, mutate) -> None:
     writer.finalize()
 
 
+def _rewrite_linux_powermode_skip(
+    root: Path, *, platform_os: str = "Linux 7.0"
+) -> None:
+    def mutate(evidence):
+        evidence["observed_platform"]["os"] = platform_os
+        record = next(
+            test for test in evidence["tests"] if test["name"] == POWER_MODE_ROUNDTRIP
+        )
+        record["status"] = "unsupported"
+        record["returncode"] = 0
+        record["error"] = (
+            "powermode roundtrip is skipped on Linux because current AMDXDNA "
+            "drivers require root privileges to set NPU power mode; passive "
+            "powermode reporting passed"
+        )
+        record["artifacts"] = [POWER_MODE_ROUNDTRIP_ARTIFACTS[0]]
+        record["metrics"] = {
+            "baseline_power_mode": "default",
+            "requested_power_modes": ["balanced", "performance", "turbo"],
+            "confirmed_power_modes": [],
+            "detected_device_count": 1,
+            "reported_device_count": 1,
+        }
+
+    for artifact in POWER_MODE_ROUNDTRIP_ARTIFACTS[1:]:
+        path = root / artifact
+        if path.exists():
+            path.unlink()
+    _rewrite_evidence(root, mutate)
+
+
 def test_deterministic_pack_and_offline_verify(tmp_path):
     source = _evidence(tmp_path / "evidence")
     first = tmp_path / "first.evidence.zip"
@@ -82,6 +117,24 @@ def test_deterministic_pack_and_offline_verify(tmp_path):
     summary = verify_evidence(first)
     assert summary["status"] == "pass"
     assert summary["evidence_status"] == "pass"
+
+
+def test_linux_powermode_roundtrip_skip_remains_passing_evidence(tmp_path):
+    source = _evidence(tmp_path / "linux-skip", platform_os="Linux 7.0")
+    _rewrite_linux_powermode_skip(source)
+
+    summary = verify_evidence(source)
+
+    assert summary["status"] == "pass"
+    assert summary["evidence_status"] == "pass"
+
+
+def test_powermode_roundtrip_skip_is_only_valid_on_linux(tmp_path):
+    source = _evidence(tmp_path / "windows-skip")
+    _rewrite_linux_powermode_skip(source, platform_os="Windows 11")
+
+    with pytest.raises(EvidenceError, match="incomplete or failed results"):
+        verify_evidence(source)
 
 
 def test_failed_resident_preparation_remains_ingestible_evidence(tmp_path):
@@ -391,6 +444,16 @@ def test_verify_rejects_missing_or_forged_native_reports(tmp_path):
     with pytest.raises(EvidenceError, match="native test record"):
         verify_evidence(source)
 
+    source = _evidence(tmp_path / "forged-powermode")
+    report_path = source / "artifacts" / "native" / "powermode-after-turbo.json"
+    report = json.loads(report_path.read_text())
+    report["data"]["devices"][0]["power_mode"] = "default"
+    writer = EvidenceWriter(source, allow_existing=True)
+    writer.write_json("artifacts/native/powermode-after-turbo.json", report)
+    writer.finalize()
+    with pytest.raises(EvidenceError, match="unexpected power mode"):
+        verify_evidence(source)
+
 
 def test_verify_rejects_forged_xadx_report_and_rounds(tmp_path):
     source = _evidence(tmp_path / "report")
@@ -527,8 +590,11 @@ def test_report_materializations_are_candidate_bound(tmp_path):
 def test_verify_rejects_junit_not_derived_from_tests(tmp_path):
     source = _evidence(tmp_path / "evidence")
     junit = (source / "junit.xml").read_text(encoding="utf-8")
+    tests = json.loads((source / "tests.json").read_text(encoding="utf-8"))
+    test_count = f'tests="{len(tests)}"'
+    assert test_count in junit
     (source / "junit.xml").write_text(
-        junit.replace('tests="7"', 'tests="999"'), encoding="utf-8"
+        junit.replace(test_count, 'tests="999"', 1), encoding="utf-8"
     )
     EvidenceWriter(source, allow_existing=True).finalize()
     with pytest.raises(EvidenceError, match="junit.xml does not match"):

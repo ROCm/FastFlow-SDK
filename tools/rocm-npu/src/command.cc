@@ -13,8 +13,8 @@
 namespace rocm_npu {
 namespace {
 
-const std::unordered_set<std::string> kBuiltins = {"version", "probe", "doctor",
-                                                   "self-test", "plugin"};
+const std::unordered_set<std::string> kBuiltins = {
+    "version", "probe", "doctor", "self-test", "plugin", "powermode"};
 
 }  // namespace
 
@@ -88,6 +88,21 @@ ParseResult ParseInvocation(const std::vector<std::string>& arguments) {
     }
     return {std::move(invocation), {}};
   }
+  if (invocation.command == "powermode") {
+    if (invocation.arguments.size() > 1) {
+      return {std::nullopt, "powermode accepts only one mode"};
+    }
+    if (!invocation.arguments.empty()) {
+      const std::string& mode = invocation.arguments.front();
+      if (mode.rfind("-", 0) == 0) {
+        return {std::nullopt, "unexpected powermode argument: " + mode};
+      }
+      if (!ParsePowerMode(mode)) {
+        return {std::nullopt, "invalid powermode: " + mode};
+      }
+    }
+    return {std::move(invocation), {}};
+  }
   if (!invocation.arguments.empty()) {
     return {std::nullopt,
             invocation.command + " does not accept positional arguments"};
@@ -101,6 +116,8 @@ std::string HelpText() {
 Commands:
   version    Report product, build, manifest, and HRX library information
   probe      Collect platform, driver, firmware, device, and HRX facts
+  powermode [mode]
+             Report or set NPU power mode
   doctor     Evaluate package, runtime, and device health
   self-test  Dispatch the packaged bounded deterministic XADX test
   plugin list
@@ -112,6 +129,9 @@ Global options:
   --runtime <path>   Use an explicit HRX library file or directory
   --verbose          Include additional diagnostics
   --help, -h         Show this help
+
+Power modes:
+  default, powersaver, balanced, performance, turbo
 )";
 }
 
@@ -121,6 +141,8 @@ Report RunCommand(const Invocation& invocation) {
     report = RunVersion(invocation);
   } else if (invocation.command == "probe") {
     report = RunProbe(invocation);
+  } else if (invocation.command == "powermode") {
+    report = RunPowerMode(invocation);
   } else if (invocation.command == "doctor") {
     report = RunDoctor(invocation);
   } else if (invocation.command == "self-test") {

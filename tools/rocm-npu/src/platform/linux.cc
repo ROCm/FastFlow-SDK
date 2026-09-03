@@ -60,6 +60,12 @@ struct AmdxdnaGetInfo {
   std::uint64_t buffer;
 };
 
+struct AmdxdnaSetState {
+  std::uint32_t param;
+  std::uint32_t buffer_size;
+  std::uint64_t buffer;
+};
+
 struct FirmwareVersion {
   std::uint32_t major;
   std::uint32_t minor;
@@ -91,10 +97,19 @@ struct AieMetadata {
   AieTileMetadata shim;
 };
 
+struct AmdxdnaPowerMode {
+  std::uint8_t power_mode;
+  std::uint8_t pad[7];
+};
+
 constexpr unsigned long kDrmIoctlVersion = _IOWR('d', 0x00, DrmVersion);
 constexpr unsigned long kAmdxdnaGetInfo = _IOWR('d', 0x40 + 7, AmdxdnaGetInfo);
+constexpr unsigned long kAmdxdnaSetState =
+    _IOWR('d', 0x40 + 8, AmdxdnaSetState);
 constexpr std::uint32_t kQueryAieMetadata = 1;
 constexpr std::uint32_t kQueryFirmwareVersion = 8;
+constexpr std::uint32_t kQueryPowerMode = 9;
+constexpr std::uint32_t kSetPowerMode = 0;
 
 std::optional<std::string> ReadText(const std::filesystem::path& path) {
   std::ifstream input(path);
@@ -140,6 +155,47 @@ std::optional<std::string> QueryInfo(int descriptor, std::uint32_t parameter,
   return std::strerror(errno);
 }
 
+template <typename Value>
+std::optional<std::string> SetState(int descriptor, std::uint32_t parameter,
+                                    Value& value) {
+  AmdxdnaSetState state = {
+      parameter,
+      static_cast<std::uint32_t>(sizeof(value)),
+      reinterpret_cast<std::uint64_t>(&value),
+  };
+  if (ioctl(descriptor, kAmdxdnaSetState, &state) == 0) {
+    return std::nullopt;
+  }
+  const int error_number = errno;
+  if (parameter == kSetPowerMode &&
+      (error_number == EACCES || error_number == EPERM)) {
+    return std::string(std::strerror(error_number)) +
+           "; DRM_AMDXDNA_SET_STATE power-mode changes require root "
+           "privileges on this Linux driver";
+  }
+  return std::strerror(error_number);
+}
+
+std::optional<std::string> QueryPowerModeValue(int descriptor, PowerMode& mode,
+                                               std::uint8_t& raw) {
+  AmdxdnaPowerMode state = {};
+  if (auto error = QueryInfo(descriptor, kQueryPowerMode, state)) {
+    return error;
+  }
+  raw = state.power_mode;
+  if (auto parsed = PowerModeFromValue(raw)) {
+    mode = *parsed;
+    return std::nullopt;
+  }
+  return "driver returned invalid power mode " + std::to_string(raw);
+}
+
+std::optional<std::string> SetPowerModeValue(int descriptor, PowerMode mode) {
+  AmdxdnaPowerMode state = {};
+  state.power_mode = static_cast<std::uint8_t>(mode);
+  return SetState(descriptor, kSetPowerMode, state);
+}
+
 nlohmann::json QueryIoctls(int descriptor) {
   nlohmann::json result = nlohmann::json::object();
   DrmVersion version = {};
@@ -177,6 +233,15 @@ nlohmann::json QueryIoctls(int descriptor) {
          {{"major", metadata.version.major},
           {"minor", metadata.version.minor}}},
     };
+  }
+
+  PowerMode mode = PowerMode::kDefault;
+  std::uint8_t raw_mode = 0;
+  if (auto error = QueryPowerModeValue(descriptor, mode, raw_mode)) {
+    result["power_mode_error"] = *error;
+  } else {
+    result["power_mode"] = PowerModeName(mode);
+    result["power_mode_value"] = static_cast<unsigned int>(raw_mode);
   }
   return result;
 }
@@ -457,6 +522,79 @@ bool IsAmdXdnaNode(const std::filesystem::path& node) {
   return !error && driver.filename() == "amdxdna";
 }
 
+std::vector<std::filesystem::path> AmdXdnaNodes(const ProbeOptions& options) {
+  auto nodes = SortedDirectories(options.sys_accel_root, "accel");
+  nodes.erase(std::remove_if(nodes.begin(), nodes.end(),
+                             [](const std::filesystem::path& node) {
+                               return !IsAmdXdnaNode(node);
+                             }),
+              nodes.end());
+  return nodes;
+}
+
+std::optional<int> OpenCheckedDevice(const ProbeOptions& options,
+                                     const std::filesystem::path& sys_node,
+                                     nlohmann::json& device) {
+  const std::filesystem::path dev_node =
+      options.dev_accel_root / sys_node.filename();
+  device["device_path"] = PathToUtf8(dev_node);
+  const auto expected = ReadText(sys_node / "dev");
+  device["expected_device_number"] = expected.value_or("");
+  if (!options.open_devices) {
+    device["access_error"] = "device opening disabled";
+    return std::nullopt;
+  }
+  if (!expected || expected->find(':') == std::string::npos) {
+    device["access_error"] = "sysfs dev value is missing or malformed";
+    return std::nullopt;
+  }
+
+  struct stat metadata = {};
+  if (stat(dev_node.c_str(), &metadata) != 0) {
+    device["access_error"] = std::strerror(errno);
+    return std::nullopt;
+  }
+  if (!S_ISCHR(metadata.st_mode)) {
+    device["access_error"] = "device path is not a character device";
+    return std::nullopt;
+  }
+
+  const auto separator = expected->find(':');
+  try {
+    const auto expected_major =
+        static_cast<unsigned int>(std::stoul(expected->substr(0, separator)));
+    const auto expected_minor =
+        static_cast<unsigned int>(std::stoul(expected->substr(separator + 1)));
+    if (major(metadata.st_rdev) != expected_major ||
+        minor(metadata.st_rdev) != expected_minor) {
+      device["access_error"] =
+          "character device major/minor does not match sysfs";
+      return std::nullopt;
+    }
+  } catch (const std::exception&) {
+    device["access_error"] = "sysfs dev value is malformed";
+    return std::nullopt;
+  }
+
+  const int descriptor = open(dev_node.c_str(), O_RDWR | O_CLOEXEC);
+  if (descriptor < 0) {
+    device["access_error"] = std::strerror(errno);
+    device["open_errno"] = errno;
+    return std::nullopt;
+  }
+  return descriptor;
+}
+
+void AddPowerModeDevicePresentCheck(PowerModeResult& result) {
+  result.checks.push_back(
+      {"powermode.device_present",
+       result.detected_devices > 0 ? Status::kPass : Status::kFail,
+       result.detected_devices > 0 ? std::to_string(result.detected_devices) +
+                                         " AMD NPU device(s) found"
+                                   : "no amdxdna accelerator sysfs node found",
+       {{"count", result.detected_devices}}});
+}
+
 ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
   ProbeResult result;
   const auto module = options.sys_module_root / "amdxdna";
@@ -474,12 +612,7 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
       {"devices", nlohmann::json::array()},
   };
 
-  auto sys_nodes = SortedDirectories(options.sys_accel_root, "accel");
-  sys_nodes.erase(std::remove_if(sys_nodes.begin(), sys_nodes.end(),
-                                 [](const std::filesystem::path& node) {
-                                   return !IsAmdXdnaNode(node);
-                                 }),
-                  sys_nodes.end());
+  auto sys_nodes = AmdXdnaNodes(options);
   result.detected_devices = static_cast<int>(sys_nodes.size());
   result.checks.push_back(
       {"device.present",
@@ -535,9 +668,14 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
           } else {
             device["ioctl"] = QueryIoctls(descriptor);
             const nlohmann::json& ioctl_facts = device["ioctl"];
+            if (ioctl_facts.contains("power_mode")) {
+              device["power_mode"] = ioctl_facts.at("power_mode");
+              device["power_mode_value"] = ioctl_facts.at("power_mode_value");
+            }
             if (!ioctl_facts.contains("drm_version_error") &&
                 !ioctl_facts.contains("firmware_version_error") &&
-                !ioctl_facts.contains("aie_metadata_error")) {
+                !ioctl_facts.contains("aie_metadata_error") &&
+                !ioctl_facts.contains("power_mode_error")) {
               ++complete_ioctl_devices;
             }
             close(descriptor);
@@ -593,6 +731,100 @@ ProbeResult CollectPlatformProbe(const ProbeOptions& options) {
           {"diagnostics_complete", complete}}});
   }
   result.facts["target_family"] = result.target_family;
+  return result;
+}
+
+PowerModeResult QueryPlatformPowerMode(const ProbeOptions& options) {
+  PowerModeResult result;
+  const auto sys_nodes = AmdXdnaNodes(options);
+  result.detected_devices = static_cast<int>(sys_nodes.size());
+  for (const auto& sys_node : sys_nodes) {
+    nlohmann::json device = {
+        {"name", PathToUtf8(sys_node.filename())},
+        {"sysfs_path", PathToUtf8(sys_node)},
+    };
+    const std::optional<int> descriptor =
+        OpenCheckedDevice(options, sys_node, device);
+    if (descriptor) {
+      PowerMode mode = PowerMode::kDefault;
+      std::uint8_t raw_mode = 0;
+      if (auto error = QueryPowerModeValue(*descriptor, mode, raw_mode)) {
+        device["query_error"] = *error;
+      } else {
+        device["power_mode"] = PowerModeName(mode);
+        device["power_mode_value"] = static_cast<unsigned int>(raw_mode);
+        ++result.reported_devices;
+      }
+      close(*descriptor);
+    }
+    result.devices.push_back(std::move(device));
+  }
+
+  AddPowerModeDevicePresentCheck(result);
+  const bool complete = result.detected_devices > 0 &&
+                        result.reported_devices == result.detected_devices;
+  result.checks.push_back(
+      {"powermode.query",
+       complete ? Status::kPass : Status::kFail,
+       complete ? "reported power mode for all AMD NPU devices"
+                : "could not report power mode for all AMD NPU devices",
+       {{"reported_count", result.reported_devices},
+        {"detected_count", result.detected_devices}}});
+  return result;
+}
+
+PowerModeResult SetPlatformPowerMode(PowerMode mode,
+                                     const ProbeOptions& options) {
+  PowerModeResult result;
+  const auto sys_nodes = AmdXdnaNodes(options);
+  result.detected_devices = static_cast<int>(sys_nodes.size());
+  for (const auto& sys_node : sys_nodes) {
+    nlohmann::json device = {
+        {"name", PathToUtf8(sys_node.filename())},
+        {"sysfs_path", PathToUtf8(sys_node)},
+    };
+    const std::optional<int> descriptor =
+        OpenCheckedDevice(options, sys_node, device);
+    if (descriptor) {
+      bool set_succeeded = false;
+      if (auto error = SetPowerModeValue(*descriptor, mode)) {
+        device["set_error"] = *error;
+      } else {
+        set_succeeded = true;
+      }
+
+      PowerMode reported_mode = PowerMode::kDefault;
+      std::uint8_t raw_mode = 0;
+      if (auto error =
+              QueryPowerModeValue(*descriptor, reported_mode, raw_mode)) {
+        device["query_error"] = *error;
+      } else {
+        device["power_mode"] = PowerModeName(reported_mode);
+        device["power_mode_value"] = static_cast<unsigned int>(raw_mode);
+        ++result.reported_devices;
+        if (set_succeeded && reported_mode == mode) {
+          ++result.updated_devices;
+        } else if (set_succeeded) {
+          device["set_error"] = "reported power mode did not match request";
+        }
+      }
+      close(*descriptor);
+    }
+    result.devices.push_back(std::move(device));
+  }
+
+  AddPowerModeDevicePresentCheck(result);
+  const bool complete = result.detected_devices > 0 &&
+                        result.updated_devices == result.detected_devices;
+  result.checks.push_back(
+      {"powermode.set",
+       complete ? Status::kPass : Status::kFail,
+       complete ? "set power mode to " + PowerModeName(mode) +
+                      " on all AMD NPU devices"
+                : "could not set power mode on all AMD NPU devices",
+       {{"requested_power_mode", PowerModeName(mode)},
+        {"updated_count", result.updated_devices},
+        {"detected_count", result.detected_devices}}});
   return result;
 }
 

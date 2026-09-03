@@ -66,6 +66,9 @@ Stable doctor check IDs include:
 - `runtime.device_count`
 - `runtime.shutdown`
 
+Power-mode reporting and setting use `powermode.device_present`,
+`powermode.query`, `powermode.set`, and `powermode.support`.
+`powermode.support` reports whether platform power-mode setting is available.
 Self-test adds `self_test.prerequisites`, `self_test.fixture`, `self_test.load`,
 `self_test.dispatch`, `self_test.cleanup`, and `self_test.output`. Plugin
 discovery uses `plugin.discovery`. Unhandled execution failures use

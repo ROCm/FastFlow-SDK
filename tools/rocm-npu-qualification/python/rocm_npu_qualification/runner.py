@@ -23,6 +23,10 @@ from .commands import run_command, run_interactive_command, serve_probe
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
+    NATIVE_CORE_REPORT_COMMANDS,
+    POWER_MODE_ROUNDTRIP,
+    POWER_MODE_ROUNDTRIP_ARTIFACTS,
+    POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
     PROFILE_SCHEMA_VERSION,
     XADX_REPORT_SCHEMA_VERSION,
     xadx_rounds,
@@ -423,6 +427,332 @@ def _run_core_report(
     ):
         raise QualificationError(f"rocm-npu {command} emitted an invalid report")
     return report, result.returncode
+
+
+def _run_powermode_report(
+    core: Path,
+    arguments: list[str],
+    *,
+    runtime: str,
+    writer: EvidenceWriter,
+    log_stem: str,
+    core_version: str,
+) -> tuple[dict[str, Any] | None, Any | None, str | None, str]:
+    log = f"logs/tests/{log_stem}.log"
+    argv: list[str | os.PathLike[str]] = [core, "--json", "powermode", *arguments]
+    if runtime:
+        argv.extend(("--runtime", runtime))
+    try:
+        result = run_command(
+            argv,
+            log_path=writer.path(log),
+            timeout=300,
+            echo=True,
+        )
+    except OSError as error:
+        return None, None, f"rocm-npu powermode could not be executed: {error}", log
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None, result, "rocm-npu powermode did not emit valid JSON", log
+    if (
+        not isinstance(report, dict)
+        or report.get("schema_version") != COMMAND_REPORT_SCHEMA_VERSION
+        or report.get("command") != "powermode"
+        or report.get("status") not in {"pass", "fail", "error"}
+        or not isinstance(report.get("product"), dict)
+        or report["product"].get("version") != core_version
+    ):
+        return None, result, "rocm-npu powermode emitted an invalid report", log
+    return report, result, None, log
+
+
+def _powermode_devices(
+    report: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    data = report.get("data")
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(devices, list):
+        return [], "powermode report did not contain device data"
+    if data.get("reported_device_count") != len(devices):
+        return [], "reported_device_count did not match the device records"
+    typed_devices = []
+    for device in devices:
+        if not isinstance(device, dict) or not isinstance(
+            device.get("power_mode"), str
+        ):
+            return [], "powermode report contained a device without power_mode"
+        typed_devices.append(device)
+    if not typed_devices:
+        return [], "powermode report contained no reported devices"
+    return typed_devices, None
+
+
+def _validate_powermode_state(
+    report: dict[str, Any],
+    expected_mode: str,
+    *,
+    require_reported_count: int | None = None,
+    require_updated_count: int | None = None,
+) -> str | None:
+    if report.get("status") != "pass":
+        return "powermode command did not pass"
+    devices, error = _powermode_devices(report)
+    if error is not None:
+        return error
+    if require_reported_count is not None and len(devices) != require_reported_count:
+        return "powermode command did not report every baseline device"
+    if any(device.get("power_mode") != expected_mode for device in devices):
+        return f"powermode report did not confirm {expected_mode}"
+    if require_updated_count is not None:
+        data = report.get("data")
+        updated = data.get("updated_device_count") if isinstance(data, dict) else None
+        if updated != require_updated_count:
+            return "powermode command did not update every detected device"
+    return None
+
+
+def _platform_os_is_linux(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"Linux(?:\s.*)?", value, re.IGNORECASE) is not None
+    )
+
+
+def _linux_powermode_roundtrip_skip_reason() -> str:
+    return (
+        "powermode roundtrip is skipped on Linux because current AMDXDNA "
+        "drivers require root privileges to set NPU power mode; passive "
+        "powermode reporting passed"
+    )
+
+
+def _is_allowed_unsupported_test(
+    evidence: dict[str, Any], test: dict[str, Any]
+) -> bool:
+    observed = evidence.get("observed_platform", {})
+    platform_os = observed.get("os") if isinstance(observed, dict) else None
+    return (
+        test.get("status") == "unsupported"
+        and test.get("kind") == "native"
+        and test.get("model") == "native-core"
+        and test.get("name") == POWER_MODE_ROUNDTRIP
+        and _platform_os_is_linux(platform_os)
+    )
+
+
+def _test_succeeded_or_was_skipped(
+    evidence: dict[str, Any], test: dict[str, Any]
+) -> bool:
+    return test.get("status") == "pass" or _is_allowed_unsupported_test(evidence, test)
+
+
+def _evidence_tests_succeeded(evidence: dict[str, Any]) -> bool:
+    tests = evidence.get("tests", [])
+    return bool(tests) and all(
+        _test_succeeded_or_was_skipped(evidence, test) for test in tests
+    )
+
+
+def _run_powermode_roundtrip(
+    core: Path,
+    *,
+    runtime: str,
+    writer: EvidenceWriter,
+    core_version: str,
+    platform_os: str | None = None,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    artifacts: list[str] = []
+    returncodes: list[int] = []
+    stage_lines = ["powermode qualification roundtrip"]
+    baseline: str | None = None
+    requested_modes = [mode for mode, _, _ in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS]
+    confirmed_modes: list[str] = []
+    restored: str | None = None
+    detected_count: int | None = None
+    reported_count: int | None = None
+    error: str | None = None
+
+    def fail(message: str | None) -> None:
+        nonlocal error
+        if not message:
+            return
+        error = message if error is None else f"{error}; {message}"
+
+    def run_stage(
+        stage: str, arguments: list[str], artifact: str
+    ) -> dict[str, Any] | None:
+        report, result, report_error, log = _run_powermode_report(
+            core,
+            arguments,
+            runtime=runtime,
+            writer=writer,
+            log_stem=f"powermode-{stage}",
+            core_version=core_version,
+        )
+        returncode = result.returncode if result is not None else 127
+        returncodes.append(returncode)
+        status = report.get("status") if report is not None else "invalid"
+        stage_lines.append(f"{stage}: exit={returncode} status={status} log={log}")
+        if report is not None:
+            writer.write_json(artifact, report)
+            artifacts.append(artifact)
+        fail(report_error)
+        if result is not None and returncode != 0:
+            fail(f"powermode {stage} exited with {returncode}")
+        return report
+
+    before_path = POWER_MODE_ROUNDTRIP_ARTIFACTS[0]
+    restore_path = POWER_MODE_ROUNDTRIP_ARTIFACTS[-2]
+    final_path = POWER_MODE_ROUNDTRIP_ARTIFACTS[-1]
+    before = run_stage("before", [], before_path)
+    if before is not None and error is None:
+        if before.get("status") != "pass":
+            fail("powermode baseline query did not pass")
+        devices, device_error = _powermode_devices(before)
+        fail(device_error)
+        modes = [device["power_mode"] for device in devices]
+        if not error:
+            data = before.get("data")
+            detected = (
+                data.get("detected_device_count") if isinstance(data, dict) else None
+            )
+            reported = (
+                data.get("reported_device_count") if isinstance(data, dict) else None
+            )
+            if not isinstance(detected, int) or detected < 1 or detected != reported:
+                fail("powermode baseline device count was invalid")
+            elif len(set(modes)) != 1:
+                fail("powermode baseline was not uniform across devices")
+            else:
+                baseline = modes[0]
+                detected_count = detected
+                reported_count = reported
+
+    skipped = False
+    skip_reason: str | None = None
+    if baseline is not None and _platform_os_is_linux(platform_os):
+        skipped = True
+        skip_reason = _linux_powermode_roundtrip_skip_reason()
+        stage_lines.append(skip_reason)
+
+    if baseline is not None and not skipped:
+        try:
+            for requested, set_path, after_path in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS:
+                set_report = run_stage(f"set-{requested}", [requested], set_path)
+                if set_report is not None:
+                    set_data = set_report.get("data")
+                    if (
+                        not isinstance(set_data, dict)
+                        or set_data.get("requested_power_mode") != requested
+                    ):
+                        fail("powermode set report did not record the requested mode")
+                    fail(
+                        _validate_powermode_state(
+                            set_report,
+                            requested,
+                            require_reported_count=detected_count,
+                            require_updated_count=detected_count,
+                        )
+                    )
+                if error is not None:
+                    break
+
+                after = run_stage(f"after-{requested}", [], after_path)
+                if after is not None:
+                    state_error = _validate_powermode_state(
+                        after, requested, require_reported_count=detected_count
+                    )
+                    fail(state_error)
+                    if state_error is None:
+                        confirmed_modes.append(requested)
+                if error is not None:
+                    break
+        finally:
+            restore = run_stage("restore", [baseline], restore_path)
+            if restore is not None:
+                restore_data = restore.get("data")
+                if (
+                    not isinstance(restore_data, dict)
+                    or restore_data.get("requested_power_mode") != baseline
+                ):
+                    fail("powermode restore report did not record the baseline mode")
+                fail(
+                    _validate_powermode_state(
+                        restore,
+                        baseline,
+                        require_reported_count=detected_count,
+                        require_updated_count=detected_count,
+                    )
+                )
+            final = run_stage("final", [], final_path)
+            if final is not None:
+                state_error = _validate_powermode_state(
+                    final, baseline, require_reported_count=detected_count
+                )
+                fail(state_error)
+                if state_error is None:
+                    restored = baseline
+
+    passed = (
+        error is None and confirmed_modes == requested_modes and restored == baseline
+    )
+    if baseline is not None:
+        stage_lines.append(f"baseline_power_mode={baseline}")
+    stage_lines.append("requested_power_modes=" + ",".join(requested_modes))
+    stage_lines.append("confirmed_power_modes=" + ",".join(confirmed_modes))
+    if restored is not None:
+        stage_lines.append(f"restored_power_mode={restored}")
+    if error is not None:
+        stage_lines.append(f"error={error}")
+    if skip_reason is not None:
+        stage_lines.append(f"skipped={skip_reason}")
+    log = "logs/tests/powermode-roundtrip.log"
+    writer.path(log).write_text("\n".join(stage_lines) + "\n", encoding="utf-8")
+    duration = time.monotonic() - started
+    returncode = (
+        0 if passed or skipped else next((code for code in returncodes if code != 0), 1)
+    )
+    metrics = (
+        {
+            "baseline_power_mode": baseline,
+            "requested_power_modes": requested_modes,
+            "confirmed_power_modes": confirmed_modes,
+            "restored_power_mode": restored,
+            "detected_device_count": detected_count,
+            "reported_device_count": reported_count,
+        }
+        if passed
+        else {
+            key: value
+            for key, value in {
+                "baseline_power_mode": baseline,
+                "requested_power_modes": requested_modes,
+                "confirmed_power_modes": confirmed_modes,
+                "restored_power_mode": restored,
+                "detected_device_count": detected_count,
+                "reported_device_count": reported_count,
+            }.items()
+            if value is not None
+        }
+    )
+    return {
+        "model": "native-core",
+        "name": POWER_MODE_ROUNDTRIP,
+        "kind": "native",
+        "status": "unsupported" if skipped else ("pass" if passed else "fail"),
+        "returncode": returncode,
+        "duration_seconds": duration,
+        "log": log,
+        "metrics": metrics,
+        "artifacts": artifacts,
+        **(
+            {}
+            if passed
+            else {"error": skip_reason or error or "powermode roundtrip failed"}
+        ),
+    }
 
 
 def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
@@ -1342,7 +1672,17 @@ def _summary(evidence: dict[str, Any], output: Path) -> dict[str, Any]:
             "log": test.get("log"),
         }
         for test in evidence.get("tests", [])
-        if test.get("status") != "pass"
+        if test.get("status") == "fail"
+    ]
+    skipped = [
+        {
+            "model": test.get("model"),
+            "name": test.get("name"),
+            "error": test.get("error"),
+            "log": test.get("log"),
+        }
+        for test in evidence.get("tests", [])
+        if test.get("status") == "unsupported"
     ]
     return {
         "schema_version": COMMAND_REPORT_SCHEMA_VERSION,
@@ -1352,9 +1692,11 @@ def _summary(evidence: dict[str, Any], output: Path) -> dict[str, Any]:
         "models": len(evidence.get("models", [])),
         "tests": len(evidence.get("tests", [])),
         "failed_tests": sum(
-            test.get("status") != "pass" for test in evidence.get("tests", [])
+            test.get("status") == "fail" for test in evidence.get("tests", [])
         ),
+        "skipped_tests": len(skipped),
         "failures": failures,
+        "skipped": skipped,
     }
 
 
@@ -1612,12 +1954,14 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         core, "self-test", runtime=runtime, writer=writer
     )
     writer.write_json("self-test.json", self_test)
-    for command, report in (
-        ("version", core_version_report),
-        ("probe", probe),
-        ("doctor", doctor),
-        ("self-test", self_test),
-    ):
+    native_report_map = {
+        "version": (core_version_report, version_exit),
+        "probe": (probe, probe_exit),
+        "doctor": (doctor, doctor_exit),
+        "self-test": (self_test, self_test_exit),
+    }
+    for command in NATIVE_CORE_REPORT_COMMANDS:
+        report = native_report_map[command][0]
         reported_version = report["product"]["version"]
         if reported_version != core_version:
             raise QualificationError(
@@ -1638,12 +1982,10 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             )
     evidence["observed_platform"] = probe.get("data", {})
     writer.write_json("evidence.json", evidence)
-    native_results = (
-        ("version", core_version_report, version_exit),
-        ("probe", probe, probe_exit),
-        ("doctor", doctor, doctor_exit),
-        ("self-test", self_test, self_test_exit),
-    )
+    native_results = [
+        (command, *native_report_map[command])
+        for command in NATIVE_CORE_REPORT_COMMANDS
+    ]
     for command, report, returncode in native_results:
         passed = returncode == 0 and report["status"] == "pass"
         evidence["tests"].append(
@@ -1665,6 +2007,29 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         for _, report, returncode in native_results
     ):
         if not keep_going:
+            evidence["status"] = "fail"
+            evidence["finished_at"] = _now()
+            writer.write_json("models.json", evidence["models"])
+            writer.write_json("tests.json", evidence["tests"])
+            writer.write_junit(evidence["tests"])
+            writer.write_json("evidence.json", evidence)
+            writer.finalize()
+            return 1, _summary(evidence, args.output)
+    else:
+        probe_data = probe.get("data")
+        platform_os = probe_data.get("os", "") if isinstance(probe_data, dict) else ""
+        powermode_test = _run_powermode_roundtrip(
+            core,
+            runtime=runtime,
+            writer=writer,
+            core_version=core_version,
+            platform_os=str(platform_os),
+        )
+        evidence["tests"].append(powermode_test)
+        _report_test_results([powermode_test])
+        writer.write_json("tests.json", evidence["tests"])
+        writer.write_json("evidence.json", evidence)
+        if powermode_test["status"] == "fail" and not keep_going:
             evidence["status"] = "fail"
             evidence["finished_at"] = _now()
             writer.write_json("models.json", evidence["models"])
@@ -1882,12 +2247,7 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if failed and not keep_going:
             break
 
-    evidence["status"] = (
-        "pass"
-        if evidence["tests"]
-        and all(test["status"] == "pass" for test in evidence["tests"])
-        else "fail"
-    )
+    evidence["status"] = "pass" if _evidence_tests_succeeded(evidence) else "fail"
     evidence["finished_at"] = _now()
     writer.write_json("models.json", evidence["models"])
     writer.write_json("tests.json", evidence["tests"])

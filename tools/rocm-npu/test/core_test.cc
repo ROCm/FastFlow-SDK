@@ -9,6 +9,7 @@
 
 #include "rocm_npu/build_config.h"
 #include "rocm_npu/command.h"
+#include "rocm_npu/platform.h"
 #include "rocm_npu/report.h"
 #include "rocm_npu/sha256.h"
 
@@ -54,6 +55,16 @@ int main() {
   assert(ParseInvocation({"plugin", "list"}).invocation);
   assert(!ParseInvocation({"plugin"}).invocation);
   assert(!ParseInvocation({"plugin", "run"}).invocation);
+  assert(ParseInvocation({"powermode"}).invocation);
+  assert(ParseInvocation({"powermode", "performance"}).invocation);
+  assert(!ParseInvocation({"powermode", "invalid"}).invocation);
+  assert(!ParseInvocation({"powermode", "performance", "turbo"}).invocation);
+  assert(rocm_npu::ParsePowerMode("PERFORMANCE") ==
+         rocm_npu::PowerMode::kPerformance);
+  assert(rocm_npu::PowerModeName(rocm_npu::PowerMode::kPowerSaver) ==
+         "powersaver");
+  assert(rocm_npu::PowerModeFromValue(4) == rocm_npu::PowerMode::kTurbo);
+  assert(!rocm_npu::PowerModeFromValue(5));
 
   rocm_npu::Report report = rocm_npu::MakeReport("doctor");
   rocm_npu::AddCheck(report, {"runtime.library.load",
