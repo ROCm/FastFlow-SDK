@@ -69,7 +69,10 @@ ml_dtypes = None
 
 
 class XadxError(RuntimeError):
-    pass
+    def __init__(self, message, *, code=None, operation=None):
+        super().__init__(message)
+        self.code = code
+        self.operation = operation
 
 
 def _ensure_numeric_runtime():
@@ -162,8 +165,41 @@ def _load_library(environ=None):
 class _Runtime:
     def __init__(self, library=None, device_index=0):
         library = _load_library() if library is None else library
+        self._bind_library(library)
+        try:
+            self._check(self._initialize(0), "hrx_gpu_initialize")
+            self._initialized = True
+            self._check(
+                self._device_get(device_index, ctypes.byref(self.device)),
+                "hrx_gpu_device_get",
+            )
+            self._check(
+                self._stream_create(self.device, 0, ctypes.byref(self.stream)),
+                "hrx_stream_create",
+            )
+        except Exception as error:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                raise error from cleanup_error
+            raise
+
+    def _bind_library(self, library):
         self._status_code = _bind(library, "hrx_status_code", ctypes.c_int, [_Status])
         self._status_ignore = _bind(library, "hrx_status_ignore", None, [_Status])
+        self._status_to_string = _bind(
+            library,
+            "hrx_status_to_string",
+            _Status,
+            [
+                _Status,
+                ctypes.POINTER(ctypes.c_char_p),
+                ctypes.POINTER(ctypes.c_size_t),
+            ],
+        )
+        self._status_free_message = _bind(
+            library, "hrx_status_free_message", None, [ctypes.c_char_p]
+        )
         self._initialize = _bind(
             library, "hrx_gpu_initialize", _Status, [ctypes.c_uint32]
         )
@@ -269,25 +305,34 @@ class _Runtime:
         self.device = _Handle()
         self.stream = _Handle()
         self.resources = []
-        self._check(self._initialize(0), "hrx_gpu_initialize")
-        try:
-            self._check(
-                self._device_get(device_index, ctypes.byref(self.device)),
-                "hrx_gpu_device_get",
-            )
-            self._check(
-                self._stream_create(self.device, 0, ctypes.byref(self.stream)),
-                "hrx_stream_create",
-            )
-        except Exception:
-            self.close()
-            raise
+        self._initialized = False
 
     def _check(self, status, operation):
-        if status:
-            code = self._status_code(status)
-            self._status_ignore(status)
-            raise XadxError(f"{operation} failed (status {code})")
+        if not status:
+            return
+        message = ctypes.c_char_p()
+        message_length = ctypes.c_size_t()
+        secondary = self._status_to_string(
+            status, ctypes.byref(message), ctypes.byref(message_length)
+        )
+        code = self._status_code(status)
+        text = (
+            ctypes.string_at(message, message_length.value).decode(
+                "utf-8", errors="replace"
+            )
+            if message
+            else "unknown error"
+        )
+        if message:
+            self._status_free_message(message)
+        if secondary:
+            self._status_ignore(secondary)
+        self._status_ignore(status)
+        raise XadxError(
+            f"{operation} failed (status {code}): {text}",
+            code=code,
+            operation=operation,
+        )
 
     def architecture(self):
         value = ctypes.create_string_buffer(256)
@@ -473,7 +518,9 @@ class _Runtime:
         if self.device:
             self._device_release(self.device)
             self.device = _Handle()
-        self._check(self._shutdown(), "hrx_gpu_shutdown")
+        if self._initialized:
+            self._check(self._shutdown(), "hrx_gpu_shutdown")
+            self._initialized = False
 
 
 def _compare(actual, expected, comparison, atol, rtol):
@@ -1158,8 +1205,11 @@ def run_recipe(
     session = _Session(runtime_factory)
     try:
         architecture = session.runtime.architecture()
-    except Exception:
-        session.close()
+    except Exception as error:
+        try:
+            session.close()
+        except Exception as cleanup_error:
+            raise error from cleanup_error
         raise
     if not _architecture_verdict(architecture, target_family):
         session.close()
