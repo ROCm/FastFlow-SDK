@@ -1,6 +1,7 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
+import numpy as np
 import pytest
 
 from build_tools.iron import (
@@ -11,7 +12,12 @@ from build_tools.iron import (
     require_runtime_image,
     select,
 )
-from build_tools.npu_test_cases import CASE_GENERATORS, generate_case
+from build_tools.npu_test_cases import (
+    CASE_GENERATORS,
+    bf16_to_float32,
+    float32_to_bf16,
+    generate_case,
+)
 
 pytestmark = pytest.mark.presubmit
 
@@ -65,6 +71,20 @@ def _shapes_from_build_kwargs(operator: Operator):
     if name == "repeat":
         rows, cols, repeat = kwargs["rows"], kwargs["cols"], kwargs["repeat"]
         return [("input", (rows, cols)), ("output", (rows * repeat, cols))]
+    if name == "strided_copy":
+        size = (kwargs["input_buffer_size"],)
+        return [("input", size), ("output", size)]
+    if name == "rope":
+        rows, cols, angle_rows = (
+            kwargs["rows"],
+            kwargs["cols"],
+            kwargs["angle_rows"],
+        )
+        return [
+            ("input", (rows, cols)),
+            ("angles", (angle_rows, cols)),
+            ("output", (rows, cols)),
+        ]
     raise AssertionError(f"{name}: no packaged shape contract")
 
 
@@ -133,12 +153,12 @@ def test_packaged_numeric_cases_cover_single_kernel_ops():
         "gemm",
         "transpose",
         "repeat",
+        "strided_copy",
+        "rope",
     }
     assert not packaged & {
         "dequant",
-        "rope",
         "mha",
-        "strided_copy",
         "swiglu_decode",
         "swiglu_prefill",
     }
@@ -154,6 +174,42 @@ def test_packaged_generator_shapes_match_compile_kwargs():
             for buffer in generate_case(operator.name)["buffers"]
         ]
         assert actual == expected, operator.name
+
+
+def test_strided_copy_packaged_case_is_identity():
+    kwargs = next(op for op in OPERATORS if op.name == "strided_copy").build_kwargs
+    assert kwargs["input_strides"] == [1]
+    assert kwargs["output_strides"] == [1]
+    assert kwargs["input_offset"] == kwargs["output_offset"] == 0
+    assert kwargs["input_buffer_size"] == kwargs["output_buffer_size"] == 1024
+    generated = generate_case("strided_copy")
+    inp = generated["buffers"][0]
+    out = generated["buffers"][1]
+    assert (inp["data"] == out["expected"]).all()
+
+
+def test_rope_packaged_case_reuses_each_angle_row_consecutively():
+    kwargs = next(op for op in OPERATORS if op.name == "rope").build_kwargs
+    assert kwargs["method_type"] == 0
+
+    generated = generate_case("rope")
+    x = generated["buffers"][0]["data"]
+    packed = generated["buffers"][1]["data"]
+    expected = generated["buffers"][2]["expected"]
+    rows, cols = x.shape
+    angle_rows = packed.shape[0]
+    rep = rows // angle_rows
+    half = cols // 2
+    xf = bf16_to_float32(x)
+    angles = bf16_to_float32(packed)
+    for angle_i in range(angle_rows):
+        cos = angles[angle_i, 0::2]
+        sin = angles[angle_i, 1::2]
+        for offset in range(rep):
+            row = angle_i * rep + offset
+            x1, x2 = xf[row, :half], xf[row, half:]
+            y = np.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin])
+            assert (expected[row] == float32_to_bf16(y)).all(), row
 
 
 def test_mha_is_host_compiled_with_local_pytest_filter():

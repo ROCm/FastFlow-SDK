@@ -12,9 +12,9 @@ extensions are required.
 
 ``package-npu-test-package`` includes an iron-ops compile artifact for every
 operator name that also appears here. That is the NPU CI surface
-(``test-npu-package``): prebuilt XADX plus these NumPy oracles. dequant, rope,
-mha, and strided_copy are still CPU-compiled; they are omitted from the package
-until they have generators. SwiGLU fused ELF is not compiled on this stack.
+(``test-npu-package``): prebuilt XADX plus these NumPy oracles. dequant and mha
+are still CPU-compiled; they are omitted until they have generators. SwiGLU
+fused ELF is not compiled on this stack.
 """
 
 
@@ -381,6 +381,52 @@ def repeat():
     }
 
 
+def strided_copy():
+    """Generates the 1024-element contiguous BF16 copy (1-channel compile shape)."""
+    return _unary_case("strided_copy", lambda x: x, size=1024, rtol=0.0, atol=0.0)
+
+
+def rope():
+    """Generates TWO_HALVES RoPE at the CPU compile shape: 32x512, 8 angle rows.
+
+    Binding order is input, angles, output (RoPE.get_arg_spec()). The kernel
+    applies a packed [cos, sin, ...] LUT; it does not compute inv_freq. The
+    worker reuses each LUT row for ``rows // angle_rows`` consecutive input
+    rows (``np.repeat``, not a whole-LUT ``tile``). Layout is (rows, cols),
+    not IRON pytest's 3-D head/seq transpose.
+    """
+    np = _numpy()
+    rows, cols, angle_rows = 32, 512, 8
+    half = cols // 2
+    row_i = np.arange(rows, dtype=np.int32)[:, None]
+    col_j = np.arange(cols, dtype=np.int32)[None, :]
+    values = (((row_i * 3 + col_j) % 17) - 8).astype(np.float32) / np.float32(8)
+    x = bf16_to_float32(float32_to_bf16(values))
+
+    pos = np.arange(angle_rows, dtype=np.float32)[:, None]
+    k = np.arange(half, dtype=np.float32)[None, :]
+    inv_freq = np.float32(1) / (
+        np.float32(10000) ** (k * np.float32(2) / np.float32(cols))
+    )
+    packed = np.empty((angle_rows, cols), dtype=np.float32)
+    packed[:, 0::2] = np.cos(pos * inv_freq)
+    packed[:, 1::2] = np.sin(pos * inv_freq)
+    angles = bf16_to_float32(float32_to_bf16(packed))
+    rep = rows // angle_rows
+    cos = np.repeat(angles[:, 0::2], rep, axis=0)
+    sin = np.repeat(angles[:, 1::2], rep, axis=0)
+    x1, x2 = x[:, :half], x[:, half:]
+    expected = np.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+    return {
+        "name": "rope",
+        "buffers": [
+            _bf16_input("input", values, (rows, cols)),
+            _bf16_input("angles", packed, (angle_rows, cols)),
+            _bf16_output("output", expected, (rows, cols), rtol=0.05, atol=0.5),
+        ],
+    }
+
+
 CASE_GENERATORS = {
     "vector_scalar_add": vector_scalar_add,
     "vector_scalar_add_chain4": vector_scalar_add_chain4,
@@ -401,6 +447,8 @@ CASE_GENERATORS = {
     "gemm": gemm,
     "transpose": transpose,
     "repeat": repeat,
+    "strided_copy": strided_copy,
+    "rope": rope,
 }
 
 

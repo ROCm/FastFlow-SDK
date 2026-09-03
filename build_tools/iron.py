@@ -539,8 +539,9 @@ OPERATORS = (
     ),
     Operator(
         name="strided_copy",
-        # CPU compile is 1-channel contiguous. Local NPU pytest also collects
-        # two_channels (amd/IRON#158 hang). Other pytest ids stay extensive.
+        # CPU compile is 1-channel contiguous. NPU CI packages that identity
+        # gather only; do not add two_channels (amd/IRON#158 hang). Local
+        # pytest still collects two_channels; other pytest ids stay extensive.
         build_kwargs={
             "input_sizes": [1024],
             "input_strides": [1],
