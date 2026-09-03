@@ -84,18 +84,6 @@ pkg-config first would still pick the broken distro file.
 **Remove when:** FastFlowLM prefers caller-provided XRT dirs over pkg-config
 upstream.
 
-### 0004-linux-xrt-smi-pmode.patch
-Invokes `xrt-smi configure --pmode` on Linux as well as Windows. FastFlowLM
-already parsed `--pmode` (default `performance`; also `powersaver`, `balanced`,
-`turbo`) but only shelled out to `xrt-smi.exe` under `_WIN32`, so Linux benches
-stayed at whatever the driver last configured.
-
-**Why:** `rocm-npu qualify --pmode turbo` and `flm bench --pmode turbo` need the
-same clock boost on Linux. PATH `xrt-smi` is tried first, then
-`/opt/xilinx/xrt/bin/xrt-smi`. Failure is still swallowed (same as Windows).
-
-**Remove when:** FastFlowLM configures NPU power mode on Linux upstream.
-
 ## patches/iron-ops/
 
 ### 0001-xrt-free-host-stack.patch

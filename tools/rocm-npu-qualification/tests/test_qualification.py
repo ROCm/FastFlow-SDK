@@ -3055,23 +3055,6 @@ def test_xrt_flm_flag_parsing():
     )
 
 
-def test_pmode_flag_parsing():
-    parser = cli.create_parser()
-    assert parser.parse_args([]).pmode is None
-    parsed = parser.parse_args(["--bench", "all", "--pmode", "turbo"])
-    assert parsed.pmode == "turbo"
-    assert parser.parse_args(["--pmode", "performance"]).pmode == "performance"
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--pmode", "max"])
-
-
-def test_flm_pmode_argv():
-    assert runner._flm_pmode_argv(None) == []
-    assert runner._flm_pmode_argv("turbo") == ["--pmode", "turbo"]
-    with pytest.raises(runner.QualificationError):
-        runner._flm_pmode_argv("max")
-
-
 _XRT_FLM_EXE = "flm.exe" if os.name == "nt" else "flm"
 
 
