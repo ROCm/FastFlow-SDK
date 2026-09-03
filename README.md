@@ -354,15 +354,15 @@ additionally emit `insts.elf`, which needs `aiebu-asm` (not part of this stack).
 **`test-iron-ops`** builds the same chain from the other direction: the `iron-ops`
 operator library (`ElementwiseAdd`, …) rather than an iron-tools example, compiling the
 operator's own `aie_kernels/*.cc` through Peano. iron-ops is developed against the
-`mlir_aie` *wheel*, so this is what catches its drift from our source pin — on a CPU
-runner rather than on the NPU. Which operators it covers is
+`mlir_aie` *wheel*, so this is what catches its drift from our source pin, without an
+NPU. Which operators it covers is
 [`build_tools/iron.py`](build_tools/iron.py) `OPERATORS`; adding a row extends it.
 
 On a machine **with** an NPU, `dev.py test-npu` dispatches an iron-tools design through
 the HAL, `dev.py test-npu-jit` compiles and dispatches the `@iron.jit` smoke design, and
-`dev.py test-npu-iron-ops` runs the iron-ops operators' own tests on the
-device (their references, their tolerances) with `NPU_RUNTIME=hrx`. The latter needs
-their test deps: `dev.py setup --iron-ops-tests` (torch, pytest — see
+`dev.py test-npu-iron-ops` runs the iron-ops operators' own tests on the device (their
+references, their tolerances) with `NPU_RUNTIME=hrx`. The latter needs their test deps:
+`dev.py setup --iron-ops-tests` (torch, pytest — see
 [`requirements/iron-ops-test.txt`](requirements/iron-ops-test.txt); the build path does not need them).
 
 </details>

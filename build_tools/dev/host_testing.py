@@ -76,6 +76,7 @@ def cmd_test_iron_ops(args):
         command += ["--operator", args.operator]
     if getattr(args, "device", None):
         command += ["--device", args.device]
+    command += ["--jobs", str(getattr(args, "jobs", 0) or 0)]
     sys.exit(
         environment.sh(
             command,

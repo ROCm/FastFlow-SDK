@@ -36,15 +36,13 @@ win_note2 = "0007 marks CaptureStdio's trivial members ([[maybe_unused]]) in too
 
 [iron_ops]                      # projects/iron-ops — the IRON operator library (pure Python)
 repo     = "github.com/amd/IRON"
-commit   = "aab8083822521ab13cfafc696fe281680f818b78"  # origin/devel 2026-08-25 (#150)
+commit   = "a279467af0bacde5d7fe3bc5ce67e762386f8aef"  # origin/devel 2026-08-31 (#165)
 branch   = "devel"                                              # IRON's default branch; main is an empty initial commit
 provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, ...)", "aie_kernels C++ sources"]
 note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==1.4.2.dev); here it runs against the SOURCE-built iron-tools ([iron_tools] above) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS (tests/iron-ops/suite.py re-exports it). This pin is required for the mlir-aie Runtime callback-body API (seq_fn) and native aiecc --get-* flags landed in iron-tools 4c8b56f."
-patches  = ["patches/iron-ops/0001-xrt-free-host-stack.patch", "patches/iron-ops/0002-lazy-operator-imports.patch", "patches/iron-ops/0004-windows-link-fallback.patch"]
-xrt_note = "0001 is what lets IRON run without XRT at all: iron/common/sequence.py did `import pyxrt` (and XRTTensor) at module scope, and test_utils.py named XRTTensor directly + sized buffers with pyxrt's `bo.size()`. The patch makes those imports optional, routes test buffers through aie.utils.DEFAULT_TENSOR_CLASS (HRXTensor here), and takes byte counts from the numpy view. The XRT-native OperatorSequence dispatch policies now raise a clear error instead of failing at import."
-lazy_note = "0002 makes iron.operators re-export lazily (PEP 562). Eagerly, importing ANY operator imported ALL of them — including mha (torch) and swiglu (pyxrt) — so the CPU build jobs would have had to install torch just to compile an elementwise add. See requirements/iron-ops-test.txt."
-aiecc_note = "The former 0003 (adapt aiecc native CLI) was dropped at this pin: iron-ops #145/#150 now compile through mlir-aie's compile_mlir_module(), which already emits native aiecc --get-* flags. The previous pin still spawned `aiecc.py` with the old Python-driver flags."
-win_note = "0004 copies aiecc work-dir inputs when symlink creation is denied (Windows without Developer Mode). CI runners can symlink; a local checkout often cannot."
+patches  = ["patches/iron-ops/0001-mha-bind-get-current-device.patch"]
+drop_note = "The former XRT-free host stack, lazy operator imports, and Windows aiecc copy fallback landed upstream as IRON #165/#163/#162. The former aiecc native CLI patch was already dropped at aab8083: #145/#150 compile through mlir-aie's compile_mlir_module()."
+mha_note = "0001 binds MHA compile to get_current_device() like every other operator. a279467 still calls DefaultNPURuntime.device(), which is None under IRON_RUNTIME=cpu. Remove when that one-liner is on IRON devel."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
 wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"

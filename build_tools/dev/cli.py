@@ -93,8 +93,8 @@ def create_parser():
     s.add_argument(
         "--iron-ops-tests",
         action="store_true",
-        help="also install what iron-ops' own tests need (torch, pytest); "
-        "the NPU job does, the build jobs do not",
+        help="also install torch/pytest for local `test-npu-iron-ops` "
+        "(CI NPU e2e does not; it uses npu-test-runtime)",
     )
     _add_command(sub, "fetch", dev_patches.cmd_fetch)
     cf = _add_command(
@@ -195,6 +195,12 @@ def create_parser():
         choices=sorted(dev_iron.NPU_TARGETS),
         help="override the NPU generation the suite pins for the operator",
     )
+    to.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="parallel operator compiles (0 = min(8, CPUs))",
+    )
     _add_command(sub, "smoke", host_testing.cmd_smoke, exit_on_return=True)
     sm = _add_command(sub, "submodules", dev_sources.cmd_submodules)
     sm.add_argument("names", nargs="+")
@@ -272,6 +278,12 @@ def create_parser():
         "--skip-compile",
         action="store_true",
         help="import every operator module, but skip compiling the torch-free suite",
+    )
+    vow.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="parallel operator compiles (0 = min(8, CPUs))",
     )
     afw = _add_command(
         sub, "audit-fastflowlm-wheels", fastflowlm_package.cmd_audit_fastflowlm_wheels
@@ -441,6 +453,7 @@ def create_parser():
         exit_on_return=True,
     )
     c.add_argument("suite", nargs="?", choices=hrx_runtime.HRX_CTS_TESTS)
+    # Local IRON pytest under HRX. CI NPU e2e uses test-npu-package instead.
     tno = _add_command(sub, "test-npu-iron-ops", device_testing.cmd_test_npu_iron_ops)
     tno.add_argument(
         "operator",

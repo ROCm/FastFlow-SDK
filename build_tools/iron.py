@@ -292,6 +292,55 @@ def check_sections(
     print(f"  ok: sections present ({'/'.join(REQUIRED_SECTIONS)})")
 
 
+def require_runtime_image(path, *, elf=False):
+    """A produced image must exist, be non-empty, and if ELF, start with ELF magic.
+
+    Full-ELF operators skip xclbin section / TXN DevGen checks; an empty file
+    would otherwise pass a boolean is_file() gate. AIE ELFs use ELF magic on
+    every host, including Windows.
+    """
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"{path} was not produced by the build")
+    if elf:
+        magic = path.read_bytes()[:4]
+        if magic != b"\x7fELF":
+            raise RuntimeError(f"{path} is not an ELF image (magic={magic!r})")
+
+
+def classify_compiled_images(artifacts):
+    """Return ``('elf', [elf])`` or ``('xclbin', [xclbin, insts])``."""
+    from iron.common.compilation import (
+        FullElfArtifact,
+        InstsBinArtifact,
+        XclbinArtifact,
+    )
+
+    elves = [
+        Path(artifact.filename)
+        for artifact in artifacts
+        if isinstance(artifact, FullElfArtifact)
+    ]
+    xclbins = [
+        Path(artifact.filename)
+        for artifact in artifacts
+        if isinstance(artifact, XclbinArtifact)
+    ]
+    insts = [
+        Path(artifact.filename)
+        for artifact in artifacts
+        if isinstance(artifact, InstsBinArtifact)
+    ]
+    if len(elves) == 1 and not xclbins and not insts:
+        return "elf", elves
+    if len(xclbins) == 1 and len(insts) == 1 and not elves:
+        return "xclbin", xclbins + insts
+    raise RuntimeError(
+        "expected xclbin+insts or one full ELF, got "
+        f"elf={elves} xclbin={xclbins} insts={insts}"
+    )
+
+
 NPU_TARGETS = {
     "npu2": {"device": "npu2", "devgen": 4, "arch": "AIE2P (Strix)"},
     "npu1": {"device": "npu", "devgen": 3, "arch": "AIE2IPU (Phoenix)"},
@@ -305,13 +354,20 @@ class Operator(NamedTuple):
         name: directory under iron-ops' iron/operators/
         build_kwargs: constructor kwargs for the CPU-side compile gate
         device: NPU generation to build for (dev.py's NPU_TARGETS)
-        hrx_pytest_filter: pytest -k expression for the on-device HRX smoke
+        hrx_pytest_filter: pytest -k for local ``dev.py test-npu-iron-ops``.
+            None means that CLI must not collect test.py. CI NPU e2e ignores
+            this field; it runs ``test-npu-package`` on CASE_GENERATORS.
+        host_compile: if False, skip test-iron-ops / verify-ops-wheels compile.
+            The operator stays in the catalog for leftover-closed-set. Use this
+            when CPU compile is known-broken (do not shim the IRON runtime in
+            staging).
     """
 
     name: str
     build_kwargs: dict[str, object]
     device: str = "npu2"
     hrx_pytest_filter: str | None = None
+    host_compile: bool = True
 
 
 def _channeled_unary(name, *, extra=None, filter_extra=""):
@@ -343,11 +399,11 @@ def _binary(name, *, extra=None, filter_extra=""):
     return Operator(name=name, build_kwargs=kwargs, hrx_pytest_filter=pytest_filter)
 
 
-# Compile one small single-stream configuration per operator. On-device pytest uses
-# the matching non-extensive case when the operator has a test.py. Operators without
-# tests are compile-only. MHA and SwiGLU stay out of this list: their modules import
-# torch, which the CPU compiler-stack job does not install. package-npu-test-package
-# only wraps operators that also have CASE_GENERATORS.
+# One catalog, three independent consumers:
+#   host_compile=True  -> CPU CI (`test-iron-ops`, `verify-ops-wheels`)
+#   CASE_GENERATORS    -> NPU CI (`package-npu-test-package` / `test-npu-package`)
+#   hrx_pytest_filter  -> local `test-npu-iron-ops` only (not GitHub Actions)
+# swiglu_prefill_stream stays out: stream-dse imports torch and onnx at module scope.
 OPERATORS = (
     _binary("elementwise_add"),
     _binary("elementwise_mul"),
@@ -428,9 +484,9 @@ OPERATORS = (
             "tile_k": 64,
             "tile_n": 64,
         },
-        # Compile shape is not in iron-ops pytest; keep the compile ids so
-        # test-npu-iron-ops does not dispatch the 2048^3 regular case.
-        hrx_pytest_filter="test_gemm and M_256 and K_64 and N_64 and num_aie_columns_1",
+        # CPU compile 256x64x64; NPU CI runs that shape via CASE_GENERATORS.
+        # IRON pytest has no such case (regular is 2048^3). Do not collect
+        # test.py: a fake -k still looks like coverage when pytest exits 0.
     ),
     Operator(
         name="softmax",
@@ -442,11 +498,7 @@ OPERATORS = (
             "num_aie_columns": 1,
             "num_channels": 1,
         },
-        # Compile shape is not in iron-ops pytest (those cases use length 32768).
-        hrx_pytest_filter=(
-            "test_softmax and input_length_2048 and tile_size_64 and "
-            "num_aie_columns_1 and num_channels_1"
-        ),
+        # IRON pytest only has length 32768. NPU CI uses this 32x64 package case.
     ),
     Operator(
         name="rope",
@@ -474,16 +526,67 @@ OPERATORS = (
             "s": 8,
             "num_batches": 1,
         },
-        # Compile 64x64 is extensive in iron-ops pytest; -m not extensive skips it.
-        hrx_pytest_filter=(
-            "test_transpose and M_64 and N_64 and aie_columns_1 and "
-            "channels_1 and num_batches_1"
-        ),
+        # Compile 64x64 is extensive in IRON pytest; -m not extensive skips it.
+        # NPU CI runs this shape via CASE_GENERATORS.
     ),
     Operator(
         name="repeat",
         # cols must exceed 1023 so the design's DMA split is 4-byte aligned for BF16.
+        # CPU compile and the packaged numeric case are 32x1024x2. IRON's
+        # non-extensive pytest row is 4x1024x2 (ids rows_4-cols_1024-...), not
+        # this compile shape.
         build_kwargs={"rows": 32, "cols": 1024, "repeat": 2},
+    ),
+    Operator(
+        name="strided_copy",
+        # CPU compile is 1-channel contiguous. Local NPU pytest also collects
+        # two_channels (amd/IRON#158 hang). Other pytest ids stay extensive.
+        build_kwargs={
+            "input_sizes": [1024],
+            "input_strides": [1],
+            "input_offset": 0,
+            "input_buffer_size": 1024,
+            "output_sizes": [1024],
+            "output_strides": [1],
+            "output_offset": 0,
+            "output_buffer_size": 1024,
+            "num_aie_channels": 1,
+        },
+        hrx_pytest_filter="test_strided_copy and (contiguous or two_channels)",
+    ),
+    Operator(
+        name="mha",
+        # Only one non-extensive IRON pytest case. CPU CI compiles this shape
+        # (patch 0001: get_current_device). NPU CI has no MHA generator, so it
+        # does not dispatch this xclbin. Local test-npu-iron-ops would compile
+        # again inside run_test; CPU CI is the drift gate, not an artifact cache.
+        build_kwargs={
+            "num_heads": 1,
+            "seq_len": 16384,
+            "d": 64,
+            "num_KV_heads": 0,
+            "num_of_pipelines": 8,
+        },
+        hrx_pytest_filter="test_mha",
+    ),
+    Operator(
+        name="swiglu_decode",
+        # OperatorSequence fused ELF needs aiebu-asm, which this stack does not
+        # ship. HRX cannot dispatch it yet either. Keep in the catalog for the
+        # leftover-closed-set; do not host-compile or collect test.py.
+        build_kwargs={"embedding_dim": 2048, "hidden_dim": 2048},
+        host_compile=False,
+    ),
+    Operator(
+        name="swiglu_prefill",
+        # Same fused-ELF host path as swiglu_decode.
+        build_kwargs={
+            "seq_len": 256,
+            "embedding_dim": 2048,
+            "hidden_dim": 2048,
+            "prio_accuracy": False,
+        },
+        host_compile=False,
     ),
 )
 
@@ -501,6 +604,30 @@ def select(name: str | None) -> tuple[Operator, ...]:
             f"{name}: not in the iron-ops suite ({known}) -- add a row to OPERATORS"
         )
     return tuple(chosen)
+
+
+def host_compile_suite(
+    operators: tuple[Operator, ...] | None = None,
+) -> tuple[Operator, ...]:
+    """Operators the CPU compile gate actually builds."""
+    chosen = OPERATORS if operators is None else operators
+    return tuple(operator for operator in chosen if operator.host_compile)
+
+
+def compile_job_count(n_operators: int, jobs: int = 0) -> int:
+    """How many operator compiles to run at once.
+
+    ``jobs <= 0`` means auto: ``min(8, os.cpu_count(), n_operators)``.
+    ``aie.utils`` device state is process-global, so callers must isolate each
+    compile in its own process when this is greater than 1.
+    """
+    n = max(0, int(n_operators))
+    if n <= 1:
+        return 1
+    if jobs and jobs > 0:
+        return min(int(jobs), n)
+    cpu = os.cpu_count() or 1
+    return max(1, min(8, cpu, n))
 
 
 def iron_env(compiler_prefix=None):

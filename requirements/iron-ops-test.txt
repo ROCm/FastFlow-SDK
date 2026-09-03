@@ -1,14 +1,12 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-# What iron-ops' OWN test suite needs, on top of compiler-stack.txt. Installed only by
-# `dev.py setup --iron-ops-tests`, which only the NPU job runs (test-npu-iron-ops runs
-# those tests on the device).
+# What iron-ops' OWN pytest suite needs, on top of compiler-stack.txt. Installed only by
+# `dev.py setup --iron-ops-tests` for the local `dev.py test-npu-iron-ops` path.
 #
-# Kept out of compiler-stack.txt so the two CPU build jobs do not download torch -- a ~200 MB
-# wheel they would install to satisfy an import and never call. The off-device operator
-# BUILD needs neither of these; that is what patches/iron-ops/0002 (lazy operator imports)
-# buys, since `import iron.operators.<any>.op` used to eagerly import mha, which imports
-# torch.
+# CI does not install this. CPU jobs compile operators without torch (lazy imports,
+# IRON #163). NPU e2e jobs use `npu-test-runtime` (numpy + ml-dtypes) and dispatch
+# prebuilt XADX via `test-npu-package`; they never run iron-ops pytest, so they do
+# not need torch for IRON goldens.
 #
 # torch: iron-ops' golden references and its test harness are written against it. CPU only
 # -- nothing here runs on a GPU.

@@ -82,9 +82,9 @@ jobs:
       # --shallow: llvm-project alone is >4 GB of history this build never reads.
       # Only iron-tools needs --clean: its patch adds gitignored files, and a leftover
       # copy makes `git apply` fail. See cmd_submodules.
-      # iron-ops is NOT in --clean: unlike iron-tools, its patches modify only tracked files,
-      # which --reset restores on its own. (-x would also delete the editable install's
-      # egg-info, which `dev.py setup` puts there.)
+      # iron-ops is NOT in --clean: it currently has no patches, and -x would
+      # also delete the editable install's egg-info, which `dev.py setup` puts
+      # there.
       - name: Initialize submodules
         run: python3 dev.py submodules llvm-project hrx iron-tools iron-ops --reset --clean iron-tools --shallow
       # setup creates .venv, installs requirements/compiler-stack.lock, applies the
@@ -154,13 +154,16 @@ jobs:
       - name: Verify compiler product relocation
         run: .venv/bin/python dev.py verify-compiler-product --dir build/rocm-npu-compiler-extracted --relocate
 
-      # The same toolchain, driven by the iron-ops OPERATOR library instead of an iron-tools
+      # Same toolchain, driven by the iron-ops OPERATOR library instead of an iron-tools
       # example: MLIR -> Peano (incl. the operator's own aie_kernels/*.cc) -> xclbin + insts.
       # iron-ops is developed against the mlir_aie WHEEL, so this is where its drift from our
       # source-built aie package shows up — on a CPU runner, minutes in, instead of an hour
-      # later on the shared NPU runners. Which operators: build_tools/iron.py OPERATORS.
+      # later on the shared NPU runners. Which operators: build_tools/iron.py host_compile
+      # rows. Auto jobs (0 = min(8, CPUs)), one process per operator.
+      # NPU e2e later dispatches a CASE_GENERATORS subset of these xclbins via
+      # test-npu-package; it does not run iron-ops pytest.
       - name: iron-ops (build operators off-device)
-        run: .venv/bin/python dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-linux-x86_64
+        run: .venv/bin/python dev.py test-iron-ops --compiler-prefix build/rocm-npu-compiler-relocated/rocm-npu-compiler-linux-x86_64 --jobs 0
 
       # The pinned manylinux image already provides wheel-building interpreters under
       # /opt/python. actions/setup-python does not publish builds for this container OS
@@ -220,7 +223,8 @@ jobs:
           .venv/bin/python dev.py package-ops-wheels
           .venv/bin/python dev.py verify-ops-wheels \
             --venv build/compiler-wheel-verify-312 \
-            --reuse-venv
+            --reuse-venv \
+            --jobs 0
 
       - name: Attest Linux compiler wheels
         if: ${{ inputs.attest_wheels }}
@@ -253,6 +257,7 @@ jobs:
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/bin/python dev.py package-npu-prereqs
 
+      # XADX + NumPy oracles for CASE_GENERATORS (not the full host_compile catalog).
       - name: Package prebuilt NPU tests
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/bin/python dev.py package-npu-test-package
@@ -294,6 +299,8 @@ jobs:
           # The product archive and checksum are already compressed/opaque.
           compression-level: 0
 
+  # Execute-only: npu-test-runtime (numpy/ml-dtypes), HRX CTS, prebuilt XADX.
+  # No Peano, no torch, no iron-ops pytest (that is local test-npu-iron-ops).
   npu_e2e:
     name: NPU e2e (Linux ${{ matrix.runner_label }})
     if: ${{ inputs.run_npu_e2e }}

@@ -216,6 +216,12 @@ class TestDevCli:
         assert hrx.what == "hrx" and hrx.fresh and hrx.include_tests
         hrx_cts = parser.parse_args(["build", "hrx", "--include-cts"])
         assert hrx_cts.what == "hrx" and hrx_cts.include_cts
+        iron_ops = parser.parse_args(["test-iron-ops"])
+        assert iron_ops.jobs == 0
+        verify_ops = parser.parse_args(["verify-ops-wheels"])
+        assert verify_ops.jobs == 0
+        assert parser.parse_args(["test-iron-ops", "--jobs", "4"]).jobs == 4
+        assert parser.parse_args(["verify-ops-wheels", "--jobs", "4"]).jobs == 4
 
     @pytest.mark.parametrize(
         ("include_tests", "include_cts", "enabled"),

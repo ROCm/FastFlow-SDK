@@ -344,6 +344,8 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "dev.py verify-compiler-wheels" in workflow
             assert "dev.py package-ops-wheels" in workflow
             assert "dev.py verify-ops-wheels" in workflow
+            assert "dev.py test-iron-ops" in workflow
+            assert workflow.count("--jobs 0") == 2
             assert "Package and verify ops wheel" in workflow
             assert "--reuse-venv" in workflow
             assert "ops-wheel-verify-313" not in workflow

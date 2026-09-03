@@ -117,13 +117,20 @@ the same version. It ships the IRON `iron` package plus the `aie_kernels`
 sources that `AIEContext.base_dir` resolves next to it, so
 `from iron.operators import ElementwiseAdd` works after a wheel install.
 The wheel is compile-oriented: it does not depend on torch. CPU reference
-helpers, MHA, SwiGLU, and stream-dse still import torch at module scope;
-`verify-ops-wheels` imports every `iron.operators.*.op` module (and every lazy
-`iron.operators` export), and fails if a torch skip is unused or a skip-list
-package is missing. CI then installs that wheel into the Python 3.12 compiler
-verify venv and compiles every torch-free operator in
-`build_tools.iron.OPERATORS` (same small shapes as `test-iron-ops`, so
-`generic/` and `aie2p/` kernels both go through Peano from site-packages).
+helpers and stream-dse still import torch at module scope; MHA and the
+hand-written SwiGLU sequences do not. `verify-ops-wheels` imports every
+`iron.operators.*.op` module (and every lazy `iron.operators` export), and fails
+if a torch skip is unused or a skip-list package is missing. CI then installs
+that wheel into the Python 3.12 compiler verify venv and compiles every
+torch-free operator in `build_tools.iron.host_compile_suite()` in parallel
+(the same small shapes as `test-iron-ops`, so `generic/` and `aie2p/` kernels
+both go through Peano from site-packages). MHA is in that compile catalog
+(`get_current_device()` via `patches/iron-ops/0001-mha-bind-get-current-device.patch`
+until IRON devel has the one-liner). SwiGLU fused ELF stays in `OPERATORS` but
+is not host-compiled until `aiebu-asm` is in the compiler wheel. NPU CI does
+not run iron-ops pytest: it dispatches the prebuilt `npu-test-package` for
+operators that have `CASE_GENERATORS`. `dev.py test-npu-iron-ops` is local
+and still compiles inside `run_test`; CPU CI is the off-device drift gate.
 3.13/3.14 already proved the abi3 compiler; ops is `py3-none-any`. Linux
 publishes the canonical ops wheel with the compiler wheel family (same artifact
 name; ops files are listed explicitly); Windows still packages and

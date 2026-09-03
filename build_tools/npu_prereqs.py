@@ -124,9 +124,9 @@ def cmd_package_npu_prereqs(args):
     if stage.exists():
         shutil.rmtree(stage)
 
-    # The NPU job downloads the separately verified compiler product for aiecc,
-    # Python bindings, headers, Peano, and xclbinutil. Duplicating that tree here
-    # made the "runtime prerequisites" artifact hundreds of megabytes.
+    # CPU jobs own the compiler product (aiecc, Peano, bindings). NPU e2e is
+    # execute-only: HRX + prebuilt XADX. Duplicating the compiler tree here
+    # made the runtime-prerequisites artifact hundreds of megabytes.
     _stage_npu_runtime_prereqs(stage, HRX_INSTALL, cts_src)
 
     _strip(stage, cts_rel)

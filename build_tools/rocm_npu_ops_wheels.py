@@ -229,20 +229,10 @@ def cmd_package_ops_wheels(args):
 
 
 # Operator packages whose import graph still needs torch at module scope.
-# mha/op.py imports torch; swiglu_{decode,prefill} import OperatorSequence which
-# still does; swiglu_prefill_stream also imports iron.common.stream.ops (torch +
-# onnx). Drop mha and the non-stream SwiGLU packages when the pin includes
-# torch-free compile (#164). Stream-dse stays torch/onnx-bound.
-# An unused skip is a hard failure so a pin bump cannot leave a torch regression
-# silently ignored.
-_TORCH_AT_IMPORT = frozenset(
-    {
-        "mha",
-        "swiglu_decode",
-        "swiglu_prefill",
-        "swiglu_prefill_stream",
-    }
-)
+# Stream-dse binds torch/onnx in iron.common.stream.ops. MHA and the hand-written
+# SwiGLU sequences compile without torch (IRON #164/#165). An unused skip is a
+# hard failure so a pin bump cannot leave a torch regression silently ignored.
+_TORCH_AT_IMPORT = frozenset({"swiglu_prefill_stream"})
 
 
 def _torch_is_missing(error: BaseException) -> bool:
@@ -374,11 +364,11 @@ print(
 def _ops_compile_specs() -> tuple[dict[str, object], ...]:
     """Shapes compiled from an installed ops wheel.
 
-    Same catalog as ``dev.py test-iron-ops`` (``build_tools.iron.OPERATORS``).
-    Torch-at-import packages stay out of that list. ``strided_copy`` is shipped
-    but has no suite shape (DMA-only, no ``aie_kernels`` ``.cc``).
+    Same catalog as ``dev.py test-iron-ops`` (``host_compile_suite()``).
+    Torch-at-import packages stay out of that list. ``host_compile=False``
+    operators stay in ``OPERATORS`` for leftover-closed-set.
     """
-    from build_tools.iron import OPERATORS
+    from build_tools.iron import OPERATORS, host_compile_suite
 
     overlap = sorted({operator.name for operator in OPERATORS} & _TORCH_AT_IMPORT)
     if overlap:
@@ -391,87 +381,40 @@ def _ops_compile_specs() -> tuple[dict[str, object], ...]:
             "kwargs": dict(operator.build_kwargs),
             "device": operator.device,
         }
-        for operator in OPERATORS
+        for operator in host_compile_suite()
     )
 
 
-def compile_installed_operators(specs, build_root):
-    """Compile each spec from the installed ``iron`` package (wheel layout)."""
-    import importlib
-    import inspect
-    import shutil
-    from pathlib import Path
-
-    import aie.utils as aie_utils
-    from aie.iron.device import NPU2, NPU1Col1
-    from iron.common import AIEContext, AIEOperatorBase
-    from iron.common.compilation import InstsBinArtifact, XclbinArtifact
-
-    devices = {"npu1": NPU1Col1, "npu2": NPU2}
-    build_root = Path(build_root)
-    build_root.mkdir(parents=True, exist_ok=True)
-    compiled = []
-    for spec in specs:
-        name = spec["name"]
-        device = spec["device"]
-        if device not in devices:
-            raise SystemExit(f"{name}: unknown device {device!r}")
-        # Pin the device per spec. Kernel subdir (generic vs aie2p), Peano
-        # triples, and TXN DevGen all key off it; a host default must not win.
-        aie_utils.set_current_device(devices[device]())
-        build_dir = build_root / name
-        if build_dir.exists():
-            shutil.rmtree(build_dir)
-        build_dir.mkdir(parents=True)
-        module = importlib.import_module(f"iron.operators.{name}.op")
-        found = [
-            value
-            for value in vars(module).values()
-            if inspect.isclass(value)
-            and issubclass(value, AIEOperatorBase)
-            and value.__module__ == module.__name__
-        ]
-        if len(found) != 1:
-            names = ", ".join(sorted(cls.__name__ for cls in found)) or "none"
-            raise SystemExit(
-                f"{name}: expected exactly one operator class, found "
-                f"{len(found)} ({names})"
-            )
-        cls = found[0]
-        params = inspect.signature(cls.__init__).parameters
-        unknown = [key for key in spec["kwargs"] if key not in params]
-        if unknown:
-            raise SystemExit(f"{name}: unsupported constructor args {unknown}")
-        operator = cls(**spec["kwargs"], context=AIEContext(build_dir=build_dir))
-        operator.compile()
-        produced = [
-            Path(artifact.filename)
-            for artifact in operator.artifacts
-            if isinstance(artifact, (XclbinArtifact, InstsBinArtifact))
-        ]
-        missing = [path for path in produced if not path.is_file()]
-        if missing or len(produced) != 2:
-            raise SystemExit(
-                f"{name}: ops compile did not produce xclbin+insts: {produced}"
-            )
-        compiled.append(name)
-        print("ops compile: ok", name, *(path.name for path in produced))
-    expected = [spec["name"] for spec in specs]
-    if compiled != expected:
-        raise SystemExit(f"ops compile set mismatch: {compiled} expected={expected}")
-    return compiled
-
-
 def _installed_ops_compile(build_dir: Path) -> str:
+    """Python the wheel venv runs: subprocess-per-operator, like test-iron-ops.
+
+    The venv has ``iron`` and the compiler, not ``build_tools``. ELF helpers are
+    copied from this tree. The driver itself is a script (argparse + re-exec),
+    not pickled ``build_tools`` callables.
+    """
+    from build_tools.iron import (
+        classify_compiled_images,
+        compile_job_count,
+        require_runtime_image,
+    )
+
     specs = _ops_compile_specs()
     return (
         """
+import argparse
+import importlib
+import inspect
 import os
+import shutil
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+os.environ.setdefault("IRON_RUNTIME", "cpu")
 
 import rocm_npu_compiler as compiler
 
-os.environ.setdefault("IRON_RUNTIME", "cpu")
 compiler.activate_toolchain_env()
 compiler.activate_native_libraries()
 prefix = Path(compiler.compiler_prefix())
@@ -479,10 +422,131 @@ if not (prefix / "include").is_dir():
     raise SystemExit(f"compiler prefix has no include/: {prefix}")
 
 """
-        + inspect.getsource(compile_installed_operators)
+        + inspect.getsource(require_runtime_image)
+        + "\n"
+        + inspect.getsource(classify_compiled_images)
+        + "\n"
+        + inspect.getsource(compile_job_count)
         + f"""
-compiled = compile_installed_operators({specs!r}, Path({str(build_dir)!r}))
-print("ops compile: ok", len(compiled), "operators")
+
+SPECS = {specs!r}
+DEFAULT_BUILD_DIR = Path({str(build_dir)!r})
+DEVICES = None
+
+
+def _devices():
+    global DEVICES
+    if DEVICES is None:
+        from aie.iron.device import NPU1Col1, NPU2
+
+        DEVICES = {{"npu1": NPU1Col1, "npu2": NPU2}}
+    return DEVICES
+
+
+def compile_one(spec, build_root):
+    import aie.utils as aie_utils
+    from iron.common import AIEContext, AIEOperatorBase
+
+    devices = _devices()
+    name = spec["name"]
+    device = spec["device"]
+    if device not in devices:
+        raise SystemExit(f"{{name}}: unknown device {{device!r}}")
+    aie_utils.set_current_device(devices[device]())
+    op_dir = Path(build_root) / name
+    if op_dir.exists():
+        shutil.rmtree(op_dir)
+    op_dir.mkdir(parents=True)
+    module = importlib.import_module(f"iron.operators.{{name}}.op")
+    found = [
+        value
+        for value in vars(module).values()
+        if inspect.isclass(value)
+        and issubclass(value, AIEOperatorBase)
+        and value.__module__ == module.__name__
+    ]
+    if len(found) != 1:
+        names = ", ".join(sorted(cls.__name__ for cls in found)) or "none"
+        raise SystemExit(
+            f"{{name}}: expected exactly one operator class, found "
+            f"{{len(found)}} ({{names}})"
+        )
+    cls = found[0]
+    params = inspect.signature(cls.__init__).parameters
+    unknown = [key for key in spec["kwargs"] if key not in params]
+    if unknown:
+        raise SystemExit(f"{{name}}: unsupported constructor args {{unknown}}")
+    operator = cls(**spec["kwargs"], context=AIEContext(build_dir=op_dir))
+    operator.compile()
+    try:
+        kind, produced = classify_compiled_images(operator.artifacts)
+        for path in produced:
+            require_runtime_image(path, elf=(kind == "elf"))
+    except RuntimeError as error:
+        raise SystemExit(f"{{name}}: {{error}}") from error
+    print("ops compile: ok", name, *(path.name for path in produced), flush=True)
+    return name
+
+
+def _spawn(name, build_root):
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--operator",
+        name,
+        "--jobs",
+        "1",
+        "--build-dir",
+        str(build_root),
+    ]
+    return name, subprocess.run(command, capture_output=True, text=True)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--operator")
+    parser.add_argument("--jobs", type=int, default=0)
+    parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
+    args = parser.parse_args(argv)
+    selected = [
+        spec
+        for spec in SPECS
+        if args.operator is None or spec["name"] == args.operator
+    ]
+    if args.operator and not selected:
+        raise SystemExit(f"unknown operator: {{args.operator}}")
+    if not selected:
+        print("ops compile: ok 0 operators")
+        return 0
+    workers = compile_job_count(len(selected), args.jobs)
+    print(f"ops compile: {{len(selected)}} operators, jobs={{workers}}", flush=True)
+    build_root = args.build_dir
+    build_root.mkdir(parents=True, exist_ok=True)
+    if workers == 1:
+        compiled = [compile_one(spec, build_root) for spec in selected]
+    else:
+        failures = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(_spawn, spec["name"], build_root) for spec in selected
+            ]
+            for future in as_completed(futures):
+                name, completed = future.result()
+                if completed.stdout:
+                    sys.stdout.write(completed.stdout)
+                if completed.stderr:
+                    sys.stderr.write(completed.stderr)
+                if completed.returncode != 0:
+                    failures.append(name)
+        if failures:
+            raise SystemExit("ops compile failed: " + ", ".join(failures))
+        compiled = [spec["name"] for spec in selected]
+    print("ops compile: ok", len(compiled), "operators")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
 """
     )
 
@@ -554,8 +618,22 @@ def cmd_verify_ops_wheels(args):
         )
         if compile_installed:
             compile_dir = venv_dir / "ops-compile"
+            compile_dir.mkdir(parents=True, exist_ok=True)
+            script_path = compile_dir / "compile_installed_operators.py"
+            jobs = int(getattr(args, "jobs", 0) or 0)
+            script_path.write_text(
+                _installed_ops_compile(compile_dir),
+                encoding="utf-8",
+            )
             subprocess.run(
-                [python, "-c", _installed_ops_compile(compile_dir)],
+                [
+                    python,
+                    str(script_path),
+                    "--jobs",
+                    str(jobs),
+                    "--build-dir",
+                    str(compile_dir),
+                ],
                 check=True,
                 env=env,
             )

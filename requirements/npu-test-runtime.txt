@@ -1,10 +1,12 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-# Minimal dependency closure for execute-only NPU CI.
+# Minimal dependency closure for execute-only NPU CI (`setup --profile npu-test-runtime`).
 #
-# Kernels are built on the CPU runner. The hardware runner generates numeric
-# inputs and BF16 oracles, so it needs NumPy and ml-dtypes; it does not need
-# Peano, MLIR Python bindings, torch, or pytest.
+# Kernels are built on the CPU runner and shipped as XADX in npu-test-package.
+# The hardware job (`test-npu-package`) compares against packaged NumPy oracles,
+# so it needs NumPy and ml-dtypes; it does not need Peano, MLIR Python bindings,
+# torch, or pytest. That heavier set is iron-ops-test.txt for local
+# `test-npu-iron-ops` only.
 # Regenerate requirements/npu-test-runtime.lock with:
 #   uv pip compile requirements/npu-test-runtime.txt --generate-hashes \
 #     --python-version 3.12 --universal --system-certs \
