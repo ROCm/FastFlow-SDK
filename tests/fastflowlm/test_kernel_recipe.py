@@ -84,12 +84,18 @@ def _catalogue():
         {
             "id": "mm-2bbc1cbf355661de",
             "kernel": "mm",
-            "families": ["Qwen3.5-0.8B-NPU2", "Qwen3.6-35B-A3B-NPU2"],
+            "families": ["Qwen3.5-OMNI-NPU2"],
         },
         {
-            "id": "mm-3ea0dff6e4318f0f",
+            "id": "mm-f09ce18ed0176ccd",
             "kernel": "mm",
-            "families": ["Qwen3.5-OMNI-NPU2"],
+            "families": [
+                "Qwen3.5-0.8B-NPU2",
+                "Qwen3.5-2B-NPU2",
+                "Qwen3.5-4B-NPU2",
+                "Qwen3.5-9B-NPU2",
+                "Qwen3.6-35B-A3B-NPU2",
+            ],
         },
         {
             "id": "mm-6f1e5507b84d4545",
@@ -185,7 +191,7 @@ def test_unreachable_implementations_are_declared_rather_than_dropped():
     limited = {
         "mm-8d5bc2adebe8c362",
         "mm-2bbc1cbf355661de",
-        "mm-3ea0dff6e4318f0f",
+        "mm-f09ce18ed0176ccd",
         "mm-6f1e5507b84d4545",
         "dequant-c64cce52830381a3",
         "mm-6c7ef8716b6c744d",

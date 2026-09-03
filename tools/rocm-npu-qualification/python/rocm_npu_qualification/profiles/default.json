@@ -8,7 +8,7 @@
       "source": "https://huggingface.co/FastFlowLM/Qwen3-0.6B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "c835491642e8d6f01c1152a04e0f2e4c6b339c0f3a8462bc00d4e043aa5b4480",
+      "registry_sha256": "0eb7eb7a1c97404d7d708188f5723e209e789a02a8af49456d12f8f431ef455b",
       "files": [
         {"path": "config.json", "sha256": "8a5ec72f5c96766168a4024f88d70841ae341900a0c84fd4fd23f8eeae16c6a7"},
         {"path": "model.q4nx", "sha256": "db8dec4dff653817218ff920c5d25d28d1805512906485e654f03980053fa667"},
@@ -61,12 +61,12 @@
     {
       "tag": "qwen3.5:0.8b",
       "source": "https://huggingface.co/FastFlowLM/Qwen3.5-0.8B-NPU2",
-      "revision": null,
-      "identity_policy": "content-sha256",
-      "registry_sha256": "c835491642e8d6f01c1152a04e0f2e4c6b339c0f3a8462bc00d4e043aa5b4480",
+      "revision": "flm_q4k_high_precision",
+      "identity_policy": "revision-sha256",
+      "registry_sha256": "0eb7eb7a1c97404d7d708188f5723e209e789a02a8af49456d12f8f431ef455b",
       "files": [
-        {"path": "config.json", "sha256": "a920821dda57277efac57cd45ee94e9813b62b0a45f023dea2d81cc8595f08d9"},
-        {"path": "model.q4nx", "sha256": "bb4d42950cf8932380c95babaa5844bb7fe2a19b759ea2fa807a55afc4d40a36"},
+        {"path": "config.json", "sha256": "a571afa7fca18a6ecb4c0c2dbc7758204b442804056280e85d4e2d6c582c70c3"},
+        {"path": "model.q4nx", "sha256": "787428ffe87be5e3e5a8fcaf241844b69896ca0c74a41f2432c436739f7ba4e4"},
         {"path": "tokenizer.json", "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"},
         {"path": "tokenizer_config.json", "sha256": "485aad30cae5f2280d6050a01f9160c435ee5aeabaf4fda7dd59b76ccc8b1f4c"},
         {"path": "vision_weight.q4nx", "sha256": "94e6b19043bf1d07645ee1e0a44b44016abb881801027b39656b7f7872f8fc18"},
@@ -115,7 +115,7 @@
       "source": "https://huggingface.co/FastFlowLM/LFM2-1.2B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "c835491642e8d6f01c1152a04e0f2e4c6b339c0f3a8462bc00d4e043aa5b4480",
+      "registry_sha256": "0eb7eb7a1c97404d7d708188f5723e209e789a02a8af49456d12f8f431ef455b",
       "files": [
         {"path": "config.json", "sha256": "21c02d2daa253c01a5b1cc08e8b275efc9cbe197abdc1c0bcc71ccfbb37d5ada"},
         {"path": "model.q4nx", "sha256": "2755ab40cd927e3cc2c7068a5108d7ab4b85600e6dd320f97003b7223fde0e2f"},
