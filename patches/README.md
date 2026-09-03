@@ -39,13 +39,6 @@ is already applied, so a patch that does not reverse cleanly breaks `setup`.
 
 The native Linux KMQ command-chain capability gate is already pin-resident.
 
-Command-cache hardening that previously lived here as `0004`–`0010` (Windows
-multi-submit deadlock, stale chain-cache descriptors, aperture-wide invalidate,
-shape-compatible PARTIAL_ELF reuse, cache-line aperture sync, deferred-materialize
-remap, empty-patch-table RTP) is in the origin/main HRX pin (`effecacdb`).
-FastFlowLM engines at `[fastflowlm]` request `HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE`
-(`0x1A`) directly, so the `HOST_LOCAL` `0x52`/`0x56` alias is not re-applied.
-
 ## patches/FastFlowLM/
 
 ### 0001-support-redirected-windows-cli-input.patch
