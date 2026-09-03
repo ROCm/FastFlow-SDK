@@ -34,8 +34,10 @@ Validated NPU driver versions are listed in each GitHub release. After
 installing or changing a driver, run `rocm-npu self-test`. If that fails,
 reboot and retry; a hot package switch can occasionally leave the device
 unhealthy even when the OS reports the new driver as installed.
-`rocm-npu probe` and `rocm-npu doctor` report the active driver, firmware,
-and runtime health.
+`rocm-npu probe` and `rocm-npu doctor` report the active driver, firmware, NPU
+power mode where supported, and runtime health. `rocm-npu powermode` reports the
+current mode. Use `rocm-npu powermode <mode>` to change it. Power-mode changes
+may require elevated privileges depending on the installed driver.
 
 Runtime and FastFlowLM Python wheels require Python 3.11 or newer. Compiler
 wheels require Python 3.12, 3.13, or 3.14. The standalone FastFlowLM/HRX

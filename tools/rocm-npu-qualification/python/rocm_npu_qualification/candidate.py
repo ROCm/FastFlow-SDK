@@ -16,6 +16,7 @@ from typing import Any
 from .contracts import (
     CANDIDATE_SCHEMA_VERSION,
     KERNEL_RECIPE_SCHEMA_VERSION,
+    NATIVE_CHECKS,
     QUALIFICATION_CONTRACT_SCHEMA_VERSION,
     xadx_rounds,
 )
@@ -69,7 +70,7 @@ def _normalize_qualification_contract(value: Any) -> dict[str, Any]:
             "policies",
         }
         or value.get("schema_version") != QUALIFICATION_CONTRACT_SCHEMA_VERSION
-        or value.get("native_checks") != ["version", "probe", "doctor", "self-test"]
+        or value.get("native_checks") != list(NATIVE_CHECKS)
         or not isinstance(value.get("xadx_cases"), list)
         or not value["xadx_cases"]
         or len(set(value["xadx_cases"])) != len(value["xadx_cases"])
@@ -221,7 +222,7 @@ def _normalize_qualification_contract(value: Any) -> dict[str, Any]:
         raise CandidateError("candidate XADX execution identities are not unique")
     return {
         "schema_version": QUALIFICATION_CONTRACT_SCHEMA_VERSION,
-        "native_checks": ["version", "probe", "doctor", "self-test"],
+        "native_checks": list(NATIVE_CHECKS),
         "xadx_cases": list(value["xadx_cases"]),
         "xadx_case_contracts": {
             name: dict(contract) for name, contract in case_contracts.items()
@@ -533,7 +534,7 @@ def _qualification_contract(archive: zipfile.ZipFile) -> dict[str, Any]:
     return _normalize_qualification_contract(
         {
             "schema_version": QUALIFICATION_CONTRACT_SCHEMA_VERSION,
-            "native_checks": ["version", "probe", "doctor", "self-test"],
+            "native_checks": list(NATIVE_CHECKS),
             "xadx_cases": [case.get("name") for case in cases],
             "xadx_case_contracts": _recipe_case_contracts(cases),
             "xadx_materializations": _recipe_materializations(cases),

@@ -13,6 +13,45 @@ PROFILE_SCHEMA_VERSION = 1
 QUALIFICATION_CONTRACT_SCHEMA_VERSION = 1
 XADX_REPORT_SCHEMA_VERSION = 1
 
+NATIVE_CORE_REPORT_COMMANDS = (
+    "version",
+    "probe",
+    "doctor",
+    "self-test",
+)
+NATIVE_CHECKS = (
+    *NATIVE_CORE_REPORT_COMMANDS,
+    "powermode-roundtrip",
+)
+POWER_MODE_ROUNDTRIP = "powermode-roundtrip"
+POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS = (
+    (
+        "balanced",
+        "artifacts/native/powermode-set-balanced.json",
+        "artifacts/native/powermode-after-balanced.json",
+    ),
+    (
+        "performance",
+        "artifacts/native/powermode-set-performance.json",
+        "artifacts/native/powermode-after-performance.json",
+    ),
+    (
+        "turbo",
+        "artifacts/native/powermode-set-turbo.json",
+        "artifacts/native/powermode-after-turbo.json",
+    ),
+)
+POWER_MODE_ROUNDTRIP_ARTIFACTS = (
+    "artifacts/native/powermode-before.json",
+    *(
+        artifact
+        for _, set_artifact, after_artifact in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS
+        for artifact in (set_artifact, after_artifact)
+    ),
+    "artifacts/native/powermode-restore.json",
+    "artifacts/native/powermode-final.json",
+)
+
 # How many times each qualification profile repeats the XADX case set. Rounds
 # buy repetition, not coverage: every profile runs every case, and the case set
 # alone already dispatches each implementation against each value population.

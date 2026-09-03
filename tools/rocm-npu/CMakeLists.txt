@@ -39,10 +39,12 @@ set(ROCM_NPU_SOURCES
   src/report.cc
   src/product.cc
   src/sha256.cc
+  src/power_mode.cc
   src/hrx_loader.cc
   src/commands/version.cc
   src/commands/plugin.cc
   src/commands/probe.cc
+  src/commands/powermode.cc
   src/commands/doctor.cc
   src/commands/self_test.cc
 )

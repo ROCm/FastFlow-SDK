@@ -1,15 +1,20 @@
 # Native ROCm NPU runtime CLI
 
-`rocm-npu` provides non-mutating runtime discovery, health checks, and a bounded
-device self-test on Linux and Windows. The executable is C++17 and does not
-require Python. HRX is loaded only when a command needs it.
+`rocm-npu` provides runtime discovery, health checks, NPU power-mode
+configuration, and a bounded device self-test on Linux and Windows. The
+executable is C++17 and does not require Python. HRX is loaded only when a
+command needs it.
 
 ## Commands and exit status
 
 - `rocm-npu version` reports build identity, package-manifest identity, and HRX
   discovery without initializing HRX or requiring hardware.
 - `rocm-npu probe` reports operating-system, driver, firmware, device, and HRX
-  facts without applying product-support policy.
+  facts without applying product-support policy. It reports the current NPU
+  power mode when the platform supports it.
+- `rocm-npu powermode` reports the current NPU power mode for detected NPUs.
+- `rocm-npu powermode <default|powersaver|balanced|performance|turbo>` sets the
+  NPU power mode and then re-queries the device to confirm the requested mode.
 - `rocm-npu doctor` evaluates package, HRX, and device health. Release package
   manifests verify every declared file's size and SHA-256 digest. It initializes
   and shuts down HRX but does not dispatch an executable.
@@ -41,12 +46,16 @@ automation. Human output is informational and is not a stable parsing surface.
 
 ## Non-mutating behavior
 
-Probe and doctor never create device nodes, change device permissions, modify
-drivers or firmware, or alter process/system limits. Linux opens existing
-`/dev/accel/accel*` nodes read/write to establish usability and uses read-only
-DRM queries. Windows uses SetupAPI, Configuration Manager, and service metadata.
-Firmware files found beside the active Windows KMD are package candidates; they
-do not prove which image the KMD loaded.
+Probe, doctor, and `powermode` without a mode never create device nodes, change
+device permissions, modify drivers or firmware, alter process/system limits, or
+change NPU power mode. They only inspect existing package, runtime, driver,
+firmware, and device state.
+
+`rocm-npu powermode <mode>` reports success only when a subsequent query
+confirms every reported NPU reached the requested mode. Some host drivers
+require elevated privileges to set power mode; permission failures are reported
+as command failures. Non-mutating power-mode reporting remains usable when the
+platform permits device access.
 
 ## HRX discovery
 

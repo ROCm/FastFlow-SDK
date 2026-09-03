@@ -9,6 +9,7 @@
 
 #include <bcrypt.h>
 #include <cfgmgr32.h>
+#include <d3dkmthk.h>
 #include <devguid.h>
 #include <initguid.h>
 #include <devpkey.h>
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -324,6 +326,446 @@ std::optional<std::filesystem::path::string_type> NativeEnvironmentVariable(
   }
   value.resize(length);
   return value;
+}
+
+std::string Win32Message(DWORD code) {
+  return std::system_category().message(static_cast<int>(code));
+}
+
+std::string NtStatusMessage(const std::string& action, NTSTATUS status) {
+  std::ostringstream output;
+  output << action << " failed with NTSTATUS 0x" << std::hex
+         << std::setfill('0') << std::setw(8)
+         << static_cast<std::uint32_t>(status);
+  return output.str();
+}
+
+std::string WideArrayToUtf8(const wchar_t* text, std::size_t capacity) {
+  std::size_t length = 0;
+  while (length < capacity && text[length] != L'\0') {
+    ++length;
+  }
+  return WideToUtf8(std::wstring(text, length));
+}
+
+std::string ToLowerAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char character) {
+                   return static_cast<char>(std::tolower(character));
+                 });
+  return value;
+}
+
+std::string FormatLuid(const LUID& luid) {
+  std::ostringstream output;
+  output << std::hex << std::setfill('0') << std::setw(8)
+         << static_cast<std::uint32_t>(luid.HighPart) << ':' << std::setw(8)
+         << static_cast<std::uint32_t>(luid.LowPart);
+  return output.str();
+}
+
+struct KmtFunctions {
+  using EnumAdapters3Fn = NTSTATUS(APIENTRY*)(D3DKMT_ENUMADAPTERS3*);
+  using CloseAdapterFn = NTSTATUS(APIENTRY*)(const D3DKMT_CLOSEADAPTER*);
+  using QueryAdapterInfoFn =
+      NTSTATUS(APIENTRY*)(const D3DKMT_QUERYADAPTERINFO*);
+  using CreateDeviceFn = NTSTATUS(APIENTRY*)(D3DKMT_CREATEDEVICE*);
+  using DestroyDeviceFn = NTSTATUS(APIENTRY*)(const D3DKMT_DESTROYDEVICE*);
+  using EscapeFn = NTSTATUS(APIENTRY*)(const D3DKMT_ESCAPE*);
+
+  HMODULE module = nullptr;
+  EnumAdapters3Fn enum_adapters3 = nullptr;
+  CloseAdapterFn close_adapter = nullptr;
+  QueryAdapterInfoFn query_adapter_info = nullptr;
+  CreateDeviceFn create_device = nullptr;
+  DestroyDeviceFn destroy_device = nullptr;
+  EscapeFn escape = nullptr;
+  std::string error;
+
+  KmtFunctions() {
+    module = LoadLibraryW(L"gdi32.dll");
+    if (module == nullptr) {
+      error = "LoadLibraryW(gdi32.dll): " + Win32Message(GetLastError());
+      return;
+    }
+    Load("D3DKMTEnumAdapters3", enum_adapters3);
+    Load("D3DKMTCloseAdapter", close_adapter);
+    Load("D3DKMTQueryAdapterInfo", query_adapter_info);
+    Load("D3DKMTCreateDevice", create_device);
+    Load("D3DKMTDestroyDevice", destroy_device);
+    Load("D3DKMTEscape", escape);
+  }
+
+  ~KmtFunctions() {
+    if (module != nullptr) {
+      FreeLibrary(module);
+    }
+  }
+
+  KmtFunctions(const KmtFunctions&) = delete;
+  KmtFunctions& operator=(const KmtFunctions&) = delete;
+
+  bool Available() const {
+    return module != nullptr && enum_adapters3 != nullptr &&
+           close_adapter != nullptr && query_adapter_info != nullptr &&
+           create_device != nullptr && destroy_device != nullptr &&
+           escape != nullptr;
+  }
+
+ private:
+  template <typename Function>
+  void Load(const char* name, Function& function) {
+    if (module == nullptr) {
+      return;
+    }
+    function = reinterpret_cast<Function>(GetProcAddress(module, name));
+    if (function == nullptr && error.empty()) {
+      error = std::string("GetProcAddress(") + name +
+              "): " + Win32Message(GetLastError());
+    }
+  }
+};
+
+struct KmtNpuAdapter {
+  D3DKMT_HANDLE handle = 0;
+  LUID luid = {};
+  std::string description;
+};
+
+class KmtAdapterList {
+ public:
+  explicit KmtAdapterList(const KmtFunctions& kmt) : kmt_(kmt) {}
+  ~KmtAdapterList() {
+    for (const auto& adapter : adapters) {
+      if (adapter.handle != 0) {
+        D3DKMT_CLOSEADAPTER close = {};
+        close.hAdapter = adapter.handle;
+        kmt_.close_adapter(&close);
+      }
+    }
+  }
+
+  KmtAdapterList(const KmtAdapterList&) = delete;
+  KmtAdapterList& operator=(const KmtAdapterList&) = delete;
+
+  std::vector<KmtNpuAdapter> adapters;
+
+ private:
+  const KmtFunctions& kmt_;
+};
+
+class ScopedKmtDevice {
+ public:
+  explicit ScopedKmtDevice(const KmtFunctions& kmt) : kmt_(kmt) {}
+  ~ScopedKmtDevice() { Reset(); }
+
+  ScopedKmtDevice(const ScopedKmtDevice&) = delete;
+  ScopedKmtDevice& operator=(const ScopedKmtDevice&) = delete;
+
+  std::optional<std::string> Create(D3DKMT_HANDLE adapter) {
+    D3DKMT_CREATEDEVICE create = {};
+    create.hAdapter = adapter;
+    const NTSTATUS status = kmt_.create_device(&create);
+    if (status != 0) {
+      return NtStatusMessage("D3DKMTCreateDevice", status);
+    }
+    handle_ = create.hDevice;
+    return std::nullopt;
+  }
+
+  D3DKMT_HANDLE handle() const { return handle_; }
+
+ private:
+  void Reset() {
+    if (handle_ == 0) {
+      return;
+    }
+    D3DKMT_DESTROYDEVICE destroy = {};
+    destroy.hDevice = handle_;
+    kmt_.destroy_device(&destroy);
+    handle_ = 0;
+  }
+
+  const KmtFunctions& kmt_;
+  D3DKMT_HANDLE handle_ = 0;
+};
+
+std::optional<std::string> QueryAdapterDescription(const KmtFunctions& kmt,
+                                                   D3DKMT_HANDLE adapter,
+                                                   std::string& description) {
+  D3DKMT_DRIVER_DESCRIPTION driver = {};
+  D3DKMT_QUERYADAPTERINFO query = {};
+  query.hAdapter = adapter;
+  query.Type = KMTQAITYPE_DRIVER_DESCRIPTION;
+  query.pPrivateDriverData = &driver;
+  query.PrivateDriverDataSize = sizeof(driver);
+  const NTSTATUS status = kmt.query_adapter_info(&query);
+  if (status != 0) {
+    return NtStatusMessage("D3DKMTQueryAdapterInfo(driver description)",
+                           status);
+  }
+  description = WideArrayToUtf8(
+      driver.DriverDescription,
+      sizeof(driver.DriverDescription) / sizeof(driver.DriverDescription[0]));
+  return std::nullopt;
+}
+
+bool LooksLikeAmdNpuAdapter(const std::string& description) {
+  const std::string lower = ToLowerAscii(description);
+  return lower.find("npu") != std::string::npos &&
+         (lower.find("amd") != std::string::npos ||
+          lower.find("xdna") != std::string::npos ||
+          lower.find("strix") != std::string::npos ||
+          lower.find("compute accelerator") != std::string::npos);
+}
+
+void CloseUnselectedAdapter(const KmtFunctions& kmt, D3DKMT_HANDLE adapter) {
+  if (adapter == 0) {
+    return;
+  }
+  D3DKMT_CLOSEADAPTER close = {};
+  close.hAdapter = adapter;
+  kmt.close_adapter(&close);
+}
+
+std::optional<std::string> PopulateKmtNpuAdapters(const KmtFunctions& kmt,
+                                                  KmtAdapterList& selected,
+                                                  nlohmann::json& inspected) {
+  std::array<D3DKMT_ADAPTERINFO, 64> adapters = {};
+  D3DKMT_ENUMADAPTERS3 enumerate = {};
+  enumerate.Filter.IncludeComputeOnly = 1;
+  enumerate.NumAdapters = static_cast<ULONG>(adapters.size());
+  enumerate.pAdapters = adapters.data();
+  const NTSTATUS status = kmt.enum_adapters3(&enumerate);
+  if (status != 0) {
+    return NtStatusMessage("D3DKMTEnumAdapters3", status);
+  }
+
+  inspected = nlohmann::json::array();
+  const ULONG count =
+      std::min(enumerate.NumAdapters, static_cast<ULONG>(adapters.size()));
+  for (ULONG index = 0; index < count; ++index) {
+    const auto& adapter = adapters[index];
+    std::string description;
+    const auto description_error =
+        QueryAdapterDescription(kmt, adapter.hAdapter, description);
+    nlohmann::json record = {
+        {"adapter_luid", FormatLuid(adapter.AdapterLuid)},
+        {"driver_description", description},
+    };
+    if (description_error) {
+      record["description_error"] = *description_error;
+    }
+
+    if (!description_error && LooksLikeAmdNpuAdapter(description)) {
+      record["selected"] = true;
+      selected.adapters.push_back(
+          {adapter.hAdapter, adapter.AdapterLuid, description});
+    } else {
+      record["selected"] = false;
+      CloseUnselectedAdapter(kmt, adapter.hAdapter);
+    }
+    inspected.push_back(std::move(record));
+  }
+  if (enumerate.NumAdapters > adapters.size()) {
+    inspected.push_back(
+        {{"truncated", true}, {"reported_count", enumerate.NumAdapters}});
+  }
+  return std::nullopt;
+}
+
+constexpr std::size_t kWindowsPowerModeQueryDwords = 52;
+constexpr std::size_t kWindowsPowerModeSetDwords = 25;
+// Windows NPU power mode is queried and set through a driver-private D3DKMT
+// escape. Query uses command 5 and returns the device name and power mode at
+// the offsets below. Set uses command 10, places the requested mode at byte
+// offset 48, and requires the hardware-access escape flag.
+constexpr std::size_t kWindowsPowerModeNameOffset = 120;
+constexpr std::size_t kWindowsPowerModeNameLength = 64;
+constexpr std::size_t kWindowsPowerModeValueDword = 46;
+constexpr std::size_t kWindowsPowerModeColumnsDword = 47;
+constexpr std::uint32_t kWindowsPowerModeQueryCommand = 5;
+constexpr std::uint32_t kWindowsPowerModeSetCommand = 10;
+
+using WindowsPowerModeQueryPayload =
+    std::array<std::uint32_t, kWindowsPowerModeQueryDwords>;
+using WindowsPowerModeSetPayload =
+    std::array<std::uint32_t, kWindowsPowerModeSetDwords>;
+
+static_assert(sizeof(WindowsPowerModeQueryPayload) == 208,
+              "Windows power-mode query payload layout changed");
+static_assert(sizeof(WindowsPowerModeSetPayload) == 100,
+              "Windows power-mode set payload layout changed");
+
+WindowsPowerModeQueryPayload MakePowerModeQueryPayload() {
+  WindowsPowerModeQueryPayload payload = {};
+  payload[0] = kWindowsPowerModeQueryCommand;
+  payload[1] = static_cast<std::uint32_t>(sizeof(payload) - 16);
+  payload[6] = 1;
+  payload[8] = 40;
+  payload[14] = 112;
+  payload[16] = 1;
+  payload[20] = 1;
+  return payload;
+}
+
+WindowsPowerModeSetPayload MakePowerModeSetPayload(PowerMode mode) {
+  WindowsPowerModeSetPayload payload = {};
+  payload[0] = kWindowsPowerModeSetCommand;
+  payload[1] = static_cast<std::uint32_t>(sizeof(payload) - 16);
+  payload[4] = 4;
+  payload[6] = 1;
+  payload[8] = 44;
+  payload[12] = static_cast<std::uint32_t>(mode);
+  payload[21] = 1;
+  return payload;
+}
+
+template <std::size_t Count>
+std::optional<std::string> RunKmtPowerModeEscape(
+    const KmtFunctions& kmt, D3DKMT_HANDLE adapter, D3DKMT_HANDLE device,
+    std::array<std::uint32_t, Count>& payload, bool hardware_access) {
+  D3DKMT_ESCAPE escape = {};
+  escape.hAdapter = adapter;
+  escape.hDevice = device;
+  escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+  escape.Flags.Value = hardware_access ? 1u : 0u;
+  escape.pPrivateDriverData = payload.data();
+  escape.PrivateDriverDataSize = static_cast<UINT>(sizeof(payload));
+  const NTSTATUS status = kmt.escape(&escape);
+  if (status != 0) {
+    return NtStatusMessage("D3DKMTEscape", status);
+  }
+  return std::nullopt;
+}
+
+std::string ExtractAsciiString(const void* data, std::size_t size) {
+  const auto* bytes = static_cast<const unsigned char*>(data);
+  std::size_t length = 0;
+  while (length < size && bytes[length] != '\0') {
+    ++length;
+  }
+  while (length > 0 && std::isspace(bytes[length - 1]) != 0) {
+    --length;
+  }
+  return std::string(reinterpret_cast<const char*>(bytes),
+                     reinterpret_cast<const char*>(bytes + length));
+}
+
+nlohmann::json PowerModeDeviceBase(const KmtNpuAdapter& adapter) {
+  return {{"source", "windows-kmt"},
+          {"adapter_luid", FormatLuid(adapter.luid)},
+          {"driver_description", adapter.description}};
+}
+
+std::optional<std::string> QueryWindowsKmtPowerModeDevice(
+    const KmtFunctions& kmt, const KmtNpuAdapter& adapter, D3DKMT_HANDLE device,
+    nlohmann::json& record) {
+  auto payload = MakePowerModeQueryPayload();
+  if (auto error =
+          RunKmtPowerModeEscape(kmt, adapter.handle, device, payload, false)) {
+    return error;
+  }
+
+  const std::uint32_t raw_mode = payload[kWindowsPowerModeValueDword];
+  const auto mode = PowerModeFromValue(raw_mode);
+  if (!mode) {
+    return "unrecognized native Windows power mode value: " +
+           std::to_string(raw_mode);
+  }
+
+  record = PowerModeDeviceBase(adapter);
+  const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
+  const std::string device_name = ExtractAsciiString(
+      bytes + kWindowsPowerModeNameOffset, kWindowsPowerModeNameLength);
+  if (!device_name.empty()) {
+    record["device_name"] = device_name;
+  }
+  record["power_mode"] = PowerModeName(*mode);
+  record["power_mode_value"] = raw_mode;
+  record["total_columns"] = payload[kWindowsPowerModeColumnsDword];
+  return std::nullopt;
+}
+
+PowerModeResult KmtUnavailablePowerModeResult(const std::string& error) {
+  PowerModeResult result;
+  result.checks.push_back({"powermode.support",
+                           Status::kFail,
+                           "Windows native KMT power-mode backend unavailable",
+                           {{"backend", "windows-kmt"}, {"error", error}}});
+  return result;
+}
+
+void AddKmtPowerModeSupportCheck(PowerModeResult& result,
+                                 const nlohmann::json& inspected) {
+  result.checks.push_back({"powermode.support",
+                           Status::kPass,
+                           "Windows native KMT power-mode backend available",
+                           {{"backend", "windows-kmt"},
+                            {"escape_type", "D3DKMT_ESCAPE_DRIVERPRIVATE"},
+                            {"inspected_adapters", inspected}}});
+}
+
+void AddKmtPowerModeDevicePresentCheck(PowerModeResult& result) {
+  result.checks.push_back(
+      {"powermode.device_present",
+       result.detected_devices > 0 ? Status::kPass : Status::kFail,
+       result.detected_devices > 0 ? std::to_string(result.detected_devices) +
+                                         " Windows KMT NPU adapter(s) found"
+                                   : "no Windows KMT NPU adapter found",
+       {{"count", result.detected_devices}}});
+}
+
+PowerModeResult QueryWindowsKmtPowerMode() {
+  KmtFunctions kmt;
+  if (!kmt.Available()) {
+    return KmtUnavailablePowerModeResult(kmt.error);
+  }
+
+  PowerModeResult result;
+  nlohmann::json inspected = nlohmann::json::array();
+  KmtAdapterList adapters(kmt);
+  if (auto error = PopulateKmtNpuAdapters(kmt, adapters, inspected)) {
+    result.checks.push_back({"powermode.support",
+                             Status::kError,
+                             "Windows KMT adapter enumeration failed",
+                             {{"backend", "windows-kmt"}, {"error", *error}}});
+    return result;
+  }
+
+  result.devices = nlohmann::json::array();
+  result.detected_devices = static_cast<int>(adapters.adapters.size());
+  AddKmtPowerModeSupportCheck(result, inspected);
+  AddKmtPowerModeDevicePresentCheck(result);
+
+  for (const auto& adapter : adapters.adapters) {
+    ScopedKmtDevice device(kmt);
+    nlohmann::json record = PowerModeDeviceBase(adapter);
+    if (auto error = device.Create(adapter.handle)) {
+      record["power_mode_error"] = *error;
+      result.devices.push_back(std::move(record));
+      continue;
+    }
+    if (auto error = QueryWindowsKmtPowerModeDevice(kmt, adapter,
+                                                    device.handle(), record)) {
+      record["power_mode_error"] = *error;
+    } else {
+      ++result.reported_devices;
+    }
+    result.devices.push_back(std::move(record));
+  }
+
+  const bool complete = result.detected_devices > 0 &&
+                        result.detected_devices == result.reported_devices;
+  result.checks.push_back(
+      {"powermode.query",
+       complete ? Status::kPass : Status::kFail,
+       complete ? "power mode reported for all Windows KMT NPU adapters"
+                : "power mode was not reported for every Windows KMT NPU "
+                  "adapter",
+       {{"reported_count", result.reported_devices},
+        {"detected_count", result.detected_devices}}});
+  return result;
 }
 
 }  // namespace
@@ -738,10 +1180,103 @@ ProbeResult CollectPlatformProbe(const ProbeOptions&) {
   SetupDiDestroyDeviceInfoList(devices);
 
   ProbeResult evaluated = EvaluateWindowsDeviceRecords(records);
+  PowerModeResult power = QueryWindowsKmtPowerMode();
+  if (!power.devices.empty()) {
+    evaluated.facts["power_modes"] = power.devices;
+    if (evaluated.facts.contains("devices") &&
+        evaluated.facts["devices"].is_array() &&
+        evaluated.facts["devices"].size() == 1 && power.devices.size() == 1 &&
+        power.devices.front().contains("power_mode")) {
+      evaluated.facts["devices"][0]["power_mode"] =
+          power.devices.front()["power_mode"];
+      evaluated.facts["devices"][0]["power_mode_display"] =
+          power.devices.front().value(
+              "power_mode_display",
+              power.devices.front()["power_mode"].get<std::string>());
+      evaluated.facts["devices"][0]["power_mode_source"] = "windows-kmt";
+    }
+  }
   evaluated.facts.update(result.facts);
   evaluated.checks.insert(evaluated.checks.end(), result.checks.begin(),
                           result.checks.end());
   return evaluated;
+}
+
+PowerModeResult QueryPlatformPowerMode(const ProbeOptions&) {
+  return QueryWindowsKmtPowerMode();
+}
+
+PowerModeResult SetPlatformPowerMode(PowerMode mode, const ProbeOptions&) {
+  KmtFunctions kmt;
+  if (!kmt.Available()) {
+    PowerModeResult result = KmtUnavailablePowerModeResult(kmt.error);
+    result.checks.front().details["requested_power_mode"] = PowerModeName(mode);
+    return result;
+  }
+
+  PowerModeResult result;
+  nlohmann::json inspected = nlohmann::json::array();
+  KmtAdapterList adapters(kmt);
+  if (auto error = PopulateKmtNpuAdapters(kmt, adapters, inspected)) {
+    result.checks.push_back({"powermode.support",
+                             Status::kError,
+                             "Windows KMT adapter enumeration failed",
+                             {{"backend", "windows-kmt"}, {"error", *error}}});
+    return result;
+  }
+
+  const std::string requested = PowerModeName(mode);
+  result.devices = nlohmann::json::array();
+  result.detected_devices = static_cast<int>(adapters.adapters.size());
+  AddKmtPowerModeSupportCheck(result, inspected);
+  AddKmtPowerModeDevicePresentCheck(result);
+
+  for (const auto& adapter : adapters.adapters) {
+    ScopedKmtDevice device(kmt);
+    nlohmann::json record = PowerModeDeviceBase(adapter);
+    if (auto error = device.Create(adapter.handle)) {
+      record["set_error"] = *error;
+      result.devices.push_back(std::move(record));
+      continue;
+    }
+
+    auto set_payload = MakePowerModeSetPayload(mode);
+    if (auto error = RunKmtPowerModeEscape(kmt, adapter.handle, device.handle(),
+                                           set_payload, true)) {
+      record["set_error"] = *error;
+      result.devices.push_back(std::move(record));
+      continue;
+    }
+
+    if (auto error = QueryWindowsKmtPowerModeDevice(kmt, adapter,
+                                                    device.handle(), record)) {
+      record["power_mode_error"] = *error;
+    } else {
+      ++result.reported_devices;
+      if (record.value("power_mode", "") == requested) {
+        ++result.updated_devices;
+      } else {
+        record["set_error"] = "reported power mode did not match request";
+      }
+    }
+    result.devices.push_back(std::move(record));
+  }
+
+  const bool complete = result.detected_devices > 0 &&
+                        result.updated_devices == result.detected_devices;
+  result.checks.push_back(
+      {"powermode.set",
+       complete ? Status::kPass : Status::kFail,
+       complete ? "set power mode to " + requested +
+                      " on all Windows KMT NPU adapters"
+                : "power mode was not set and confirmed on every Windows KMT "
+                  "NPU adapter",
+       {{"requested_power_mode", requested},
+        {"attempted_count", result.detected_devices},
+        {"confirmed_count", result.updated_devices},
+        {"reported_count", result.reported_devices},
+        {"detected_count", result.detected_devices}}});
+  return result;
 }
 
 }  // namespace rocm_npu

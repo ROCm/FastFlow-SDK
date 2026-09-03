@@ -20,10 +20,24 @@ from rocm_npu_qualification import installation
 from rocm_npu_qualification.candidate import (
     canonical_candidate_bytes as _canonical_candidate_bytes,
 )
+from rocm_npu_qualification.contracts import (
+    NATIVE_CHECKS,
+    POWER_MODE_ROUNDTRIP,
+    POWER_MODE_ROUNDTRIP_ARTIFACTS,
+    POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
+)
 from rocm_npu_qualification.evidence import EvidenceWriter
 from rocm_npu_qualification.numeric_runtime import (
     NUMERIC_RUNTIME as _NUMERIC_RUNTIME,
 )
+
+_POWER_MODE_VALUES = {
+    "default": 0,
+    "powersaver": 1,
+    "balanced": 2,
+    "performance": 3,
+    "turbo": 4,
+}
 
 __all__ = (
     "make_candidate",
@@ -300,7 +314,7 @@ def make_candidate(revision: str = "a" * 40) -> dict[str, object]:
         "numeric_runtime": dict(_NUMERIC_RUNTIME),
         "qualification_contract": {
             "schema_version": 1,
-            "native_checks": ["version", "probe", "doctor", "self-test"],
+            "native_checks": list(NATIVE_CHECKS),
             "xadx_cases": ["xadx-case"],
             "xadx_case_contracts": {
                 "xadx-case": {
@@ -483,8 +497,27 @@ def make_evidence(
                     "log": writer.relative(log),
                     "metrics": {"report_status": "pass"},
                 }
-                for name in ("version", "probe", "doctor", "self-test")
+                for name in NATIVE_CHECKS
+                if name != POWER_MODE_ROUNDTRIP
             ],
+            {
+                "model": "native-core",
+                "name": POWER_MODE_ROUNDTRIP,
+                "kind": "native",
+                "status": "pass",
+                "returncode": 0,
+                "duration_seconds": 0,
+                "log": "logs/tests/powermode-roundtrip.log",
+                "metrics": {
+                    "baseline_power_mode": "default",
+                    "requested_power_modes": ["balanced", "performance", "turbo"],
+                    "confirmed_power_modes": ["balanced", "performance", "turbo"],
+                    "restored_power_mode": "default",
+                    "detected_device_count": 1,
+                    "reported_device_count": 1,
+                },
+                "artifacts": list(POWER_MODE_ROUNDTRIP_ARTIFACTS),
+            },
             {
                 "model": "fastflowlm-production-kernels",
                 "name": "xadx-case",
@@ -511,7 +544,9 @@ def make_evidence(
     writer.write_json("profile.json", profile)
     writer.write_json("models.json", evidence["models"])
     writer.write_json("tests.json", evidence["tests"])
-    for command in ("version", "probe", "doctor", "self-test"):
+    for command in NATIVE_CHECKS:
+        if command == POWER_MODE_ROUNDTRIP:
+            continue
         report = {
             "schema_version": 1,
             "status": "pass",
@@ -527,6 +562,45 @@ def make_evidence(
         writer.write_json(
             "core-version.json" if command == "version" else f"{command}.json",
             report,
+        )
+    (writer.path("logs/tests/powermode-roundtrip.log")).write_text(
+        "powermode roundtrip passed\n", encoding="utf-8"
+    )
+    powermode_reports = [("default", None, 0)]
+    for mode, _, _ in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS:
+        powermode_reports.extend(((mode, mode, 1), (mode, None, 0)))
+    powermode_reports.extend((("default", "default", 1), ("default", None, 0)))
+    for artifact, (mode, requested_mode, updated_count) in zip(
+        POWER_MODE_ROUNDTRIP_ARTIFACTS, powermode_reports, strict=True
+    ):
+        data = {
+            "detected_device_count": 1,
+            "reported_device_count": 1,
+            "updated_device_count": updated_count,
+            "devices": [
+                {
+                    "device_name": "NPU fixture",
+                    "source": "fixture",
+                    "power_mode": mode,
+                    "power_mode_value": _POWER_MODE_VALUES[mode],
+                }
+            ],
+        }
+        if requested_mode is not None:
+            data["requested_power_mode"] = requested_mode
+        writer.write_json(
+            artifact,
+            {
+                "schema_version": 1,
+                "status": "pass",
+                "command": "powermode",
+                "product": {
+                    "version": "1.2.3",
+                    "source_revision": candidate["source_revision"],
+                },
+                "checks": [],
+                "data": data,
+            },
         )
     writer.write_json(
         "xadx-report.json",

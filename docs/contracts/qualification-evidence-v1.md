@@ -7,6 +7,18 @@ A qualification run writes a portable directory containing:
   release candidate, or an explicit ad-hoc placeholder
 - `core-version.json`, `probe.json`, `doctor.json`, and `self-test.json`:
   native CLI reports
+- `artifacts/native/powermode-before.json`: raw CLI report proving passive
+  powermode reporting worked
+- `artifacts/native/powermode-set-balanced.json`,
+  `artifacts/native/powermode-after-balanced.json`,
+  `artifacts/native/powermode-set-performance.json`,
+  `artifacts/native/powermode-after-performance.json`,
+  `artifacts/native/powermode-set-turbo.json`,
+  `artifacts/native/powermode-after-turbo.json`,
+  `artifacts/native/powermode-restore.json`, and
+  `artifacts/native/powermode-final.json`: raw CLI reports backing the native
+  mutating powermode roundtrip test when the host supports unprivileged
+  power-mode changes
 - `xadx-report.json`: schema-v2 XADX identity, per-case metrics, and structured
   phase/round failures
 - `profile.json`: either the exact versioned `profile-v1` executed (curated
@@ -90,7 +102,14 @@ registry digest, and file hash, and contain every expected test iteration,
 native check, XCLBIN inventory, and packaged XADX case.
 Passing evidence must contain every raw native and XADX report; report status,
 identity, case order, metrics, and round counts must agree with `tests.json`
-and the candidate qualification contract.
+and the candidate qualification contract. The native powermode roundtrip is
+verified from its raw artifacts: baseline query, set/query confirmation for
+`balanced`, `performance`, and `turbo`, restore, and final restore confirmation
+must agree with the single `powermode-roundtrip` native test record. Linux runs
+may mark only this native record `unsupported`, because current AMDXDNA drivers
+require root privileges for power-mode sets; such evidence must still contain a
+passing `powermode-before.json` baseline report, and every other expected test
+must pass.
 The XADX report records exact recipe and executable provenance and one result
 per case: dispatch/readback counts, validated bytes, duration, mismatch count,
 first mismatch, and structured failures. Runtime-generated buffer contracts,

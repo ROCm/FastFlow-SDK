@@ -27,7 +27,11 @@ from .candidate import (
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
+    NATIVE_CHECKS,
     POLICY_SCHEMA_VERSION,
+    POWER_MODE_ROUNDTRIP,
+    POWER_MODE_ROUNDTRIP_ARTIFACTS,
+    POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
     XADX_REPORT_SCHEMA_VERSION,
 )
 from .evidence import junit_bytes
@@ -282,7 +286,7 @@ def _validate_layout(members: dict[str, bytes]) -> None:
         raise EvidenceError(f"evidence is missing required files: {missing}")
     for name in members:
         top = name.split("/", 1)[0]
-        if name not in ROOT_FILES and top not in {"bench", "logs"}:
+        if name not in ROOT_FILES and top not in {"artifacts", "bench", "logs"}:
             raise EvidenceError(f"evidence has unexpected nesting: {name}")
 
 
@@ -323,6 +327,28 @@ def _normalized_platform(value: Any) -> dict[str, str]:
         "os": os_name,
         "target_family": target_family.casefold(),
     }
+
+
+def _is_allowed_unsupported_test(
+    evidence: dict[str, Any], test: dict[str, Any]
+) -> bool:
+    try:
+        platform = _normalized_platform(evidence.get("observed_platform"))
+    except EvidenceError:
+        return False
+    return (
+        test.get("status") == "unsupported"
+        and test.get("kind") == "native"
+        and test.get("model") == "native-core"
+        and test.get("name") == POWER_MODE_ROUNDTRIP
+        and platform.get("os") == "linux"
+    )
+
+
+def _test_succeeded_or_was_skipped(
+    evidence: dict[str, Any], test: dict[str, Any]
+) -> bool:
+    return test.get("status") == "pass" or _is_allowed_unsupported_test(evidence, test)
 
 
 def _validate_complete_execution(
@@ -445,7 +471,231 @@ def _validate_complete_execution(
         )
 
 
+def _native_report_name(command: str) -> str:
+    # The version report keeps its historical root filename.
+    return "core-version.json" if command == "version" else f"{command}.json"
+
+
+def _validate_core_report(
+    report: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    command: str,
+    name: str,
+) -> None:
+    if (
+        report.get("schema_version") != COMMAND_REPORT_SCHEMA_VERSION
+        or report.get("command") != command
+        or report.get("status") not in {"pass", "fail", "error"}
+        or not isinstance(report.get("product"), dict)
+        or report["product"].get("version") != evidence["subject"]["version"]
+    ):
+        raise EvidenceError(f"{name} does not match the evidence subject")
+    source_revision = evidence["subject"].get("source_revision")
+    if source_revision and report["product"].get("source_revision") != source_revision:
+        raise EvidenceError(f"{name} source revision does not match the candidate")
+
+
+def _powermode_report(
+    members: dict[str, bytes], evidence: dict[str, Any], name: str
+) -> dict[str, Any]:
+    report = _json_object(members[name], name)
+    _validate_core_report(report, evidence, command="powermode", name=name)
+    return report
+
+
+def _reported_power_modes(report: dict[str, Any], name: str) -> list[str]:
+    data = report.get("data")
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(devices, list):
+        raise EvidenceError(f"{name} has no power-mode device data")
+    modes = []
+    for device in devices:
+        if not isinstance(device, dict) or not isinstance(
+            device.get("power_mode"), str
+        ):
+            raise EvidenceError(f"{name} contains a device without power_mode")
+        modes.append(device["power_mode"])
+    if not modes:
+        raise EvidenceError(f"{name} contains no reported power modes")
+    if data.get("reported_device_count") != len(modes):
+        raise EvidenceError(f"{name} reported device count does not match devices")
+    return modes
+
+
+def _require_uniform_power_mode(
+    report: dict[str, Any],
+    name: str,
+    expected_mode: str,
+    *,
+    expected_count: int | None = None,
+) -> None:
+    if report.get("status") != "pass":
+        raise EvidenceError(f"{name} did not pass")
+    modes = _reported_power_modes(report, name)
+    if expected_count is not None and len(modes) != expected_count:
+        raise EvidenceError(f"{name} did not report every baseline device")
+    if any(mode != expected_mode for mode in modes):
+        raise EvidenceError(f"{name} reported an unexpected power mode")
+
+
+def _reconcile_powermode_roundtrip(
+    members: dict[str, bytes],
+    evidence: dict[str, Any],
+    test: dict[str, Any],
+) -> None:
+    if _is_allowed_unsupported_test(evidence, test):
+        before_name = POWER_MODE_ROUNDTRIP_ARTIFACTS[0]
+        if (
+            test.get("returncode") != 0
+            or test.get("artifacts") != [before_name]
+            or not str(test.get("error", "")).startswith(
+                "powermode roundtrip is skipped on Linux"
+            )
+        ):
+            raise EvidenceError("powermode roundtrip skip is not a valid Linux skip")
+        before = _powermode_report(members, evidence, before_name)
+        baseline_modes = _reported_power_modes(before, before_name)
+        if len(set(baseline_modes)) != 1:
+            raise EvidenceError("powermode roundtrip baseline was not uniform")
+        baseline = baseline_modes[0]
+        before_data = before.get("data")
+        detected = (
+            before_data.get("detected_device_count")
+            if isinstance(before_data, dict)
+            else None
+        )
+        reported = (
+            before_data.get("reported_device_count")
+            if isinstance(before_data, dict)
+            else None
+        )
+        if not isinstance(detected, int) or detected < 1 or detected != reported:
+            raise EvidenceError("powermode roundtrip baseline device count is invalid")
+        _require_uniform_power_mode(
+            before, before_name, baseline, expected_count=detected
+        )
+        expected_metrics = {
+            "baseline_power_mode": baseline,
+            "requested_power_modes": [
+                mode for mode, _, _ in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS
+            ],
+            "confirmed_power_modes": [],
+            "detected_device_count": detected,
+            "reported_device_count": reported,
+        }
+        if test.get("metrics") != expected_metrics:
+            raise EvidenceError(
+                "powermode roundtrip skip metrics do not match artifacts"
+            )
+        return
+
+    if (
+        test.get("status") != "pass"
+        or test.get("returncode") != 0
+        or test.get("artifacts") != list(POWER_MODE_ROUNDTRIP_ARTIFACTS)
+    ):
+        raise EvidenceError("powermode roundtrip does not match its native test record")
+
+    reports = {
+        name: _powermode_report(members, evidence, name)
+        for name in POWER_MODE_ROUNDTRIP_ARTIFACTS
+    }
+    before = reports[POWER_MODE_ROUNDTRIP_ARTIFACTS[0]]
+    baseline_modes = _reported_power_modes(before, POWER_MODE_ROUNDTRIP_ARTIFACTS[0])
+    if len(set(baseline_modes)) != 1:
+        raise EvidenceError("powermode roundtrip baseline was not uniform")
+    baseline = baseline_modes[0]
+
+    before_data = before.get("data")
+    detected = (
+        before_data.get("detected_device_count")
+        if isinstance(before_data, dict)
+        else None
+    )
+    reported = (
+        before_data.get("reported_device_count")
+        if isinstance(before_data, dict)
+        else None
+    )
+    if not isinstance(detected, int) or detected < 1 or detected != reported:
+        raise EvidenceError("powermode roundtrip baseline device count is invalid")
+
+    _require_uniform_power_mode(
+        before, POWER_MODE_ROUNDTRIP_ARTIFACTS[0], baseline, expected_count=detected
+    )
+
+    requested_modes = []
+    confirmed_modes = []
+    for expected_mode, set_name, after_name in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS:
+        set_report = reports[set_name]
+        data = set_report.get("data")
+        if not isinstance(data, dict):
+            raise EvidenceError(f"{set_name} has no power-mode set data")
+        requested = data.get("requested_power_mode")
+        if requested != expected_mode:
+            raise EvidenceError("powermode roundtrip requested an unexpected mode")
+        requested_modes.append(requested)
+        _require_uniform_power_mode(
+            set_report,
+            set_name,
+            expected_mode,
+            expected_count=detected,
+        )
+        if data.get("updated_device_count") != detected:
+            raise EvidenceError(
+                f"powermode set for {expected_mode} did not update every detected device"
+            )
+        _require_uniform_power_mode(
+            reports[after_name],
+            after_name,
+            expected_mode,
+            expected_count=detected,
+        )
+        confirmed_modes.append(expected_mode)
+
+    if not {"performance", "turbo"}.issubset(requested_modes):
+        raise EvidenceError(
+            "powermode roundtrip did not exercise performance and turbo"
+        )
+
+    restore = reports[POWER_MODE_ROUNDTRIP_ARTIFACTS[-2]]
+    final = reports[POWER_MODE_ROUNDTRIP_ARTIFACTS[-1]]
+    restore_data = restore.get("data")
+    if (
+        not isinstance(restore_data, dict)
+        or restore_data.get("requested_power_mode") != baseline
+    ):
+        raise EvidenceError("powermode roundtrip restore requested the wrong mode")
+    _require_uniform_power_mode(
+        restore,
+        POWER_MODE_ROUNDTRIP_ARTIFACTS[-2],
+        baseline,
+        expected_count=detected,
+    )
+    _require_uniform_power_mode(
+        final,
+        POWER_MODE_ROUNDTRIP_ARTIFACTS[-1],
+        baseline,
+        expected_count=detected,
+    )
+    if restore_data.get("updated_device_count") != detected:
+        raise EvidenceError("powermode restore did not update every detected device")
+
+    expected_metrics = {
+        "baseline_power_mode": baseline,
+        "requested_power_modes": requested_modes,
+        "confirmed_power_modes": confirmed_modes,
+        "restored_power_mode": baseline,
+        "detected_device_count": detected,
+        "reported_device_count": reported,
+    }
+    if test.get("metrics") != expected_metrics:
+        raise EvidenceError("powermode roundtrip metrics do not match artifacts")
+
+
 def _reconcile_native_reports(
+    members: dict[str, bytes],
     reports: dict[str, dict[str, Any]],
     evidence: dict[str, Any],
     native_checks: list[str],
@@ -458,27 +708,14 @@ def _reconcile_native_reports(
     if set(tests) != set(native_checks):
         raise EvidenceError("native reports do not match the native test inventory")
     for command in native_checks:
-        name = f"core-{command}.json" if command == "version" else f"{command}.json"
-        # The version report keeps its historical root filename.
-        if command == "version":
-            name = "core-version.json"
+        if command == POWER_MODE_ROUNDTRIP:
+            _reconcile_powermode_roundtrip(members, evidence, tests[command])
+            continue
+        name = _native_report_name(command)
         report = reports.get(name)
         if report is None:
             raise EvidenceError(f"passing evidence is missing {name}")
-        if (
-            report.get("schema_version") != COMMAND_REPORT_SCHEMA_VERSION
-            or report.get("command") != command
-            or report.get("status") not in {"pass", "fail", "error"}
-            or not isinstance(report.get("product"), dict)
-            or report["product"].get("version") != evidence["subject"]["version"]
-        ):
-            raise EvidenceError(f"{name} does not match the evidence subject")
-        source_revision = evidence["subject"].get("source_revision")
-        if (
-            source_revision
-            and report["product"].get("source_revision") != source_revision
-        ):
-            raise EvidenceError(f"{name} source revision does not match the candidate")
+        _validate_core_report(report, evidence, command=command, name=name)
         test = tests[command]
         report_passed = report["status"] == "pass"
         if test.get("metrics") != {"report_status": report["status"]} or (
@@ -782,11 +1019,9 @@ def _reconcile_reports(
     if evidence["status"] != "pass":
         return
     native_checks = (
-        contract["native_checks"]
-        if contract is not None
-        else ["version", "probe", "doctor", "self-test"]
+        contract["native_checks"] if contract is not None else list(NATIVE_CHECKS)
     )
-    _reconcile_native_reports(reports, evidence, native_checks)
+    _reconcile_native_reports(members, reports, evidence, native_checks)
 
 
 def _validate_semantics(
@@ -820,7 +1055,10 @@ def _validate_semantics(
             or not evidence["models"]
             or not evidence["tests"]
             or any(model.get("status") != "pass" for model in evidence["models"])
-            or any(test.get("status") != "pass" for test in evidence["tests"])
+            or any(
+                not _test_succeeded_or_was_skipped(evidence, test)
+                for test in evidence["tests"]
+            )
         ):
             raise EvidenceError("passing evidence has incomplete or failed results")
     for test in evidence["tests"]:

@@ -36,6 +36,7 @@ bool IsValidExternalCommandName(const std::string& command);
 std::string HelpText();
 Report RunVersion(const Invocation& invocation);
 Report RunProbe(const Invocation& invocation);
+Report RunPowerMode(const Invocation& invocation);
 Report RunDoctor(const Invocation& invocation);
 bool HasValidSelfTestFixtureTypes(const nlohmann::json& fixture);
 Report RunSelfTest(const Invocation& invocation);

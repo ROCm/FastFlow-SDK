@@ -12,9 +12,13 @@
   "properties": {
     "schema_version": {"const": 1},
     "native_checks": {
-      "type": "array",
-      "minItems": 4,
-      "items": {"type": "string"}
+      "const": [
+        "version",
+        "probe",
+        "doctor",
+        "self-test",
+        "powermode-roundtrip"
+      ]
     },
     "xadx_cases": {
       "type": "array",
