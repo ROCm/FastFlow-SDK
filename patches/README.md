@@ -39,20 +39,12 @@ is already applied, so a patch that does not reverse cleanly breaks `setup`.
 
 The native Linux KMQ command-chain capability gate is already pin-resident.
 
-### 0004-accept-fastflowlm-host-local-device-visible-alias.patch
-Restores the historical FastFlowLM `hrx_buffer_allocate` memory-type alias in the
-amdxdna allocator: `HOST_LOCAL|DEVICE_VISIBLE` (`0x52`) and the older
-`HOST_LOCAL|HOST_COHERENT|DEVICE_VISIBLE` (`0x56`, from `HOST_LOCAL=0x46`)
-canonicalize to non-coherent HOST_ONLY (`HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE`,
-`0x1A`). Bare `HOST_LOCAL` or real `HOST_COHERENT` without `DEVICE_VISIBLE` stay
-rejected. This compatibility stays in rocm-npu's patch queue rather than the
-pinned HRX branch.
-
-**Why:** prebuilt FastFlowLM engine `.dll`/`.so` files bake those HIP-style
-immediates. Rebuilding `flm.exe` or editing `hrx_cpp.hpp` does not change them.
-Staging ctypes, XADX, and tests request `0x1A` directly.
-
-**Remove when:** FastFlowLM engine binaries are rebuilt against `0x1A`.
+Command-cache hardening that previously lived here as `0004`–`0010` (Windows
+multi-submit deadlock, stale chain-cache descriptors, aperture-wide invalidate,
+shape-compatible PARTIAL_ELF reuse, cache-line aperture sync, deferred-materialize
+remap, empty-patch-table RTP) is in the origin/main HRX pin (`effecacdb`).
+FastFlowLM engines at `[fastflowlm]` request `HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE`
+(`0x1A`) directly, so the `HOST_LOCAL` `0x52`/`0x56` alias is not re-applied.
 
 ## patches/FastFlowLM/
 

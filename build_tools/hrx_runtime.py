@@ -196,8 +196,8 @@ HRX_AMDXDNA_CONTEXT_MODE_CREATE = 0
 
 # Canonical amdxdna heap: HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A).
 # HIP HOST_LOCAL (0x42) is a placement extra bit; staging callers do not
-# request it. Prebuilt FastFlowLM engines still pass 0x52/0x56; that alias
-# lives in patches/hrx/0004-accept-fastflowlm-host-local-device-visible-alias.patch.
+# request it. FastFlowLM Windows engines at the [fastflowlm] pin request 0x1A
+# directly; the former 0x52/0x56 HOST_LOCAL alias patch is gone.
 HRX_MEMORY_TYPE_HOST_VISIBLE = 0x00000002
 HRX_MEMORY_TYPE_HOST_CACHED = 0x00000008
 HRX_MEMORY_TYPE_DEVICE_VISIBLE = 0x00000010
