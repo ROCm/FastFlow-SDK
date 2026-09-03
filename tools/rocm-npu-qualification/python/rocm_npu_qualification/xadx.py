@@ -64,15 +64,24 @@ _GUARD_VALUE = 0xA5
 _MAX_BUFFER_BYTES = 16 * 1024 * 1024
 _MAX_MATERIALIZED_BYTES = 128 * 1024 * 1024
 _MAX_RESIDENT_BYTES = 256 * 1024 * 1024
+# IREE/HRX UNAVAILABLE. Some amdxdna kernels return EAGAIN from the first
+# GET_INFO / hrx_gpu_initialize after runtime autosuspend because firmware
+# resume (aie2_hw_start) is not ready; a later open succeeds. We cannot patch
+# those drivers from qualification, so the runner retries this status only.
+# Delays are a first-cut backoff; reports record attempts so a padded host
+# is visible.
+_HRX_UNAVAILABLE = 14
+_OPEN_RETRY_DELAYS = (0.1, 0.4, 1.0)
 np = None
 ml_dtypes = None
 
 
 class XadxError(RuntimeError):
-    def __init__(self, message, *, code=None, operation=None):
+    def __init__(self, message, *, code=None, operation=None, runtime_open=None):
         super().__init__(message)
         self.code = code
         self.operation = operation
+        self.runtime_open = runtime_open
 
 
 def _ensure_numeric_runtime():
@@ -591,6 +600,38 @@ def _compare_details(actual, expected, comparison, atol, rtol):
     }
 
 
+def _is_transient_open_error(error):
+    """Whether an HRX open failed in the autosuspend-resume EAGAIN window."""
+    return (
+        isinstance(error, XadxError)
+        and error.code == _HRX_UNAVAILABLE
+        and error.operation == "hrx_gpu_initialize"
+    )
+
+
+def _runtime_open_payload(record):
+    return {
+        "attempts": record["attempts"],
+        "unavailable_retries": record["unavailable_retries"],
+    }
+
+
+def _open_runtime(factory, record):
+    """Open HRX, retrying UNAVAILABLE resumes that some amdxdna drivers flake on."""
+    delays = _OPEN_RETRY_DELAYS
+    attempts = 1 + len(delays)
+    for attempt in range(attempts):
+        record["attempts"] += 1
+        try:
+            return factory()
+        except XadxError as error:
+            if attempt + 1 == attempts or not _is_transient_open_error(error):
+                error.runtime_open = _runtime_open_payload(record)
+                raise
+            record["unavailable_retries"] += 1
+            time.sleep(delays[attempt])
+
+
 class _Session:
     """Holds the runtime so a lifecycle round can replace a leaking one.
 
@@ -602,11 +643,16 @@ class _Session:
 
     def __init__(self, factory):
         self.factory = factory
-        self.runtime = factory()
+        self.open_record = {"attempts": 0, "unavailable_retries": 0}
+        self.runtime = _open_runtime(factory, self.open_record)
 
     def reset(self):
         self.runtime.close()
-        self.runtime = self.factory()
+        # Same UNAVAILABLE retry as the first open. The throwaway record is so
+        # a later reopen is not mixed into the initial-open counts on the report.
+        self.runtime = _open_runtime(
+            self.factory, {"attempts": 0, "unavailable_retries": 0}
+        )
 
     def close(self):
         self.runtime.close()
@@ -820,35 +866,38 @@ def _executable_identities(implementations):
     return sorted(identities, key=lambda item: (item["id"], item.get("execution", "")))
 
 
-def _unsupported_report(recipe, recipe_bytes, cases, executables, architecture, reason):
-    return validate_xadx_report(
-        {
-            "schema_version": XADX_REPORT_SCHEMA_VERSION,
-            "report_kind": "execution",
-            "status": "unsupported",
-            "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
-            "generator_version": recipe["generator_version"],
-            "executables": executables,
-            "reason": reason,
-            "architecture": architecture,
-            "case_names": [case["name"] for case in cases],
-            "case_results": [
-                {
-                    "name": case["name"],
-                    "status": "unsupported",
-                    "dispatches": 0,
-                    "readbacks": 0,
-                    "validated_bytes": 0,
-                    "duration_seconds": 0.0,
-                    "mismatch_count": 0,
-                    "first_mismatch": None,
-                    "failures": [],
-                }
-                for case in cases
-            ],
-            "failures": [],
-        }
-    )
+def _unsupported_report(
+    recipe, recipe_bytes, cases, executables, architecture, reason, runtime_open=None
+):
+    report = {
+        "schema_version": XADX_REPORT_SCHEMA_VERSION,
+        "report_kind": "execution",
+        "status": "unsupported",
+        "recipe_sha256": hashlib.sha256(recipe_bytes).hexdigest(),
+        "generator_version": recipe["generator_version"],
+        "executables": executables,
+        "reason": reason,
+        "architecture": architecture,
+        "case_names": [case["name"] for case in cases],
+        "case_results": [
+            {
+                "name": case["name"],
+                "status": "unsupported",
+                "dispatches": 0,
+                "readbacks": 0,
+                "validated_bytes": 0,
+                "duration_seconds": 0.0,
+                "mismatch_count": 0,
+                "first_mismatch": None,
+                "failures": [],
+            }
+            for case in cases
+        ],
+        "failures": [],
+    }
+    if runtime_open is not None:
+        report["runtime_open"] = runtime_open
+    return validate_xadx_report(report)
 
 
 def _validate_recipe(recipe):
@@ -1225,6 +1274,7 @@ def run_recipe(
                 f"reported architecture {architecture!r} and the probe reported "
                 f"target family {target_family!r}"
             ),
+            runtime_open=_runtime_open_payload(session.open_record),
         )
 
     case_metrics = {
@@ -1510,6 +1560,7 @@ def run_recipe(
                 (metadata for _, metadata in materialized.values()),
                 key=lambda item: item["contract_sha256"],
             ),
+            "runtime_open": _runtime_open_payload(session.open_record),
             "failures": failures,
         }
     )

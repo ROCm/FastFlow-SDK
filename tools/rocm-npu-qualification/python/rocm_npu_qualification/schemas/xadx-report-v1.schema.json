@@ -45,6 +45,7 @@
       "uniqueItems": true,
       "items": {"$ref": "#/$defs/materialized_buffer"}
     },
+    "runtime_open": {"$ref": "#/$defs/runtime_open"},
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/top_failure"}
@@ -175,6 +176,15 @@
         "size": {"type": "integer", "minimum": 1, "maximum": 16777216},
         "sha256": {"$ref": "#/$defs/sha256"},
         "contract_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "runtime_open": {
+      "type": "object",
+      "required": ["attempts", "unavailable_retries"],
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {"type": "integer", "minimum": 1},
+        "unavailable_retries": {"type": "integer", "minimum": 0}
       }
     },
     "executable": {
