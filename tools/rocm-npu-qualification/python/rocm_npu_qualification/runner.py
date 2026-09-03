@@ -1270,6 +1270,9 @@ def _test_xadx(
             ],
             "failures": [{"case": "package-validation", **failure}],
         }
+        runtime_open = getattr(error, "runtime_open", None)
+        if isinstance(runtime_open, dict):
+            report["runtime_open"] = runtime_open
     validate_xadx_report(report)
     writer.write_json("xadx-report.json", report)
     records = []

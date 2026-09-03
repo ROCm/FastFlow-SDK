@@ -814,6 +814,7 @@ def test_authoritative_unsupported_family_short_circuits_assets_and_generators(
         target_family="npu1",
     )
     assert report["status"] == "unsupported"
+    assert "runtime_open" not in report
 
 
 def test_every_stage_output_is_cleared_between_rounds(tmp_path):
@@ -1013,6 +1014,7 @@ def test_report_binds_exact_recipe_bytes_and_flattened_executables(tmp_path):
         target_family="npu2",
     )
     assert report["schema_version"] == 1
+    assert report["runtime_open"] == {"attempts": 1, "unavailable_retries": 0}
     assert report["recipe_sha256"] == hashlib.sha256(raw).hexdigest()
     assert report["generator_version"] == "kernel-recipe-generator-v1"
     assert report["executables"] == [
@@ -1038,6 +1040,7 @@ def test_unsupported_report_satisfies_v1_branch(tmp_path):
     assert report["case_results"][0]["dispatches"] == 0
     assert report["failures"] == []
     assert "reason" in report
+    assert report["runtime_open"] == {"attempts": 1, "unavailable_retries": 0}
 
 
 def test_failed_case_does_not_taint_passing_case_row(tmp_path):
