@@ -26,6 +26,10 @@
 namespace rocm_npu {
 namespace {
 
+constexpr hrx_memory_type_t kMappedBufferMemory =
+    HRX_MEMORY_TYPE_HOST_VISIBLE | HRX_MEMORY_TYPE_HOST_CACHED |
+    HRX_MEMORY_TYPE_DEVICE_VISIBLE;
+
 class CleanupGuard {
  public:
   explicit CleanupGuard(const std::function<void()>& cleanup)
@@ -761,8 +765,7 @@ Report RunSelfTest(const Invocation& invocation) {
     }
     status_error = consume(
         functions.buffer_allocate(
-            stream, size,
-            HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+            stream, size, kMappedBufferMemory,
             HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
             &buffer.handle),
         "hrx_buffer_allocate");

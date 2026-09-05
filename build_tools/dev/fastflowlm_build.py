@@ -17,6 +17,20 @@ BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or str(os.cpu_count() or 8)
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 
 
+def preset_cache_variables(source: Path) -> dict[str, str]:
+    """Return ``common-default`` cache variables from FastFlowLM CMakePresets.json."""
+    path = source / "CMakePresets.json"
+    try:
+        presets = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        sys.exit(f"unable to read FastFlowLM CMakePresets.json ({path}): {error}")
+    for preset in presets.get("configurePresets") or []:
+        if preset.get("name") == "common-default":
+            cache = preset.get("cacheVariables") or {}
+            return {str(key): str(value) for key, value in cache.items()}
+    sys.exit(f"missing common-default cacheVariables in {path}")
+
+
 def _require_fastflowlm_deps(env):
     configured = dependency_paths(paths.ROOT)
     missing = dependency_errors(
@@ -137,6 +151,14 @@ def _build_fastflowlm(args, *, backend):
             "(run: git submodule update --init --recursive "
             "projects/FastFlowLM)"
         )
+    cache = preset_cache_variables(source)
+    flm_version = cache.get("FLM_VERSION")
+    npu_version = cache.get("NPU_VERSION")
+    if not flm_version or not npu_version:
+        sys.exit(
+            "FastFlowLM CMakePresets.json common-default must set "
+            "FLM_VERSION and NPU_VERSION"
+        )
     use_hrx = backend == "hrx"
     build_dir = paths.FASTFLOWLM_BUILD if use_hrx else paths.FASTFLOWLM_XRT_BUILD
     install_dir = paths.FASTFLOWLM_INSTALL if use_hrx else paths.FASTFLOWLM_XRT_INSTALL
@@ -154,13 +176,14 @@ def _build_fastflowlm(args, *, backend):
             "libdrm (Ubuntu: sudo apt-get install libdrm-dev; "
             "Fedora: sudo dnf install libdrm-devel)"
         )
-    if not use_hrx and not paths.is_windows():
+    if not use_hrx:
         host_xrt = _host_xrt_prefix()
         if host_xrt is None:
             sys.exit(
-                "missing host XRT runtime: set XILINX_XRT or install to "
-                "/opt/xilinx/xrt (the XRT FastFlowLM build links the host "
-                "install; it does not bundle a relocatable XRT prefix)"
+                "missing host XRT runtime: set XILINX_XRT"
+                + ("" if paths.is_windows() else " or install to /opt/xilinx/xrt")
+                + " (the XRT FastFlowLM build links the host install; it does "
+                "not bundle a relocatable XRT prefix)"
             )
         xrt_include = _host_xrt_include_dir(host_xrt)
         if xrt_include is None:
@@ -217,6 +240,7 @@ def _build_fastflowlm(args, *, backend):
             f"-DXRT_INCLUDE_DIR={environment.cmake_path(xrt_include)}",
             f"-DXRT_LIB_DIR={environment.cmake_path(host_xrt / 'lib')}",
         ]
+    print(f"  FLM_VERSION={flm_version} NPU_VERSION={npu_version} (CMakePresets.json)")
     cc, cxx = environment.compilers()
     environment.sh(
         [
@@ -231,8 +255,8 @@ def _build_fastflowlm(args, *, backend):
             "-DCMAKE_BUILD_TYPE=Release",
             *backend_flags,
             "-DCMAKE_INSTALL_LIBDIR=lib",
-            "-DFLM_VERSION=0.9.45",
-            "-DNPU_VERSION=32.0.203.304",
+            f"-DFLM_VERSION={flm_version}",
+            f"-DNPU_VERSION={npu_version}",
             f"-DCMAKE_TOOLCHAIN_FILE={environment.cmake_path(Path(dependencies['toolchain']))}",
             f"-DVCPKG_TARGET_TRIPLET={dependencies['triplet']}",
             f"-DVCPKG_INSTALLED_DIR={environment.cmake_path(Path(dependencies['install_root']))}",

@@ -8,7 +8,7 @@
       "source": "https://huggingface.co/FastFlowLM/Qwen3-0.6B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "b650a430f3e7d3878073b990843ce99acd74e4132dcc14f8f49f6b2678694db8",
+      "registry_sha256": "229e823dd2199da1ec1dbcd5b5f4f62b6b15bc3cb81a56b558ba5afa15248a59",
       "files": [
         {"path": "config.json", "sha256": "8a5ec72f5c96766168a4024f88d70841ae341900a0c84fd4fd23f8eeae16c6a7"},
         {"path": "model.q4nx", "sha256": "db8dec4dff653817218ff920c5d25d28d1805512906485e654f03980053fa667"},
@@ -18,7 +18,7 @@
       "xclbins": [
         {"path": "Qwen3-0.6B-NPU2/attn.xclbin", "sha256": "9acc30b9412d01b57c0c8c909851eaaaa3607b38d4212b7028c6bf87cdac1d2c"},
         {"path": "Qwen3-0.6B-NPU2/dequant.xclbin", "sha256": "575d45e47993315f95f601e07f9f21164f30515f80e232e16255d7c5f2a1d4bf"},
-        {"path": "Qwen3-0.6B-NPU2/layer.xclbin", "sha256": "9b26f1089ace21f84e26d126957175a6e34eed2a099ca30656fb2a03ef7eea6b"},
+        {"path": "Qwen3-0.6B-NPU2/layer.xclbin", "sha256": "7cccd219d211eb39e93c81aca401e294b0b9434e4c2844ae614618347e1c6c3c"},
         {"path": "Qwen3-0.6B-NPU2/mm.xclbin", "sha256": "4afc2a6f2459c0ddcf7de61193a6e83e53a951a0f6c33521456d569bab2c7142"}
       ],
       "tests": [

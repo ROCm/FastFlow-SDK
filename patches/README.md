@@ -39,21 +39,6 @@ is already applied, so a patch that does not reverse cleanly breaks `setup`.
 
 The native Linux KMQ command-chain capability gate is already pin-resident.
 
-### 0004-accept-fastflowlm-host-local-device-visible-alias.patch
-Restores the historical FastFlowLM `hrx_buffer_allocate` memory-type alias in the
-amdxdna allocator: `HOST_LOCAL|DEVICE_VISIBLE` (`0x52`) and the older
-`HOST_LOCAL|HOST_COHERENT|DEVICE_VISIBLE` (`0x56`, from `HOST_LOCAL=0x46`)
-canonicalize to non-coherent HOST_ONLY (`HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE`,
-`0x1A`). Bare `HOST_LOCAL` or real `HOST_COHERENT` without `DEVICE_VISIBLE` stay
-rejected. This compatibility stays in rocm-npu's patch queue rather than the
-pinned HRX branch.
-
-**Why:** prebuilt FastFlowLM engine `.dll`/`.so` files bake those HIP-style
-immediates. Rebuilding `flm.exe` or editing `hrx_cpp.hpp` does not change them.
-Staging ctypes, XADX, and tests request `0x1A` directly.
-
-**Remove when:** FastFlowLM engine binaries are rebuilt against `0x1A`.
-
 ## patches/FastFlowLM/
 
 ### 0001-support-redirected-windows-cli-input.patch
@@ -91,6 +76,19 @@ pkg-config first would still pick the broken distro file.
 
 **Remove when:** FastFlowLM prefers caller-provided XRT dirs over pkg-config
 upstream.
+
+### 0004-skip-optional-hrx-engines-missing-from-lib-hrx.patch
+When `FLM_USE_HRX` is on, skip linking and compiling model engines whose
+import library is absent from `lib/hrx` (today `gemma4_12b_npu` and
+`hunyuan_npu`, which main ships only under `lib/xrt`). Requesting a skipped
+family fails closed instead of substituting Llama3.
+
+**Why:** HRX engine coverage lags FastFlowLM main. The merged 1.0.3 `lib/hrx`
+set is enough to build and run the rest of the 1.0.5 catalog; requiring the
+XRT-only engines would fail the HRX link until those blobs are rebuilt.
+
+**Remove when:** `lib/hrx` contains every engine `lib/xrt` ships at the pinned
+FastFlowLM commit.
 
 ## patches/iron-ops/
 

@@ -1,0 +1,178 @@
+From: ROCm NPU staging <rocm-npu@amd.com>
+Subject: [PATCH] Skip optional HRX engines missing from lib/hrx
+
+HRX engine coverage can lag FastFlowLM main: new families may ship only
+under lib/xrt. When FLM_USE_HRX is on, skip linking and compiling those
+engines if the import library is absent, and fail closed if a skipped
+family is requested instead of substituting Llama3.
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 647d667..232f201 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -246,6 +246,36 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
+ file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
+ file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
+ 
++# HRX engine coverage can lag FastFlowLM main: new families may exist only
++# under lib/xrt. An HRX build skips those engines instead of failing the link.
++function(flm_have_engine name var)
++    if(WIN32)
++        set(_cand "${FLM_ENGINE_LIB_DIR}/${name}.lib")
++    else()
++        set(_cand "${FLM_ENGINE_LIB_DIR}/lib${name}.so")
++    endif()
++    if(EXISTS "${_cand}")
++        set(${var} TRUE PARENT_SCOPE)
++    else()
++        set(${var} FALSE PARENT_SCOPE)
++    endif()
++endfunction()
++
++set(FLM_HAVE_GEMMA4_12B_ENGINE TRUE)
++set(FLM_HAVE_HUNYUAN_ENGINE TRUE)
++if(FLM_USE_HRX)
++    flm_have_engine(gemma4_12b_npu FLM_HAVE_GEMMA4_12B_ENGINE)
++    flm_have_engine(hunyuan_npu FLM_HAVE_HUNYUAN_ENGINE)
++    if(NOT FLM_HAVE_GEMMA4_12B_ENGINE)
++        message(WARNING "Skipping gemma4_12b_npu: not present in ${FLM_ENGINE_LIB_DIR}")
++        list(FILTER SOURCES EXCLUDE REGEX "modeling_gemma4_12b")
++    endif()
++    if(NOT FLM_HAVE_HUNYUAN_ENGINE)
++        message(WARNING "Skipping hunyuan_npu: not present in ${FLM_ENGINE_LIB_DIR}")
++        list(FILTER SOURCES EXCLUDE REGEX "modeling_hunyuan")
++    endif()
++endif()
++
+ # Exclude files that depend on missing libraries for Linux
+ if(NOT WIN32)
+     # list(FILTER SOURCES EXCLUDE REGEX ".*modeling_gemma3\\.cpp$")
+@@ -276,6 +306,16 @@ endif()
+ 
+ 
+ add_executable(flm ${SOURCES} ${HEADERS})
++if(FLM_HAVE_GEMMA4_12B_ENGINE)
++    target_compile_definitions(flm PUBLIC FLM_HAVE_GEMMA4_12B=1)
++else()
++    target_compile_definitions(flm PUBLIC FLM_HAVE_GEMMA4_12B=0)
++endif()
++if(FLM_HAVE_HUNYUAN_ENGINE)
++    target_compile_definitions(flm PUBLIC FLM_HAVE_HUNYUAN=1)
++else()
++    target_compile_definitions(flm PUBLIC FLM_HAVE_HUNYUAN=0)
++endif()
+ 
+ if(WIN32)
+     if(VCPKG_TOOLCHAIN)
+@@ -423,19 +463,23 @@ target_link_libraries(flm PUBLIC
+     gemma_npu
+     gemma_text_npu
+     gemma4e_npu
+-    gemma4_12b_npu
+     gpt_oss_npu
+     whisper_npu
+     gemma_embedding
+     lfm2_npu
+     phi4_npu
+     nanbeige_npu
+-    hunyuan_npu
+     dequant
+     gemm
+     lm_head
+     mha
+ )
++if(FLM_HAVE_GEMMA4_12B_ENGINE)
++    target_link_libraries(flm PUBLIC gemma4_12b_npu)
++endif()
++if(FLM_HAVE_HUNYUAN_ENGINE)
++    target_link_libraries(flm PUBLIC hunyuan_npu)
++endif()
+ 
+ # Link the selected NPU runtime after the detail model libraries above so their
+ # runtime references (libhrx / libxrt_coreutil) resolve.
+diff --git a/src/include/AutoModel/all_models.hpp b/src/include/AutoModel/all_models.hpp
+index 3281a17..f0e5290 100644
+--- a/src/include/AutoModel/all_models.hpp
++++ b/src/include/AutoModel/all_models.hpp
+@@ -22,10 +22,15 @@
+ #include "modeling_qwen3_6_moe.hpp"
+ #include "modeling_nanbeige.hpp"
+ #include "modeling_gemma4e.hpp"
++#if !defined(FLM_HAVE_HUNYUAN) || FLM_HAVE_HUNYUAN
+ #include "modeling_hunyuan.hpp"
++#endif
++#if !defined(FLM_HAVE_GEMMA4_12B) || FLM_HAVE_GEMMA4_12B
+ #include "modeling_gemma4_12b.hpp"
++#endif
+ #include "model_list.hpp"
+ #include "nlohmann/json.hpp"
++#include <stdexcept>
+ 
+ typedef enum {
+     llama3,
+@@ -128,7 +133,12 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
+             auto_chat_engine = std::make_unique<Gemma4e>(npu_device_inst);
+             break;
+         case SupportedModelFamily::gemma4_12b:
++#if defined(FLM_HAVE_GEMMA4_12B) && !FLM_HAVE_GEMMA4_12B
++            throw std::runtime_error(
++                "gemma4-12b is not in this HRX build (gemma4_12b_npu engine library absent)");
++#else
+             auto_chat_engine = std::make_unique<Gemma4_12B>(npu_device_inst);
++#endif
+             break;
+         case SupportedModelFamily::gpt_oss:
+             auto_chat_engine = std::make_unique<GPT_OSS>(npu_device_inst);
+@@ -155,7 +165,12 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
+             auto_chat_engine = std::make_unique<Nanbeige>(npu_device_inst);
+             break;
+         case SupportedModelFamily::hunyuan:
++#if defined(FLM_HAVE_HUNYUAN) && !FLM_HAVE_HUNYUAN
++            throw std::runtime_error(
++                "hunyuan is not in this HRX build (hunyuan_npu engine library absent)");
++#else
+             auto_chat_engine = std::make_unique<Hunyuan>(npu_device_inst);
++#endif
+             break;
+         case SupportedModelFamily::phi4:
+             auto_chat_engine = std::make_unique<Phi4>(npu_device_inst);
+diff --git a/src/runner/runner.cpp b/src/runner/runner.cpp
+index d38e5e9..7d0664e 100644
+--- a/src/runner/runner.cpp
++++ b/src/runner/runner.cpp
+@@ -425,7 +425,13 @@ void Runner::cmd_status(std::vector<std::string>& input_list) {
+ void Runner::cmd_load(std::vector<std::string>& input_list) {
+     std::string model_name = input_list[1];
+ 
+-    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(model_name, this->supported_models, &this->npu_device_inst);
++    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model;
++    try {
++        auto_model = get_auto_model(model_name, this->supported_models, &this->npu_device_inst);
++    } catch (const std::exception& e) {
++        header_print("ERROR", std::string(e.what()));
++        return;
++    }
+     model_name = auto_model.first;
+ 
+     if (model_name != this->tag) {
+diff --git a/src/server/rest_handler.cpp b/src/server/rest_handler.cpp
+index 95e90a3..089a2a7 100644
+--- a/src/server/rest_handler.cpp
++++ b/src/server/rest_handler.cpp
+@@ -384,7 +384,15 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
+         if (auto_chat_engine != nullptr) {
+             auto_chat_engine.reset();
+         }
+-        std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(ensure_tag, this->supported_models, &this->npu_device_inst);
++        std::pair<std::string, std::unique_ptr<AutoModel>> auto_model;
++        try {
++            auto_model = get_auto_model(ensure_tag, this->supported_models, &this->npu_device_inst);
++        } catch (const std::exception& e) {
++            header_print("ERROR", std::string(e.what()));
++            this->auto_chat_engine.reset();
++            this->current_model_tag = "model-faker";
++            return false;
++        }
+         auto_chat_engine = std::move(auto_model.second);
+         ensure_tag = auto_model.first;
+         switch (downloader.is_model_downloaded(ensure_tag)) {

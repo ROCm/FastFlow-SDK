@@ -2138,10 +2138,12 @@ def test_enumerate_registry_models_classifies_and_pins_identity(tmp_path):
     }
     assert set(discovered) == {"qwen3:0.6b", "embed-gemma:300m", "whisper-v3:turbo"}
     assert discovered["qwen3:0.6b"]["kind"] == "chat"
+    assert discovered["qwen3:0.6b"]["family"] == "qwen3"
     assert discovered["qwen3:0.6b"]["identity_policy"] == "revision-sha256"
     assert discovered["qwen3:0.6b"]["source"] == "https://hf.example/Qwen3-0.6B-NPU2"
     assert discovered["qwen3:0.6b"]["revision"] == "rev1"
     assert discovered["qwen3:0.6b"]["think"] is True
+    assert discovered["qwen3:0.6b"]["think_toggleable"] is False
     assert discovered["embed-gemma:300m"]["kind"] == "embed"
     assert discovered["embed-gemma:300m"]["identity_policy"] == "content-sha256"
     assert discovered["embed-gemma:300m"]["revision"] is None
@@ -2168,6 +2170,39 @@ def test_enumerate_registry_models_skips_entries_without_url(tmp_path):
     )
     discovered = models.enumerate_registry_models(path)
     assert [model["tag"] for model in discovered] == ["good:1b"]
+
+
+def test_filter_models_missing_optional_engines_skips_absent_library(tmp_path):
+    flm = tmp_path / "bin" / ("flm.exe" if os.name == "nt" else "flm")
+    flm.parent.mkdir()
+    flm.write_bytes(b"flm")
+    kept, skipped = models.filter_models_missing_optional_engines(
+        [
+            {"tag": "qwen3:0.6b", "family": "qwen3"},
+            {"tag": "hy-mt2:1.8b", "family": "hunyuan"},
+            {"tag": "gemma4-it:12b", "family": "gemma4-12b"},
+        ],
+        flm,
+    )
+    assert [model["tag"] for model in kept] == ["qwen3:0.6b"]
+    assert [model["tag"] for model in skipped] == ["hy-mt2:1.8b", "gemma4-it:12b"]
+
+
+def test_filter_models_missing_optional_engines_keeps_present_library(tmp_path):
+    flm = tmp_path / "bin" / ("flm.exe" if os.name == "nt" else "flm")
+    flm.parent.mkdir()
+    flm.write_bytes(b"flm")
+    engine = "hunyuan_npu.dll" if os.name == "nt" else "libhunyuan_npu.so"
+    (flm.parent / engine).write_bytes(b"engine")
+    kept, skipped = models.filter_models_missing_optional_engines(
+        [
+            {"tag": "hy-mt2:1.8b", "family": "hunyuan"},
+            {"tag": "gemma4-it:12b", "family": "gemma4-12b"},
+        ],
+        flm,
+    )
+    assert [model["tag"] for model in kept] == ["hy-mt2:1.8b"]
+    assert [model["tag"] for model in skipped] == ["gemma4-it:12b"]
 
 
 def test_resolve_model_dynamic_builds_inventory_without_pins(tmp_path):
@@ -2197,6 +2232,52 @@ def test_resolve_model_dynamic_builds_inventory_without_pins(tmp_path):
     assert record["cache_directory"] == "models/Qwen3-0.6B-NPU2"
     assert [entry["path"] for entry in record["files"]] == ["model.q4nx"]
     assert record["files"][0]["sha256"] == hashlib.sha256(b"weights").hexdigest()
+
+
+def test_resolve_model_dynamic_resumes_undersized_q4nx(monkeypatch, tmp_path):
+    config = _sweep_config(tmp_path)
+    cache = tmp_path / "cache"
+    model_directory = cache / "models" / "Qwen3-0.6B-NPU2"
+    model_directory.mkdir(parents=True)
+    dest = model_directory / "model.q4nx"
+    dest.write_bytes(b"partial")
+    model_info = tmp_path / "model_info.json"
+    model_info.write_text(
+        json.dumps(
+            {"qwen3:0.6b": [{"path": "model.q4nx", "size": len(b"complete-weights")}]}
+        ),
+        encoding="utf-8",
+    )
+    model = next(
+        entry
+        for entry in models.enumerate_registry_models(config)
+        if entry["tag"] == "qwen3:0.6b"
+    )
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append([str(part) for part in argv])
+        if "curl" in str(argv[0]) or str(argv[0]).endswith("curl.exe"):
+            dest.write_bytes(b"complete-weights")
+        return _result(returncode=0)
+
+    monkeypatch.setattr(models, "run_command", fake_run)
+    record, commands = models.resolve_model_dynamic(
+        model,
+        flm=tmp_path / "flm",
+        config_path=config,
+        model_cache=cache,
+        pull_log=tmp_path / "pull.log",
+        offline=False,
+        no_pull=False,
+        environment={"FLM_MODELINFO_PATH": str(model_info)},
+    )
+    assert record["status"] == "pass"
+    assert record["pulled"] is True
+    assert dest.read_bytes() == b"complete-weights"
+    assert any("curl" in command[0] for command in seen)
+    assert not any(command[:2] == [str(tmp_path / "flm"), "pull"] for command in seen)
+    assert len(commands) == 2  # curl resume + flm check
 
 
 def test_resolve_model_dynamic_reports_missing_required_file(monkeypatch, tmp_path):
@@ -2266,7 +2347,12 @@ def test_default_tests_for_scopes_by_kind():
     assert tuple(single["setup_commands"]) == runner._SWEEP_GREEDY_SETUP
     assert tuple(multi["setup_commands"]) == runner._SWEEP_GREEDY_SETUP_MULTI
     assert "/set gen-lim 16" in single["setup_commands"]
-    assert "/set gen-lim 64" in multi["setup_commands"]
+    assert "/set gen-lim 256" in multi["setup_commands"]
+    think_on = runner._default_tests_for(
+        {"kind": "chat", "footprint": 3.1, "think": True, "think_toggleable": True}
+    )
+    assert think_on[0]["setup_commands"][0] == "/think"
+    assert think_on[1]["setup_commands"][0] == "/think"
     # 8k is the default complete-sweep benchmark stage.
     assert runner._SWEEP_BENCH_DEFAULT == "8k"
     assert bench["name"] == "context-8k"
@@ -2771,6 +2857,30 @@ def test_serve_probe_embed_parses_port_and_reports_throughput(tmp_path):
     assert "embedding dim=4" in probe["detail"]
 
 
+def test_serve_probe_embed_throughput_when_usage_missing(tmp_path):
+    script = tmp_path / "fake_serve_no_usage.py"
+    script.write_text(
+        _FAKE_SERVE_SERVER.replace(
+            '"usage": {"prompt_tokens": 12},',
+            "",
+        ),
+        encoding="utf-8",
+    )
+    result, probe = serve_probe(
+        [sys.executable, str(script)],
+        log_path=tmp_path / "probe.log",
+        env=dict(os.environ),
+        probe_kind="embed",
+        model="embed-gemma:300m",
+        boot_timeout=30.0,
+        http_timeout=15.0,
+    )
+    assert probe["ok"] is True
+    assert result.returncode == 0
+    assert probe["metrics"]["encode_toks_per_s"] > 0
+    assert probe["metrics"]["input_tokens"] > 0
+
+
 def test_serve_probe_asr_transcribes_multipart_and_matches_phrase(tmp_path):
     import wave
 
@@ -3202,6 +3312,59 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
     Draft202012Validator(schema).validate(evidence)
 
 
+def test_all_models_skips_optional_hrx_engines_absent_from_install(
+    monkeypatch, tmp_path, capsys
+):
+    def config_factory(root: Path) -> Path:
+        path = root / "model_list.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "model_path": "models",
+                    "models": {
+                        "qwen3": {
+                            "0.6b": {
+                                "name": "Qwen3-0.6B-NPU2",
+                                "url": "https://hf.example/Qwen3-0.6B-NPU2/resolve/rev1",
+                                "files": ["model.q4nx"],
+                                "footprint": 0.6,
+                                "details": {"family": "qwen3"},
+                            }
+                        },
+                        "hy-mt2": {
+                            "1.8b": {
+                                "name": "Hy-MT2-1.8B-NPU2",
+                                "url": "https://hf.example/Hy-MT2-1.8B-NPU2",
+                                "files": ["model.q4nx"],
+                                "footprint": 1.5,
+                                "details": {"family": "hunyuan"},
+                            }
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    exit_code, summary, evidence = _run_sweep(
+        monkeypatch,
+        tmp_path,
+        all_models=True,
+        bench_context="8k",
+        config_factory=config_factory,
+    )
+    assert exit_code == 0
+    assert summary["models"] == 1
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert [model["tag"] for model in profile["models"]] == ["qwen3:0.6b"]
+    warning = capsys.readouterr().err
+    assert "HRX engine is not in this build" in warning
+    assert "hy-mt2:1.8b" in warning
+
+
 def test_all_models_with_candidate_manifest_stays_ad_hoc(monkeypatch, tmp_path):
     # Passing --candidate-manifest to the sweep must not bind it: candidate_bound
     # tracks "execution equals a sealed wheel profile," which the sweep never is.
@@ -3277,6 +3440,11 @@ def test_all_models_is_mutually_exclusive_with_profile():
         parser.parse_args(["--all-models", "--bench-context", "4k"]).bench_context
         == "4k"
     )
+    restricted = parser.parse_args(
+        ["--all-models", "--models", "qwen3:0.6b,qwen3:4b", "--skip-xadx"]
+    )
+    assert restricted.models == "qwen3:0.6b,qwen3:4b"
+    assert restricted.skip_xadx is True
     with pytest.raises(SystemExit):
         parser.parse_args(["--all-models", "--bench-context", "16k"])
 

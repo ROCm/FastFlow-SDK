@@ -44,6 +44,48 @@ def _classify_model_kind(family: str, labels: list[str], details_family: str) ->
     return "chat"
 
 
+# Families whose HRX engines can lag FastFlowLM main (XRT-only until rebuilt).
+OPTIONAL_HRX_ENGINE_BY_FAMILY = {
+    "hunyuan": "hunyuan_npu",
+    "gemma4-12b": "gemma4_12b_npu",
+}
+
+
+def engine_search_directories(flm: Path) -> list[Path]:
+    """Directories that may hold FastFlowLM engine libraries next to ``flm``."""
+    parent = flm.resolve().parent
+    return [parent, parent.parent / "lib" / "flm", parent.parent / "lib"]
+
+
+def engine_library_present(flm: Path, engine: str) -> bool:
+    """True when the runtime library for ``engine`` is next to the ``flm`` binary."""
+    names = (
+        (f"{engine}.dll",)
+        if os.name == "nt"
+        else (f"lib{engine}.so", f"lib{engine}.so.0")
+    )
+    return any(
+        (directory / name).is_file()
+        for directory in engine_search_directories(flm)
+        for name in names
+    )
+
+
+def filter_models_missing_optional_engines(
+    models: list[dict[str, Any]], flm: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split sweep candidates whose optional HRX engine is absent from this build."""
+    kept: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for model in models:
+        engine = OPTIONAL_HRX_ENGINE_BY_FAMILY.get(str(model.get("family") or ""))
+        if engine and not engine_library_present(flm, engine):
+            skipped.append(model)
+        else:
+            kept.append(model)
+    return kept, skipped
+
+
 def fastflow_environment(
     model_cache: Path,
     *,
@@ -113,6 +155,80 @@ def _registry_model(
                 f"{model['tag']}: mutable registry source does not match profile"
             )
     return entry, source, revision, model_path, registry_digest
+
+
+def _parse_dotted_version(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for item in value.split("."):
+        if not item.isdigit():
+            break
+        parts.append(int(item))
+    return tuple(parts) if parts else (0,)
+
+
+def _cache_is_stale(model_directory: Path, min_version: str | None) -> bool:
+    """True when config.json flm_version is older than the registry minimum."""
+    if not min_version:
+        return False
+    config_path = model_directory / "config.json"
+    if not config_path.is_file():
+        return False
+    try:
+        cached = json.loads(config_path.read_text(encoding="utf-8")).get("flm_version")
+    except (OSError, json.JSONDecodeError, TypeError):
+        return True
+    if not isinstance(cached, str) or not cached:
+        return True
+    return _parse_dotted_version(cached) < _parse_dotted_version(min_version)
+
+
+def _expected_file_sizes(tag: str, environment: Mapping[str, str]) -> dict[str, int]:
+    """Map registry filenames to byte sizes from FLM model_info.json, if present."""
+    raw = environment.get("FLM_MODELINFO_PATH")
+    if not raw:
+        return {}
+    path = Path(raw)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    entries = payload.get(tag) if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    sizes: dict[str, int] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("path")
+        size = item.get("size")
+        if isinstance(name, str) and name and isinstance(size, int) and size > 0:
+            sizes[name] = size
+    return sizes
+
+
+def _incomplete_required_files(
+    model_directory: Path,
+    required_files: list[str],
+    expected_sizes: Mapping[str, int],
+) -> list[str]:
+    """Filenames that exist but are shorter or longer than model_info sizes."""
+    incomplete: list[str] = []
+    for name in required_files:
+        path = model_directory / name
+        expected = expected_sizes.get(name)
+        if expected is None or not path.is_file():
+            continue
+        if path.stat().st_size != expected:
+            incomplete.append(name)
+    return incomplete
+
+
+def _curl_executable() -> str:
+    return "curl.exe" if os.name == "nt" else "curl"
+
+
+def _pull_timeout_seconds(footprint: float) -> int:
+    return min(14400, max(1800, int(max(footprint, 0.5) * 500)))
 
 
 def _verify_expected_files(
@@ -286,8 +402,10 @@ def enumerate_registry_models(config_path: Path) -> list[dict[str, Any]]:
                     "registry_sha256": registry_digest,
                     "xclbins": [],
                     "kind": kind,
+                    "family": details_family,
                     "footprint": footprint,
                     "think": bool(details.get("think", False)),
+                    "think_toggleable": bool(details.get("think_toggleable", False)),
                 }
             )
     if not models:
@@ -315,6 +433,7 @@ def resolve_model_dynamic(
     satisfies the evidence ``model`` schema.
     """
     model_cache.mkdir(parents=True, exist_ok=True)
+    expected_sizes = _expected_file_sizes(model["tag"], environment)
     environment = fastflow_environment(
         model_cache, offline=offline, base_environment=environment
     )
@@ -341,31 +460,105 @@ def resolve_model_dynamic(
         raise ModelError(f"{model['tag']}: FLM registry file contract is invalid")
     model_directory = model_cache / model_path / model_name
     commands: list[CommandResult] = []
-    cached = all((model_directory / path).is_file() for path in required_files)
+    min_version = registry.get("flm_min_version")
+    min_version_s = min_version if isinstance(min_version, str) else None
+    present_files = all((model_directory / path).is_file() for path in required_files)
+    incomplete = _incomplete_required_files(
+        model_directory, required_files, expected_sizes
+    )
+    cached = present_files and not incomplete
+    stale = cached and _cache_is_stale(model_directory, min_version_s)
     pulled = False
-    if not cached:
+    need_pull = (not cached) or stale
+    if need_pull:
         if offline:
             raise ModelError(
-                f"{model['tag']}: model is absent and --offline forbids pulling"
+                f"{model['tag']}: model is "
+                f"{'outdated' if stale else 'incomplete' if incomplete else 'absent'} "
+                "and --offline forbids pulling"
             )
         if no_pull:
             raise ModelError(
-                f"{model['tag']}: model is absent and --no-pull was requested"
+                f"{model['tag']}: model is "
+                f"{'outdated' if stale else 'incomplete' if incomplete else 'absent'} "
+                "and --no-pull was requested"
             )
-    if not cached and not offline and not no_pull:
-        pull = run_command(
-            [flm, "pull", model["tag"]],
-            log_path=pull_log,
-            env=environment,
-            timeout=1800,
-            echo=echo,
-        )
-        commands.append(pull)
-        if pull.returncode != 0:
-            raise ModelError(
-                f"{model['tag']}: flm pull failed with exit {pull.returncode}"
+    if need_pull and not offline and not no_pull:
+        # flm pull opens model.q4nx with "wb" and truncates a partial download.
+        # Resume undersized files with HTTP Range before (or instead of) pull.
+        if incomplete and not stale:
+            registry_url = registry.get("url")
+            if not isinstance(registry_url, str) or not registry_url:
+                raise ModelError(f"{model['tag']}: FLM registry URL is invalid")
+            model_directory.mkdir(parents=True, exist_ok=True)
+            for name in incomplete:
+                dest = model_directory / name
+                file_url = f"{registry_url.rstrip('/')}/{name}?download=true"
+                curl = run_command(
+                    [
+                        _curl_executable(),
+                        "-L",
+                        "--retry",
+                        "20",
+                        "--retry-delay",
+                        "5",
+                        "--retry-all-errors",
+                        "--max-time",
+                        "0",
+                        "-C",
+                        "-",
+                        "--output",
+                        str(dest),
+                        "--user-agent",
+                        "FastFlowLM/1.0",
+                        file_url,
+                    ],
+                    log_path=pull_log.with_name(
+                        pull_log.stem + f"-resume-{Path(name).stem}.log"
+                    ),
+                    env=environment,
+                    timeout=_pull_timeout_seconds(
+                        float(model.get("footprint", 0) or 0)
+                    ),
+                    echo=echo,
+                )
+                commands.append(curl)
+                if curl.returncode != 0:
+                    raise ModelError(
+                        f"{model['tag']}: resumed download of {name} failed "
+                        f"with exit {curl.returncode}"
+                    )
+                expected = expected_sizes.get(name)
+                if expected is not None and dest.stat().st_size != expected:
+                    raise ModelError(
+                        f"{model['tag']}: resumed {name} is "
+                        f"{dest.stat().st_size} bytes, expected {expected}"
+                    )
+            pulled = True
+            present_files = all(
+                (model_directory / path).is_file() for path in required_files
             )
-        pulled = True
+            incomplete = _incomplete_required_files(
+                model_directory, required_files, expected_sizes
+            )
+            cached = present_files and not incomplete
+        if not cached or stale:
+            pull_argv: list[str | os.PathLike[str]] = [flm, "pull", model["tag"]]
+            if stale:
+                pull_argv.append("--force")
+            pull = run_command(
+                pull_argv,
+                log_path=pull_log,
+                env=environment,
+                timeout=_pull_timeout_seconds(float(model.get("footprint", 0) or 0)),
+                echo=echo,
+            )
+            commands.append(pull)
+            if pull.returncode != 0:
+                raise ModelError(
+                    f"{model['tag']}: flm pull failed with exit {pull.returncode}"
+                )
+            pulled = True
         check = run_command(
             [flm, "check", model["tag"]],
             log_path=pull_log.with_name(pull_log.stem + "-check-after.log"),

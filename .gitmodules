@@ -16,5 +16,5 @@
 [submodule "projects/FastFlowLM"]
 	path = projects/FastFlowLM
 	url = https://github.com/ROCm/FastFlowLM.git
-	branch = hrx_native_pr
+	branch = main
 	ignore = dirty

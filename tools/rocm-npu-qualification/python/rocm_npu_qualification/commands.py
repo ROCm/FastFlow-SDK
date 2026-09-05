@@ -394,12 +394,17 @@ def serve_probe(
                             if isinstance(usage, dict)
                             else None
                         )
-                        if (
-                            isinstance(prompt_tokens, int)
-                            and prompt_tokens > 0
-                            and request_latency > 0
-                        ):
+                        # FLM currently returns usage.prompt_tokens=0 for
+                        # /v1/embeddings. Fall back to a word-token count of
+                        # the probe input so encode throughput is still
+                        # measured from request latency.
+                        if not isinstance(prompt_tokens, int) or prompt_tokens <= 0:
+                            prompt_tokens = len(
+                                _WORD_TOKEN_PATTERN.findall(_EMBED_PROBE_INPUT)
+                            )
+                        if prompt_tokens > 0 and request_latency > 0:
                             toks_per_s = prompt_tokens / request_latency
+                            probe_metrics["input_tokens"] = prompt_tokens
                             probe_metrics["encode_toks_per_s"] = toks_per_s
                             summary += f", {toks_per_s:.1f} tok/s"
                         detail = summary
