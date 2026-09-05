@@ -44,6 +44,48 @@ def _classify_model_kind(family: str, labels: list[str], details_family: str) ->
     return "chat"
 
 
+# Families whose HRX engines can lag FastFlowLM main (XRT-only until rebuilt).
+OPTIONAL_HRX_ENGINE_BY_FAMILY = {
+    "hunyuan": "hunyuan_npu",
+    "gemma4-12b": "gemma4_12b_npu",
+}
+
+
+def engine_search_directories(flm: Path) -> list[Path]:
+    """Directories that may hold FastFlowLM engine libraries next to ``flm``."""
+    parent = flm.resolve().parent
+    return [parent, parent.parent / "lib" / "flm", parent.parent / "lib"]
+
+
+def engine_library_present(flm: Path, engine: str) -> bool:
+    """True when the runtime library for ``engine`` is next to the ``flm`` binary."""
+    names = (
+        (f"{engine}.dll",)
+        if os.name == "nt"
+        else (f"lib{engine}.so", f"lib{engine}.so.0")
+    )
+    return any(
+        (directory / name).is_file()
+        for directory in engine_search_directories(flm)
+        for name in names
+    )
+
+
+def filter_models_missing_optional_engines(
+    models: list[dict[str, Any]], flm: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split sweep candidates whose optional HRX engine is absent from this build."""
+    kept: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for model in models:
+        engine = OPTIONAL_HRX_ENGINE_BY_FAMILY.get(str(model.get("family") or ""))
+        if engine and not engine_library_present(flm, engine):
+            skipped.append(model)
+        else:
+            kept.append(model)
+    return kept, skipped
+
+
 def fastflow_environment(
     model_cache: Path,
     *,
@@ -360,6 +402,7 @@ def enumerate_registry_models(config_path: Path) -> list[dict[str, Any]]:
                     "registry_sha256": registry_digest,
                     "xclbins": [],
                     "kind": kind,
+                    "family": details_family,
                     "footprint": footprint,
                     "think": bool(details.get("think", False)),
                     "think_toggleable": bool(details.get("think_toggleable", False)),

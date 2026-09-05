@@ -66,7 +66,7 @@ upstream   = "github.com/ROCm/FastFlowLM"
 branch     = "main"
 pr         = "ROCm/FastFlowLM#703"
 commit     = "dae4c7545bb8c4119e884fa0b83e7472efc1630c"
-note       = "FastFlowLM upstream main after PR #703 (Abhishek-Varma/update_hrx_binaries). Includes HRX-native app support plus upstream model/runtime catalog updates through FLM v1.0.5. The rocm-npu build keeps caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
+note       = "FastFlowLM upstream main after PR #703 (Abhishek-Varma/update_hrx_binaries). App/catalog follow this pin (FLM v1.0.5 today); python dev.py build fastflowlm stamps -DFLM_VERSION/-DNPU_VERSION from src/CMakePresets.json. lib/hrx is the merged 1.0.3 engine set and may lag new families on main (gemma4-12b and hunyuan are XRT-only at this pin). patches/FastFlowLM/0004 skips those missing HRX engines and fails closed if they are requested. Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"

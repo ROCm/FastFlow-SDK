@@ -1769,6 +1769,7 @@ def test_enumerate_registry_models_classifies_and_pins_identity(tmp_path):
     }
     assert set(discovered) == {"qwen3:0.6b", "embed-gemma:300m", "whisper-v3:turbo"}
     assert discovered["qwen3:0.6b"]["kind"] == "chat"
+    assert discovered["qwen3:0.6b"]["family"] == "qwen3"
     assert discovered["qwen3:0.6b"]["identity_policy"] == "revision-sha256"
     assert discovered["qwen3:0.6b"]["source"] == "https://hf.example/Qwen3-0.6B-NPU2"
     assert discovered["qwen3:0.6b"]["revision"] == "rev1"
@@ -1800,6 +1801,39 @@ def test_enumerate_registry_models_skips_entries_without_url(tmp_path):
     )
     discovered = models.enumerate_registry_models(path)
     assert [model["tag"] for model in discovered] == ["good:1b"]
+
+
+def test_filter_models_missing_optional_engines_skips_absent_library(tmp_path):
+    flm = tmp_path / "bin" / ("flm.exe" if os.name == "nt" else "flm")
+    flm.parent.mkdir()
+    flm.write_bytes(b"flm")
+    kept, skipped = models.filter_models_missing_optional_engines(
+        [
+            {"tag": "qwen3:0.6b", "family": "qwen3"},
+            {"tag": "hy-mt2:1.8b", "family": "hunyuan"},
+            {"tag": "gemma4-it:12b", "family": "gemma4-12b"},
+        ],
+        flm,
+    )
+    assert [model["tag"] for model in kept] == ["qwen3:0.6b"]
+    assert [model["tag"] for model in skipped] == ["hy-mt2:1.8b", "gemma4-it:12b"]
+
+
+def test_filter_models_missing_optional_engines_keeps_present_library(tmp_path):
+    flm = tmp_path / "bin" / ("flm.exe" if os.name == "nt" else "flm")
+    flm.parent.mkdir()
+    flm.write_bytes(b"flm")
+    engine = "hunyuan_npu.dll" if os.name == "nt" else "libhunyuan_npu.so"
+    (flm.parent / engine).write_bytes(b"engine")
+    kept, skipped = models.filter_models_missing_optional_engines(
+        [
+            {"tag": "hy-mt2:1.8b", "family": "hunyuan"},
+            {"tag": "gemma4-it:12b", "family": "gemma4-12b"},
+        ],
+        flm,
+    )
+    assert [model["tag"] for model in kept] == ["hy-mt2:1.8b"]
+    assert [model["tag"] for model in skipped] == ["gemma4-it:12b"]
 
 
 def test_resolve_model_dynamic_builds_inventory_without_pins(tmp_path):
@@ -2907,6 +2941,59 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
         ).read_text(encoding="utf-8")
     )
     Draft202012Validator(schema).validate(evidence)
+
+
+def test_all_models_skips_optional_hrx_engines_absent_from_install(
+    monkeypatch, tmp_path, capsys
+):
+    def config_factory(root: Path) -> Path:
+        path = root / "model_list.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "model_path": "models",
+                    "models": {
+                        "qwen3": {
+                            "0.6b": {
+                                "name": "Qwen3-0.6B-NPU2",
+                                "url": "https://hf.example/Qwen3-0.6B-NPU2/resolve/rev1",
+                                "files": ["model.q4nx"],
+                                "footprint": 0.6,
+                                "details": {"family": "qwen3"},
+                            }
+                        },
+                        "hy-mt2": {
+                            "1.8b": {
+                                "name": "Hy-MT2-1.8B-NPU2",
+                                "url": "https://hf.example/Hy-MT2-1.8B-NPU2",
+                                "files": ["model.q4nx"],
+                                "footprint": 1.5,
+                                "details": {"family": "hunyuan"},
+                            }
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    exit_code, summary, evidence = _run_sweep(
+        monkeypatch,
+        tmp_path,
+        all_models=True,
+        bench_context="8k",
+        config_factory=config_factory,
+    )
+    assert exit_code == 0
+    assert summary["models"] == 1
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert [model["tag"] for model in profile["models"]] == ["qwen3:0.6b"]
+    warning = capsys.readouterr().err
+    assert "HRX engine is not in this build" in warning
+    assert "hy-mt2:1.8b" in warning
 
 
 def test_all_models_with_candidate_manifest_stays_ad_hoc(monkeypatch, tmp_path):

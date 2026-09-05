@@ -60,6 +60,7 @@ from .models import (
     ModelError,
     enumerate_registry_models,
     fastflow_environment,
+    filter_models_missing_optional_engines,
     resolve_model,
     resolve_model_dynamic,
 )
@@ -1811,6 +1812,21 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     execution_models = profile["models"]
     if is_sweep:
         discovered = enumerate_registry_models(flm_config)
+        discovered, skipped_engines = filter_models_missing_optional_engines(
+            discovered, flm
+        )
+        if skipped_engines:
+            skipped_tags = ", ".join(model["tag"] for model in skipped_engines)
+            print(
+                "qualify: skipping tags whose HRX engine is not in this build: "
+                f"{skipped_tags}",
+                file=sys.stderr,
+                flush=True,
+            )
+        if not discovered:
+            raise QualificationError(
+                "no installed FLM registry models have an HRX engine in this build"
+            )
         if any_benchmark:
             # --bench dev starts from the curated subset; --bench all from the
             # whole registry. --models then narrows whichever base set was chosen.
