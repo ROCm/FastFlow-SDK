@@ -3799,6 +3799,19 @@ def test_models_flag_parsing():
     )
 
 
+def test_flm_flag_parsing():
+    parser = cli.create_parser()
+    assert parser.parse_args([]).flm is None
+    parsed = parser.parse_args(["--flm", "/opt/FastFlowLM-install"])
+    assert parsed.flm == Path("/opt/FastFlowLM-install")
+    # It is a modifier, not part of the run-mode exclusion group.
+    parsed = parser.parse_args(
+        ["--bench", "all", "--flm", "/opt/FastFlowLM-install", "--xrt-flm", "/opt/flm-xrt"]
+    )
+    assert parsed.flm == Path("/opt/FastFlowLM-install")
+    assert parsed.xrt_flm == Path("/opt/flm-xrt")
+
+
 def test_xrt_flm_flag_parsing():
     parser = cli.create_parser()
     # Off by default; supplying --xrt-flm is the single opt-in for the
@@ -3881,6 +3894,38 @@ def test_resolve_xrt_flm_accepts_fhs_root_and_binary(tmp_path, monkeypatch):
     flat = tmp_path / "flat-xrt"
     flat_flm = _make_xrt_build(flat, layout="flat")
     assert runner._resolve_xrt_flm(flat)["command"] == str(flat_flm.resolve())
+
+
+def test_resolve_flm_install_accepts_fhs_root_and_binary(tmp_path, monkeypatch):
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    root = tmp_path / "flm-install"
+    flm = _make_xrt_build(root)
+    lib = root / "lib"
+    lib.mkdir()
+    resolved_flm, resolved_config, environment = runner._resolve_flm_install(root)
+    assert resolved_flm == flm.resolve()
+    assert resolved_config == (root / "share" / "flm" / "model_list.json").resolve()
+    assert environment["FLM_CONFIG_PATH"] == str(resolved_config)
+    if os.name != "nt":
+        assert str(lib.resolve()) in environment["LD_LIBRARY_PATH"].split(os.pathsep)
+    resolved_flm, _, _ = runner._resolve_flm_install(flm)
+    assert resolved_flm == flm.resolve()
+    flat = tmp_path / "flat-hrx"
+    flat_flm = _make_xrt_build(flat, layout="flat")
+    resolved_flm, _, _ = runner._resolve_flm_install(flat)
+    assert resolved_flm == flat_flm.resolve()
+
+
+def test_resolve_flm_install_raises_on_missing_pieces(tmp_path):
+    with pytest.raises(runner.QualificationError, match="does not contain"):
+        runner._resolve_flm_install(tmp_path / "nope")
+    root = tmp_path / "partial"
+    root.mkdir()
+    exe = root / _XRT_FLM_EXE
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    with pytest.raises(runner.QualificationError, match="missing"):
+        runner._resolve_flm_install(root)
 
 
 def test_resolve_xrt_flm_is_best_effort_on_missing_pieces(tmp_path, capsys):

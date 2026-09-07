@@ -148,6 +148,19 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--flm",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "HRX FastFlowLM entrypoint (bin/flm) or its FHS install root, as "
+            "produced by `dev.py build fastflowlm`. When set, qualify uses this "
+            "build instead of the `rocm-npu-fastflowlm` wheel binary (needed "
+            "when the venv wheel lags the in-tree 1.0.5 install). Off by "
+            "default so packaged-wheel CI keeps using the installed product."
+        ),
+    )
+    parser.add_argument(
         "--xrt-flm",
         type=Path,
         default=None,

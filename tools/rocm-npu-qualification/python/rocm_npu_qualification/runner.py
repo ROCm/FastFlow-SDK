@@ -999,6 +999,101 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     return path.resolve(), config.resolve(), environment
 
 
+def _flm_executable_name() -> str:
+    return "flm.exe" if os.name == "nt" else "flm"
+
+
+def _locate_flm_entrypoint(tree: Path) -> Path | None:
+    """Return the flm binary under ``tree`` (file or FHS/flat install root)."""
+    executable = _flm_executable_name()
+    candidate = tree.expanduser()
+    if candidate.is_file():
+        return candidate
+    if candidate.is_dir():
+        for option in (candidate / "bin" / executable, candidate / executable):
+            if option.is_file():
+                return option
+    return None
+
+
+def _locate_flm_metadata(
+    entrypoint: Path,
+) -> tuple[Path | None, Path | None, Path | None]:
+    """Find model_list.json, model_info.json, and the xclbins parent."""
+    root = entrypoint.parent
+    metadata_roots = [root, root / "share" / "flm", root.parent / "share" / "flm"]
+    config = model_info = xclbin_root = None
+    for base in metadata_roots:
+        if config is None and (base / "model_list.json").is_file():
+            config = base / "model_list.json"
+        if model_info is None and (base / "model_info.json").is_file():
+            model_info = base / "model_info.json"
+        if xclbin_root is None and (base / "xclbins").is_dir():
+            xclbin_root = base
+    return config, model_info, xclbin_root
+
+
+def _hrx_library_dirs(entrypoint: Path) -> list[str]:
+    """Loader directories next to an FHS or flat FastFlowLM install."""
+    directories = []
+    seen: set[Path] = set()
+    for path in (entrypoint.parent / "lib", entrypoint.parent.parent / "lib"):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not path.is_dir():
+            continue
+        seen.add(resolved)
+        directories.append(str(resolved))
+    return directories
+
+
+def _resolve_flm_install(flm_tree: Path) -> tuple[Path, Path, dict[str, str]]:
+    """Resolve ``--flm`` to (command, config, env). Raises QualificationError."""
+    executable = _flm_executable_name()
+    entrypoint = _locate_flm_entrypoint(flm_tree)
+    if entrypoint is None:
+        raise QualificationError(
+            f"--flm path does not contain an '{executable}' executable ({flm_tree})"
+        )
+    config, model_info, xclbin_root = _locate_flm_metadata(entrypoint)
+    missing = [
+        name
+        for name, value in (
+            ("model_list.json", config),
+            ("model_info.json", model_info),
+            ("xclbins/", xclbin_root),
+        )
+        if value is None
+    ]
+    if missing:
+        raise QualificationError(
+            f"--flm FastFlowLM build is missing {', '.join(missing)} near {entrypoint}"
+        )
+    environment = dict(os.environ)
+    environment.setdefault("HRX_GPU_DRIVER", "amdxdna")
+    environment["FLM_CONFIG_PATH"] = str(config.resolve())
+    environment["FLM_XCLBIN_PATH"] = str(xclbin_root.resolve())
+    environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
+    if os.name == "nt":
+        environment["PATH"] = os.pathsep.join(
+            entry
+            for entry in (str(entrypoint.parent), environment.get("PATH", ""))
+            if entry
+        )
+    else:
+        environment["LD_LIBRARY_PATH"] = os.pathsep.join(
+            entry
+            for entry in (
+                *_hrx_library_dirs(entrypoint),
+                environment.get("LD_LIBRARY_PATH", ""),
+            )
+            if entry
+        )
+    return entrypoint.resolve(), config.resolve(), environment
+
+
 _windows_install_roots = host_xrt.windows_install_roots
 _host_xrt_prefix_candidates = host_xrt.host_xrt_prefix_candidates
 _is_host_xrt_prefix = host_xrt.is_host_xrt_loader_prefix
@@ -2461,7 +2556,16 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         writer.finalize()
         return 1, _summary(evidence, args.output)
 
-    flm, flm_config, flm_environment = _resolve_flm()
+    flm_arg = getattr(args, "flm", None)
+    if flm_arg is not None:
+        flm, flm_config, flm_environment = _resolve_flm_install(Path(flm_arg))
+        print(
+            f"qualify: using --flm {flm}",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        flm, flm_config, flm_environment = _resolve_flm()
     version_result = run_command(
         [flm, "--version"],
         log_path=writer.path("logs/tests/flm-version.log"),
