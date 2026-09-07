@@ -3865,6 +3865,7 @@ def test_resolve_xrt_flm_accepts_fhs_root_and_binary(tmp_path, monkeypatch):
         (root / "share" / "flm" / "model_info.json").resolve()
     )
     assert environment["FLM_XCLBIN_PATH"] == str((root / "share" / "flm").resolve())
+    assert environment["FLM_LOG_RAW_OUTPUT"] == "1"
     assert environment["XILINX_XRT"] == str(host)
     if os.name == "nt":
         assert str(host / "lib") in environment["PATH"]

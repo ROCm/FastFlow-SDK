@@ -972,6 +972,11 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     environment["FLM_CONFIG_PATH"] = str(config)
     environment["FLM_XCLBIN_PATH"] = str(xclbins)
     environment["FLM_MODELINFO_PATH"] = str(model_info)
+    # Qualification anchors per-turn/per-iteration parsing on the "Model RAW
+    # Output:" marker. Most models emit it by default, but some (e.g. the hy-mt2
+    # translator) quiet it for interactive use; force it on so every model is
+    # parseable without changing the interactive default.
+    environment["FLM_LOG_RAW_OUTPUT"] = "1"
     if os.name == "nt":
         try:
             from rocm_npu_runtime import binary_dir
@@ -1120,6 +1125,10 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     environment["FLM_CONFIG_PATH"] = str(config.resolve())
     environment["FLM_XCLBIN_PATH"] = str(xclbin_root.resolve())
     environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
+    # Match the HRX child: force the "Model RAW Output:" marker so the XRT
+    # comparison is parseable for models that quiet it by default (see
+    # _resolve_flm).
+    environment["FLM_LOG_RAW_OUTPUT"] = "1"
     # Isolate host XRT to this child only; never rewrite the parent process.
     xrt_env_root = _host_xrt_env_root(host_xrt)
     environment["XILINX_XRT"] = str(xrt_env_root)
