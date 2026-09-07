@@ -79,16 +79,16 @@ upstream.
 
 ### 0004-skip-optional-hrx-engines-missing-from-lib-hrx.patch
 When `FLM_USE_HRX` is on, skip linking and compiling model engines whose
-import library is absent from `lib/hrx` (today `gemma4_12b_npu` and
-`hunyuan_npu`, which main ships only under `lib/xrt`). Requesting a skipped
-family fails closed instead of substituting Llama3.
+import library is absent from `lib/hrx`. Linux `update_hrx_105` now ships
+`gemma4_12b_npu` and `hunyuan_npu` `.so` files; Windows HRX `.dll`/`.lib` for
+those families may still be missing. Requesting a skipped family fails closed
+instead of substituting Llama3.
 
-**Why:** HRX engine coverage lags FastFlowLM main. The merged 1.0.3 `lib/hrx`
-set is enough to build and run the rest of the 1.0.5 catalog; requiring the
-XRT-only engines would fail the HRX link until those blobs are rebuilt.
+**Why:** HRX engine coverage can still lag on one OS. Skip-if-absent keeps the
+HRX app build green without dropping a family that is actually present.
 
 **Remove when:** `lib/hrx` contains every engine `lib/xrt` ships at the pinned
-FastFlowLM commit.
+FastFlowLM commit, on both Linux and Windows.
 
 ## patches/iron-ops/
 

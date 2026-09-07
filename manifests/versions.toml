@@ -63,12 +63,12 @@ windows_perf_note = "Avoids native command/BO construction before retained chain
 host_only_note = "Eager command/context caches before device publication. HOST_ONLY is HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A); HOST_COHERENT and HOST_LOCAL/DEVICE_LOCAL without OPTIMAL are rejected. FastFlowLM Windows HRX engines at [fastflowlm] request 0x1A directly, so the former 0004 HOST_LOCAL|DEVICE_VISIBLE (0x52/0x56) alias is dropped. Reject non-1x1x1 dispatch and unaligned patch addresses."
 
 [fastflowlm]                    # projects/FastFlowLM — HRX-native LLM inference engine
-repo       = "github.com/ROCm/FastFlowLM"
+repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
 upstream   = "github.com/ROCm/FastFlowLM"
-branch     = "main"
+branch     = "update_hrx_105"
 pr         = "ROCm/FastFlowLM#703"
-commit     = "dae4c7545bb8c4119e884fa0b83e7472efc1630c"
-note       = "FastFlowLM upstream main after PR #703 (Abhishek-Varma/update_hrx_binaries). App/catalog follow this pin (FLM v1.0.5 today); python dev.py build fastflowlm stamps -DFLM_VERSION/-DNPU_VERSION from src/CMakePresets.json. lib/hrx is the merged 1.0.3 engine set and may lag new families on main (gemma4-12b and hunyuan are XRT-only at this pin). patches/FastFlowLM/0004 skips those missing HRX engines and fails closed if they are requested. Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
+commit     = "6c64537163d6ec446b892dbadfb6ee0c84ae771c"
+note       = "FastFlowLM_JT update_hrx_105: Linux HRX engines rebuilt manylinux_2_28 Boost-free against jtuyls/hrx flm-hrx-amdxdna-v2026.09.02 (IRON flm_use_hrx_flag c357a526), including gemma4-12b and hy-mt2 (hunyuan). App/catalog follow FLM v1.0.5. patches/FastFlowLM/0004 still skips an HRX engine if its .so/.lib is absent (Windows HRX dlls for the new families are not in this pin). Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
