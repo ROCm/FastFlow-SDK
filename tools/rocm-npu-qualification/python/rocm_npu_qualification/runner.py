@@ -862,13 +862,50 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     return path.resolve(), config.resolve(), environment
 
 
+# Keep in sync with build_tools.dev.fastflowlm_build Windows defaults.
+_WINDOWS_XRT_PREFIXES = (
+    Path(r"C:\dev\xrt-prefix"),
+    Path(r"C:\dev\xrtNPUfromDLL"),
+)
+
+
+def _directory_has_xrt_runtime(path: Path) -> bool:
+    """True when *path* contains XRT link or loader libraries."""
+    if not path.is_dir():
+        return False
+    return any(
+        (path / name).is_file()
+        for name in (
+            "xrt_coreutil.lib",
+            "xrt_coreutil.dll",
+            "libxrt_coreutil.so",
+            "libxrt_coreutil.so.2",
+            "libxrt_coreutil.so.1",
+        )
+    )
+
+
+def _is_host_xrt_prefix(prefix: Path) -> bool:
+    """True when *prefix* looks like a usable host XRT install root."""
+    if not prefix.is_dir():
+        return False
+    return (
+        (prefix / "lib").is_dir()
+        or (prefix / "include").is_dir()
+        or (prefix / "bin").is_dir()
+        or _directory_has_xrt_runtime(prefix)
+    )
+
+
 def _host_xrt_prefix() -> Path | None:
     """Return the host XRT install prefix, or ``None`` if it is not present."""
     candidates: list[Path] = []
     env_root = os.environ.get("XILINX_XRT")
     if env_root:
         candidates.append(Path(env_root).expanduser())
-    if os.name != "nt":
+    if os.name == "nt":
+        candidates.extend(_WINDOWS_XRT_PREFIXES)
+    else:
         candidates.append(Path("/opt/xilinx/xrt"))
     seen: set[Path] = set()
     for prefix in candidates:
@@ -879,20 +916,28 @@ def _host_xrt_prefix() -> Path | None:
         if resolved in seen:
             continue
         seen.add(resolved)
-        if prefix.is_dir() and (
-            (prefix / "lib").is_dir() or (prefix / "include").is_dir()
-        ):
+        if _is_host_xrt_prefix(prefix):
             return resolved
     return None
 
 
 def _host_xrt_library_dirs(prefix: Path) -> list[str]:
     """Loader directories under a host XRT prefix, if they exist."""
-    directories = []
-    for relative in ("lib", os.path.join("lib", "x86_64-linux-gnu")):
-        path = prefix / relative
-        if path.is_dir():
-            directories.append(str(path.resolve()))
+    directories: list[str] = []
+    seen: set[str] = set()
+    for relative in ("lib", os.path.join("lib", "x86_64-linux-gnu"), "bin", ""):
+        path = prefix if relative == "" else prefix / relative
+        if not path.is_dir():
+            continue
+        if relative == "bin" and not _directory_has_xrt_runtime(path):
+            continue
+        if relative == "" and not _directory_has_xrt_runtime(path):
+            continue
+        resolved = str(path.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        directories.append(resolved)
     return directories
 
 
@@ -966,9 +1011,15 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
         return {"status": "unavailable", "requested": requested, "error": error}
     host_xrt = _host_xrt_prefix()
     if host_xrt is None:
+        extra = (
+            " or use C:\\dev\\xrt-prefix / C:\\dev\\xrtNPUfromDLL"
+            if os.name == "nt"
+            else " or install to /opt/xilinx/xrt"
+        )
         error = (
-            "host XRT runtime is not installed (set XILINX_XRT or install to "
-            "/opt/xilinx/xrt); the XRT comparison uses the host install rather "
+            "host XRT runtime is not installed (set XILINX_XRT"
+            + extra
+            + "); the XRT comparison uses the host install rather "
             "than a bundled prefix"
         )
         print(
@@ -983,7 +1034,17 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
     # Isolate host XRT to this child only; never rewrite the parent process.
     environment["XILINX_XRT"] = str(host_xrt)
-    if os.name != "nt":
+    if os.name == "nt":
+        environment["PATH"] = os.pathsep.join(
+            entry
+            for entry in (
+                str(entrypoint.parent.resolve()),
+                *_host_xrt_library_dirs(host_xrt),
+                environment.get("PATH", ""),
+            )
+            if entry
+        )
+    else:
         environment["LD_LIBRARY_PATH"] = os.pathsep.join(
             entry
             for entry in (
