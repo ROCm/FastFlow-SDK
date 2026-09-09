@@ -67,7 +67,7 @@ repo       = "github.com/Abhishek-Varma/FastFlowLM_JT"
 upstream   = "github.com/ROCm/FastFlowLM"
 branch     = "update_hrx_105"
 pr         = "ROCm/FastFlowLM#703"
-commit     = "2c937628b07e723b04e2488daed46fb992386f7d"
+commit     = "1bb7f281b19306e324825c3647566b9b7194f386"
 note       = "FastFlowLM_JT update_hrx_105 rebased onto upstream ROCm/FastFlowLM main (10a3f14) 2026-09-08, keeping the validated flm-hrx-amdxdna-v2026.09.02 engine set (Linux .so byte-identical; upstream's CMake/Makefile/CI and dequant/gemm/mha import libs adopted). Linux and Windows HRX engines rebuilt Boost-free against jtuyls/hrx flm-hrx-amdxdna-v2026.09.02 (IRON flm_use_hrx_flag c357a526), including gemma4_12b_npu and hunyuan_npu. App/catalog follow FLM v1.0.5. HRX buffer.hpp uses shared_ptr ownership so the app ABI matches IRON engines (XRT unique_ptr path unchanged). hy-mt2 (hunyuan) keeps its quiet interactive default (no Model RAW Output echo) but honors FLM_LOG_RAW_OUTPUT=1 via AutoModel::env_forces_raw_output(); qualify and numerical-match set that env so its per-turn responses stay parseable. The former 0004 skip-optional-hrx-engines patch was dropped at this pin: lib/hrx now ships every model engine lib/xrt does on both Linux (.so) and Windows (.dll/.lib), so nothing is ever absent to skip. Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
