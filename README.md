@@ -270,9 +270,10 @@ python3 dev.py test-fastflowlm
 
 `build fastflowlm-xrt` builds a diagnostic, XRT-backed FastFlowLM into a
 separate `build/FastFlowLM-xrt-install/` tree (never shipped in the HRX wheels).
-It links the host XRT install (`$XILINX_XRT`, `/opt/xilinx/xrt` on Linux, or
-`C:\dev\xrt-prefix` / `C:\dev\xrtNPUfromDLL` on Windows) and installs an FHS
-`bin/flm` tree; it does not bundle a relocatable XRT runtime. Point
+It links the host XRT install discovered from `$XILINX_XRT`, the platform
+default (`/opt/xilinx/xrt` on Linux; Program Files or `C:\Xilinx\XRT` on
+Windows), or an XRT runtime already on `PATH`. It installs an FHS `bin/flm`
+tree; it does not bundle a relocatable XRT runtime. Point
 `rocm-npu qualify --bench --xrt-flm <path>` at this tree for the optional
 HRX-vs-XRT comparison. Qualification sets `XILINX_XRT` and the loader path
 (`LD_LIBRARY_PATH` on Linux, `PATH` on Windows) only on that comparison child.

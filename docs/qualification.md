@@ -94,8 +94,9 @@ enables the comparison (there is no separate enable flag). Because the shipped
 wheel only bundles the HRX runtime, point `--xrt-flm` at a separately built XRT
 entrypoint (`bin/flm`, or its FHS install root) produced by
 `python dev.py build fastflowlm-xrt`, which links the host XRT install
-(`$XILINX_XRT`, `/opt/xilinx/xrt` on Linux, or `C:\dev\xrt-prefix` /
-`C:\dev\xrtNPUfromDLL` on Windows). Qualification sets `XILINX_XRT` and the
+discovered from `$XILINX_XRT`, the platform default (`/opt/xilinx/xrt` on
+Linux; Program Files or `C:\Xilinx\XRT` on Windows), or an XRT runtime
+already on `PATH`. Qualification sets `XILINX_XRT` and the
 loader path (`LD_LIBRARY_PATH` on Linux, `PATH` on Windows) only on that
 comparison child. XRT is strictly best-effort:
 the status column is `PASS`, `FAIL`, or `N/A` (unavailable build or host XRT);
