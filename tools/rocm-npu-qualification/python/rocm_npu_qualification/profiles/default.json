@@ -18,7 +18,7 @@
       "xclbins": [
         {"path": "Qwen3-0.6B-NPU2/attn.xclbin", "sha256": "9acc30b9412d01b57c0c8c909851eaaaa3607b38d4212b7028c6bf87cdac1d2c"},
         {"path": "Qwen3-0.6B-NPU2/dequant.xclbin", "sha256": "575d45e47993315f95f601e07f9f21164f30515f80e232e16255d7c5f2a1d4bf"},
-        {"path": "Qwen3-0.6B-NPU2/layer.xclbin", "sha256": "7cccd219d211eb39e93c81aca401e294b0b9434e4c2844ae614618347e1c6c3c"},
+        {"path": "Qwen3-0.6B-NPU2/layer.xclbin", "sha256": "18a6915f9da2b1eba89c0f7410fa5d50afc72781929e300541636b0776fa90e1"},
         {"path": "Qwen3-0.6B-NPU2/mm.xclbin", "sha256": "4afc2a6f2459c0ddcf7de61193a6e83e53a951a0f6c33521456d569bab2c7142"}
       ],
       "tests": [
