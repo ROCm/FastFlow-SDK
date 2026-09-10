@@ -18,6 +18,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from . import host_xrt
 from .benchmark import benchmark_csv_checkpoint as _benchmark_csv_checkpoint
 from .commands import run_command, run_interactive_command, serve_probe
 from .contracts import (
@@ -862,38 +863,17 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     return path.resolve(), config.resolve(), environment
 
 
-def _host_xrt_prefix() -> Path | None:
-    """Return the host XRT install prefix, or ``None`` if it is not present."""
-    candidates: list[Path] = []
-    env_root = os.environ.get("XILINX_XRT")
-    if env_root:
-        candidates.append(Path(env_root).expanduser())
-    if os.name != "nt":
-        candidates.append(Path("/opt/xilinx/xrt"))
-    seen: set[Path] = set()
-    for prefix in candidates:
-        try:
-            resolved = prefix.resolve()
-        except OSError:
-            resolved = prefix
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if prefix.is_dir() and (
-            (prefix / "lib").is_dir() or (prefix / "include").is_dir()
-        ):
-            return resolved
-    return None
+_windows_install_roots = host_xrt.windows_install_roots
+_host_xrt_prefix_candidates = host_xrt.host_xrt_prefix_candidates
+_is_host_xrt_prefix = host_xrt.is_host_xrt_loader_prefix
+_host_xrt_library_dirs = host_xrt.host_xrt_library_dirs
 
 
-def _host_xrt_library_dirs(prefix: Path) -> list[str]:
-    """Loader directories under a host XRT prefix, if they exist."""
-    directories = []
-    for relative in ("lib", os.path.join("lib", "x86_64-linux-gnu")):
-        path = prefix / relative
-        if path.is_dir():
-            directories.append(str(path.resolve()))
-    return directories
+def _host_xrt_prefix(*, environ=None, windows=None) -> Path | None:
+    """Return a loadable host XRT prefix, or ``None`` if none is present."""
+    return host_xrt.host_xrt_prefix(
+        windows=windows, environ=environ, require_loader=True
+    )
 
 
 def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
@@ -966,9 +946,15 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
         return {"status": "unavailable", "requested": requested, "error": error}
     host_xrt = _host_xrt_prefix()
     if host_xrt is None:
+        extra = (
+            ", or put xrt_coreutil.dll on PATH"
+            if os.name == "nt"
+            else " or install to /opt/xilinx/xrt"
+        )
         error = (
-            "host XRT runtime is not installed (set XILINX_XRT or install to "
-            "/opt/xilinx/xrt); the XRT comparison uses the host install rather "
+            "host XRT runtime is not installed (set XILINX_XRT to an XRT install"
+            + extra
+            + "); the XRT comparison uses the host install rather "
             "than a bundled prefix"
         )
         print(
@@ -983,7 +969,17 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
     # Isolate host XRT to this child only; never rewrite the parent process.
     environment["XILINX_XRT"] = str(host_xrt)
-    if os.name != "nt":
+    if os.name == "nt":
+        environment["PATH"] = os.pathsep.join(
+            entry
+            for entry in (
+                str(entrypoint.parent.resolve()),
+                *_host_xrt_library_dirs(host_xrt),
+                environment.get("PATH", ""),
+            )
+            if entry
+        )
+    else:
         environment["LD_LIBRARY_PATH"] = os.pathsep.join(
             entry
             for entry in (

@@ -13,6 +13,19 @@ from build_tools.artifact import directory_state, git_source_state
 from build_tools.dev import patches
 from build_tools.fastflowlm_deps import dependency_errors, dependency_paths
 
+_QUALIFICATION_PYTHON = paths.ROOT / "tools" / "rocm-npu-qualification" / "python"
+if str(_QUALIFICATION_PYTHON) not in sys.path:
+    sys.path.insert(0, str(_QUALIFICATION_PYTHON))
+
+from rocm_npu_qualification import host_xrt
+
+_directory_has_xrt_runtime = host_xrt.directory_has_xrt_runtime
+_has_xrt_headers = host_xrt.has_xrt_headers
+_host_xrt_prefix = host_xrt.host_xrt_prefix
+_host_xrt_prefix_candidates = host_xrt.host_xrt_prefix_candidates
+_is_host_xrt_prefix = host_xrt.is_host_xrt_prefix
+_windows_install_roots = host_xrt.windows_install_roots
+
 BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or str(os.cpu_count() or 8)
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 
@@ -54,47 +67,34 @@ def _prepare_fresh_cmake_tree(path, expected):
             child.unlink()
 
 
-def _host_xrt_prefix():
-    """Return the host XRT install prefix, or ``None`` if it is not present.
+def _host_xrt_lib_dir(prefix: Path) -> Path:
+    """Return the directory CMake should pass as ``XRT_LIB_DIR``.
 
-    The XRT FastFlowLM build links against this install; ``qualify --xrt-flm``
-    then points only that comparison child at it via ``XILINX_XRT`` /
-    ``LD_LIBRARY_PATH``. There is no bundled or fake XRT prefix inside
-    ``FastFlowLM-xrt-install``.
+    Linux FHS installs keep ``libxrt_coreutil.so`` under ``prefix/lib``.
+    Windows trees keep import libs and DLLs in ``prefix/lib``, ``prefix/bin``,
+    or directly in the prefix.
     """
-    candidates = []
-    env_root = os.environ.get("XILINX_XRT")
-    if env_root:
-        candidates.append(Path(env_root).expanduser())
-    if not paths.is_windows():
-        candidates.append(Path("/opt/xilinx/xrt"))
-    seen = set()
-    for prefix in candidates:
-        try:
-            resolved = prefix.resolve()
-        except OSError:
-            resolved = prefix
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if prefix.is_dir() and (
-            (prefix / "lib").is_dir() or (prefix / "include").is_dir()
-        ):
-            return resolved
-    return None
+    for candidate in (prefix / "lib", prefix / "bin", prefix):
+        if _directory_has_xrt_runtime(candidate):
+            return candidate
+    lib = prefix / "lib"
+    return lib if lib.is_dir() else prefix
 
 
-def _host_xrt_include_dir(prefix):
+def _host_xrt_include_dir(prefix, *, windows=None):
     """Return the directory that contains ``xrt/xrt_bo.h``, or ``None``.
 
-    The runtime prefix (``$XILINX_XRT`` / ``/opt/xilinx/xrt``) is often a
-    runtime-only tree. Development headers then live in the distro ``xrt``
-    package (``/usr/include/xrt``).
+    Headers are taken from the discovered prefix (``include/`` or an XRT
+    source layout under it). Linux also probes the distro ``xrt`` package.
+    A runtime-only tree without SDK headers is not a compile-time install.
     """
+    selected_windows = paths.is_windows() if windows is None else windows
     candidates = []
     if prefix is not None:
         candidates.append(Path(prefix) / "include")
-    candidates.extend((Path("/usr/include/xrt"), Path("/usr/include")))
+        candidates.append(Path(prefix) / "src" / "runtime_src" / "core" / "include")
+    if not selected_windows:
+        candidates.extend((Path("/usr/include/xrt"), Path("/usr/include")))
     seen = set()
     for candidate in candidates:
         try:
@@ -104,11 +104,24 @@ def _host_xrt_include_dir(prefix):
         if resolved in seen:
             continue
         seen.add(resolved)
-        if (candidate / "xrt" / "experimental" / "xrt_ext.h").is_file() and (
-            candidate / "xrt" / "xrt_bo.h"
-        ).is_file():
+        if _has_xrt_headers(candidate):
             return resolved
     return None
+
+
+def _missing_host_xrt_message(*, windows=None):
+    selected_windows = paths.is_windows() if windows is None else windows
+    extra = (
+        ", or put xrt_coreutil.dll on PATH"
+        if selected_windows
+        else " or install to /opt/xilinx/xrt"
+    )
+    return (
+        "missing host XRT runtime: set XILINX_XRT to an XRT install"
+        + extra
+        + " (the XRT FastFlowLM build links the host install; it does "
+        "not bundle a relocatable XRT prefix)"
+    )
 
 
 def _host_xrt_pkgconfig_dir(prefix):
@@ -137,10 +150,10 @@ def _build_fastflowlm(args, *, backend):
     ``backend="hrx"`` (default) is the shipped product: it links the HRX
     amdxdna runtime and installs an FHS ``bin/flm`` tree consumed by the wheels.
     ``backend="xrt"`` is a diagnostic-only comparison build (``FLM_USE_HRX=OFF``):
-    it links the host XRT install (``$XILINX_XRT`` or ``/opt/xilinx/xrt``),
-    installs a matching FHS ``bin/flm`` tree, and is never packaged into the
-    HRX wheels. The two use entirely separate CMake/build/install trees so they
-    never share state.
+    it links the discovered host XRT install (``$XILINX_XRT``, platform default
+    roots, or ``PATH``), installs a matching FHS ``bin/flm`` tree, and is never
+    packaged into the HRX wheels. The two use entirely separate
+    CMake/build/install trees so they never share state.
     """
     if backend not in ("hrx", "xrt"):
         raise ValueError(f"unknown FastFlowLM backend: {backend}")
@@ -179,12 +192,7 @@ def _build_fastflowlm(args, *, backend):
     if not use_hrx:
         host_xrt = _host_xrt_prefix()
         if host_xrt is None:
-            sys.exit(
-                "missing host XRT runtime: set XILINX_XRT"
-                + ("" if paths.is_windows() else " or install to /opt/xilinx/xrt")
-                + " (the XRT FastFlowLM build links the host install; it does "
-                "not bundle a relocatable XRT prefix)"
-            )
+            sys.exit(_missing_host_xrt_message())
         xrt_include = _host_xrt_include_dir(host_xrt)
         if xrt_include is None:
             sys.exit(
@@ -238,7 +246,7 @@ def _build_fastflowlm(args, *, backend):
         backend_flags = [
             "-DFLM_USE_HRX=OFF",
             f"-DXRT_INCLUDE_DIR={environment.cmake_path(xrt_include)}",
-            f"-DXRT_LIB_DIR={environment.cmake_path(host_xrt / 'lib')}",
+            f"-DXRT_LIB_DIR={environment.cmake_path(_host_xrt_lib_dir(host_xrt))}",
         ]
     print(f"  FLM_VERSION={flm_version} NPU_VERSION={npu_version} (CMakePresets.json)")
     cc, cxx = environment.compilers()

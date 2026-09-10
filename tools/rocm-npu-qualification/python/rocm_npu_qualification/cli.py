@@ -154,14 +154,17 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         help=(
             "additionally benchmark each model through an XRT-backed FastFlowLM "
             "build and emit an HRX-vs-XRT comparison table (only with "
-            "--bench; off by default; Linux, requires a host XRT install). "
-            "PATH is the XRT FastFlowLM entrypoint (bin/flm) or its FHS "
-            "install root, produced by `dev.py build fastflowlm-xrt`. "
+            "--bench; off by default; Linux and Windows, requires a host XRT "
+            "install). PATH is the XRT FastFlowLM entrypoint (bin/flm.exe on "
+            "Windows, bin/flm on Linux) or its FHS install root, produced by "
+            "`dev.py build fastflowlm-xrt`. "
             "Supplying it is what enables the comparison. The comparison "
-            "child is pointed at the host XRT prefix via XILINX_XRT / "
-            "LD_LIBRARY_PATH; XRT results are best-effort. Status is "
-            "PASS, FAIL, or N/A (unavailable); metric cells are N/A unless "
-            "the comparison passed. XRT never changes the overall pass/fail."
+            "child is pointed at a discovered host XRT prefix (XILINX_XRT, "
+            "platform default install, or PATH) via XILINX_XRT and the "
+            "loader path (LD_LIBRARY_PATH on Linux, PATH on Windows); XRT "
+            "results are best-effort. Status is PASS, FAIL, or N/A "
+            "(unavailable); metric cells are N/A unless the comparison "
+            "passed. XRT never changes the overall pass/fail."
         ),
     )
     parser.add_argument(

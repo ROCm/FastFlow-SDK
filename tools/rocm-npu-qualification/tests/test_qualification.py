@@ -23,6 +23,7 @@ QUALIFICATION_PYTHON = ROOT / "tools" / "rocm-npu-qualification" / "python"
 from rocm_npu_qualification import (
     benchmark,
     cli,
+    host_xrt,
     installation,
     models,
     offline,
@@ -3562,7 +3563,14 @@ def test_resolve_xrt_flm_accepts_fhs_root_and_binary(tmp_path, monkeypatch):
     )
     assert environment["FLM_XCLBIN_PATH"] == str((root / "share" / "flm").resolve())
     assert environment["XILINX_XRT"] == str(host)
-    if os.name != "nt":
+    if os.name == "nt":
+        assert str(host / "lib") in environment["PATH"]
+        assert str(flm.resolve().parent) in environment["PATH"]
+        assert "flm-xrt-install\\lib" not in environment["PATH"]
+        assert "LD_LIBRARY_PATH" not in environment or str(host / "lib") not in (
+            environment.get("LD_LIBRARY_PATH") or ""
+        )
+    else:
         assert str(host / "lib") in environment["LD_LIBRARY_PATH"]
         assert "flm-xrt-install/lib" not in environment["LD_LIBRARY_PATH"]
     assert runner._resolve_xrt_flm(flm)["command"] == str(flm.resolve())
@@ -3586,6 +3594,29 @@ def test_resolve_xrt_flm_is_best_effort_on_missing_pieces(tmp_path, capsys):
     warning = capsys.readouterr().err
     assert "missing" in resolved["error"]
     assert "model_list.json" in warning
+
+
+def test_host_xrt_library_dirs_include_windows_dll_root(tmp_path):
+    prefix = tmp_path / "xrtNPUfromDLL"
+    prefix.mkdir()
+    (prefix / "xrt_coreutil.dll").write_bytes(b"")
+    dirs = runner._host_xrt_library_dirs(prefix)
+    assert str(prefix.resolve()) in dirs
+
+
+def test_host_xrt_prefix_discovers_dll_on_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_xrt, "windows_install_roots", lambda environ: [])
+    bindir = tmp_path / "Xilinx" / "XRT" / "bin"
+    bindir.mkdir(parents=True)
+    (bindir / "xrt_coreutil.dll").write_bytes(b"")
+    found = runner._host_xrt_prefix(
+        windows=True,
+        environ={
+            "XILINX_XRT": "",
+            "PATH": str(bindir),
+        },
+    )
+    assert found == (tmp_path / "Xilinx" / "XRT").resolve()
 
 
 def test_resolve_xrt_flm_requires_host_xrt(tmp_path, monkeypatch, capsys):
