@@ -34,9 +34,11 @@ A qualification run writes a portable directory containing:
 - `junit.xml`: CI-compatible passed and failed test cases
 - `report.md`: optional human-readable HRX overlay written for sweeps. It is
   covered by `SHA256SUMS` but is not schema-validated and carries no intake
-  semantics; profile runs omit it. When `--bench --xrt-flm <path>` runs, the
-  decode benchmark table and the Embedding/ASR probe tables widen to a
-  side-by-side HRX-vs-XRT comparison.
+  semantics; profile runs omit it. When `--bench --xrt-flm <path>` or
+  `--all-models --xrt-flm <path>` runs, the decode benchmark table and the
+  Embedding/ASR probe tables widen to a side-by-side HRX-vs-XRT comparison.
+  `--all-models --xrt-flm` also emits a greedy numerical-match table (exact
+  `Model RAW Output` equality on the single-prompt run).
 - `logs/pull/` and `logs/tests/`: redacted subprocess transcripts
 - `SHA256SUMS`: every other evidence file in deterministic path order
 
@@ -47,11 +49,14 @@ written as `running` before device work begins and updated as results arrive,
 so interrupted and failed runs retain useful partial evidence. Both successes
 and failures remain in the final bundle.
 
-An optional `--bench --xrt-flm <path>` comparison never adds test entries: each
-model's XRT result is folded into the matching HRX record under the free-form
-`metrics.xrt` object (`status`, measurements, log/artifact references, or
-`status: "unavailable"` with an error). Chat models fold onto the `bench`
-record; embed/ASR models fold onto the `serve` record. This keeps XRT strictly
+An optional `--bench --xrt-flm <path>` or `--all-models --xrt-flm <path>`
+comparison never adds test entries: each model's XRT result is folded into the
+matching HRX record under the free-form `metrics.xrt` object (`status`,
+measurements, `match` / `matched_outputs` for the single-prompt greedy text,
+log/artifact references, or `status: "unavailable"` with an error). Chat
+models fold greedy match onto the single-prompt `run` record and fold decode
+metrics onto the `bench` record; embed/ASR models
+fold onto the `serve` record. This keeps XRT strictly
 informational -- it never changes the run's `pass`/`fail` and needs no schema
 change. When the flag is given, the diagnostic-sweep `profile.json` records the
 requested path, the resolved XRT entrypoint, and the host `XILINX_XRT` prefix

@@ -230,9 +230,10 @@ def _filter_models_by_tags(
     """Restrict ``discovered`` to an explicit ``--models`` list.
 
     ``discovered`` is the set ``--models`` filters: the installed registry for
-    ``--bench all``, or the curated chat subset for ``--bench dev``. Preserves
-    the requested order and warns (rather than fails) about any tag missing
-    from that pool, so a stale or non-curated tag still benchmarks the rest.
+    ``--bench all`` / ``--all-models``, or the curated chat subset for
+    ``--bench dev``. Preserves the requested order and warns (rather than fails)
+    about any tag missing from that pool, so a stale or non-curated tag still
+    benchmarks the rest.
     Raises when none of the requested tags are present.
     """
     by_tag = {model["tag"]: model for model in discovered}
@@ -876,6 +877,23 @@ def _host_xrt_prefix(*, environ=None, windows=None) -> Path | None:
     )
 
 
+def _host_xrt_env_root(prefix: Path) -> Path:
+    """Directory exported as ``XILINX_XRT`` for the comparison child.
+
+    Linux keeps the FHS prefix (``libxrt`` is loaded from ``prefix/lib``).
+    Windows FastFlowLM/XRT loads ``%XILINX_XRT%\\xrt_core.dll`` from that
+    exact directory, so prefer ``prefix``, then ``bin``, then ``lib``.
+    """
+    if os.name != "nt":
+        return prefix
+    for candidate in (prefix, prefix / "bin", prefix / "lib"):
+        if (candidate / "xrt_core.dll").is_file() or (
+            candidate / "xrt_coreutil.dll"
+        ).is_file():
+            return candidate
+    return prefix
+
+
 def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     """Resolve a user-supplied XRT FastFlowLM build for best-effort comparison.
 
@@ -968,7 +986,8 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
     environment["FLM_XCLBIN_PATH"] = str(xclbin_root.resolve())
     environment["FLM_MODELINFO_PATH"] = str(model_info.resolve())
     # Isolate host XRT to this child only; never rewrite the parent process.
-    environment["XILINX_XRT"] = str(host_xrt)
+    xrt_env_root = _host_xrt_env_root(host_xrt)
+    environment["XILINX_XRT"] = str(xrt_env_root)
     if os.name == "nt":
         environment["PATH"] = os.pathsep.join(
             entry
@@ -992,7 +1011,7 @@ def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:
         "status": "resolved",
         "requested": requested,
         "command": str(entrypoint.resolve()),
-        "xilinx_xrt": str(host_xrt),
+        "xilinx_xrt": str(xrt_env_root),
         "environment": environment,
     }
 
@@ -1151,6 +1170,47 @@ def _run_flm_bench(
     }
 
 
+def _raw_outputs_match(hrx: list[str], xrt: list[str]) -> dict[str, Any]:
+    """Exact greedy-decode comparison of HRX vs XRT ``Model RAW Output`` lists."""
+    matched = sum(1 for left, right in zip(hrx, xrt) if left == right)
+    return {
+        "match": list(hrx) == list(xrt),
+        "matched_outputs": matched,
+        "hrx_outputs": len(hrx),
+        "xrt_outputs": len(xrt),
+    }
+
+
+def _invoke_flm_run(
+    *,
+    flm: Path,
+    model_tag: str,
+    test: dict[str, Any],
+    environment: dict[str, str],
+    log: Path,
+    input_lines: list[str],
+):
+    """Run ``flm run`` with the same stdin shape the HRX sweep uses."""
+    argv = [flm, "run", model_tag, "--ctx-len", str(test["ctx_len"])]
+    if os.name == "nt":
+        return run_command(
+            argv,
+            log_path=log,
+            env=environment,
+            input_text="".join(f"{line}\n" for line in input_lines),
+            timeout=test["timeout_seconds"],
+            echo=True,
+        )
+    return run_interactive_command(
+        argv,
+        log_path=log,
+        env=environment,
+        input_lines=input_lines,
+        timeout=test["timeout_seconds"],
+        echo=True,
+    )
+
+
 def _run_xrt_comparison(
     *,
     xrt_flm: Path,
@@ -1199,6 +1259,62 @@ def _run_xrt_comparison(
         metrics["error"] = result["semantic_error"] or "FastFlowLM XRT benchmark failed"
     artifacts = [result["config"]] + ([] if result["csv"] is None else [result["csv"]])
     return metrics, artifacts
+
+
+def _run_xrt_chat_comparison(
+    *,
+    xrt_flm: Path,
+    model_tag: str,
+    test: dict[str, Any],
+    environment: dict[str, str],
+    writer: EvidenceWriter,
+    safe_tag: str,
+    name: str,
+    input_lines: list[str],
+    expected_turns: int,
+    hrx_raw_outputs: list[str],
+) -> dict[str, Any]:
+    """Run the single-prompt chat through XRT and compare greedy decode text.
+
+    Folded into the HRX run record as ``metrics.xrt``. Failures are best-effort
+    (``status`` fail/unavailable plus ``match: false``) and never raise.
+    """
+    log = writer.path(f"logs/tests/{safe_tag}-{name}-xrt.log")
+    try:
+        result = _invoke_flm_run(
+            flm=xrt_flm,
+            model_tag=model_tag,
+            test=test,
+            environment=environment,
+            log=log,
+            input_lines=input_lines,
+        )
+    except (QualificationError, OSError) as error:
+        return {"status": "unavailable", "error": str(error), "match": False}
+    transcript = result.stdout + "\n" + result.stderr
+    raw_outputs = extract_raw_outputs(transcript)
+    comparison = _raw_outputs_match(hrx_raw_outputs, raw_outputs)
+    semantic_error = ""
+    if has_runtime_error(transcript):
+        semantic_error = "FastFlowLM emitted an XRT runtime error"
+    elif len(raw_outputs) != expected_turns:
+        semantic_error = (
+            f"FastFlowLM emitted {len(raw_outputs)} XRT responses; "
+            f"expected {expected_turns}"
+        )
+    passed = result.returncode == 0 and not semantic_error
+    metrics: dict[str, Any] = {
+        "status": "pass" if passed else "fail",
+        **comparison,
+        "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
+        "log": writer.relative(log),
+        "returncode": result.returncode,
+        "timed_out": result.timed_out,
+        "duration_seconds": result.duration_seconds,
+    }
+    if not passed:
+        metrics["error"] = semantic_error or "FastFlowLM XRT chat run failed"
+    return metrics
 
 
 def _run_xrt_serve_comparison(
@@ -1483,36 +1599,14 @@ def _test_model(
                 *test["setup_commands"],
                 *(turn["prompt"] for turn in turns),
             ]
-            if os.name == "nt":
-                result = run_command(
-                    [
-                        flm,
-                        "run",
-                        model["tag"],
-                        "--ctx-len",
-                        str(test["ctx_len"]),
-                    ],
-                    log_path=log,
-                    env=environment,
-                    input_text="".join(f"{line}\n" for line in input_lines),
-                    timeout=test["timeout_seconds"],
-                    echo=True,
-                )
-            else:
-                result = run_interactive_command(
-                    [
-                        flm,
-                        "run",
-                        model["tag"],
-                        "--ctx-len",
-                        str(test["ctx_len"]),
-                    ],
-                    log_path=log,
-                    env=environment,
-                    input_lines=input_lines,
-                    timeout=test["timeout_seconds"],
-                    echo=True,
-                )
+            result = _invoke_flm_run(
+                flm=flm,
+                model_tag=model["tag"],
+                test=test,
+                environment=environment,
+                log=log,
+                input_lines=input_lines,
+            )
             transcript = result.stdout + "\n" + result.stderr
             raw_outputs = extract_raw_outputs(transcript)
             max_length_reached = bool(MAX_LENGTH_PATTERN.search(transcript))
@@ -1556,6 +1650,33 @@ def _test_model(
             # each per-turn check above passed, so a thinking model that ran long
             # before answering is not itself a failure.
             passed = result.returncode == 0 and not semantic_error
+            run_metrics: dict[str, Any] = {
+                "responses": len(raw_outputs),
+                "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
+                "max_length_reached": max_length_reached,
+            }
+            compare_xrt = "single" in name
+            if compare_xrt and (xrt_flm is not None or xrt_unavailable is not None):
+                run_metrics["backend"] = "hrx"
+            if compare_xrt and xrt_unavailable is not None:
+                run_metrics["xrt"] = dict(xrt_unavailable)
+            elif (
+                compare_xrt
+                and xrt_flm is not None
+                and xrt_bench_environment is not None
+            ):
+                run_metrics["xrt"] = _run_xrt_chat_comparison(
+                    xrt_flm=xrt_flm,
+                    model_tag=model["tag"],
+                    test=test,
+                    environment=xrt_bench_environment,
+                    writer=writer,
+                    safe_tag=safe_tag,
+                    name=name,
+                    input_lines=input_lines,
+                    expected_turns=len(turns),
+                    hrx_raw_outputs=raw_outputs,
+                )
             records.append(
                 {
                     "model": model["tag"],
@@ -1569,11 +1690,7 @@ def _test_model(
                     "turn_count": len(turns),
                     "process_iteration": iteration,
                     "soak_iterations": test["process_iterations"],
-                    "metrics": {
-                        "responses": len(raw_outputs),
-                        "raw_outputs_sha256": canonical_json_sha256(raw_outputs),
-                        "max_length_reached": max_length_reached,
-                    },
+                    "metrics": run_metrics,
                     "artifacts": [],
                     **(
                         {}
@@ -1807,8 +1924,8 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     "--bench-iterations must be a positive integer, got "
                     f"{benchmark_iterations}"
                 )
-    # --models narrows a benchmark sweep to an explicit tag subset. It only has
-    # meaning for a benchmark mode; anywhere else it is warned about and ignored.
+    # --models narrows a --bench or --all-models sweep to an explicit tag
+    # subset. Anywhere else it is warned about and ignored.
     # An explicit empty list (``--models=`` / commas-only) is an error: the flag
     # is a restriction, not a no-op that silently sweeps the whole registry.
     models_arg = getattr(args, "models", None)
@@ -1817,9 +1934,10 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         model_filter = [tag.strip() for tag in models_arg.split(",") if tag.strip()]
         if not model_filter:
             raise QualificationError("--models requires at least one tag")
-    if model_filter and not any_benchmark:
+    if model_filter and not any_benchmark and not all_models:
         print(
-            "qualify: --models has no effect without --bench; ignoring it",
+            "qualify: --models has no effect without --bench or --all-models; "
+            "ignoring it",
             file=sys.stderr,
             flush=True,
         )
@@ -1836,12 +1954,13 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             flush=True,
         )
     # Supplying --xrt-flm is what opts into the XRT comparison; there is no
-    # separate enable flag.
+    # separate enable flag. --bench compares decode/serve metrics; --all-models
+    # compares the single-prompt greedy Model RAW Output.
     xrt_flm_arg = getattr(args, "xrt_flm", None)
     with_xrt = xrt_flm_arg is not None
-    if with_xrt and not any_benchmark:
+    if with_xrt and not any_benchmark and not all_models:
         print(
-            "qualify: --xrt-flm has no effect without --bench; "
+            "qualify: --xrt-flm has no effect without --bench or --all-models; "
             "ignoring the XRT comparison",
             file=sys.stderr,
             flush=True,
@@ -1866,6 +1985,13 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 "FastFlowLM registry: single-prompt run, multi-turn, and a "
                 f"{bench_choice} benchmark for chat models; serve-probe for "
                 "embed/ASR models."
+                + (
+                    " With --xrt-flm, the single-prompt run is also executed "
+                    "on the XRT FastFlowLM build and the greedy Model RAW "
+                    "Output is compared (best-effort; never changes pass/fail)."
+                    if with_xrt
+                    else ""
+                )
             ),
             "bench_context": bench_choice,
             "models": [],
@@ -2232,16 +2358,25 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             sweep_iterations = (
                 int(requested_iterations) if requested_iterations else None
             )
-            for base in discovered:
+            execution_models = (
+                _filter_models_by_tags(
+                    discovered,
+                    model_filter,
+                    pool="installed FLM registry",
+                )
+                if model_filter
+                else discovered
+            )
+            for base in execution_models:
                 base["tests"] = _default_tests_for(
                     base,
                     bench_context=bench_context,
                     iterations=sweep_iterations,
                 )
-            execution_models = discovered
+            selection = "selected" if model_filter else "discovered"
             summary_note = (
-                f"complete sweep discovered {len(discovered)} models from the "
-                "installed FLM registry"
+                f"complete sweep {selection} {len(execution_models)} models "
+                "from the installed FLM registry"
             )
         # The descriptor records what actually ran (tag, kind, test names) rather
         # than a profile-v1 model+test config: a sweep pins nothing, so the full

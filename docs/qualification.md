@@ -82,10 +82,13 @@ fewer FastFlowLM tags -- native checks and the XADX kernel recipe still run at
 the same soak depth as `--bench all` (5/20/32). `--bench` already drops
 functional chat stages; XADX is a separate envelope.
 
-`--xrt-flm <path>` (only meaningful with `--bench`; Linux and Windows, requires
-a host XRT install) additionally exercises each model through an XRT-backed
-FastFlowLM build and widens the report to a side-by-side HRX-vs-XRT comparison. For chat
-models the benchmark table gains an XRT Status column plus XRT metric columns
+`--xrt-flm <path>` (meaningful with `--bench` or `--all-models`; Linux and
+Windows, requires a host XRT install) additionally exercises each model
+through an XRT-backed FastFlowLM build. `--bench` widens the report to a
+side-by-side HRX-vs-XRT metric comparison. `--all-models --xrt-flm` runs the
+single-prompt greedy chat on XRT and records an exact numerical match of
+`Model RAW Output` text. For chat models the benchmark table gains an
+XRT Status column plus XRT metric columns
 (`Model | XRT Status | XRT TTFT s | HRX TTFT s | XRT prefill tok/s | HRX prefill
 tok/s | XRT decode tok/s | HRX decode tok/s`); for embed/ASR models the
 Embedding and ASR probe tables gain XRT status and measurement columns (encode
@@ -100,10 +103,11 @@ already on `PATH`. Qualification sets `XILINX_XRT` and the
 loader path (`LD_LIBRARY_PATH` on Linux, `PATH` on Windows) only on that
 comparison child. XRT is strictly best-effort:
 the status column is `PASS`, `FAIL`, or `N/A` (unavailable build or host XRT);
-metric cells are `N/A` unless the comparison passed. XRT never emits a separate
+metric cells are `N/A` unless the comparison passed. Numerical-match cells are
+`MATCH`, `MISMATCH`, `FAIL`, or `N/A`. XRT never emits a separate
 test and never changes the run's pass/fail (so a fully passing HRX sweep still
-passes even when XRT is unavailable or fails). An unresolved `--xrt-flm` still
-stamps `unavailable` on every model so the XRT columns remain.
+passes even when XRT is unavailable, fails, or mismatches). An unresolved
+`--xrt-flm` still stamps `unavailable` on every model so the XRT columns remain.
 
 In addition to the machine-readable bundle, the `--all-models` and `--bench`
 sweeps write a human-readable `report.md` into the output directory. It contains
@@ -161,10 +165,12 @@ Useful options include:
   `dev` a curated set of chat tags)
 - `--bench-iterations <N>` (decode-benchmark iterations per chat model for
   `--bench`; a positive integer, default `5`)
-- `--models <tag>[,<tag>...]` (restrict a `--bench` sweep to explicit tags;
-  with `dev`, further restricts the curated set; ignored without `--bench`)
-- `--xrt-flm <path>` (with `--bench`; Linux and Windows; add a best-effort
-  HRX-vs-XRT comparison against a host XRT install, off by default)
+- `--models <tag>[,<tag>...]` (restrict a `--bench` or `--all-models` sweep to
+  explicit tags; with `dev`, further restricts the curated set; ignored
+  without `--bench` or `--all-models`)
+- `--xrt-flm <path>` (with `--bench` or `--all-models`; Linux and Windows; add
+  a best-effort HRX-vs-XRT comparison against a host XRT install, including
+  greedy numerical match on the `--all-models` single-prompt run; off by default)
 - `--json`
 
 Profiles support ad-hoc diagnostics and candidate-bound release runs. Packaged
@@ -303,6 +309,7 @@ rocm-npu qualify --bench all --model-cache $cache --output bench-all-evidence
 rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
 # HRX-vs-XRT comparison against a host XRT install (Linux and Windows)
 # rocm-npu qualify --bench all --xrt-flm C:\path\to\build\FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
+# rocm-npu qualify --all-models --models=qwen3:0.6b,llama3.2:1b --bench-context 1k --xrt-flm C:\path\to\build\FastFlowLM-xrt-install --model-cache $cache --output all-models-xrt-evidence
 rocm-npu qualify --bench dev --model-cache $cache --output bench-dev-evidence
 rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```

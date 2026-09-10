@@ -8,10 +8,12 @@ embedding/ASR probe tables. The complete-sweep (``--all-models``) also includes
 a per-model functional matrix (single-prompt / multi-turn); ``--bench`` skips
 that matrix because it does not run those stages. Those tables report HRX
 numbers by default; when a run additionally exercises an XRT-backed FastFlowLM
-build (``qualify --bench --xrt-flm <path>``), each widens to a side-by-side
-HRX-vs-XRT comparison (decode metrics for chat, encode-tok/s / RTF / WER for
-the probes). XRT metric cells are N/A unless that comparison passed; an XRT
-Status column distinguishes PASS, FAIL, and N/A (unavailable).
+build (``qualify --bench --xrt-flm`` or ``qualify --all-models --xrt-flm``),
+decode/serve tables widen to a side-by-side HRX-vs-XRT comparison, and
+``--all-models`` adds a greedy numerical-match table (exact ``Model RAW Output``
+equality on the single-prompt run). XRT metric cells are
+N/A unless that comparison passed; an XRT Status column distinguishes PASS,
+FAIL, and N/A (unavailable).
 """
 
 from __future__ import annotations
@@ -397,6 +399,55 @@ def _asr_table(evidence: dict[str, Any], kinds: dict[str, str] | None) -> list[s
     return lines
 
 
+def _match_label(xrt: dict[str, Any] | None) -> str:
+    """Render MATCH / MISMATCH / FAIL / N/A for a folded XRT comparison."""
+    if not isinstance(xrt, dict):
+        return "—"
+    status = str(xrt.get("status") or "")
+    if status == "unavailable":
+        return "N/A"
+    if status == "fail":
+        return "FAIL"
+    if xrt.get("match") is True:
+        return "MATCH"
+    if xrt.get("match") is False:
+        return "MISMATCH"
+    return "N/A"
+
+
+def _numerical_match_table(
+    evidence: dict[str, Any], kinds: dict[str, str] | None
+) -> list[str]:
+    """Exact greedy-decode HRX vs XRT table for the single-prompt run."""
+    run_tests = [
+        test for test in evidence.get("tests", []) if test.get("kind") == "run"
+    ]
+    if not any(
+        isinstance(test.get("metrics", {}).get("xrt"), dict) for test in run_tests
+    ):
+        return []
+    grouped = _tests_by_model(evidence)
+    lines = [
+        "## HRX vs XRT numerical match",
+        "",
+        "| Model | Single-prompt |",
+        "|-------|---------------|",
+    ]
+    for model in evidence.get("models", []):
+        tag = str(model.get("tag", ""))
+        tests = grouped.get(tag, [])
+        if _model_kind(tag, tests, kinds) in ("embed", "asr"):
+            continue
+        runs = [test for test in tests if test.get("kind") == "run"]
+        single = _first(runs, lambda test: "single" in test.get("name", ""))
+        lines.append(
+            f"| `{tag}` | "
+            f"{_match_label((single or {}).get('metrics', {}).get('xrt'))} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _notes(evidence: dict[str, Any]) -> list[str]:
     failures = [
         f"- **{test.get('kind', 'test')}** `{test.get('model', '')}`/"
@@ -428,6 +479,7 @@ def build_markdown_report(
     ]
     lines += _environment_table(evidence)
     lines += _results_table(evidence, kinds)
+    lines += _numerical_match_table(evidence, kinds)
     lines += _benchmark_table(evidence, kinds)
     lines += _embedding_table(evidence, kinds)
     lines += _asr_table(evidence, kinds)

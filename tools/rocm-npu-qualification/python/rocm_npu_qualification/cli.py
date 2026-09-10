@@ -118,12 +118,13 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         default=None,
         metavar="TAG[,TAG...]",
         help=(
-            "comma-separated FastFlowLM tags to restrict a --bench sweep to "
-            "(for example --models=llama3.2:1b,qwen3:0.6b). With --bench all, "
-            "tags absent from the installed registry are skipped with a "
-            "warning. With --bench dev, --models further restricts the curated "
-            "chat set: tags not in that set are skipped even if they are "
-            "installed. Has no effect without --bench."
+            "comma-separated FastFlowLM tags to restrict a --bench or "
+            "--all-models sweep to (for example --models=llama3.2:1b,qwen3:0.6b). "
+            "With --bench all or --all-models, tags absent from the installed "
+            "registry are skipped with a warning. With --bench dev, --models "
+            "further restricts the curated chat set: tags not in that set are "
+            "skipped even if they are installed. Has no effect without --bench "
+            "or --all-models."
         ),
     )
     parser.add_argument(
@@ -152,17 +153,19 @@ def create_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help=(
-            "additionally benchmark each model through an XRT-backed FastFlowLM "
-            "build and emit an HRX-vs-XRT comparison table (only with "
-            "--bench; off by default; Linux and Windows, requires a host XRT "
-            "install). PATH is the XRT FastFlowLM entrypoint (bin/flm.exe on "
-            "Windows, bin/flm on Linux) or its FHS install root, produced by "
-            "`dev.py build fastflowlm-xrt`. "
-            "Supplying it is what enables the comparison. The comparison "
-            "child is pointed at a discovered host XRT prefix (XILINX_XRT, "
-            "platform default install, or PATH) via XILINX_XRT and the "
-            "loader path (LD_LIBRARY_PATH on Linux, PATH on Windows); XRT "
-            "results are best-effort. Status is PASS, FAIL, or N/A "
+            "additionally exercise each model through an XRT-backed FastFlowLM "
+            "build (only with --bench or --all-models; off by default; Linux "
+            "and Windows, requires a host XRT install). PATH is the XRT "
+            "FastFlowLM entrypoint (bin/flm.exe on Windows, bin/flm on Linux) "
+            "or its FHS install root, produced by `dev.py build fastflowlm-xrt`. "
+            "Supplying it is what enables the comparison. --bench widens "
+            "decode/serve metric tables; --all-models runs the single-prompt "
+            "greedy chat on XRT and records an exact numerical match of Model "
+            "RAW Output text. The comparison child is pointed at a discovered "
+            "host XRT prefix (XILINX_XRT, platform default install, or PATH) "
+            "via XILINX_XRT and the loader path (LD_LIBRARY_PATH on Linux, "
+            "PATH on Windows); XRT results are best-effort. Status is PASS, "
+            "FAIL, or N/A "
             "(unavailable); metric cells are N/A unless the comparison "
             "passed. XRT never changes the overall pass/fail."
         ),

@@ -1209,6 +1209,110 @@ def test_model_test_validates_every_turn(monkeypatch, tmp_path):
     )
 
 
+def test_raw_outputs_match_requires_identical_greedy_text():
+    assert runner._raw_outputs_match(["Paris."], ["Paris."])["match"] is True
+    mismatch = runner._raw_outputs_match(["Paris."], ["Lyon."])
+    assert mismatch["match"] is False
+    assert mismatch["matched_outputs"] == 0
+    short = runner._raw_outputs_match(["a", "b"], ["a"])
+    assert short["match"] is False
+    assert short["matched_outputs"] == 1
+
+
+def test_model_test_records_xrt_numerical_match_on_single_prompt(monkeypatch, tmp_path):
+    model = _model()
+    model["tests"][0]["name"] = "single-prompt"
+    model["tests"][0]["turns"] = [{"prompt": "alpha", "expected": "alpha"}]
+    hrx = "Model RAW Output:\nalpha\n>>>"
+    xrt = "Model RAW Output:\nalpha\n>>>"
+    xrt_flm = tmp_path / "xrt-flm"
+    xrt_flm.write_bytes(b"xrt")
+
+    def fake_run(*args, **kwargs):
+        argv = [str(part) for part in args[0]]
+        transcript = xrt if str(xrt_flm) in argv else hrx
+        return _result(stdout=transcript)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "run_interactive_command", fake_run)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+        xrt_flm=xrt_flm,
+        xrt_environment={"XILINX_XRT": "/opt/xilinx/xrt"},
+    )
+    assert records[0]["status"] == "pass"
+    xrt_metrics = records[0]["metrics"]["xrt"]
+    assert xrt_metrics["status"] == "pass"
+    assert xrt_metrics["match"] is True
+    assert xrt_metrics["matched_outputs"] == 1
+
+
+def test_model_test_records_xrt_numerical_mismatch_without_failing(monkeypatch, tmp_path):
+    model = _model()
+    model["tests"][0]["name"] = "single-prompt"
+    model["tests"][0]["turns"] = [{"prompt": "alpha", "expected": "alpha"}]
+    hrx = "Model RAW Output:\nalpha\n>>>"
+    xrt = "Model RAW Output:\nnot-alpha\n>>>"
+    xrt_flm = tmp_path / "xrt-flm"
+    xrt_flm.write_bytes(b"xrt")
+
+    def fake_run(*args, **kwargs):
+        argv = [str(part) for part in args[0]]
+        return _result(stdout=xrt if str(xrt_flm) in argv else hrx)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "run_interactive_command", fake_run)
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+        xrt_flm=xrt_flm,
+        xrt_environment={"XILINX_XRT": "/opt/xilinx/xrt"},
+    )
+    assert records[0]["status"] == "pass"
+    assert records[0]["metrics"]["xrt"]["status"] == "pass"
+    assert records[0]["metrics"]["xrt"]["match"] is False
+
+
+def test_model_test_records_xrt_numerical_match_only_on_single_prompt(
+    monkeypatch, tmp_path
+):
+    model = _model()
+    model["tests"][0]["name"] = "multi-turn"
+    model["tests"][0]["turns"] = [{"prompt": "alpha", "expected": "alpha"}]
+    transcript = "Model RAW Output:\nalpha\n>>>"
+    xrt_flm = tmp_path / "xrt-flm"
+    xrt_flm.write_bytes(b"xrt")
+    monkeypatch.setattr(
+        runner, "run_command", lambda *args, **kwargs: _result(stdout=transcript)
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_interactive_command",
+        lambda *args, **kwargs: _result(stdout=transcript),
+    )
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+        xrt_flm=xrt_flm,
+        xrt_environment={"XILINX_XRT": "/opt/xilinx/xrt"},
+    )
+    assert records[0]["status"] == "pass"
+    assert "xrt" not in records[0]["metrics"]
+
+
 def test_model_test_reports_expected_regex_before_generic_text_quality(
     monkeypatch, tmp_path
 ):
@@ -3178,6 +3282,18 @@ def _run_sweep(
 
     def fake_test_model(model, **kwargs):
         kwargs["writer"].path("logs/tests/x.log").write_text("ok\n", encoding="utf-8")
+        xrt_unavailable = kwargs.get("xrt_unavailable")
+        if xrt_unavailable is not None:
+            xrt_blob = dict(xrt_unavailable)
+        elif kwargs.get("xrt_flm") is not None:
+            xrt_blob = {
+                "status": "pass",
+                "match": True,
+                "matched_outputs": 1,
+                "ttft_avg_s": 0.3,
+            }
+        else:
+            xrt_blob = None
         records = []
         for test in model["tests"]:
             record = {
@@ -3189,10 +3305,14 @@ def _run_sweep(
                 "log": "logs/tests/x.log",
             }
             if test["kind"] == "run":
+                metrics = {"responses": len(test["turns"])}
+                if xrt_blob is not None and "single" in test["name"]:
+                    metrics["backend"] = "hrx"
+                    metrics["xrt"] = dict(xrt_blob)
                 record.update(
                     turn_count=len(test["turns"]),
                     process_iteration=1,
-                    metrics={"responses": len(test["turns"])},
+                    metrics=metrics,
                     artifacts=[],
                 )
             elif test["kind"] == "bench":
@@ -3209,21 +3329,33 @@ def _run_sweep(
                     if "iterations" in test
                     else (3 if context_k == 8 else 1)
                 )
-                record.update(
-                    metrics={
-                        "checkpoint_tokens": context_k * 1000,
-                        "iterations": iterations,
+                metrics = {
+                    "checkpoint_tokens": context_k * 1000,
+                    "iterations": iterations,
+                    "csv_checkpoint_metrics": {
+                        "context_length_k": context_k,
+                        "ttft_avg_s": 0.922 if context_k == 8 else 0.5,
+                        "prefill_avg_toks_per_s": (
+                            1075.37 if context_k == 8 else 900.0
+                        ),
+                        "decoding_avg_toks_per_s": (
+                            52.15 if context_k == 8 else 40.0
+                        ),
+                    },
+                }
+                if xrt_blob is not None:
+                    metrics["backend"] = "hrx"
+                    metrics["xrt"] = {
+                        "status": xrt_blob.get("status", "pass"),
                         "csv_checkpoint_metrics": {
                             "context_length_k": context_k,
-                            "ttft_avg_s": 0.922 if context_k == 8 else 0.5,
-                            "prefill_avg_toks_per_s": (
-                                1075.37 if context_k == 8 else 900.0
-                            ),
-                            "decoding_avg_toks_per_s": (
-                                52.15 if context_k == 8 else 40.0
-                            ),
+                            "ttft_avg_s": 0.35,
+                            "prefill_avg_toks_per_s": 800.0,
+                            "decoding_avg_toks_per_s": 45.0,
                         },
-                    },
+                    }
+                record.update(
+                    metrics=metrics,
                     artifacts=[],
                 )
             elif test["kind"] == "serve":
@@ -3234,6 +3366,8 @@ def _run_sweep(
                 elif probe_kind == "asr":
                     metrics["real_time_factor"] = 0.25
                     metrics["word_error_rate"] = 0.05
+                if xrt_blob is not None:
+                    metrics["xrt"] = {"status": xrt_blob.get("status", "pass")}
                 record.update(metrics=metrics, artifacts=[])
             records.append(record)
         return records
@@ -3311,6 +3445,63 @@ def test_all_models_sweep_generates_schema_valid_evidence(monkeypatch, tmp_path)
         ).read_text(encoding="utf-8")
     )
     Draft202012Validator(schema).validate(evidence)
+
+
+def test_all_models_models_filter_narrows_registry(monkeypatch, tmp_path):
+    exit_code, summary, evidence = _run_sweep(
+        monkeypatch,
+        tmp_path,
+        all_models=True,
+        bench_context="1k",
+        models="qwen3:0.6b",
+    )
+    assert exit_code == 0
+    tags = [model["tag"] for model in evidence["models"]]
+    assert tags == ["qwen3:0.6b"]
+    kinds = {
+        test["kind"]
+        for test in evidence["tests"]
+        if test.get("model") != "native-core"
+    }
+    assert {"run", "bench"} <= kinds
+
+
+def test_all_models_xrt_flm_records_numerical_match_report(monkeypatch, tmp_path):
+    xrt_flm = Path("/opt/flm-xrt")
+
+    def fake_resolve(path):
+        return {
+            "status": "resolved",
+            "requested": str(path),
+            "command": "/opt/flm-xrt/bin/flm",
+            "xilinx_xrt": "/opt/xilinx/xrt",
+            "environment": {"XILINX_XRT": "/opt/xilinx/xrt"},
+        }
+
+    monkeypatch.setattr(runner, "_resolve_xrt_flm", fake_resolve)
+    exit_code, summary, evidence = _run_sweep(
+        monkeypatch,
+        tmp_path,
+        all_models=True,
+        bench_context="1k",
+        models="qwen3:0.6b",
+        xrt_flm=xrt_flm,
+    )
+    assert exit_code == 0
+    assert summary["status"] == "pass"
+    profile = json.loads(
+        (tmp_path / "evidence" / "profile.json").read_text(encoding="utf-8")
+    )
+    assert profile["xrt"]["status"] == "resolved"
+    run = next(
+        test
+        for test in evidence["tests"]
+        if test.get("kind") == "run" and "single" in test.get("name", "")
+    )
+    assert run["metrics"]["xrt"]["match"] is True
+    report_text = (tmp_path / "evidence" / "report.md").read_text(encoding="utf-8")
+    assert "## HRX vs XRT numerical match" in report_text
+    assert "| `qwen3:0.6b` | MATCH |" in report_text
 
 
 def test_all_models_skips_optional_hrx_engines_absent_from_install(
@@ -3602,6 +3793,34 @@ def test_host_xrt_library_dirs_include_windows_dll_root(tmp_path):
     (prefix / "xrt_coreutil.dll").write_bytes(b"")
     dirs = runner._host_xrt_library_dirs(prefix)
     assert str(prefix.resolve()) in dirs
+
+
+def test_host_xrt_env_root_uses_windows_lib_when_dlls_are_not_at_prefix(tmp_path):
+    prefix = tmp_path / "xrt-prefix"
+    lib = prefix / "lib"
+    lib.mkdir(parents=True)
+    (lib / "xrt_core.dll").write_bytes(b"")
+    if os.name == "nt":
+        assert runner._host_xrt_env_root(prefix) == lib
+        (prefix / "xrt_core.dll").write_bytes(b"")
+        assert runner._host_xrt_env_root(prefix) == prefix
+    else:
+        assert runner._host_xrt_env_root(prefix) == prefix
+
+
+def test_resolve_xrt_flm_sets_windows_xilinx_xrt_to_dll_dir(tmp_path, monkeypatch):
+    host = tmp_path / "host-xrt"
+    lib = host / "lib"
+    lib.mkdir(parents=True)
+    (lib / "xrt_core.dll").write_bytes(b"")
+    monkeypatch.setattr(runner, "_host_xrt_prefix", lambda: host.resolve())
+    root = tmp_path / "flm-xrt-install"
+    _make_xrt_build(root)
+    resolved = runner._resolve_xrt_flm(root)
+    assert resolved["status"] == "resolved"
+    expected = lib.resolve() if os.name == "nt" else host.resolve()
+    assert resolved["xilinx_xrt"] == str(expected)
+    assert resolved["environment"]["XILINX_XRT"] == str(expected)
 
 
 def test_host_xrt_prefix_discovers_dll_on_path(tmp_path, monkeypatch):
