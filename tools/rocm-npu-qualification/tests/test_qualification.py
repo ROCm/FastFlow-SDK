@@ -1252,7 +1252,9 @@ def test_model_test_records_xrt_numerical_match_on_single_prompt(monkeypatch, tm
     assert xrt_metrics["matched_outputs"] == 1
 
 
-def test_model_test_records_xrt_numerical_mismatch_without_failing(monkeypatch, tmp_path):
+def test_model_test_records_xrt_numerical_mismatch_without_failing(
+    monkeypatch, tmp_path
+):
     model = _model()
     model["tests"][0]["name"] = "single-prompt"
     model["tests"][0]["turns"] = [{"prompt": "alpha", "expected": "alpha"}]
@@ -3338,9 +3340,7 @@ def _run_sweep(
                         "prefill_avg_toks_per_s": (
                             1075.37 if context_k == 8 else 900.0
                         ),
-                        "decoding_avg_toks_per_s": (
-                            52.15 if context_k == 8 else 40.0
-                        ),
+                        "decoding_avg_toks_per_s": (52.15 if context_k == 8 else 40.0),
                     },
                 }
                 if xrt_blob is not None:
@@ -3459,9 +3459,7 @@ def test_all_models_models_filter_narrows_registry(monkeypatch, tmp_path):
     tags = [model["tag"] for model in evidence["models"]]
     assert tags == ["qwen3:0.6b"]
     kinds = {
-        test["kind"]
-        for test in evidence["tests"]
-        if test.get("model") != "native-core"
+        test["kind"] for test in evidence["tests"] if test.get("model") != "native-core"
     }
     assert {"run", "bench"} <= kinds
 

@@ -1172,7 +1172,7 @@ def _run_flm_bench(
 
 def _raw_outputs_match(hrx: list[str], xrt: list[str]) -> dict[str, Any]:
     """Exact greedy-decode comparison of HRX vs XRT ``Model RAW Output`` lists."""
-    matched = sum(1 for left, right in zip(hrx, xrt) if left == right)
+    matched = sum(1 for left, right in zip(hrx, xrt, strict=False) if left == right)
     return {
         "match": list(hrx) == list(xrt),
         "matched_outputs": matched,
