@@ -13,6 +13,19 @@ from build_tools.artifact import directory_state, git_source_state
 from build_tools.dev import patches
 from build_tools.fastflowlm_deps import dependency_errors, dependency_paths
 
+_QUALIFICATION_PYTHON = paths.ROOT / "tools" / "rocm-npu-qualification" / "python"
+if str(_QUALIFICATION_PYTHON) not in sys.path:
+    sys.path.insert(0, str(_QUALIFICATION_PYTHON))
+
+from rocm_npu_qualification import host_xrt
+
+_directory_has_xrt_runtime = host_xrt.directory_has_xrt_runtime
+_has_xrt_headers = host_xrt.has_xrt_headers
+_host_xrt_prefix = host_xrt.host_xrt_prefix
+_host_xrt_prefix_candidates = host_xrt.host_xrt_prefix_candidates
+_is_host_xrt_prefix = host_xrt.is_host_xrt_prefix
+_windows_install_roots = host_xrt.windows_install_roots
+
 BUILD_JOBS = os.environ.get("RNS_BUILD_JOBS") or str(os.cpu_count() or 8)
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 
@@ -52,131 +65,6 @@ def _prepare_fresh_cmake_tree(path, expected):
             shutil.rmtree(child)
         else:
             child.unlink()
-
-
-_XRT_RUNTIME_NAMES = (
-    "xrt_coreutil.dll",
-    "xrt_core.dll",
-    "xrt_coreutil.lib",
-    "libxrt_coreutil.so",
-    "libxrt_coreutil.so.2",
-    "libxrt_coreutil.so.1",
-    "xbutil.exe",
-    "xbutil2.exe",
-    "xbutil",
-    "xbutil2",
-)
-
-
-def _directory_has_xrt_runtime(path: Path) -> bool:
-    """True when *path* contains XRT link or loader libraries."""
-    if not path.is_dir():
-        return False
-    return any((path / name).is_file() for name in _XRT_RUNTIME_NAMES)
-
-
-def _has_xrt_headers(include_dir: Path) -> bool:
-    return (include_dir / "xrt" / "experimental" / "xrt_ext.h").is_file() and (
-        include_dir / "xrt" / "xrt_bo.h"
-    ).is_file()
-
-
-def _is_host_xrt_prefix(prefix: Path) -> bool:
-    """True when *prefix* contains XRT runtime libraries or SDK headers."""
-    if not prefix.is_dir():
-        return False
-    return (
-        _directory_has_xrt_runtime(prefix)
-        or _directory_has_xrt_runtime(prefix / "lib")
-        or _directory_has_xrt_runtime(prefix / "bin")
-        or _has_xrt_headers(prefix / "include")
-        or _has_xrt_headers(prefix / "src" / "runtime_src" / "core" / "include")
-    )
-
-
-def _prefix_from_runtime_dir(directory: Path) -> Path:
-    """Map a directory that holds XRT DLLs/SOs to an install prefix."""
-    if directory.name.lower() in {"bin", "lib"}:
-        return directory.parent
-    return directory
-
-
-def _windows_install_roots(environ) -> list[Path]:
-    """Vendor-default Windows XRT locations (not machine-local scratch paths)."""
-    roots: list[Path] = []
-    seen: set[Path] = set()
-    bases = []
-    for key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
-        value = (environ.get(key) or "").strip()
-        if value:
-            bases.append(Path(value))
-    for base in bases:
-        for relative in (Path("Xilinx") / "XRT", Path("AMD") / "XRT"):
-            candidate = base / relative
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            roots.append(candidate)
-    # XRT's own Windows installer historically uses this FHS-style root.
-    xilinx = Path(r"C:\Xilinx\XRT")
-    if xilinx not in seen:
-        roots.append(xilinx)
-    return roots
-
-
-def _path_runtime_dirs(environ) -> list[Path]:
-    directories: list[Path] = []
-    seen: set[Path] = set()
-    for entry in (environ.get("PATH") or "").split(os.pathsep):
-        if not entry.strip():
-            continue
-        directory = Path(entry.strip())
-        if directory in seen or not _directory_has_xrt_runtime(directory):
-            continue
-        seen.add(directory)
-        directories.append(directory)
-    return directories
-
-
-def _host_xrt_prefix_candidates(*, windows=None, environ=None):
-    """Ordered host XRT prefix candidates (env override first)."""
-    selected_windows = paths.is_windows() if windows is None else windows
-    selected_environ = os.environ if environ is None else environ
-    candidates = []
-    env_root = (selected_environ.get("XILINX_XRT") or "").strip()
-    if env_root:
-        candidates.append(Path(env_root).expanduser())
-    if selected_windows:
-        candidates.extend(_windows_install_roots(selected_environ))
-    else:
-        candidates.append(Path("/opt/xilinx/xrt"))
-    candidates.extend(
-        _prefix_from_runtime_dir(directory)
-        for directory in _path_runtime_dirs(selected_environ)
-    )
-    return candidates
-
-
-def _host_xrt_prefix(*, windows=None, environ=None):
-    """Return the host XRT install prefix, or ``None`` if it is not present.
-
-    Discovery is generic: ``$XILINX_XRT``, the platform default install root
-    (``/opt/xilinx/xrt`` or Program Files / ``C:\\Xilinx\\XRT``), then any
-    ``PATH`` entry that already holds XRT libraries. There is no bundled or
-    fake XRT prefix inside ``FastFlowLM-xrt-install``.
-    """
-    seen = set()
-    for prefix in _host_xrt_prefix_candidates(windows=windows, environ=environ):
-        try:
-            resolved = prefix.resolve()
-        except OSError:
-            resolved = prefix
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if _is_host_xrt_prefix(prefix):
-            return resolved
-    return None
 
 
 def _host_xrt_lib_dir(prefix: Path) -> Path:

@@ -23,6 +23,7 @@ QUALIFICATION_PYTHON = ROOT / "tools" / "rocm-npu-qualification" / "python"
 from rocm_npu_qualification import (
     benchmark,
     cli,
+    host_xrt,
     installation,
     models,
     offline,
@@ -3604,28 +3605,16 @@ def test_host_xrt_library_dirs_include_windows_dll_root(tmp_path):
 
 
 def test_host_xrt_prefix_discovers_dll_on_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "_windows_install_roots", lambda environ: [])
-    original = runner._is_host_xrt_prefix
-    tmp_root = tmp_path.resolve()
-
-    def _scoped(prefix):
-        try:
-            resolved = prefix.resolve()
-        except OSError:
-            resolved = prefix
-        if resolved != tmp_root and tmp_root not in resolved.parents:
-            return False
-        return original(prefix)
-
-    monkeypatch.setattr(runner, "_is_host_xrt_prefix", _scoped)
+    monkeypatch.setattr(host_xrt, "windows_install_roots", lambda environ: [])
     bindir = tmp_path / "Xilinx" / "XRT" / "bin"
     bindir.mkdir(parents=True)
     (bindir / "xrt_coreutil.dll").write_bytes(b"")
     found = runner._host_xrt_prefix(
+        windows=True,
         environ={
             "XILINX_XRT": "",
             "PATH": str(bindir),
-        }
+        },
     )
     assert found == (tmp_path / "Xilinx" / "XRT").resolve()
 

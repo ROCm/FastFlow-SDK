@@ -18,6 +18,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from . import host_xrt
 from .benchmark import benchmark_csv_checkpoint as _benchmark_csv_checkpoint
 from .commands import run_command, run_interactive_command, serve_probe
 from .contracts import (
@@ -862,137 +863,17 @@ def _resolve_flm() -> tuple[Path, Path, dict[str, str]]:
     return path.resolve(), config.resolve(), environment
 
 
-# Keep host-XRT discovery in sync with build_tools.dev.fastflowlm_build.
-_XRT_RUNTIME_NAMES = (
-    "xrt_coreutil.dll",
-    "xrt_core.dll",
-    "xrt_coreutil.lib",
-    "libxrt_coreutil.so",
-    "libxrt_coreutil.so.2",
-    "libxrt_coreutil.so.1",
-    "xbutil.exe",
-    "xbutil2.exe",
-    "xbutil",
-    "xbutil2",
-)
+_windows_install_roots = host_xrt.windows_install_roots
+_host_xrt_prefix_candidates = host_xrt.host_xrt_prefix_candidates
+_is_host_xrt_prefix = host_xrt.is_host_xrt_loader_prefix
+_host_xrt_library_dirs = host_xrt.host_xrt_library_dirs
 
 
-def _directory_has_xrt_runtime(path: Path) -> bool:
-    """True when *path* contains XRT link or loader libraries."""
-    if not path.is_dir():
-        return False
-    return any((path / name).is_file() for name in _XRT_RUNTIME_NAMES)
-
-
-def _has_xrt_headers(include_dir: Path) -> bool:
-    return (include_dir / "xrt" / "experimental" / "xrt_ext.h").is_file() and (
-        include_dir / "xrt" / "xrt_bo.h"
-    ).is_file()
-
-
-def _is_host_xrt_prefix(prefix: Path) -> bool:
-    """True when *prefix* contains XRT runtime libraries or SDK headers."""
-    if not prefix.is_dir():
-        return False
-    return (
-        _directory_has_xrt_runtime(prefix)
-        or _directory_has_xrt_runtime(prefix / "lib")
-        or _directory_has_xrt_runtime(prefix / "bin")
-        or _has_xrt_headers(prefix / "include")
-        or _has_xrt_headers(prefix / "src" / "runtime_src" / "core" / "include")
+def _host_xrt_prefix(*, environ=None, windows=None) -> Path | None:
+    """Return a loadable host XRT prefix, or ``None`` if none is present."""
+    return host_xrt.host_xrt_prefix(
+        windows=windows, environ=environ, require_loader=True
     )
-
-
-def _prefix_from_runtime_dir(directory: Path) -> Path:
-    """Map a directory that holds XRT DLLs/SOs to an install prefix."""
-    if directory.name.lower() in {"bin", "lib"}:
-        return directory.parent
-    return directory
-
-
-def _windows_install_roots(environ) -> list[Path]:
-    """Vendor-default Windows XRT locations (not machine-local scratch paths)."""
-    roots: list[Path] = []
-    seen: set[Path] = set()
-    bases = []
-    for key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
-        value = (environ.get(key) or "").strip()
-        if value:
-            bases.append(Path(value))
-    for base in bases:
-        for relative in (Path("Xilinx") / "XRT", Path("AMD") / "XRT"):
-            candidate = base / relative
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            roots.append(candidate)
-    xilinx = Path(r"C:\Xilinx\XRT")
-    if xilinx not in seen:
-        roots.append(xilinx)
-    return roots
-
-
-def _path_runtime_dirs(environ) -> list[Path]:
-    directories: list[Path] = []
-    seen: set[Path] = set()
-    for entry in (environ.get("PATH") or "").split(os.pathsep):
-        if not entry.strip():
-            continue
-        directory = Path(entry.strip())
-        if directory in seen or not _directory_has_xrt_runtime(directory):
-            continue
-        seen.add(directory)
-        directories.append(directory)
-    return directories
-
-
-def _host_xrt_prefix(*, environ=None) -> Path | None:
-    """Return the host XRT install prefix, or ``None`` if it is not present."""
-    selected_environ = os.environ if environ is None else environ
-    candidates: list[Path] = []
-    env_root = (selected_environ.get("XILINX_XRT") or "").strip()
-    if env_root:
-        candidates.append(Path(env_root).expanduser())
-    if os.name == "nt":
-        candidates.extend(_windows_install_roots(selected_environ))
-    else:
-        candidates.append(Path("/opt/xilinx/xrt"))
-    candidates.extend(
-        _prefix_from_runtime_dir(directory)
-        for directory in _path_runtime_dirs(selected_environ)
-    )
-    seen: set[Path] = set()
-    for prefix in candidates:
-        try:
-            resolved = prefix.resolve()
-        except OSError:
-            resolved = prefix
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if _is_host_xrt_prefix(prefix):
-            return resolved
-    return None
-
-
-def _host_xrt_library_dirs(prefix: Path) -> list[str]:
-    """Loader directories under a host XRT prefix, if they exist."""
-    directories: list[str] = []
-    seen: set[str] = set()
-    for relative in ("lib", os.path.join("lib", "x86_64-linux-gnu"), "bin", ""):
-        path = prefix if relative == "" else prefix / relative
-        if not path.is_dir():
-            continue
-        if relative == "bin" and not _directory_has_xrt_runtime(path):
-            continue
-        if relative == "" and not _directory_has_xrt_runtime(path):
-            continue
-        resolved = str(path.resolve())
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        directories.append(resolved)
-    return directories
 
 
 def _resolve_xrt_flm(xrt_flm: Path) -> dict[str, Any]:

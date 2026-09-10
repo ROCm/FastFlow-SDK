@@ -92,7 +92,7 @@ Embedding and ASR probe tables gain XRT status and measurement columns (encode
 tok/s; RTF and WER). It is off by default -- simply supplying the path is what
 enables the comparison (there is no separate enable flag). Because the shipped
 wheel only bundles the HRX runtime, point `--xrt-flm` at a separately built XRT
-entrypoint (`bin/flm`, or its FHS install root) produced by
+entrypoint (`bin/flm.exe` on Windows, `bin/flm` on Linux, or its FHS install root) produced by
 `python dev.py build fastflowlm-xrt`, which links the host XRT install
 discovered from `$XILINX_XRT`, the platform default (`/opt/xilinx/xrt` on
 Linux; Program Files or `C:\Xilinx\XRT` on Windows), or an XRT runtime

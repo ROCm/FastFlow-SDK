@@ -13,10 +13,25 @@ from build_tools.dev.fastflowlm_build import (
     _host_xrt_prefix_candidates,
     _is_host_xrt_prefix,
     _missing_host_xrt_message,
+    _windows_install_roots,
     preset_cache_variables,
 )
+from rocm_npu_qualification import host_xrt, runner
 
 pytestmark = pytest.mark.presubmit
+
+
+def _write_xrt_headers(include: Path) -> None:
+    (include / "xrt" / "experimental").mkdir(parents=True)
+    (include / "xrt" / "xrt_bo.h").write_text("", encoding="utf-8")
+    (include / "xrt" / "experimental" / "xrt_ext.h").write_text("", encoding="utf-8")
+
+
+def test_fastflowlm_and_qualify_share_host_xrt_discovery():
+    assert _host_xrt_prefix_candidates is host_xrt.host_xrt_prefix_candidates
+    assert runner._host_xrt_prefix_candidates is host_xrt.host_xrt_prefix_candidates
+    assert _windows_install_roots is host_xrt.windows_install_roots
+    assert runner._windows_install_roots is host_xrt.windows_install_roots
 
 
 def test_host_xrt_pkgconfig_dir_uses_real_host_pc(tmp_path):
@@ -83,10 +98,7 @@ def test_host_xrt_prefix_prefers_xilinx_xrt_env(tmp_path):
 
 
 def test_host_xrt_prefix_discovers_dll_on_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "build_tools.dev.fastflowlm_build._windows_install_roots",
-        lambda environ: [],
-    )
+    monkeypatch.setattr(host_xrt, "windows_install_roots", lambda environ: [])
     bindir = tmp_path / "Xilinx" / "XRT" / "bin"
     bindir.mkdir(parents=True)
     (bindir / "xrt_coreutil.dll").write_bytes(b"")
@@ -128,6 +140,82 @@ def test_host_xrt_include_dir_reads_prefix_source_tree(tmp_path):
     assert _host_xrt_include_dir(runtime, windows=True) is None
     found = _host_xrt_include_dir(tmp_path / "XRT", windows=True)
     assert found == include.resolve()
+
+
+def test_host_xrt_prefix_accepts_headers_only_sdk(tmp_path):
+    sdk = tmp_path / "sdk"
+    _write_xrt_headers(sdk / "include")
+    found = _host_xrt_prefix(
+        windows=True,
+        environ={
+            "XILINX_XRT": str(sdk),
+            "PATH": "",
+            "ProgramFiles": str(tmp_path / "unused-pf"),
+        },
+    )
+    assert found == sdk.resolve()
+    assert _is_host_xrt_prefix(sdk)
+
+
+def test_qualify_host_xrt_skips_headers_only_vendor_root_for_path_loader(
+    tmp_path, monkeypatch
+):
+    sdk = tmp_path / "Program Files" / "Xilinx" / "XRT"
+    _write_xrt_headers(sdk / "include")
+    monkeypatch.setattr(host_xrt, "windows_install_roots", lambda environ: [sdk])
+    path_bin = tmp_path / "path-xrt" / "bin"
+    path_bin.mkdir(parents=True)
+    (path_bin / "xrt_coreutil.dll").write_bytes(b"")
+    environ = {
+        "XILINX_XRT": "",
+        "PATH": str(path_bin),
+    }
+    found = host_xrt.host_xrt_prefix(windows=True, require_loader=True, environ=environ)
+    assert found == (tmp_path / "path-xrt").resolve()
+    build = _host_xrt_prefix(windows=True, environ=environ)
+    assert build == sdk.resolve()
+
+
+def test_qualify_host_xrt_env_headers_only_is_unavailable(tmp_path):
+    sdk = tmp_path / "sdk"
+    _write_xrt_headers(sdk / "include")
+    path_bin = tmp_path / "path-xrt" / "bin"
+    path_bin.mkdir(parents=True)
+    (path_bin / "xrt_coreutil.dll").write_bytes(b"")
+    found = host_xrt.host_xrt_prefix(
+        windows=True,
+        require_loader=True,
+        environ={
+            "XILINX_XRT": str(sdk),
+            "PATH": str(path_bin),
+            "ProgramFiles": str(tmp_path / "unused-pf"),
+        },
+    )
+    assert found is None
+    assert (
+        runner._host_xrt_prefix(
+            windows=True,
+            environ={
+                "XILINX_XRT": str(sdk),
+                "PATH": str(path_bin),
+                "ProgramFiles": str(tmp_path / "unused-pf"),
+            },
+        )
+        is None
+    )
+
+
+def test_host_xrt_library_dirs_put_windows_bin_before_lib(tmp_path):
+    prefix = tmp_path / "xrt"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib").mkdir()
+    (prefix / "bin" / "xrt_coreutil.dll").write_bytes(b"")
+    (prefix / "lib" / "xrt_coreutil.lib").write_bytes(b"")
+    windows_dirs = host_xrt.host_xrt_library_dirs(prefix, windows=True)
+    assert windows_dirs[0] == str((prefix / "bin").resolve())
+    assert str((prefix / "lib").resolve()) in windows_dirs
+    linux_dirs = host_xrt.host_xrt_library_dirs(prefix, windows=False)
+    assert linux_dirs[0] == str((prefix / "lib").resolve())
 
 
 def test_preset_cache_variables_reads_common_default(tmp_path):
