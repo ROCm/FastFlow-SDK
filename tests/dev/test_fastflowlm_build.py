@@ -41,14 +41,17 @@ def test_windows_xrt_candidates_use_vendor_roots_not_local_dev():
         "XILINX_XRT": "",
     }
     candidates = _host_xrt_prefix_candidates(windows=True, environ=environ)
-    assert Path(r"C:\Program Files\Xilinx\XRT") in candidates
-    assert Path(r"C:\Program Files\AMD\XRT") in candidates
+    program_files = Path(environ["ProgramFiles"])
+    # Join the same way production does so this stays valid on POSIX CI
+    # (Path(r"C:\Program Files\Xilinx\XRT") is a single name there).
+    assert program_files / "Xilinx" / "XRT" in candidates
+    assert program_files / "AMD" / "XRT" in candidates
     assert Path(r"C:\Xilinx\XRT") in candidates
     assert Path(r"C:\dev\xrt-prefix") not in candidates
     assert Path(r"C:\dev\xrtNPUfromDLL") not in candidates
     linux = _host_xrt_prefix_candidates(windows=False, environ=environ)
     assert Path("/opt/xilinx/xrt") in linux
-    assert Path(r"C:\Program Files\Xilinx\XRT") not in linux
+    assert program_files / "Xilinx" / "XRT" not in linux
 
 
 def test_missing_host_xrt_message_does_not_pin_local_dev():
