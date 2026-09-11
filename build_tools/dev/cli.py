@@ -329,6 +329,14 @@ def create_parser():
         action="store_true",
         help="omit the platform-neutral meta wheel (Windows release job)",
     )
+    icw = _add_command(
+        sub, "install-compiler-wheels", compiler_wheels.cmd_install_compiler_wheels
+    )
+    icw.add_argument(
+        "--dir",
+        required=True,
+        help="directory containing compiler core and bindings wheels",
+    )
     acw = _add_command(
         sub, "audit-compiler-wheels", compiler_wheels.cmd_audit_compiler_wheels
     )

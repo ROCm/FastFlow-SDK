@@ -29,6 +29,7 @@ from build_tools.rocm_npu_compiler_wheels import (
 from build_tools.rocm_npu_wheel_common import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_PACKAGE,
+    find_distribution_wheels,
     verify_wheel_checksums,
     verify_wheel_source_revision,
 )
@@ -390,3 +391,27 @@ def cmd_verify_compiler_wheels(args):
         f"verify compiler wheels: ok ({len(graph)} native dependency records) "
         f"-> {venv_dir}"
     )
+
+
+def cmd_install_compiler_wheels(args):
+    python = environment.venv_py()
+    try:
+        found = find_distribution_wheels(
+            Path(args.dir),
+            (COMPILER_CORE_DISTRIBUTION, COMPILER_BINDINGS_DISTRIBUTION),
+        )
+        wheels = [
+            found[COMPILER_CORE_DISTRIBUTION],
+            found[COMPILER_BINDINGS_DISTRIBUTION],
+        ]
+        environment.python_install(
+            python,
+            "--no-index",
+            "--no-deps",
+            *(str(wheel) for wheel in wheels),
+        )
+        environment.python_install(python, *COMPILER_BINDINGS_RUNTIME_REQUIREMENTS)
+    except RuntimeError as error:
+        sys.exit(str(error))
+    names = ", ".join(wheel.name for wheel in wheels)
+    print(f"install-compiler-wheels: ok ({names})")

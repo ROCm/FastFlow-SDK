@@ -182,6 +182,39 @@ def test_wheel_verification_runs_binding_conformance_with_current_minor():
     assert command[-1] == f"{sys.version_info.major}.{sys.version_info.minor}"
 
 
+def test_install_compiler_wheels_installs_core_and_bindings(tmp_path):
+    core = tmp_path / "rocm_npu_compiler_core-0.1.0-py3-none-any.whl"
+    bindings = tmp_path / "rocm_npu_compiler_bindings-0.1.0-py3-none-any.whl"
+    meta = tmp_path / "rocm_npu_compiler-0.1.0-py3-none-any.whl"
+    ops = tmp_path / "rocm_npu_ops-0.1.0-py3-none-any.whl"
+    for wheel in (core, bindings, meta, ops):
+        wheel.write_bytes(b"wheel")
+    args = SimpleNamespace(dir=str(tmp_path))
+    with (
+        mock.patch.object(
+            compiler_wheels.environment, "venv_py", return_value="python"
+        ),
+        mock.patch.object(compiler_wheels.environment, "python_install") as install,
+    ):
+        compiler_wheels.cmd_install_compiler_wheels(args)
+
+    wheels_call, requirements_call = install.call_args_list
+    assert wheels_call.args[:3] == ("python", "--no-index", "--no-deps")
+    assert wheels_call.args[3:] == (str(core), str(bindings))
+    assert str(meta) not in wheels_call.args
+    assert str(ops) not in wheels_call.args
+    assert requirements_call.args == (
+        "python",
+        *compiler_wheels.COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
+    )
+
+
+def test_install_compiler_wheels_requires_exactly_one_distribution_wheel(tmp_path):
+    args = SimpleNamespace(dir=str(tmp_path))
+    with pytest.raises(SystemExit, match="expected one wheel per distribution"):
+        compiler_wheels.cmd_install_compiler_wheels(args)
+
+
 def test_consumer_only_verification_skips_static_wheel_scans():
     args = SimpleNamespace(consumer_only=True)
     with (

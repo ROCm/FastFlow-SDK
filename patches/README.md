@@ -100,6 +100,16 @@ CPU compile gate cannot build MHA without this patch.
 
 **Remove when:** IRON devel uses `get_current_device()` for MHA compile.
 
+### 0002-mem-copy-pass-bit-width.patch
+Passes `-DBIT_WIDTH=16` when compiling `mem_copy`'s `passThrough.cc`. The
+design uses bfloat16; MHA already sends the same define for this kernel.
+mlir-aie v1.4.3 Peano compiles with `-Werror=undef`, so an unset `BIT_WIDTH`
+fails `test-iron-ops`. IRON still builds against the mlir_aie 1.4.2.dev wheel,
+which did not error on the undef.
+
+**Remove when:** IRON `mem_copy` passes `-DBIT_WIDTH` (or the kernel no longer
+requires it).
+
 The former XRT-free host stack, lazy operator imports, and Windows aiecc copy
 fallback landed upstream as IRON #165, #163, and #162. The former aiecc native
 CLI patch was dropped earlier: IRON #145/#150 compile through mlir-aie's

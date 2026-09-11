@@ -24,9 +24,9 @@ win_note   = "Built with the STATIC MSVC runtime on Windows (dev.py passes CMAKE
 
 [iron_tools]                    # projects/iron-tools — built from source against [llvm]
 repo     = "github.com/Xilinx/mlir-aie"
-commit   = "4c8b56f5db25a9a89582bffed3ad933dea5b1d15"    # nightly 2026-08-25 ("4c8b56f5db")
+commit   = "95b3d1ccc0bfe5183bae1fa9014cfdc1fb4d96c8"    # mlir-aie v1.4.3
 provides = ["aie-opt", "aie-translate", "aiecc", "IRON python", "bootgen", "aie_api", "aie-rt", "xclbinutil (vendored third_party/hrx-xclbinutil)"]
-note     = "Builds against the same ROCm LLVM pin as mlir-aie utils/clone-llvm.sh (56bcc187, LLVM 24). hrx-xclbinutil is vendored in-tree (mlir-aie #3473), no longer a nested git submodule."
+note     = "Builds against the same ROCm LLVM pin as mlir-aie utils/clone-llvm.sh (56bcc187, LLVM 24). hrx-xclbinutil is vendored in-tree (mlir-aie #3473), no longer a nested git submodule. v1.4.3 IRON host-runtime allocates HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A), matching HRX HOST_ONLY."
 e2e_design = "programming_examples/basic/matrix_scalar_add"   # the design `dev.py test` builds
 e2e_device = "npu2"                                          # -d passed to that design
 patches  = ["patches/iron-tools/0001-eudsl-offline-find-links.patch", "patches/iron-tools/0002-windows-clang-cl.patch", "patches/iron-tools/0005-eudsl-download-no-build-isolation.patch", "patches/iron-tools/0006-mlir-core-type-stubs-from-build-tree.patch", "patches/iron-tools/0007-aiecc-capture-stdio-maybe-unused.patch"]
@@ -39,10 +39,11 @@ repo     = "github.com/amd/IRON"
 commit   = "a279467af0bacde5d7fe3bc5ce67e762386f8aef"  # origin/devel 2026-08-31 (#165)
 branch   = "devel"                                              # IRON's default branch; main is an empty initial commit
 provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, ...)", "aie_kernels C++ sources"]
-note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==1.4.2.dev); here it runs against the SOURCE-built iron-tools ([iron_tools] above) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS (tests/iron-ops/suite.py re-exports it). This pin is required for the mlir-aie Runtime callback-body API (seq_fn) and native aiecc --get-* flags landed in iron-tools 4c8b56f."
-patches  = ["patches/iron-ops/0001-mha-bind-get-current-device.patch"]
+note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==1.4.2.dev); here it runs against the SOURCE-built iron-tools ([iron_tools] v1.4.3) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS (tests/iron-ops/suite.py re-exports it). This pin is required for the mlir-aie Runtime callback-body API (seq_fn) and native aiecc --get-* flags landed in iron-tools 4c8b56f and still present at v1.4.3."
+patches  = ["patches/iron-ops/0001-mha-bind-get-current-device.patch", "patches/iron-ops/0002-mem-copy-pass-bit-width.patch"]
 drop_note = "The former XRT-free host stack, lazy operator imports, and Windows aiecc copy fallback landed upstream as IRON #165/#163/#162. The former aiecc native CLI patch was already dropped at aab8083: #145/#150 compile through mlir-aie's compile_mlir_module()."
 mha_note = "0001 binds MHA compile to get_current_device() like every other operator. a279467 still calls DefaultNPURuntime.device(), which is None under IRON_RUNTIME=cpu. Remove when that one-liner is on IRON devel."
+mem_copy_note = "0002 passes -DBIT_WIDTH=16 when compiling mem_copy's passThrough.cc (bf16, same define MHA already sends). mlir-aie v1.4.3 Peano uses -Werror=undef; an unset BIT_WIDTH is a hard error. IRON still targets the 1.4.2.dev wheel. Remove when IRON mem_copy defines BIT_WIDTH."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
 wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"
