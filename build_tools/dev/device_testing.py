@@ -4,7 +4,8 @@
 
 CI NPU e2e uses ``npu-probe``, ``test-hrx-cts``, and ``test-npu-package``.
 ``test-npu-iron-ops`` is a local extra (IRON pytest under HRX); it is not a
-workflow step.
+workflow step. The README compile+run example is ``test-npu-jit`` on the
+dedicated examples job.
 """
 
 import os
@@ -162,26 +163,54 @@ def cmd_test_hrx_cts(args):
     return 0
 
 
+def _resolved_compiler_prefix(compiler_prefix=None):
+    if compiler_prefix:
+        return Path(compiler_prefix).resolve()
+    return iron.compiler_prefix_from_env()
+
+
 def _compiler_python_root(compiler_prefix=None):
-    value = compiler_prefix or os.environ.get("ROCM_NPU_COMPILER_PREFIX")
-    prefix = Path(value).resolve() if value else None
+    prefix = _resolved_compiler_prefix(compiler_prefix)
     return prefix / "python" if prefix else paths.IRON_TOOLS_BUILD / "python"
 
 
+def _hrxruntime_discovery(compiler_prefix=None):
+    roots = [_compiler_python_root(compiler_prefix)]
+    installed = iron.installed_aie_python_root()
+    if installed is not None and installed not in roots:
+        roots.append(installed)
+    for root in roots:
+        candidate = (
+            root / "aie" / "utils" / "hostruntime" / "hrxruntime" / "discovery.py"
+        )
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _require_hrx_runtime(compiler_prefix=None):
-    python_root = _compiler_python_root(compiler_prefix)
-    discovery = (
-        python_root / "aie" / "utils" / "hostruntime" / "hrxruntime" / "discovery.py"
-    )
-    if not discovery.exists():
+    if _hrxruntime_discovery(compiler_prefix) is None:
         sys.exit(
-            "hrxruntime missing from the built aie package — "
-            "rebuild against a current iron-tools "
-            "(run: python dev.py build iron-tools)"
+            "hrxruntime missing from the aie package — rebuild iron-tools "
+            "or install rocm-npu-compiler-bindings"
         )
     if not hrx_runtime.libhrx_path():
         library_name = "hrx.dll" if paths.is_windows() else "libhrx.so"
         sys.exit(f"{library_name} not found — run: python dev.py build hrx")
+
+
+def _toolchain_aie_opt(compiler_prefix=None):
+    prefix = _resolved_compiler_prefix(compiler_prefix)
+    name = paths.executable_name("aie-opt")
+    if prefix:
+        return prefix / "bin" / name
+    return paths.IRON_TOOLS_BUILD / "bin" / name
+
+
+def _compiler_env(compiler_prefix=None):
+    if compiler_prefix or _toolchain_aie_opt(compiler_prefix).is_file():
+        return iron.iron_env(compiler_prefix)
+    return os.environ.copy()
 
 
 def cmd_test_npu(args):
@@ -231,7 +260,7 @@ def cmd_test_npu_jit(args):
     compiler_prefix = getattr(args, "compiler_prefix", None)
     if not build_only:
         _require_hrx_runtime(compiler_prefix)
-    env = iron.iron_env(compiler_prefix)
+    env = _compiler_env(compiler_prefix)
     command = [
         environment.venv_py(),
         paths.ROOT / "tests" / "npu" / "jit_smoke.py",
@@ -239,7 +268,7 @@ def cmd_test_npu_jit(args):
     if build_only:
         command.append("--build-only")
     else:
-        _select_hrx_runtime(env)
+        env = _select_hrx_runtime(env)
     environment.sh(command, env=env)
     print(
         "test-npu-jit: ok "

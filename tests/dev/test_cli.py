@@ -81,6 +81,7 @@ class TestDevCli:
             "npu-probe": device_testing.cmd_npu_probe,
             "test-hrx-cts": device_testing.cmd_test_hrx_cts,
             "test-npu": device_testing.cmd_test_npu,
+            "test-npu-jit": device_testing.cmd_test_npu_jit,
             "test-npu-iron-ops": device_testing.cmd_test_npu_iron_ops,
         }
         for name, handler in expected_test_handlers.items():
@@ -112,6 +113,10 @@ class TestDevCli:
         assert (
             choices["package-ops-wheels"]._defaults["_handler"].__module__
             == "build_tools.rocm_npu_ops_wheels"
+        )
+        assert (
+            choices["install-compiler-wheels"]._defaults["_handler"].__module__
+            == "build_tools.compiler_wheels"
         )
         assert (
             choices["verify-ops-wheels"]._defaults["_handler"].__module__
@@ -222,6 +227,10 @@ class TestDevCli:
         assert verify_ops.jobs == 0
         assert parser.parse_args(["test-iron-ops", "--jobs", "4"]).jobs == 4
         assert parser.parse_args(["verify-ops-wheels", "--jobs", "4"]).jobs == 4
+        jit = parser.parse_args(["test-npu-jit"])
+        assert not jit.build_only
+        install = parser.parse_args(["install-compiler-wheels", "--dir", "wheels"])
+        assert install.dir == "wheels"
 
     @pytest.mark.parametrize(
         ("include_tests", "include_cts", "enabled"),

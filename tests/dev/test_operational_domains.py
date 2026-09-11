@@ -26,6 +26,15 @@ from build_tools.dev import compiler_build, device_testing, runtime_build, sourc
 pytestmark = pytest.mark.presubmit
 
 
+def _write_hrxruntime_discovery(python_root: Path) -> Path:
+    discovery = (
+        python_root / "aie" / "utils" / "hostruntime" / "hrxruntime" / "discovery.py"
+    )
+    discovery.parent.mkdir(parents=True)
+    discovery.write_text("", encoding="utf-8")
+    return discovery
+
+
 class TestPathOwnership:
     def test_repository_paths_are_a_shared_foundation(self):
         assert paths.__name__ == "build_tools.paths"
@@ -244,6 +253,114 @@ class TestTestingDomain:
             contextlib.redirect_stdout(io.StringIO()),
         ):
             assert device_testing.cmd_npu_probe(args) == 1
+
+    def test_hrxruntime_discovery_prefers_compiler_python_root(self, tmp_path):
+        source = tmp_path / "source"
+        installed = tmp_path / "site"
+        source_discovery = _write_hrxruntime_discovery(source)
+        _write_hrxruntime_discovery(installed)
+        with (
+            mock.patch.object(
+                device_testing, "_compiler_python_root", return_value=source
+            ),
+            mock.patch.object(
+                device_testing.iron, "installed_aie_python_root", return_value=installed
+            ),
+        ):
+            assert device_testing._hrxruntime_discovery() == source_discovery
+
+    def test_hrxruntime_discovery_uses_installed_aie_when_source_tree_missing(
+        self, tmp_path
+    ):
+        missing = tmp_path / "missing-python"
+        installed = tmp_path / "site"
+        discovery = _write_hrxruntime_discovery(installed)
+        with (
+            mock.patch.object(
+                device_testing, "_compiler_python_root", return_value=missing
+            ),
+            mock.patch.object(
+                device_testing.iron, "installed_aie_python_root", return_value=installed
+            ),
+        ):
+            assert device_testing._hrxruntime_discovery() == discovery
+
+    def test_test_npu_jit_compile_run_skips_iron_env_without_aie_opt(self, tmp_path):
+        args = SimpleNamespace(build_only=False, compiler_prefix=None)
+        missing = tmp_path / "aie-opt"
+        with (
+            mock.patch.object(device_testing, "_require_hrx_runtime"),
+            mock.patch.object(
+                device_testing, "_toolchain_aie_opt", return_value=missing
+            ),
+            mock.patch.object(
+                device_testing, "_select_hrx_runtime", side_effect=lambda env: env
+            ) as select_hrx,
+            mock.patch.object(device_testing.iron, "iron_env") as iron_env,
+            mock.patch.object(
+                device_testing.environment, "venv_py", return_value="python"
+            ),
+            mock.patch.object(device_testing.environment, "sh") as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            device_testing.cmd_test_npu_jit(args)
+
+        iron_env.assert_not_called()
+        select_hrx.assert_called_once()
+        command = run.call_args.args[0]
+        assert Path(command[1]).name == "jit_smoke.py"
+        assert "--build-only" not in command
+
+    def test_test_npu_jit_uses_iron_env_when_aie_opt_exists(self, tmp_path):
+        args = SimpleNamespace(build_only=False, compiler_prefix=None)
+        aie_opt = tmp_path / "aie-opt"
+        aie_opt.write_text("", encoding="utf-8")
+        with (
+            mock.patch.object(device_testing, "_require_hrx_runtime"),
+            mock.patch.object(
+                device_testing, "_toolchain_aie_opt", return_value=aie_opt
+            ),
+            mock.patch.object(
+                device_testing, "_select_hrx_runtime", side_effect=lambda env: env
+            ),
+            mock.patch.object(
+                device_testing.iron, "iron_env", return_value={"IRON": "1"}
+            ) as iron_env,
+            mock.patch.object(
+                device_testing.environment, "venv_py", return_value="python"
+            ),
+            mock.patch.object(device_testing.environment, "sh") as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            device_testing.cmd_test_npu_jit(args)
+
+        iron_env.assert_called_once_with(None)
+        assert run.call_args.kwargs["env"] == {"IRON": "1"}
+
+    def test_test_npu_jit_build_only_skips_hrx(self, tmp_path):
+        args = SimpleNamespace(build_only=True, compiler_prefix=None)
+        missing = tmp_path / "aie-opt"
+        with (
+            mock.patch.object(device_testing, "_require_hrx_runtime") as require,
+            mock.patch.object(
+                device_testing, "_toolchain_aie_opt", return_value=missing
+            ),
+            mock.patch.object(device_testing, "_select_hrx_runtime") as select_hrx,
+            mock.patch.object(device_testing.iron, "iron_env") as iron_env,
+            mock.patch.object(
+                device_testing.environment, "venv_py", return_value="python"
+            ),
+            mock.patch.object(device_testing.environment, "sh") as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            device_testing.cmd_test_npu_jit(args)
+
+        require.assert_not_called()
+        select_hrx.assert_not_called()
+        iron_env.assert_not_called()
+        command = run.call_args.args[0]
+        assert Path(command[1]).name == "jit_smoke.py"
+        assert "--build-only" in command
 
 
 class TestIronPolicy:

@@ -12,7 +12,8 @@ Proves the chain the operator library actually walks:
 `run_e2e.py` proves the same toolchain against an iron-tools programming example. This
 proves it against projects/iron-ops, and the difference is the point: iron-ops is developed
 against the mlir_aie WHEEL (1.4.2.dev), while this stack builds the aie package from SOURCE at
-a nightly pin. When the two drift, an operator stops compiling -- and it should say so here,
+the [iron_tools] pin (mlir-aie v1.4.3). When the two drift, an operator stops compiling -- and
+it should say so here,
 on a CPU runner, not an hour later on the one machine that has an NPU. This also compiles
 the operator's own aie_kernels/*.cc through Peano, which the examples' @iron.jit path never
 does.

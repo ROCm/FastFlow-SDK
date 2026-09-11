@@ -1,0 +1,12 @@
+diff --git a/iron/operators/mem_copy/op.py b/iron/operators/mem_copy/op.py
+index 37058b6..d4248c3 100644
+--- a/iron/operators/mem_copy/op.py
++++ b/iron/operators/mem_copy/op.py
+@@ -60,6 +60,7 @@ class MemCopy(MLIROperator):
+         return [
+             KernelObjectArtifact(
+                 "mem_copy.o",
++                extra_flags=["-DBIT_WIDTH=16"],
+                 dependencies=[
+                     SourceArtifact(
+                         self.context.base_dir
