@@ -17,7 +17,8 @@
         "probe",
         "doctor",
         "self-test",
-        "powermode-roundtrip"
+        "powermode-roundtrip",
+        "shared-code-memory-reclaim"
       ]
     },
     "xadx_cases": {

@@ -224,6 +224,98 @@ def _powermode_roundtrip_fixture(core, **kwargs):
     }
 
 
+def _shared_code_memory_reclaim_fixture(runtime, **kwargs):
+    writer = kwargs["writer"]
+    log = "logs/tests/shared-code-memory-reclaim.log"
+    artifact = "artifacts/native/shared-code-memory-reclaim.json"
+    writer.path(log).write_text("resource pressure passed\n", encoding="utf-8")
+    writer.write_json(
+        artifact,
+        {
+            "schema_version": 1,
+            "status": "pass",
+            "bounded_shared_code_memory": True,
+            "budget_bytes": 64 << 20,
+            "allocated_bytes": 64 << 20,
+            "exhaustion_observed": True,
+            "reclaimed_bytes": 1 << 20,
+            "post_reclaim_allocation_bytes": 33 << 10,
+        },
+    )
+    return {
+        "model": "native-core",
+        "name": "shared-code-memory-reclaim",
+        "kind": "native",
+        "status": "pass",
+        "returncode": 0,
+        "duration_seconds": 0,
+        "log": log,
+        "metrics": {
+            "bounded_shared_code_memory": True,
+            "allocated_bytes": 64 << 20,
+            "budget_bytes": 64 << 20,
+            "exhaustion_observed": True,
+            "reclaimed_bytes": 1 << 20,
+            "post_reclaim_allocation_bytes": 33 << 10,
+        },
+        "artifacts": [artifact],
+    }
+
+
+def test_shared_code_memory_reclaim_runs_packaged_tool(monkeypatch, tmp_path):
+    if os.name == "nt":
+        runtime = tmp_path / "bin" / "hrx.dll"
+        executable = tmp_path / "bin" / "hrx-amdxdna-resource-pressure.exe"
+    else:
+        runtime = tmp_path / "lib" / "libhrx.so"
+        executable = tmp_path / "bin" / "hrx-amdxdna-resource-pressure"
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(tuple(map(str, argv)))
+        return CommandResult(
+            argv=calls[-1],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "pass",
+                    "bounded_shared_code_memory": True,
+                    "budget_bytes": 64 << 20,
+                    "allocated_bytes": 63 << 20,
+                    "exhaustion_observed": True,
+                    "reclaimed_bytes": 1 << 20,
+                    "post_reclaim_allocation_bytes": 33 << 10,
+                }
+            ),
+            stderr="",
+            duration_seconds=0.1,
+            timed_out=False,
+            log=str(kwargs["log_path"]),
+        )
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    writer = EvidenceWriter(tmp_path / "evidence")
+    record = runner._run_shared_code_memory_reclaim(str(runtime), writer=writer)
+
+    assert calls == [(str(executable),)]
+    assert record["status"] == "pass"
+    assert record["metrics"] == {
+        "bounded_shared_code_memory": True,
+        "allocated_bytes": 63 << 20,
+        "budget_bytes": 64 << 20,
+        "exhaustion_observed": True,
+        "reclaimed_bytes": 1 << 20,
+        "post_reclaim_allocation_bytes": 33 << 10,
+    }
+    assert (
+        json.loads(writer.path(record["artifacts"][0]).read_text(encoding="utf-8"))[
+            "status"
+        ]
+        == "pass"
+    )
+
+
 def _fake_powermode_run(responses, calls):
     remaining = iter(responses)
 
@@ -1074,6 +1166,11 @@ def _patch_qualification(monkeypatch, tmp_path, *, doctor_exit):
     monkeypatch.setattr(
         runner, "_run_powermode_roundtrip", _powermode_roundtrip_fixture
     )
+    monkeypatch.setattr(
+        runner,
+        "_run_shared_code_memory_reclaim",
+        _shared_code_memory_reclaim_fixture,
+    )
 
 
 def test_native_doctor_failure_preserves_partial_evidence(monkeypatch, tmp_path):
@@ -1745,6 +1842,7 @@ def test_xadx_plan_is_visible_before_execution(tmp_path, capsys):
     output = capsys.readouterr()
     assert output.out == ""
     assert "XADX recipe scheduled 2 cases" in output.err
+    assert "unique_xclbin_images=33" in output.err
     assert "fastflowlm-production-kernels/dequant/zero: scheduled" in output.err
     assert "fastflowlm-production-kernels/mm/full: scheduled" in output.err
 
@@ -1916,7 +2014,14 @@ def test_interruption_preserves_completed_core_and_model_identity(
     assert evidence["subject"]["source_revision"] == "abc"
     assert [
         test["name"] for test in evidence["tests"] if test["model"] == "native-core"
-    ] == ["version", "probe", "doctor", "self-test", POWER_MODE_ROUNDTRIP]
+    ] == [
+        "version",
+        "probe",
+        "doctor",
+        "self-test",
+        POWER_MODE_ROUNDTRIP,
+        "shared-code-memory-reclaim",
+    ]
     assert evidence["models"][0]["files"][0]["sha256"] == "b" * 64
 
 
@@ -2152,6 +2257,11 @@ def test_shipped_runner_loads_and_executes_the_packaged_recipe(monkeypatch, tmp_
                     "failures": [],
                 }
             ],
+            "unique_xclbin_context_soak": {
+                "status": "pass",
+                "images": 33,
+                "duration_seconds": 0.5,
+            },
         }
 
     monkeypatch.setattr(runner.resources, "files", lambda _: tmp_path)
@@ -2165,13 +2275,17 @@ def test_shipped_runner_loads_and_executes_the_packaged_recipe(monkeypatch, tmp_
     assert observed["root"] == assets
     assert observed["kwargs"] == {
         "target_family": "npu2",
+        "unique_xclbin_context_soak": 33,
         "lifecycle_rounds": 5,
         "resident_rounds": 20,
         "readback_rounds": 32,
     }
-    assert records[0]["rounds"] == 57
-    assert records[0]["metrics"]["validated_bytes"] == 114
-    assert records[0]["metrics"]["mismatch_count"] == 0
+    assert records[0]["name"] == "unique-xclbin-context-soak"
+    assert records[0]["rounds"] == 33
+    assert records[0]["metrics"]["unique_xclbin_images"] == 33
+    assert records[1]["rounds"] == 57
+    assert records[1]["metrics"]["validated_bytes"] == 114
+    assert records[1]["metrics"]["mismatch_count"] == 0
 
 
 def test_runner_writes_schema_valid_package_validation_report(monkeypatch, tmp_path):

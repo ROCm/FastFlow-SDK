@@ -19,8 +19,9 @@ A qualification run writes a portable directory containing:
   `artifacts/native/powermode-final.json`: raw CLI reports backing the native
   mutating powermode roundtrip test when the host supports unprivileged
   power-mode changes
-- `xadx-report.json`: schema-v2 XADX identity, per-case metrics, and structured
-  phase/round failures
+- `xadx-report.json`: schema-v1 XADX identity, per-case metrics, structured
+  phase/round failures, and `unique_xclbin_context_soak` (the counted
+  `unique-xclbin-context-soak` test: 33 distinct images in one runtime)
 - `profile.json`: either the exact versioned `profile-v1` executed (curated
   `fast` / `default` / `extended` runs) or a `diagnostic-sweep` descriptor
   (`kind: "diagnostic-sweep"`) recording what a sweep actually ran (name, bench
@@ -115,6 +116,13 @@ may mark only this native record `unsupported`, because current AMDXDNA drivers
 require root privileges for power-mode sets; such evidence must still contain a
 passing `powermode-before.json` baseline report, and every other expected test
 must pass.
+
+The `shared-code-memory-reclaim` native test is required on every platform. Its
+raw JSON artifact records whether the native driver exposes a bounded shared
+code-memory budget and how many instruction bytes were allocated. On bounded
+drivers the test must exhaust that budget through the recoverable allocation
+path, release capacity, and successfully allocate again; on other drivers it
+executes the same instruction-allocation path as a smoke test.
 The XADX report records exact recipe and executable provenance and one result
 per case: dispatch/readback counts, validated bytes, duration, mismatch count,
 first mismatch, and structured failures. Runtime-generated buffer contracts,

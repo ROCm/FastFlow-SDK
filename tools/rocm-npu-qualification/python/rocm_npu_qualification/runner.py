@@ -29,7 +29,10 @@ from .contracts import (
     POWER_MODE_ROUNDTRIP_ARTIFACTS,
     POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
     PROFILE_SCHEMA_VERSION,
+    SHARED_CODE_MEMORY_RECLAIM,
     XADX_REPORT_SCHEMA_VERSION,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
     xadx_rounds,
 )
 from .errors import QualificationError
@@ -489,6 +492,138 @@ def _run_core_report(
     ):
         raise QualificationError(f"rocm-npu {command} emitted an invalid report")
     return report, result.returncode
+
+
+def _run_shared_code_memory_reclaim(
+    runtime: str, *, writer: EvidenceWriter
+) -> dict[str, Any]:
+    runtime_path = Path(runtime)
+    if os.name == "nt":
+        executable = runtime_path.parent / "hrx-amdxdna-resource-pressure.exe"
+    else:
+        executable = (
+            runtime_path.parent.parent / "bin" / "hrx-amdxdna-resource-pressure"
+        )
+    log = "logs/tests/shared-code-memory-reclaim.log"
+    started = time.monotonic()
+    try:
+        result = run_command(
+            [executable],
+            log_path=writer.path(log),
+            timeout=300,
+            echo=True,
+        )
+        report = json.loads(result.stdout)
+        bounded = (
+            report.get("bounded_shared_code_memory")
+            if isinstance(report, dict)
+            else None
+        )
+        allocated = report.get("allocated_bytes") if isinstance(report, dict) else None
+        budget = report.get("budget_bytes", 0) if isinstance(report, dict) else None
+        exhaustion = (
+            report.get("exhaustion_observed") if isinstance(report, dict) else None
+        )
+        reclaimed = report.get("reclaimed_bytes") if isinstance(report, dict) else None
+        post_reclaim = (
+            report.get("post_reclaim_allocation_bytes")
+            if isinstance(report, dict)
+            else None
+        )
+        valid = (
+            isinstance(report, dict)
+            and report.get("schema_version") == 1
+            and report.get("status") in {"pass", "fail"}
+            and isinstance(bounded, bool)
+            and type(allocated) is int
+            and allocated >= 0
+            and type(budget) is int
+            and budget >= 0
+            and isinstance(exhaustion, bool)
+            and type(reclaimed) is int
+            and reclaimed >= 0
+            and type(post_reclaim) is int
+            and post_reclaim >= 0
+            and (
+                (
+                    bounded
+                    and budget > 0
+                    and allocated >= (budget // 4) * 3
+                    and exhaustion
+                    and reclaimed >= post_reclaim > 0
+                )
+                or (
+                    not bounded
+                    and budget == 0
+                    and allocated > 0
+                    and not exhaustion
+                    and reclaimed == 0
+                    and post_reclaim == 0
+                )
+            )
+        )
+        passed = result.returncode == 0 and valid and report["status"] == "pass"
+        error = (
+            None
+            if passed
+            else (
+                "resource-pressure tool emitted an invalid report"
+                if not valid
+                else f"resource-pressure tool failed in {report.get('phase', 'unknown')}"
+            )
+        )
+    except (OSError, json.JSONDecodeError, QualificationError) as caught:
+        report = {}
+        passed = False
+        error = str(caught)
+        if not writer.path(log).is_file():
+            writer.path(log).write_text(f"{error}\n", encoding="utf-8")
+    artifact = "artifacts/native/shared-code-memory-reclaim.json"
+    writer.write_json(artifact, report)
+    report_data = report if isinstance(report, dict) else {}
+    return {
+        "model": "native-core",
+        "name": SHARED_CODE_MEMORY_RECLAIM,
+        "kind": "native",
+        "status": "pass" if passed else "fail",
+        "returncode": 0 if passed else 1,
+        "duration_seconds": max(time.monotonic() - started, 0.0),
+        "log": log,
+        "metrics": {
+            "bounded_shared_code_memory": (
+                report_data.get("bounded_shared_code_memory")
+                if isinstance(report_data.get("bounded_shared_code_memory"), bool)
+                else False
+            ),
+            "allocated_bytes": (
+                report_data.get("allocated_bytes")
+                if type(report_data.get("allocated_bytes")) is int
+                else 0
+            ),
+            "budget_bytes": (
+                report_data.get("budget_bytes")
+                if type(report_data.get("budget_bytes")) is int
+                else 0
+            ),
+            "exhaustion_observed": (
+                report_data.get("exhaustion_observed")
+                if isinstance(report_data.get("exhaustion_observed"), bool)
+                else False
+            ),
+            "reclaimed_bytes": (
+                report_data.get("reclaimed_bytes")
+                if type(report_data.get("reclaimed_bytes")) is int
+                else 0
+            ),
+            "post_reclaim_allocation_bytes": (
+                report_data.get("post_reclaim_allocation_bytes")
+                if type(report_data.get("post_reclaim_allocation_bytes")) is int
+                else 0
+            ),
+        },
+        "artifacts": [artifact],
+        **({} if passed else {"error": error or "resource-pressure test failed"}),
+    }
 
 
 def _run_powermode_report(
@@ -1712,7 +1847,8 @@ def _report_xadx_plan(recipe_path: Path, rounds: dict[str, int]) -> None:
         f"qualify: XADX recipe scheduled {len(cases)} cases "
         f"(lifecycle={rounds['lifecycle_rounds']}, "
         f"resident={rounds['resident_rounds']}, "
-        f"readback={rounds['readback_rounds']})",
+        f"readback={rounds['readback_rounds']}, "
+        f"unique_xclbin_images={XADX_UNIQUE_XCLBIN_CONTEXT_SOAK})",
         file=sys.stderr,
         flush=True,
     )
@@ -1726,24 +1862,65 @@ def _report_xadx_plan(recipe_path: Path, rounds: dict[str, int]) -> None:
             )
 
 
+def _xadx_soak_record(report: dict[str, Any]) -> dict[str, Any] | None:
+    soak = report.get("unique_xclbin_context_soak")
+    if not isinstance(soak, dict):
+        return None
+    status = soak.get("status")
+    if status not in {"pass", "fail", "unsupported"}:
+        status = "fail"
+    images = int(soak.get("images", 0) or 0)
+    record = {
+        "model": "fastflowlm-production-kernels",
+        "name": XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+        "kind": "xadx",
+        "status": status,
+        "duration_seconds": float(soak.get("duration_seconds", 0.0) or 0.0),
+        "log": "xadx-report.json",
+        "rounds": images,
+        "metrics": {
+            "architecture": report.get("architecture", "unknown"),
+            "unique_xclbin_images": images,
+        },
+        "artifacts": ["xadx-report.json"],
+    }
+    if status != "pass":
+        record["error"] = soak.get("error") or (
+            "unique-xclbin-context-soak is unsupported"
+            if status == "unsupported"
+            else "unique-xclbin-context-soak failed"
+        )
+    return record
+
+
 def _test_xadx(
     writer: EvidenceWriter, *, target_family: str, profile_name: str
 ) -> list[dict[str, Any]]:
     started = time.monotonic()
     try:
         rounds = xadx_rounds(profile_name)
-        asset_resource = resources.files("rocm_npu_qualification").joinpath(
-            "xadx_assets"
-        )
-        if not asset_resource.is_dir():
-            raise XadxError("qualification wheel has no embedded XADX assets")
-        with resources.as_file(asset_resource) as asset_root:
-            recipe_path = asset_root / "recipe.json"
+        override = os.environ.get("ROCM_NPU_XADX_ASSETS")
+        with ExitStack() as stack:
+            if override:
+                asset_root = Path(override)
+                if not (asset_root / "recipe.json").is_file():
+                    raise XadxError(
+                        f"ROCM_NPU_XADX_ASSETS has no recipe.json: {asset_root}"
+                    )
+            else:
+                asset_resource = resources.files("rocm_npu_qualification").joinpath(
+                    "xadx_assets"
+                )
+                if not asset_resource.is_dir():
+                    raise XadxError("qualification wheel has no embedded XADX assets")
+                asset_root = stack.enter_context(resources.as_file(asset_resource))
+            recipe_path = Path(asset_root) / "recipe.json"
             _report_xadx_plan(recipe_path, rounds)
             report = run_recipe(
                 recipe_path,
                 asset_root,
                 target_family=target_family,
+                unique_xclbin_context_soak=XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
                 **rounds,
             )
     except (OSError, ValueError, XadxError) as error:
@@ -1795,6 +1972,9 @@ def _test_xadx(
             }
             for name in report.get("case_names", ["package-validation"])
         ]
+    soak_record = _xadx_soak_record(report)
+    if soak_record is not None:
+        records.append(soak_record)
     for case_result in case_results:
         name = case_result["name"]
         status = case_result["status"]
@@ -2236,9 +2416,15 @@ def run_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         )
         evidence["tests"].append(powermode_test)
         _report_test_results([powermode_test])
+        resource_pressure_test = _run_shared_code_memory_reclaim(runtime, writer=writer)
+        evidence["tests"].append(resource_pressure_test)
+        _report_test_results([resource_pressure_test])
         writer.write_json("tests.json", evidence["tests"])
         writer.write_json("evidence.json", evidence)
-        if powermode_test["status"] == "fail" and not keep_going:
+        if (
+            powermode_test["status"] == "fail"
+            or resource_pressure_test["status"] == "fail"
+        ) and not keep_going:
             evidence["status"] = "fail"
             evidence["finished_at"] = _now()
             writer.write_json("models.json", evidence["models"])

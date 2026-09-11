@@ -86,6 +86,7 @@ def cmd_build_hrx(args):
             "-DCMAKE_INSTALL_LIBDIR=lib",
             "-DIREE_HAL_DRIVER_AMDGPU=OFF",
             "-DIREE_HAL_DRIVER_AMDXDNA=ON",
+            "-DIREE_HAL_DRIVER_AMDXDNA_BUILD_QUALIFICATION_TOOLS=ON",
             *_hrx_test_cmake_options(include_tests, include_cts),
             "-DLIBHRX_BUILD_CTS=OFF",
             "-DHRX_INSTALL_TESTS=OFF",
@@ -107,6 +108,7 @@ def cmd_build_hrx(args):
             *(["--clean-first"] if fresh else []),
             "--target",
             "iree_hal_drivers_amdxdna_registration_registration",
+            "iree_hal_drivers_amdxdna_resource_pressure_test_tool",
             "hrx",
             "flatcc_runtime",
             # Public dist installs hrx-info; a targeted build otherwise skips it.

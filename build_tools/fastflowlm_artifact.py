@@ -867,6 +867,10 @@ def stage_runtime_bundle(
     binary_dependencies = None
     if os.name == "nt":
         _copy_checked(hrx_install / "bin" / "hrx.dll", bundle / "bin" / "hrx.dll")
+        _copy_checked(
+            hrx_install / "bin" / "hrx-amdxdna-resource-pressure.exe",
+            bundle / "bin" / "hrx-amdxdna-resource-pressure.exe",
+        )
         cli_name = "rocm-npu.exe"
     else:
         cli_name = "rocm-npu"
@@ -877,6 +881,10 @@ def stage_runtime_bundle(
             )
         for library in hrx_libraries:
             _copy_checked(library, bundle / "lib" / library.name)
+        _copy_checked(
+            hrx_install / "bin" / "hrx-amdxdna-resource-pressure",
+            bundle / "bin" / "hrx-amdxdna-resource-pressure",
+        )
 
     _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
     fixture_source = cli_install / "share" / "rocm-npu" / "self-test"

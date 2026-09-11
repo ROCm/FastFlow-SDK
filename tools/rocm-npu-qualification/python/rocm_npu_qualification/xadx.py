@@ -22,7 +22,11 @@ import re
 import time
 from pathlib import Path, PurePosixPath
 
-from .contracts import XADX_REPORT_SCHEMA_VERSION, XADX_ROUNDS
+from .contracts import (
+    XADX_REPORT_SCHEMA_VERSION,
+    XADX_ROUNDS,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+)
 from .numeric_runtime import NUMERIC_DISTRIBUTIONS
 from .recipe_contract import recipe_materialization_requests
 from .schema import SchemaValidationError, load_packaged_schema, validate_schema
@@ -658,6 +662,130 @@ class _Session:
         self.runtime.close()
 
 
+# AXLF uniqueId is XRT axlf.m_uniqueId at offset 0x128 (magic 8 + cipher 32 +
+# keyBlock 256). Windows keys HAL contexts by full xclbin bytes, so rewriting
+# this field is enough to miss the cache without changing PDI or control code.
+_AXLF_MAGIC = b"xclbin2\0"
+_AXLF_UNIQUE_ID_OFFSET = 0x128
+_AXLF_UNIQUE_ID_BASE = 0xA11CE00000000000
+
+
+def _uniquify_xadx_axlf(data, unique_id):
+    patched = bytearray(data)
+    found = 0
+    start = 0
+    token = int(unique_id).to_bytes(8, "little")
+    while True:
+        offset = patched.find(_AXLF_MAGIC, start)
+        if offset < 0:
+            break
+        uid = offset + _AXLF_UNIQUE_ID_OFFSET
+        if uid + 8 > len(patched):
+            raise XadxError("embedded AXLF is truncated")
+        patched[uid : uid + 8] = token
+        found += 1
+        start = offset + len(_AXLF_MAGIC)
+    if found == 0:
+        raise XadxError("XADX does not embed an AXLF/xclbin2 image")
+    return bytes(patched)
+
+
+def _rollback_runtime(runtime, mark):
+    if hasattr(runtime, "rollback"):
+        runtime.rollback(mark)
+        return
+    del runtime.resources[mark:]
+
+
+def _soak_sample(cases, executable_data):
+    axlf_items = [
+        (key, data) for key, data in executable_data.items() if _AXLF_MAGIC in data
+    ]
+    if not axlf_items:
+        return None
+    key, data = min(axlf_items, key=lambda item: len(item[1]))
+    impl_id, execution = key
+    for case in cases:
+        for stage in case["stages"]:
+            if (
+                stage["implementation"] == impl_id
+                and stage.get("execution") == execution
+            ):
+                return case, key, data
+    raise XadxError(
+        "unique-xclbin-context-soak found an AXLF image with no recipe case"
+    )
+
+
+def _soak_payload(status, images, duration_seconds, error=None):
+    payload = {
+        "status": status,
+        "images": int(images),
+        "duration_seconds": float(duration_seconds),
+    }
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def _soak_unique_xclbin_contexts(
+    session, cases, executable_data, *, prepare, unique_xclbin_context_soak
+):
+    """Load more distinct xclbin images than the Windows HAL cache in one runtime.
+
+    Recipe coverage only has a handful of unique production xclbins, and
+    lifecycle rounds reset the device. Windows sizes the context cache at
+    architecture-budget-1 (31 on Strix Halo). This clone-and-uniquify pass
+    loads 33 distinct images so LRU must evict before CreateContext rather
+    than recovering from a 0xc01e0009 remap. The soak is a counted XADX test
+    (`unique-xclbin-context-soak`), not a recipe case.
+    """
+    started = time.monotonic()
+    if unique_xclbin_context_soak <= 0:
+        return _soak_payload("unsupported", 0, 0.0)
+    sample = _soak_sample(cases, executable_data)
+    if sample is None:
+        return _soak_payload("unsupported", 0, max(time.monotonic() - started, 0.0))
+    case, key, original = sample
+    runtime = session.runtime
+    try:
+        for index in range(unique_xclbin_context_soak):
+            unique_id = _AXLF_UNIQUE_ID_BASE + index
+            uniquified = _uniquify_xadx_axlf(original, unique_id)
+            if uniquified == original:
+                uniquified = _uniquify_xadx_axlf(original, unique_id ^ (1 << 63))
+            if uniquified == original:
+                raise XadxError(
+                    "unique-xclbin-context-soak could not distinguish AXLF uniqueId"
+                )
+            executable_data[key] = uniquified
+            mark = len(runtime.resources)
+            try:
+                plan, *_ = prepare(case)
+                for executable, ordinal, buffers, _, _ in plan:
+                    runtime.run(executable, ordinal, buffers)
+            except Exception as error:
+                raise XadxError(
+                    "unique-xclbin-context-soak image "
+                    f"{index + 1}/{unique_xclbin_context_soak} failed: {error}"
+                ) from error
+            finally:
+                try:
+                    _rollback_runtime(runtime, mark)
+                except Exception as error:
+                    raise XadxError(
+                        "unique-xclbin-context-soak failed to release image "
+                        f"{index + 1}: {error}"
+                    ) from error
+    finally:
+        executable_data[key] = original
+    return _soak_payload(
+        "pass",
+        unique_xclbin_context_soak,
+        max(time.monotonic() - started, 1e-9),
+    )
+
+
 def _run_rounds(
     session,
     cases,
@@ -894,6 +1022,7 @@ def _unsupported_report(
             for case in cases
         ],
         "failures": [],
+        "unique_xclbin_context_soak": _soak_payload("unsupported", 0, 0.0),
     }
     if runtime_open is not None:
         report["runtime_open"] = runtime_open
@@ -1161,6 +1290,7 @@ def run_recipe(
     lifecycle_rounds=XADX_ROUNDS["default"]["lifecycle_rounds"],
     resident_rounds=XADX_ROUNDS["default"]["resident_rounds"],
     readback_rounds=XADX_ROUNDS["default"]["readback_rounds"],
+    unique_xclbin_context_soak=XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
     target_family=None,
 ):
     """Run a kernel recipe, staging buffers between dispatches within a case.
@@ -1170,9 +1300,25 @@ def run_recipe(
     stage that declares an expectation is compared; earlier stages are the setup
     the expectation depends on.
     """
-    if min(lifecycle_rounds, resident_rounds, readback_rounds) < 0:
+    if (
+        min(
+            lifecycle_rounds,
+            resident_rounds,
+            readback_rounds,
+            unique_xclbin_context_soak,
+        )
+        < 0
+    ):
         raise ValueError("round counts must be nonnegative")
-    if max(lifecycle_rounds, resident_rounds, readback_rounds) > 1000:
+    if (
+        max(
+            lifecycle_rounds,
+            resident_rounds,
+            readback_rounds,
+            unique_xclbin_context_soak,
+        )
+        > 1000
+    ):
         raise ValueError("round counts exceed the safety bound (1000)")
     root = Path(root)
     if isinstance(recipe, (str, Path)):
@@ -1501,6 +1647,13 @@ def run_recipe(
         return revisit
 
     try:
+        soak = _soak_unique_xclbin_contexts(
+            session,
+            cases,
+            executable_data,
+            prepare=prepare,
+            unique_xclbin_context_soak=unique_xclbin_context_soak,
+        )
         failures, readback_by_case = _run_rounds(
             session,
             cases,
@@ -1561,6 +1714,7 @@ def run_recipe(
                 key=lambda item: item["contract_sha256"],
             ),
             "runtime_open": _runtime_open_payload(session.open_record),
+            "unique_xclbin_context_soak": soak,
             "failures": failures,
         }
     )
