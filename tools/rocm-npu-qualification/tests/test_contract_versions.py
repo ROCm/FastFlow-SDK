@@ -22,6 +22,8 @@ from rocm_npu_qualification.contracts import (
     QUALIFICATION_CONTRACT_SCHEMA_VERSION,
     XADX_REPORT_SCHEMA_VERSION,
     XADX_ROUNDS,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
     xadx_rounds,
 )
 from rocm_npu_qualification.schema import SchemaValidationError, validate_schema
@@ -187,3 +189,8 @@ def test_every_profile_preserves_the_approved_stress_contract():
 def test_unknown_profile_is_qualified_at_default_depth():
     assert xadx_rounds("not-a-profile") == XADX_ROUNDS["default"]
     assert xadx_rounds("fast") is not XADX_ROUNDS["fast"]
+
+
+def test_unique_xclbin_context_soak_exceeds_strix_budget():
+    assert XADX_UNIQUE_XCLBIN_CONTEXT_SOAK == 33
+    assert XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST == "unique-xclbin-context-soak"

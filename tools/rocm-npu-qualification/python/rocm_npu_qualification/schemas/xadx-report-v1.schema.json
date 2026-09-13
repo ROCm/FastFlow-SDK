@@ -46,6 +46,7 @@
       "items": {"$ref": "#/$defs/materialized_buffer"}
     },
     "runtime_open": {"$ref": "#/$defs/runtime_open"},
+    "unique_xclbin_context_soak": {"$ref": "#/$defs/unique_xclbin_context_soak"},
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/top_failure"}
@@ -87,7 +88,7 @@
           "required": [
             "numeric_runtime", "lifecycle_rounds", "resident_rounds",
             "readback_rounds", "cases", "readback_by_case",
-            "materialized_buffers"
+            "materialized_buffers", "unique_xclbin_context_soak"
           ]
         }
       }
@@ -95,6 +96,17 @@
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "unique_xclbin_context_soak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "images", "duration_seconds"],
+      "properties": {
+        "status": {"enum": ["pass", "fail", "unsupported"]},
+        "images": {"type": "integer", "minimum": 0},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "error": {"type": "string", "minLength": 1}
+      }
+    },
     "failure": {
       "type": "object",
       "required": ["phase", "round", "message"],

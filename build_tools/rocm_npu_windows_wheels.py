@@ -187,6 +187,9 @@ def stage_wheel_products(
     fastflowlm_root = trees.fastflowlm_root
 
     _copy_relative_file(source_bundle, "bin/hrx.dll", runtime_root)
+    _copy_relative_file(
+        source_bundle, "bin/hrx-amdxdna-resource-pressure.exe", runtime_root
+    )
     _copy_relative_file(source_bundle, "bin/rocm-npu.exe", runtime_root)
     _copy_windows_runtime_closure(source_bundle, runtime_root)
     _copy_windows_fastflowlm_payload(source_bundle, fastflowlm_root, runtime_root)

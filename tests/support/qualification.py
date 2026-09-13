@@ -25,6 +25,9 @@ from rocm_npu_qualification.contracts import (
     POWER_MODE_ROUNDTRIP,
     POWER_MODE_ROUNDTRIP_ARTIFACTS,
     POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
+    SHARED_CODE_MEMORY_RECLAIM,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
 )
 from rocm_npu_qualification.evidence import EvidenceWriter
 from rocm_npu_qualification.numeric_runtime import (
@@ -498,7 +501,7 @@ def make_evidence(
                     "metrics": {"report_status": "pass"},
                 }
                 for name in NATIVE_CHECKS
-                if name != POWER_MODE_ROUNDTRIP
+                if name not in (POWER_MODE_ROUNDTRIP, SHARED_CODE_MEMORY_RECLAIM)
             ],
             {
                 "model": "native-core",
@@ -517,6 +520,38 @@ def make_evidence(
                     "reported_device_count": 1,
                 },
                 "artifacts": list(POWER_MODE_ROUNDTRIP_ARTIFACTS),
+            },
+            {
+                "model": "native-core",
+                "name": SHARED_CODE_MEMORY_RECLAIM,
+                "kind": "native",
+                "status": "pass",
+                "returncode": 0,
+                "duration_seconds": 0,
+                "log": "logs/tests/shared-code-memory-reclaim.log",
+                "metrics": {
+                    "bounded_shared_code_memory": True,
+                    "allocated_bytes": 64 << 20,
+                    "budget_bytes": 64 << 20,
+                    "exhaustion_observed": True,
+                    "reclaimed_bytes": 1 << 20,
+                    "post_reclaim_allocation_bytes": 33 << 10,
+                },
+                "artifacts": ["artifacts/native/shared-code-memory-reclaim.json"],
+            },
+            {
+                "model": "fastflowlm-production-kernels",
+                "name": XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+                "kind": "xadx",
+                "status": "pass",
+                "duration_seconds": 1,
+                "log": "xadx-report.json",
+                "rounds": XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+                "metrics": {
+                    "architecture": "AMD_AIE2_NPU2",
+                    "unique_xclbin_images": XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+                },
+                "artifacts": ["xadx-report.json"],
             },
             {
                 "model": "fastflowlm-production-kernels",
@@ -545,7 +580,7 @@ def make_evidence(
     writer.write_json("models.json", evidence["models"])
     writer.write_json("tests.json", evidence["tests"])
     for command in NATIVE_CHECKS:
-        if command == POWER_MODE_ROUNDTRIP:
+        if command in (POWER_MODE_ROUNDTRIP, SHARED_CODE_MEMORY_RECLAIM):
             continue
         report = {
             "schema_version": 1,
@@ -565,6 +600,22 @@ def make_evidence(
         )
     (writer.path("logs/tests/powermode-roundtrip.log")).write_text(
         "powermode roundtrip passed\n", encoding="utf-8"
+    )
+    writer.path("logs/tests/shared-code-memory-reclaim.log").write_text(
+        "resource pressure passed\n", encoding="utf-8"
+    )
+    writer.write_json(
+        "artifacts/native/shared-code-memory-reclaim.json",
+        {
+            "schema_version": 1,
+            "status": "pass",
+            "bounded_shared_code_memory": True,
+            "budget_bytes": 64 << 20,
+            "allocated_bytes": 64 << 20,
+            "exhaustion_observed": True,
+            "reclaimed_bytes": 1 << 20,
+            "post_reclaim_allocation_bytes": 33 << 10,
+        },
     )
     powermode_reports = [("default", None, 0)]
     for mode, _, _ in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS:
@@ -637,6 +688,11 @@ def make_evidence(
             "materialized_buffers": candidate["qualification_contract"][
                 "xadx_materializations"
             ],
+            "unique_xclbin_context_soak": {
+                "status": "pass",
+                "images": XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+                "duration_seconds": 1,
+            },
             "failures": [],
         },
     )

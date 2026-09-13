@@ -11,7 +11,8 @@ from pathlib import Path
 from .hashing import sha256_file
 
 RUNTIME_ERROR_PATTERN = re.compile(
-    r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+"
+    r"\[hrx\]\[ERROR\]|INTERNAL;|ERT_CMD_CHAIN did not complete|ert state [0-9]+|"
+    r"D3DKMTCreateContextVirtual|0xC01E0009|0xc01e0009"
 )
 # Known-benign HRX diagnostics that are emitted on the text path and do not
 # indicate a runtime failure. ``run::start with no bindings`` is logged by

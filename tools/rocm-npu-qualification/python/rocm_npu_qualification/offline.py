@@ -32,7 +32,10 @@ from .contracts import (
     POWER_MODE_ROUNDTRIP,
     POWER_MODE_ROUNDTRIP_ARTIFACTS,
     POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
+    SHARED_CODE_MEMORY_RECLAIM,
     XADX_REPORT_SCHEMA_VERSION,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
 )
 from .evidence import junit_bytes
 from .hashing import sha256_file, write_sha256sums
@@ -400,6 +403,13 @@ def _validate_complete_execution(
         expected[("native", "native-core", name)] = {}
     for name in contract["xadx_cases"]:
         expected[("xadx", "fastflowlm-production-kernels", name)] = {}
+    expected[
+        (
+            "xadx",
+            "fastflowlm-production-kernels",
+            XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+        )
+    ] = {}
     for model in profile["models"]:
         if model["xclbins"]:
             expected[("xclbin", model["tag"], "production-xclbin-inventory")] = {
@@ -459,10 +469,12 @@ def _validate_complete_execution(
     budget = len(contract["xadx_cases"]) * resident + sum(
         observed[key].get("metrics", {}).get("readback_rounds", 0)
         for key in observed
-        if key[0] == "xadx"
+        if key[0] == "xadx" and key[2] != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
     )
     performed = sum(
-        observed[key].get("rounds", 0) for key in observed if key[0] == "xadx"
+        observed[key].get("rounds", 0)
+        for key in observed
+        if key[0] == "xadx" and key[2] != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
     )
     if performed != budget:
         raise EvidenceError(
@@ -711,6 +723,74 @@ def _reconcile_native_reports(
         if command == POWER_MODE_ROUNDTRIP:
             _reconcile_powermode_roundtrip(members, evidence, tests[command])
             continue
+        if command == SHARED_CODE_MEMORY_RECLAIM:
+            artifact = "artifacts/native/shared-code-memory-reclaim.json"
+            report = _json_object(
+                members.get(artifact, b""), "shared-code-memory-reclaim report"
+            )
+            bounded = report.get("bounded_shared_code_memory")
+            allocated = report.get("allocated_bytes")
+            budget = report.get("budget_bytes", 0)
+            exhaustion = report.get("exhaustion_observed")
+            reclaimed = report.get("reclaimed_bytes")
+            post_reclaim = report.get("post_reclaim_allocation_bytes")
+            valid = (
+                report.get("schema_version") == 1
+                and report.get("status") == "pass"
+                and isinstance(bounded, bool)
+                and type(allocated) is int
+                and allocated >= 0
+                and type(budget) is int
+                and budget >= 0
+                and isinstance(exhaustion, bool)
+                and type(reclaimed) is int
+                and reclaimed >= 0
+                and type(post_reclaim) is int
+                and post_reclaim >= 0
+                and (
+                    (
+                        bounded
+                        and budget > 0
+                        and allocated >= (budget // 4) * 3
+                        and exhaustion
+                        and reclaimed >= post_reclaim > 0
+                    )
+                    or (
+                        not bounded
+                        and budget == 0
+                        and allocated > 0
+                        and not exhaustion
+                        and reclaimed == 0
+                        and post_reclaim == 0
+                    )
+                )
+            )
+            test = tests[command]
+            expected_metrics = {
+                "bounded_shared_code_memory": report.get(
+                    "bounded_shared_code_memory", False
+                ),
+                "allocated_bytes": report.get("allocated_bytes", 0),
+                "budget_bytes": report.get("budget_bytes", 0),
+                "exhaustion_observed": report.get("exhaustion_observed", False),
+                "reclaimed_bytes": report.get("reclaimed_bytes", 0),
+                "post_reclaim_allocation_bytes": report.get(
+                    "post_reclaim_allocation_bytes", 0
+                ),
+            }
+            if (
+                not valid
+                or test.get("status") != "pass"
+                or test.get("returncode") != 0
+                or test.get("artifacts") != [artifact]
+                or test.get("metrics") != expected_metrics
+                or test.get("log") != "logs/tests/shared-code-memory-reclaim.log"
+            ):
+                raise EvidenceError(
+                    "shared-code-memory-reclaim report does not match its "
+                    "native test record"
+                )
+            continue
         name = _native_report_name(command)
         report = reports.get(name)
         if report is None:
@@ -787,8 +867,22 @@ def _reconcile_xadx_report(
     expected_names = (
         contract["xadx_cases"]
         if contract is not None
-        else [test.get("name") for test in tests]
+        else [
+            test.get("name")
+            for test in tests
+            if test.get("name") != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+        ]
     )
+    soak_tests = [
+        test
+        for test in tests
+        if test.get("name") == XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+    ]
+    recipe_tests = [
+        test
+        for test in tests
+        if test.get("name") != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+    ]
     if report.get("case_names") != expected_names:
         raise EvidenceError("xadx-report.json case inventory does not match tests.json")
     status = report.get("status")
@@ -814,7 +908,39 @@ def _reconcile_xadx_report(
         raise EvidenceError(
             "xadx-report.json round counts do not match the qualification contract"
         )
-    if len(tests) != len(expected_names):
+    if len(soak_tests) != 1:
+        raise EvidenceError("tests.json is missing unique-xclbin-context-soak")
+    soak = report.get("unique_xclbin_context_soak")
+    soak_test = soak_tests[0]
+    if not isinstance(soak, dict):
+        raise EvidenceError("xadx-report.json unique-xclbin-context-soak is missing")
+    if (
+        soak_test.get("status") != soak.get("status")
+        or soak_test.get("rounds") != soak.get("images")
+        or soak_test.get("duration_seconds") != soak.get("duration_seconds")
+        or soak_test.get("metrics")
+        != {
+            "architecture": report.get("architecture", "unknown"),
+            "unique_xclbin_images": soak.get("images"),
+        }
+        or soak_test.get("log") != "xadx-report.json"
+        or soak_test.get("artifacts") != ["xadx-report.json"]
+    ):
+        raise EvidenceError(
+            "xadx-report.json unique-xclbin-context-soak does not match tests.json"
+        )
+    if status == "pass" and (
+        soak.get("status") != "pass"
+        or soak.get("images") != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK
+    ):
+        raise EvidenceError(
+            "unique-xclbin-context-soak did not load 33 distinct images"
+        )
+    if status == "unsupported" and soak.get("status") != "unsupported":
+        raise EvidenceError(
+            "unsupported XADX report must skip unique-xclbin-context-soak"
+        )
+    if len(recipe_tests) != len(expected_names):
         raise EvidenceError("xadx-report.json does not match the XADX test inventory")
     case_results = report.get("case_results")
     if (
@@ -899,7 +1025,9 @@ def _reconcile_xadx_report(
             for row in case_results
         ):
             raise EvidenceError("xadx-report.json unsupported results are invalid")
-    for test, name, measured in zip(tests, expected_names, case_results, strict=True):
+    for test, name, measured in zip(
+        recipe_tests, expected_names, case_results, strict=True
+    ):
         readback = attribution.get(name, 0)
         expected_dispatches = None
         expected_validated_bytes = None

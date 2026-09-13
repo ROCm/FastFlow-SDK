@@ -119,6 +119,27 @@ def test_deterministic_pack_and_offline_verify(tmp_path):
     assert summary["evidence_status"] == "pass"
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda report: report.pop("exhaustion_observed"),
+        lambda report: report.update(reclaimed_bytes=1),
+        lambda report: report.update(post_reclaim_allocation_bytes=0),
+    ],
+)
+def test_offline_verify_rejects_incomplete_reclaim_evidence(tmp_path, mutate):
+    source = _evidence(tmp_path / "resource-pressure")
+    artifact = "artifacts/native/shared-code-memory-reclaim.json"
+    report = json.loads((source / artifact).read_text(encoding="utf-8"))
+    mutate(report)
+    writer = EvidenceWriter(source, allow_existing=True)
+    writer.write_json(artifact, report)
+    writer.finalize()
+
+    with pytest.raises(EvidenceError, match="shared-code-memory-reclaim report"):
+        verify_evidence(source)
+
+
 def test_linux_powermode_roundtrip_skip_remains_passing_evidence(tmp_path):
     source = _evidence(tmp_path / "linux-skip", platform_os="Linux 7.0")
     _rewrite_linux_powermode_skip(source)
@@ -167,7 +188,7 @@ def test_failed_resident_preparation_remains_ingestible_evidence(tmp_path):
 
     def mark_failed(evidence):
         evidence["status"] = "fail"
-        test = next(row for row in evidence["tests"] if row["kind"] == "xadx")
+        test = next(row for row in evidence["tests"] if row["name"] == "xadx-case")
         test["status"] = "fail"
         test["error"] = "resident preparation failed"
         test["rounds"] = 5
@@ -189,7 +210,9 @@ def test_report_without_v1_runtime_fields_is_rejected(tmp_path):
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     def remove_new_metric(evidence):
-        test = next(record for record in evidence["tests"] if record["kind"] == "xadx")
+        test = next(
+            record for record in evidence["tests"] if record["name"] == "xadx-case"
+        )
         test["metrics"].pop("validated_bytes")
 
     _rewrite_evidence(source, remove_new_metric)
@@ -503,7 +526,7 @@ def test_verify_rejects_empty_passing_case_measurements(tmp_path, field, message
     report = json.loads(report_path.read_text())
     report["case_results"][0][field] = 0
     evidence = json.loads((source / "evidence.json").read_text())
-    xadx_test = next(test for test in evidence["tests"] if test["kind"] == "xadx")
+    xadx_test = next(test for test in evidence["tests"] if test["name"] == "xadx-case")
     if field == "duration_seconds":
         xadx_test[field] = 0
     else:
@@ -524,7 +547,7 @@ def test_report_cannot_redistribute_or_omit_case_execution(tmp_path):
     evidence = json.loads((source / "evidence.json").read_text())
     report["case_results"][0]["dispatches"] = 56
     report["case_results"][0]["validated_bytes"] = 448
-    xadx_test = next(test for test in evidence["tests"] if test["kind"] == "xadx")
+    xadx_test = next(test for test in evidence["tests"] if test["name"] == "xadx-case")
     xadx_test["rounds"] = 56
     xadx_test["metrics"]["validated_bytes"] = 448
     with pytest.raises(EvidenceError, match="invalid per-case metrics"):
@@ -567,7 +590,7 @@ def test_passing_case_budget_is_exact_even_when_report_fails(tmp_path):
         }
     )
     failed_test = dict(
-        next(test for test in evidence["tests"] if test["kind"] == "xadx")
+        next(test for test in evidence["tests"] if test["name"] == "xadx-case")
     )
     failed_test["name"] = "failed-case"
     failed_test["status"] = "fail"

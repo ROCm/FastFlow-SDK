@@ -293,6 +293,41 @@ class TestDevCli:
         ]
         assert missing == []
 
+    def test_windows_context_reclaim_is_covered_by_hrx_host_tests(self):
+        """Lock the HAL tests that catch process-lifetime unique-xclbin leaks.
+
+        Qualify --fast soaks 33 distinct XADX images in one runtime (past the
+        Windows cache of architecture-budget-1). These hermetic host tests
+        still lock the HAL classifier, budget-1 cache size, and lease-evict
+        policy via ``dev.py build all --include-tests``.
+        """
+        amdxdna = (
+            hrx_runtime.paths.PROJ
+            / "hrx"
+            / "runtime"
+            / "src"
+            / "iree"
+            / "hal"
+            / "drivers"
+            / "amdxdna"
+        )
+        cache_test = amdxdna / "context_cache_test.cc"
+        mcdm_test = amdxdna / "native_windows_mcdm_test.cc"
+        mcdm_cc = amdxdna / "native_windows_mcdm.cc"
+        if not cache_test.is_file() or not mcdm_test.is_file() or not mcdm_cc.is_file():
+            pytest.skip("HRX submodule is not checked out")
+        cache = cache_test.read_text(encoding="utf-8")
+        mcdm = mcdm_test.read_text(encoding="utf-8")
+        windows = mcdm_cc.read_text(encoding="utf-8")
+        assert "CapacityFullOfLeasedEntriesForceEvicts" in cache
+        assert "ClassifiesIpuRemappedCreateContextFailure" in mcdm
+        assert "SizesCacheOneBelowArchitectureBudget" in mcdm
+        assert "0xC01E0009" in mcdm
+        assert "kWindowsHardwareContextCacheCap" not in windows
+        assert (
+            "iree_hal_amdxdna_native_windows_hardware_context_cache_capacity" in windows
+        )
+
     @pytest.mark.parametrize("value", ["0", "-1", "abc"])
     def test_positive_integer_rejects_invalid_values(self, value):
         with pytest.raises(argparse.ArgumentTypeError):

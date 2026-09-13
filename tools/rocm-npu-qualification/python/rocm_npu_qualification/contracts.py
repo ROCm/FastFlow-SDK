@@ -22,8 +22,10 @@ NATIVE_CORE_REPORT_COMMANDS = (
 NATIVE_CHECKS = (
     *NATIVE_CORE_REPORT_COMMANDS,
     "powermode-roundtrip",
+    "shared-code-memory-reclaim",
 )
 POWER_MODE_ROUNDTRIP = "powermode-roundtrip"
+SHARED_CODE_MEMORY_RECLAIM = "shared-code-memory-reclaim"
 POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS = (
     (
         "balanced",
@@ -76,6 +78,17 @@ XADX_ROUNDS = {
     # never drift silently.
     for name in ("fast", "default", "extended", "all-models", "bench-all", "bench-dev")
 }
+
+# One past the Strix/Krackan architecture table (32). Windows sizes the HAL
+# cache at budget-1 (31 on Strix Halo) so LRU runs before CreateContext; 33
+# distinct images in one runtime overflows both. Phoenix is 6 / cache 5; the
+# same soak still overflows smaller parts. Windows keys hardware contexts by
+# xclbin bytes, so qualification clones one recipe image and rewrites AXLF
+# m_uniqueId rather than shipping 33 kernels.
+XADX_UNIQUE_XCLBIN_CONTEXT_SOAK = 33
+# Counted XADX test name. Not a recipe case: it is a same-runtime preamble
+# that must show up in tests.json / junit.
+XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST = "unique-xclbin-context-soak"
 
 
 def xadx_rounds(profile_name: str) -> dict[str, int]:

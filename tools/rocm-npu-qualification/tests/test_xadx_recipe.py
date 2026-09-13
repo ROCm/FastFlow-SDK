@@ -23,7 +23,10 @@ import numpy as np
 import pytest
 
 from rocm_npu_qualification import candidate, xadx
-from rocm_npu_qualification.contracts import KERNEL_RECIPE_SCHEMA_VERSION
+from rocm_npu_qualification.contracts import (
+    KERNEL_RECIPE_SCHEMA_VERSION,
+    XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+)
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 
@@ -1080,3 +1083,72 @@ def test_failed_case_does_not_taint_passing_case_row(tmp_path):
             "message": "exact mismatch at byte 0",
         }
     ]
+
+
+def _axlf_xadx(unique_id=1):
+    blob = bytearray(0x130)
+    blob[:8] = b"xclbin2\0"
+    blob[0x128:0x130] = int(unique_id).to_bytes(8, "little")
+    return bytes(blob)
+
+
+class RecordingRuntime(StagingRuntime):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.loaded = []
+
+    def load(self, data, export):
+        self.loaded.append(bytes(data))
+        return super().load(data, export)
+
+
+def test_uniquify_xadx_axlf_rewrites_unique_id():
+    original = _axlf_xadx(1)
+    patched = xadx._uniquify_xadx_axlf(original, 0xA11CE00000000000)
+    assert patched != original
+    assert patched[:0x128] == original[:0x128]
+    assert int.from_bytes(patched[0x128:0x130], "little") == 0xA11CE00000000000
+
+
+def test_unique_xclbin_context_soak_loads_distinct_images_in_one_runtime(tmp_path):
+    payload = _axlf_xadx(1)
+    digest = hashlib.sha256(payload).hexdigest()
+    (tmp_path / "xadx").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "xadx" / "kernel.xadx").write_bytes(payload)
+    (tmp_path / "transactions").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "transactions" / "kernel.bin").write_bytes(TRANSACTION_DATA)
+    body = recipe(
+        [{"name": "only", "stages": [stage("only", "first", expected=generator())]}],
+        implementations=("first",),
+    )
+    body["implementations"][0]["xadx_sha256"] = digest
+    runtimes = []
+
+    def factory():
+        runtimes.append(RecordingRuntime())
+        return runtimes[-1]
+
+    report = xadx.run_recipe(
+        body,
+        tmp_path,
+        runtime_factory=factory,
+        generators=Generators(),
+        lifecycle_rounds=0,
+        resident_rounds=0,
+        readback_rounds=0,
+        unique_xclbin_context_soak=XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
+        target_family="npu2",
+    )
+    assert report["status"] == "pass", report["failures"]
+    assert report["unique_xclbin_context_soak"]["status"] == "pass"
+    assert (
+        report["unique_xclbin_context_soak"]["images"]
+        == XADX_UNIQUE_XCLBIN_CONTEXT_SOAK
+    )
+    assert report["unique_xclbin_context_soak"]["duration_seconds"] > 0
+    assert len(runtimes) == 1
+    soak_loads = runtimes[0].loaded[:XADX_UNIQUE_XCLBIN_CONTEXT_SOAK]
+    assert len(soak_loads) == XADX_UNIQUE_XCLBIN_CONTEXT_SOAK
+    assert len(set(soak_loads)) == XADX_UNIQUE_XCLBIN_CONTEXT_SOAK
+    assert payload not in soak_loads
+    assert len(runtimes[0].loaded) >= XADX_UNIQUE_XCLBIN_CONTEXT_SOAK

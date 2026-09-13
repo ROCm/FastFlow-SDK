@@ -30,6 +30,7 @@ class TestRocmNpuWheelNative:
     def test_stage_products_partitions_payload_and_dependency_licenses(self, tmp_path):
         source = tmp_path / "bundle"
         self._write_pe(source / "bin" / "hrx.dll")
+        self._write_pe(source / "bin" / "hrx-amdxdna-resource-pressure.exe")
         self._write_pe(source / "bin" / "Runtime.DLL")
         self._write_pe(source / "bin" / "flm.exe")
         self._write_pe(source / "bin" / "rocm-npu.exe")
@@ -83,6 +84,7 @@ class TestRocmNpuWheelNative:
         (source / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         imports = {
             "hrx.dll": ["runtime.dll"],
+            "hrx-amdxdna-resource-pressure.exe": ["hrx.dll"],
             "runtime.dll": ["kernel32.dll"],
             "flm.exe": ["runtime.dll"],
             "rocm-npu.exe": ["kernel32.dll"],
@@ -102,6 +104,7 @@ class TestRocmNpuWheelNative:
         runtime = products[RUNTIME_DISTRIBUTION] / RUNTIME_PACKAGE
         fastflowlm = products[FASTFLOWLM_DISTRIBUTION] / FASTFLOWLM_PACKAGE
         assert (runtime / "bin" / "Runtime.DLL").is_file()
+        assert (runtime / "bin" / "hrx-amdxdna-resource-pressure.exe").is_file()
         assert (runtime / "bin" / "rocm-npu.exe").is_file()
         assert (
             runtime / "share" / "rocm-npu" / "self-test" / "case" / "kernel.xadx"

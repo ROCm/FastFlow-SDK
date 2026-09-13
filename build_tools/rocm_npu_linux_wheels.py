@@ -300,6 +300,9 @@ def stage_wheel_products(
     fastflowlm_root = trees.fastflowlm_root
 
     _copy_hrx_soname(source_bundle, runtime_root)
+    _copy_relative_file(
+        source_bundle, "bin/hrx-amdxdna-resource-pressure", runtime_root
+    )
     _copy_relative_file(source_bundle, "bin/rocm-npu", runtime_root)
     runtime_license_names = _copy_runtime_native_closure(source_bundle, runtime_root)
 
