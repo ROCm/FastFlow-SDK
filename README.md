@@ -30,7 +30,7 @@ subproject requirements; each subproject has more detail. See
 - **HRX**: the runtime layer that loads and dispatches NPU applications.
 - **AIE**: AMD's AI Engine array, the programmable compute fabric targeted by
   *iron-tools*.
-- **PDI**: the processor device image extracted from a compiled design and
+- **PDI**: the programmable device image extracted from a compiled design and
   loaded by the NPU runtime.
 - **Peano**: the LLVM-based AIE compiler toolchain used to generate device code.
 
@@ -142,7 +142,7 @@ source ~/rocm-npu/bin/activate
 ```
 
 Replace `<tag>` and `<version>` with the values from the release. For example,
-if the release tag is `rocm-npu-v0.1.0.dev202609050033`, then use `<tag> = rocm-npu-v0.1.0.dev202609050033` and `<version> = 0.1.0.dev202609050033`
+if the release tag is `rocm-npu-v0.1.0.dev202609130034`, then use `<tag> = rocm-npu-v0.1.0.dev202609130034` and `<version> = 0.1.0.dev202609130034`
 
 ```bash
 python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-fastflowlm==<version>"
