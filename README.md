@@ -14,9 +14,10 @@ Processing Engines (NPUs).
 > installable artifacts and for the driver versions validated with that
 > build. These packages are not published to PyPI.
 
-[!TIP] For production deployments, use [Lemonade Server](https://lemonade-server.ai/),
-which provides the latest, most stable, and highest-performing support for
-FastFlowLM models.
+> [!TIP]
+> For production deployments, use [Lemonade Server](https://lemonade-server.ai/),
+> which provides the latest, most stable, and highest-performing support for
+> FastFlowLM models.
 
 It consists of:
 
@@ -44,19 +45,25 @@ subproject requirements; each subproject has more details. See
 
 ## Intended audience
 
-This early-access release enables developers to run FastFlowLM models on AMD Ryzen AI XDNA2 NPUs, validate the NPU runtime with `rocm-npu`, and experiment with the `iron-tools` compiler stack.
+This early-access release enables developers to use hands-on utilities for
+custom model development with the `iron-tools` compiler stack, run FastFlowLM
+models on AMD Ryzen AI XDNA2 NPUs using the HRX runtime, and validate the NPU
+runtime with `rocm-npu`.
 
 ## Supported models
 
-Each release includes a registry of the FastFlowLM models validated for that build. Run `flm list` after installation to see the models available in your release.
+Each release includes a registry of FastFlowLM models validated for that build.
+Run `flm list` after installation to see the models available in your release.
 
-The examples use `qwen3:0.6b` because it is the smallest recommended model for verifying NPU inference.
+The examples use `qwen3:0.6b` because it is the smallest recommended model for
+verifying NPU inference.
 
-For the complete model catalog, see the [FastFlowLM model documentation](https://fastflowlm.com/docs/models/).
+For the complete model catalog, see the
+[FastFlowLM model documentation](https://fastflowlm.com/docs/models/).
 
 ## Supported platforms
 
-This early snapshot targets **Linux and Windows** on **x86_64**, with
+This early-access release targets **Linux and Windows** on **x86_64**, with
 **AMD Ryzen AI NPUs that implement XDNA2 (NPU2)**. Windows instructions are
 native PowerShell; WSL is not the supported Windows path.
 
@@ -150,7 +157,9 @@ source ~/rocm-npu/bin/activate
 ```
 
 Replace `<tag>` and `<version>` with the values from the release. For example,
-if the release tag is `rocm-npu-v0.1.0.dev202609130034`, then use `<tag> = rocm-npu-v0.1.0.dev202609130034` and `<version> = 0.1.0.dev202609130034`
+if the release tag is `rocm-npu-v0.1.0.dev202609130034`, then use
+`<tag> = rocm-npu-v0.1.0.dev202609130034` and
+`<version> = 0.1.0.dev202609130034`.
 
 ```bash
 python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-fastflowlm==<version>"
