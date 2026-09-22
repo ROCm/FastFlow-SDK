@@ -373,6 +373,18 @@ references, their tolerances) with `NPU_RUNTIME=hrx`. The latter needs their tes
 
 </details>
 
+## Known limitations
+
+- **Preemption:** FastFlowLM contains opt-in support for inserting NPU
+  preemption points, but it is disabled by default. The native HRX/XADX flow
+  does not yet support or validate the required preemption save/restore
+  payloads end-to-end, so FastFlowLM preemption must remain disabled when using
+  this flow.
+- **`load_pdi` and control scratchpad:** ROCm NPU packaging does not yet carry
+  standalone PDIs, `load_pdi` relocations, or scratchpad parameter metadata.
+  IRON sequences using `load_pdi` or `ScratchpadParameter` are therefore not
+  currently supported.
+
 ## Additional documentation
 
 - [Native runtime CLI](docs/runtime-cli.md): `rocm-npu version`, `probe`,
@@ -390,10 +402,6 @@ references, their tolerances) with `NPU_RUNTIME=hrx`. The latter needs their tes
 ## License
 
 This repository is licensed under the [MIT License](LICENSE).
-
-FastFlowLM NPU kernel binaries shipped in releases are not open source and
-are subject to additional terms. Those terms are included with the packages
-as `licenses/FastFlowLM-TERMS.md`.
 
 Please file issues in this repository. See [SECURITY.md](SECURITY.md) to
 report a vulnerability. This is an early snapshot, so expect breaking
