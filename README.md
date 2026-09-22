@@ -1,14 +1,22 @@
 # ROCm-NPU
 
-ROCm-NPU is a software stack for running and developing applications on
-AMD XDNA Neural Processing Engines (NPUs).
+ROCm-NPU is a new software stack that brings together emerging capabilities,
+tools, and runtimes for developing custom GenAI models for AMD XDNA Neural
+Processing Engines (NPUs).
 
 > [!IMPORTANT]
-> **This is an early release.** Interfaces, packages, models, and supported
+> **This is an early-access release** that enables developers to experiment with
+> the iron-tools compiler stack for custom model development and run
+> out-of-the-box FastFlowLM models on AMD Ryzen AI XDNA2 NPUs using the new HRX
+> runtime. Interfaces, packages, models, and supported
 > hardware or driver combinations can change between snapshots. Use a
 > [GitHub Release](https://github.com/ROCm/rocm-npu/releases) for
 > installable artifacts and for the driver versions validated with that
 > build. These packages are not published to PyPI.
+
+[!TIP] For production deployments, use [Lemonade Server](https://lemonade-server.ai/),
+which provides the latest, most stable, and highest-performing support for
+FastFlowLM models.
 
 It consists of:
 
@@ -21,7 +29,7 @@ It consists of:
 
 The native `rocm-npu` CLI ships with the runtime and reports device, driver,
 and runtime health. Building from this repository also pulls additional
-subproject requirements; each subproject has more detail. See
+subproject requirements; each subproject has more details. See
 [CONTRIBUTING.md](CONTRIBUTING.md) if you want to change the stack.
 
 ### Key terms
@@ -148,7 +156,7 @@ if the release tag is `rocm-npu-v0.1.0.dev202609130034`, then use `<tag> = rocm-
 python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-fastflowlm==<version>"
 ```
 
-To validate the runtime, use the following commands
+To validate the runtime, use the following commands:
 
 ```bash
 rocm-npu version
@@ -182,7 +190,7 @@ are the same as in the previous section.
 
 Install `rocm-npu-compiler` and `rocm-npu-runtime` from a
 [GitHub Release](https://github.com/ROCm/rocm-npu/releases): the compiler builds
-the design, the runtime dispatches it on the NPU. Replace `<tag>` and
+the design, and the runtime dispatches it on the NPU. Replace `<tag>` and
 `<version>` with values from that release (tags look like
 `rocm-npu-v<version>`):
 
