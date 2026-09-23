@@ -1,7 +1,7 @@
 # ROCm-NPU
 
 ROCm-NPU is a new software stack that brings together emerging capabilities,
-tools, and runtimes for developing custom GenAI models for AMD XDNA Neural
+tools, and runtimes for developing custom GenAI applications for AMD XDNA Neural
 Processing Engines (NPUs).
 
 > [!IMPORTANT]
@@ -15,9 +15,8 @@ Processing Engines (NPUs).
 > build. These packages are not published to PyPI.
 
 > [!TIP]
-> For production deployments, use [Lemonade Server](https://lemonade-server.ai/),
-> which provides the latest, most stable, and highest-performing support for
-> FastFlowLM models.
+> For a higher-level application-serving experience, use [Lemonade Server](https://lemonade-server.ai/),
+> which provides a validated FastFlowLM integration.
 
 It consists of:
 
@@ -46,7 +45,7 @@ subproject requirements; each subproject has more details. See
 ## Intended audience
 
 This early-access release enables developers to use hands-on utilities for
-custom model development with the `iron-tools` compiler stack, run FastFlowLM
+custom application development with the `iron-tools` compiler stack, run FastFlowLM
 models on AMD Ryzen AI XDNA2 NPUs using the HRX runtime, and validate the NPU
 runtime with `rocm-npu`.
 
