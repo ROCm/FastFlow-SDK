@@ -53,7 +53,7 @@ note  = "LLVM 21 (lags ROCm's 24). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/ROCm/hrx-system"                # canonical ROCm remote (no fork in the chain)
 branch     = "users/jtuyls/amdxdna-aie4-linux"
-commit     = "efba47fcba8bc3ec0a28efb2bb983e9048d9e8bb"
+commit     = "220f1fa3895e9d3ab8f33338269e00cb85ae2c91"
 aie4_note  = "Linux KMQ START_DPU, one commit past native-rel c023c3e7d. One ert_dpu_data per occupied ELF column; a single column stays a direct packet. CERT's full ERT-header wipe is restored only for START_DPU, so AIE2P cache reuse still keeps rewritten arg VAs. Empty AIE4 contexts are cached by partition column count."
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
 reclaim_note = "Classify IPU-remapped CreateContext 0xc01e0009 as pool exhaustion. Windows drivers 32.0.203.280, .314, and .329 expose a larger virtual-context budget than their firmware-active limit; cap their cache one below the hardware-specific active limit (Phoenix 6, Strix 8, Strix B0/Halo/Krackan 16) so LRU eviction occurs before the defective virtual-context suspend/resume path. Other Windows drivers and Linux retain the existing policy, with one-shot evict-and-retry remaining as a fallback."
