@@ -4,6 +4,7 @@
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -291,7 +292,17 @@ class TestFastFlowLMArtifact:
     def test_linux_system_dependency_uses_source_rpm_license_files(self, tmp_path):
         bundle = tmp_path
         (bundle / "lib").mkdir()
-        (bundle / "lib" / "libstdc++.so.6.0.25").write_bytes(b"")
+        library = bytearray(120)
+        library[:4] = b"\x7fELF"
+        library[4] = 2
+        library[5] = 1
+        struct.pack_into("<H", library, 16, 3)
+        struct.pack_into("<Q", library, 32, 64)
+        struct.pack_into("<H", library, 52, 64)
+        struct.pack_into("<H", library, 54, 56)
+        struct.pack_into("<H", library, 56, 1)
+        struct.pack_into("<I", library, 64, 2)
+        (bundle / "lib" / "libstdc++.so.6.0.25").write_bytes(library)
         license_source = (
             bundle
             / "rpm-root"

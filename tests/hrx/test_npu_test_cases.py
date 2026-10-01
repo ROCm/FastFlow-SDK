@@ -127,6 +127,18 @@ def test_nan_remains_nan():
             "repeat",
             [("input", (32, 1024), "uint16"), ("output", (64, 1024), "uint16")],
         ),
+        (
+            "add_relu_fused",
+            [
+                ("inputs", (8192,), "uint16"),
+                ("output", (4096,), "uint16"),
+                ("scratch", (4096,), "uint16"),
+            ],
+        ),
+        (
+            "strided_copy",
+            [("input", (2048,), "uint16"), ("output", (1024,), "uint16")],
+        ),
     ],
 )
 def test_exact_suite_shapes_storage_and_binding_order(name, buffer_expectations):
@@ -220,6 +232,39 @@ def test_gemm_and_layout_references():
             np.repeat(cases.bf16_to_float32(repeated[0]["data"]), 2, axis=0)
         ),
     )
+
+
+def test_strided_copy_alternates_parameterized_input_offsets():
+    generated = cases.strided_copy()
+    source = generated["buffers"][0]["data"]
+    np.testing.assert_array_equal(generated["buffers"][1]["expected"], source[:1024])
+    dispatches = generated["dispatches"]
+    assert [dispatch["name"] for dispatch in dispatches] == [
+        "input_offset_0",
+        "input_offset_1024",
+    ]
+    assert [
+        int.from_bytes(dispatch["constants"], "little", signed=True)
+        for dispatch in dispatches
+    ] == [0, 1024]
+    np.testing.assert_array_equal(dispatches[0]["expected"]["output"], source[:1024])
+    np.testing.assert_array_equal(dispatches[1]["expected"]["output"], source[1024:])
+    assert dispatches[0]["expected"]["output"].dtype == np.uint16
+
+
+def test_add_relu_fused_uses_consolidated_arenas_and_rounded_intermediate():
+    buffers = cases.add_relu_fused()["buffers"]
+    inputs = buffers[0]["data"]
+    lhs = cases.bf16_to_float32(inputs[:4096])
+    rhs = cases.bf16_to_float32(inputs[4096:])
+    summed = cases.float32_to_bf16(lhs + rhs)
+    expected = cases.float32_to_bf16(
+        np.maximum(cases.bf16_to_float32(summed), np.float32(0))
+    )
+    np.testing.assert_array_equal(buffers[1]["expected"], expected)
+    np.testing.assert_array_equal(buffers[2]["data"], np.zeros(4096, dtype=np.uint16))
+    assert np.any(lhs + rhs < 0)
+    assert np.any(lhs + rhs > 0)
 
 
 def test_unary_and_norm_references_match_rounded_inputs():

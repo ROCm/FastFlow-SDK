@@ -149,6 +149,7 @@ def toolchain_env(
     """IRON toolchain env from either build trees or a relocated rocm-npu-compiler product."""
     if compiler_prefix:
         aie_bin = compiler_prefix / "bin"
+        aiebu_bin = aie_bin
         product_aie_python = compiler_prefix / "python"
         aie_python = (
             product_aie_python
@@ -159,6 +160,7 @@ def toolchain_env(
         aieopt_dir = compiler_prefix / "third_party" / "aie_api"
     else:
         aie_bin = ROOT / "build" / "iron-tools" / "bin"
+        aiebu_bin = paths.AIEBU_INSTALL / "bin"
         aie_python = ROOT / "build" / "iron-tools" / "python"
         peano = SITE / "llvm-aie"
         aieopt_dir = PROJ / "iron-tools" / "third_party" / "aie_api"
@@ -176,9 +178,19 @@ def toolchain_env(
         raise E2EError(f"Peano not available to this toolchain\n  {peano}")
     if not aieopt_dir.is_dir():
         raise E2EError(f"aie_api not available to this toolchain\n  {aieopt_dir}")
+    if not (aiebu_bin / f"aiebu-asm{EXE}").is_file():
+        raise E2EError(
+            f"aiebu-asm not built (run: python dev.py build aiebu)\n  {aiebu_bin}"
+        )
 
     env = dict(os.environ)
-    path_entries = [xclbinutil.parent, aie_bin, VENV_BIN, cmake_candidate().parent]
+    path_entries = [
+        xclbinutil.parent,
+        aie_bin,
+        aiebu_bin,
+        VENV_BIN,
+        cmake_candidate().parent,
+    ]
     if compiler_prefix and os.name == "nt":
         path_entries.append(compiler_prefix / "lib")
     env["PATH"] = os.pathsep.join(
@@ -361,6 +373,9 @@ class Operator(NamedTuple):
             The operator stays in the catalog for leftover-closed-set. Use this
             when CPU compile is known-broken (do not shim the IRON runtime in
             staging).
+        full_elf: compile the operator through a one-stage fused
+            ``OperatorSequence`` and also compile a context xclbin. This is the
+            artifact pair needed to convert a dynamic IRON ELF to XADX.
     """
 
     name: str
@@ -368,6 +383,26 @@ class Operator(NamedTuple):
     device: str = "npu2"
     hrx_pytest_filter: str | None = None
     host_compile: bool = True
+    full_elf: bool = False
+
+
+class Sequence(NamedTuple):
+    """One fused multi-operator sequence compiled for packaged NPU coverage."""
+
+    name: str
+    size: int
+    tile_size: int
+    num_aie_columns: int
+
+
+SEQUENCES = (
+    Sequence(
+        name="add_relu_fused",
+        size=4096,
+        tile_size=1024,
+        num_aie_columns=4,
+    ),
+)
 
 
 def _channeled_unary(name, *, extra=None, filter_extra=""):
@@ -539,20 +574,24 @@ OPERATORS = (
     ),
     Operator(
         name="strided_copy",
-        # CPU compile is 1-channel contiguous. Local NPU pytest also collects
-        # two_channels (amd/IRON#158 hang). Other pytest ids stay extensive.
+        # Compile a dynamic-offset FULL_ELF case. NPU CI alternates the
+        # input_offset scratchpad parameter between the two 1024-element halves
+        # of one 2048-element input while keeping the executable resident.
         build_kwargs={
             "input_sizes": [1024],
             "input_strides": [1],
             "input_offset": 0,
-            "input_buffer_size": 1024,
+            "input_buffer_size": 2048,
             "output_sizes": [1024],
             "output_strides": [1],
             "output_offset": 0,
             "output_buffer_size": 1024,
             "num_aie_channels": 1,
+            "input_offset_parameter": "input_offset",
         },
-        hrx_pytest_filter="test_strided_copy and (contiguous or two_channels)",
+        # No upstream pytest row has this dynamic-parameter shape. The packaged
+        # XADX case is the execution gate.
+        full_elf=True,
     ),
     Operator(
         name="mha",
@@ -571,15 +610,14 @@ OPERATORS = (
     ),
     Operator(
         name="swiglu_decode",
-        # OperatorSequence fused ELF needs aiebu-asm, which this stack does not
-        # ship. HRX cannot dispatch it yet either. Keep in the catalog for the
-        # leftover-closed-set; do not host-compile or collect test.py.
+        # Keep in the leftover closed set until it has a numeric packaged-XADX
+        # case; aiebu-asm and HRX FULL_ELF support are now available.
         build_kwargs={"embedding_dim": 2048, "hidden_dim": 2048},
         host_compile=False,
     ),
     Operator(
         name="swiglu_prefill",
-        # Same fused-ELF host path as swiglu_decode.
+        # Same missing numeric packaged-XADX case as swiglu_decode.
         build_kwargs={
             "seq_len": 256,
             "embedding_dim": 2048,

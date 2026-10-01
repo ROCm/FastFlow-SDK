@@ -232,7 +232,10 @@ class TestOpsOperatorProbe:
         compile(script, "<ops-compile>", "exec")
         specs = _ops_compile_specs()
         names = [spec["name"] for spec in specs]
-        assert names == [operator.name for operator in host_compile_suite()]
+        assert names == [
+            *(operator.name for operator in host_compile_suite()),
+            "add_relu_fused",
+        ]
         assert not _TORCH_AT_IMPORT.intersection(names)
         assert "gemm" in names
         assert "relu" in names
@@ -241,6 +244,18 @@ class TestOpsOperatorProbe:
         assert "swiglu_decode" not in names
         assert "swiglu_prefill" not in names
         assert "strided_copy" in names
+        strided_copy = next(spec for spec in specs if spec["name"] == "strided_copy")
+        assert strided_copy["full_elf"] is True
+        add_relu_fused = next(
+            spec for spec in specs if spec["name"] == "add_relu_fused"
+        )
+        assert add_relu_fused["kind"] == "add_relu_sequence"
+        assert add_relu_fused["full_elf"] is True
+        assert all(
+            spec["full_elf"] is False
+            for spec in specs
+            if spec["name"] not in ("strided_copy", "add_relu_fused")
+        )
         for spec in specs:
             assert spec["device"] == "npu2"
             assert spec["kwargs"]
@@ -255,6 +270,10 @@ class TestOpsOperatorProbe:
         assert 'if __name__ == "__main__"' in script
         assert "def require_runtime_image" in script
         assert "def classify_compiled_images" in script
+        assert 'if spec["full_elf"]:' in script
+        assert "OperatorSequence(" in script
+        assert '"full-elf"' in script
+        assert '"context"' in script
         assert "tile_m" in script
         assert "FullElfArtifact" in script
         assert "activate_toolchain_env" in script

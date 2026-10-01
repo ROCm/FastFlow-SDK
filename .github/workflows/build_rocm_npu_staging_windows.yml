@@ -9,8 +9,8 @@
 #
 # Only OS-forced differences: the azure-windows-scale-rocm runner (no manylinux
 # container); clang-cl (from the VS Developer environment, or LLVM) instead of the
-# gcc-toolset; OpenSSL from vcpkg instead of dnf openssl-devel (the only system
-# library); Python via actions/setup-python; and Windows venv paths (.venv/Scripts).
+# gcc-toolset; OpenSSL and Boost headers from vcpkg; Python via
+# actions/setup-python; and Windows venv paths (.venv/Scripts).
 # cmake/ninja come from pip; ccache is installed below and persisted via actions/cache
 # (dev.py routes every compile through it when it is on PATH).
 #
@@ -195,16 +195,15 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.vcpkg-bincache
-          key: vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache.outputs.revision }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake') }}
+          key: vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache.outputs.revision }}-${{ hashFiles('.github/vcpkg/triplets/*.cmake', 'projects/aiebu/vcpkg.json') }}
           restore-keys: |
             vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-
 
-      # OpenSSL (bootgen's find_package(OpenSSL)) is the ONLY system library dep — the
-      # Linux job likewise installs just openssl-devel. Use vcpkg (not choco's openssl,
+      # Bootgen needs OpenSSL and aiebu-asm needs Boost headers. Use vcpkg (not choco,
       # which fetches from slproweb.com — 404s on older versions, flaky in CI). Point
       # find_package(OpenSSL) at the vcpkg tree (forward-slashed so CMake reads it cleanly).
       # cmake + ninja come from pip (the venv).
-      - name: Install OpenSSL (vcpkg) for bootgen
+      - name: Install compiler native dependencies (vcpkg)
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-bincache,readwrite
         run: |
@@ -216,8 +215,9 @@ jobs:
           triplets="$PWD/.github/vcpkg/triplets"
           if command -v cygpath >/dev/null; then triplets="$(cygpath -m "$triplets")"; fi
 
-          install_openssl() {
-            vcpkg install openssl --triplet x64-windows-rel --overlay-triplets="$triplets"
+          install_compiler_dependencies() {
+            vcpkg install openssl boost-format boost-uuid boost-interprocess boost-algorithm boost-property-tree boost-headers \
+              --triplet x64-windows-rel --overlay-triplets="$triplets"
           }
 
           # An empty store means vcpkg WILL compile openssl, and that needs Perl on the NATIVE
@@ -235,7 +235,7 @@ jobs:
           # openssl's sources still come over the network; retry transient failures.
           ok=0
           for attempt in 1 2 3; do
-            if install_openssl; then ok=1; break; fi
+            if install_compiler_dependencies; then ok=1; break; fi
             buildtrees="$(dirname "$(command -v vcpkg)")/buildtrees"
             for log in \
               "$buildtrees"/detect_compiler/config-x64-windows-out.log \
@@ -246,7 +246,7 @@ jobs:
                 echo "::endgroup::"
               fi
             done
-            echo "::warning::vcpkg install openssl failed (attempt $attempt/3) — retrying"
+            echo "::warning::vcpkg compiler dependency install failed (attempt $attempt/3) — retrying"
             sleep 20
           done
           [ "$ok" -eq 1 ]
@@ -258,9 +258,10 @@ jobs:
           root="$(dirname "$(command -v vcpkg)")"
           if command -v cygpath >/dev/null; then root="$(cygpath -m "$root")"; fi   # -> C:/vcpkg (CMake-friendly)
           echo "OPENSSL_ROOT_DIR=$root/installed/x64-windows-rel" >> "$GITHUB_ENV"
+          echo "BOOST_ROOT=$root/installed/x64-windows-rel" >> "$GITHUB_ENV"
 
       # Persist immediately: later compiler/test failures must not discard the expensive
-      # OpenSSL build and force the next retry to install Perl and rebuild it again.
+      # dependency builds and force the next retry to rebuild them again.
       - name: Save vcpkg binary packages
         if: success() && steps.vcpkg-binaries.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -273,7 +274,7 @@ jobs:
       # markedly slower on this runner than on Linux. The build needs the pinned trees,
       # not history; check_pins/patches work on shallow checkouts.
       - name: Initialize submodules
-        run: python dev.py submodules llvm-project hrx iron-tools iron-ops --shallow
+        run: python dev.py submodules llvm-project aiebu hrx iron-tools iron-ops --shallow
       # setup creates .venv, installs the pinned requirements (including the Python
       # zstandard codec used to package the compiler product), applies the temporary
       # patches, and prefetches the eudsl sdist (the single network step).

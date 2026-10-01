@@ -52,6 +52,7 @@ os.environ.setdefault("IRON_RUNTIME", "cpu")
 import aie.utils as aie_utils
 from aie.iron.device import NPU2, NPU1Col1
 from iron.common import AIEContext, AIEOperatorBase
+from iron.common.sequence import OperatorSequence
 
 DEVICES = {"npu2": NPU2, "npu1": NPU1Col1}
 
@@ -136,13 +137,100 @@ def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
     shape = ", ".join(f"{k}={v}" for k, v in operator_spec.build_kwargs.items())
     print(f"\n== iron-ops: {operator_spec.name} ({shape}, {device}) ==")
 
+    operator_class = find_operator_class(operator_spec.name)
+    if operator_spec.full_elf:
+        full_elf_dir = build_dir / "full-elf"
+        operator = instantiate(
+            operator_class,
+            operator_spec,
+            AIEContext(build_dir=full_elf_dir),
+        )
+        sequence = OperatorSequence(
+            name=f"{operator_spec.name}_dynamic",
+            runlist=[(operator, "input", "output")],
+            input_args=["input"],
+            output_args=["output"],
+            dispatch="fused",
+            context=AIEContext(build_dir=full_elf_dir),
+        )
+        sequence.compile()
+        check_runtime_images(sequence, device)
+
+        context_kwargs = dict(operator_spec.build_kwargs)
+        for key in tuple(context_kwargs):
+            if key.endswith("_parameter"):
+                context_kwargs[key] = None
+        context_spec = operator_spec._replace(build_kwargs=context_kwargs)
+        context_operator = instantiate(
+            operator_class,
+            context_spec,
+            AIEContext(build_dir=build_dir / "context"),
+        )
+        context_operator.compile()
+        check_runtime_images(context_operator, device)
+        return
+
     operator = instantiate(
-        find_operator_class(operator_spec.name),
-        operator_spec,
-        AIEContext(build_dir=build_dir),
+        operator_class, operator_spec, AIEContext(build_dir=build_dir)
     )
     operator.compile()
     check_runtime_images(operator, device)
+
+
+def build_sequence(sequence_spec: iron.Sequence, device: str, build_root: Path) -> None:
+    """Build one fused add-to-ReLU sequence and its context xclbin."""
+    from iron.operators.elementwise_add.op import ElementwiseAdd
+    from iron.operators.relu.op import ReLU
+
+    build_dir = build_root / sequence_spec.name
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True)
+
+    aie_utils.set_current_device(DEVICES[device]())
+    print(
+        f"\n== iron-ops: {sequence_spec.name} "
+        f"(size={sequence_spec.size}, tile_size={sequence_spec.tile_size}, "
+        f"num_aie_columns={sequence_spec.num_aie_columns}, {device}) =="
+    )
+
+    full_elf_dir = build_dir / "full-elf"
+    sequence_context = AIEContext(build_dir=full_elf_dir)
+    add = ElementwiseAdd(
+        size=sequence_spec.size,
+        tile_size=sequence_spec.tile_size,
+        num_aie_columns=sequence_spec.num_aie_columns,
+        context=sequence_context,
+    )
+    relu = ReLU(
+        size=sequence_spec.size,
+        tile_size=sequence_spec.tile_size,
+        num_aie_columns=sequence_spec.num_aie_columns,
+        num_channels=1,
+        context=sequence_context,
+    )
+    sequence = OperatorSequence(
+        name=sequence_spec.name,
+        runlist=[
+            (add, "a", "b", "temp"),
+            (relu, "temp", "out"),
+        ],
+        input_args=["a", "b"],
+        output_args=["out"],
+        dispatch="fused",
+        context=sequence_context,
+    )
+    sequence.compile()
+    check_runtime_images(sequence, device)
+
+    context_operator = ElementwiseAdd(
+        size=sequence_spec.size,
+        tile_size=sequence_spec.tile_size,
+        num_aie_columns=sequence_spec.num_aie_columns,
+        context=AIEContext(build_dir=build_dir / "context"),
+    )
+    context_operator.compile()
+    check_runtime_images(context_operator, device)
 
 
 def _compile_one_subprocess(
@@ -189,8 +277,22 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     try:
-        selected = iron.select(args.operator)
-        operators = iron.host_compile_suite(selected)
+        if args.operator:
+            sequences = tuple(
+                sequence
+                for sequence in iron.SEQUENCES
+                if sequence.name == args.operator
+            )
+            if sequences:
+                selected = ()
+                operators = ()
+            else:
+                selected = iron.select(args.operator)
+                operators = iron.host_compile_suite(selected)
+        else:
+            sequences = iron.SEQUENCES
+            selected = iron.select(None)
+            operators = iron.host_compile_suite(selected)
         for skipped in selected:
             if not skipped.host_compile:
                 why = (
@@ -199,10 +301,14 @@ def main(argv: list[str]) -> int:
                     else "not built on this stack"
                 )
                 print(f"{skipped.name}: skipped host compile ({why})")
-        if not operators:
-            print("\niron-ops build: PASS (0 host-compile operators)")
+        if not operators and not sequences:
+            print("\niron-ops build: PASS (0 host-compile items)")
             return 0
-        jobs = iron.compile_job_count(len(operators), args.jobs)
+        items = [
+            *(("operator", operator.name, operator.device) for operator in operators),
+            *(("sequence", sequence.name, "npu2") for sequence in sequences),
+        ]
+        jobs = iron.compile_job_count(len(items), args.jobs)
         if jobs == 1:
             for operator_spec in operators:
                 build(
@@ -210,18 +316,24 @@ def main(argv: list[str]) -> int:
                     args.device or operator_spec.device,
                     args.build_dir,
                 )
+            for sequence_spec in sequences:
+                build_sequence(
+                    sequence_spec,
+                    args.device or "npu2",
+                    args.build_dir,
+                )
         else:
-            print(f"iron-ops build: {len(operators)} operators, jobs={jobs}")
+            print(f"iron-ops build: {len(items)} items, jobs={jobs}")
             failures = []
             with ThreadPoolExecutor(max_workers=jobs) as pool:
                 futures = [
                     pool.submit(
                         _compile_one_subprocess,
-                        operator_spec.name,
-                        args.device or operator_spec.device,
+                        name,
+                        args.device or device,
                         args.build_dir,
                     )
-                    for operator_spec in operators
+                    for _, name, device in items
                 ]
                 for future in as_completed(futures):
                     name, completed = future.result()
@@ -245,8 +357,8 @@ def main(argv: list[str]) -> int:
         print(f"IRON-OPS BUILD FAIL: {e.args[0]}", file=sys.stderr)
         return 1
 
-    names = ", ".join(op.name for op in operators)
-    print(f"\niron-ops build: PASS ({len(operators)} operator(s): {names})")
+    names = ", ".join(name for _, name, _ in items)
+    print(f"\niron-ops build: PASS ({len(items)} item(s): {names})")
     return 0
 
 

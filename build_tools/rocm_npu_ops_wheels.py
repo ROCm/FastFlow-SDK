@@ -368,21 +368,38 @@ def _ops_compile_specs() -> tuple[dict[str, object], ...]:
     Torch-at-import packages stay out of that list. ``host_compile=False``
     operators stay in ``OPERATORS`` for leftover-closed-set.
     """
-    from build_tools.iron import OPERATORS, host_compile_suite
+    from build_tools.iron import OPERATORS, SEQUENCES, host_compile_suite
 
     overlap = sorted({operator.name for operator in OPERATORS} & _TORCH_AT_IMPORT)
     if overlap:
         raise RuntimeError(
             "OPERATORS includes torch-at-import packages: " + ", ".join(overlap)
         )
-    return tuple(
+    operators = tuple(
         {
             "name": operator.name,
+            "kind": "operator",
             "kwargs": dict(operator.build_kwargs),
             "device": operator.device,
+            "full_elf": operator.full_elf,
         }
         for operator in host_compile_suite()
     )
+    sequences = tuple(
+        {
+            "name": sequence.name,
+            "kind": "add_relu_sequence",
+            "kwargs": {
+                "size": sequence.size,
+                "tile_size": sequence.tile_size,
+                "num_aie_columns": sequence.num_aie_columns,
+            },
+            "device": "npu2",
+            "full_elf": True,
+        }
+        for sequence in SEQUENCES
+    )
+    return operators + sequences
 
 
 def _installed_ops_compile(build_dir: Path) -> str:
@@ -446,6 +463,7 @@ def _devices():
 def compile_one(spec, build_root):
     import aie.utils as aie_utils
     from iron.common import AIEContext, AIEOperatorBase
+    from iron.common.sequence import OperatorSequence
 
     devices = _devices()
     name = spec["name"]
@@ -457,6 +475,73 @@ def compile_one(spec, build_root):
     if op_dir.exists():
         shutil.rmtree(op_dir)
     op_dir.mkdir(parents=True)
+    if spec["kind"] == "add_relu_sequence":
+        from iron.operators.elementwise_add.op import ElementwiseAdd
+        from iron.operators.relu.op import ReLU
+
+        kwargs = spec["kwargs"]
+        full_elf_dir = op_dir / "full-elf"
+        context_dir = op_dir / "context"
+        sequence_context = AIEContext(build_dir=full_elf_dir)
+        add = ElementwiseAdd(
+            size=kwargs["size"],
+            tile_size=kwargs["tile_size"],
+            num_aie_columns=kwargs["num_aie_columns"],
+            context=sequence_context,
+        )
+        relu = ReLU(
+            size=kwargs["size"],
+            tile_size=kwargs["tile_size"],
+            num_aie_columns=kwargs["num_aie_columns"],
+            num_channels=1,
+            context=sequence_context,
+        )
+        sequence = OperatorSequence(
+            name=name,
+            runlist=[
+                (add, "a", "b", "temp"),
+                (relu, "temp", "out"),
+            ],
+            input_args=["a", "b"],
+            output_args=["out"],
+            dispatch="fused",
+            context=sequence_context,
+        )
+        sequence.compile()
+        try:
+            kind, produced = classify_compiled_images(sequence.artifacts)
+            if kind != "elf":
+                raise RuntimeError("fused sequence did not produce a full ELF")
+            for path in produced:
+                require_runtime_image(path, elf=True)
+        except RuntimeError as error:
+            raise SystemExit(f"{{name}}: {{error}}") from error
+
+        context_operator = ElementwiseAdd(
+            size=kwargs["size"],
+            tile_size=kwargs["tile_size"],
+            num_aie_columns=kwargs["num_aie_columns"],
+            context=AIEContext(build_dir=context_dir),
+        )
+        context_operator.compile()
+        try:
+            kind, context_produced = classify_compiled_images(
+                context_operator.artifacts
+            )
+            if kind != "xclbin":
+                raise RuntimeError("sequence context did not produce xclbin+insts")
+            for path in context_produced:
+                require_runtime_image(path)
+        except RuntimeError as error:
+            raise SystemExit(f"{{name}} context: {{error}}") from error
+        print(
+            "ops compile: ok",
+            name,
+            *(path.name for path in produced + context_produced),
+            flush=True,
+        )
+        return name
+
     module = importlib.import_module(f"iron.operators.{{name}}.op")
     found = [
         value
@@ -476,6 +561,56 @@ def compile_one(spec, build_root):
     unknown = [key for key in spec["kwargs"] if key not in params]
     if unknown:
         raise SystemExit(f"{{name}}: unsupported constructor args {{unknown}}")
+    if spec["full_elf"]:
+        full_elf_dir = op_dir / "full-elf"
+        context_dir = op_dir / "context"
+        operator = cls(
+            **spec["kwargs"], context=AIEContext(build_dir=full_elf_dir)
+        )
+        sequence = OperatorSequence(
+            name=f"{{name}}_dynamic",
+            runlist=[(operator, "input", "output")],
+            input_args=["input"],
+            output_args=["output"],
+            dispatch="fused",
+            context=AIEContext(build_dir=full_elf_dir),
+        )
+        sequence.compile()
+        try:
+            kind, produced = classify_compiled_images(sequence.artifacts)
+            if kind != "elf":
+                raise RuntimeError("dynamic sequence did not produce a full ELF")
+            for path in produced:
+                require_runtime_image(path, elf=True)
+        except RuntimeError as error:
+            raise SystemExit(f"{{name}}: {{error}}") from error
+
+        context_kwargs = dict(spec["kwargs"])
+        for key in tuple(context_kwargs):
+            if key.endswith("_parameter"):
+                context_kwargs[key] = None
+        context_operator = cls(
+            **context_kwargs, context=AIEContext(build_dir=context_dir)
+        )
+        context_operator.compile()
+        try:
+            kind, context_produced = classify_compiled_images(
+                context_operator.artifacts
+            )
+            if kind != "xclbin":
+                raise RuntimeError("context build did not produce xclbin+insts")
+            for path in context_produced:
+                require_runtime_image(path)
+        except RuntimeError as error:
+            raise SystemExit(f"{{name}} context: {{error}}") from error
+        print(
+            "ops compile: ok",
+            name,
+            *(path.name for path in produced + context_produced),
+            flush=True,
+        )
+        return name
+
     operator = cls(**spec["kwargs"], context=AIEContext(build_dir=op_dir))
     operator.compile()
     try:

@@ -12,8 +12,8 @@ Runs on Linux and Windows. Exits non-zero on any failure.
 The design and its -d device default to `[iron_tools] e2e_design`/`e2e_device` in
 manifests/versions.toml. DESIGN overrides it: a bare name resolves beside the manifest's
 design, a path is taken relative to projects/iron-tools. It must be Peano-capable
-and use makefile-common's `jit_xclbin` rule -- `jit_xclbin_elf` designs also emit
-insts.elf, which needs aiebu-asm (absent from this stack).
+and use makefile-common's `jit_xclbin` rule. The compiler product also ships
+aiebu-asm for `jit_xclbin_elf` and OperatorSequence FULL_ELF designs.
 
 We invoke the design's @iron.jit script directly rather than `make`. That IS the
 jit_xclbin recipe (`python3 <design>.py -d <dev> --xclbin-path=... --insts-path=...`),

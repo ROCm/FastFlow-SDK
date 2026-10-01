@@ -28,12 +28,14 @@ def _load_package_runner():
 class FakeRuntime:
     instances = []
 
-    def __init__(self, correct=True):
+    def __init__(self, correct=True, capabilities=0):
         self.correct = correct
+        self.capabilities = capabilities
         self.loaded = []
         self.export_names = []
         self.buffers = []
         self.dispatches = []
+        self.constants = []
         self.synchronize_count = 0
         self.closed = False
         self.executable = None
@@ -54,12 +56,22 @@ class FakeRuntime:
         self.buffers.append(buffer)
         return buffer
 
-    def dispatch(self, executable, export_ordinal, buffers):
+    def dispatch(self, executable, export_ordinal, buffers, constants=b""):
         self.dispatches.append((executable, export_ordinal, buffers))
-        buffers[1].array[:] = buffers[0].array + (1 if self.correct else 2)
+        self.constants.append(constants)
+        if constants:
+            offset = int.from_bytes(constants, "little", signed=True)
+            buffers[1].array[:] = buffers[0].array[
+                offset : offset + buffers[1].array.size
+            ]
+        else:
+            buffers[1].array[:] = buffers[0].array + (1 if self.correct else 2)
 
     def synchronize(self):
         self.synchronize_count += 1
+
+    def amdxdna_capabilities(self):
+        return self.capabilities
 
     def close(self):
         self.closed = True
@@ -108,12 +120,16 @@ def test_runs_package_with_fake_runtime(package_root, capsys):
     failures = runner.run_package(package_root, runtime_factory=FakeRuntime)
 
     assert failures == 0
-    assert capsys.readouterr().out == "vector_scalar_add: PASS\n"
+    output = capsys.readouterr().out
+    assert "[npu-test] lifecycle 1/5 vector_scalar_add: preparing\n" in output
+    assert "[npu-test] resident 10/10 vector_scalar_add: complete\n" in output
+    assert output.endswith("vector_scalar_add: PASS\n")
     runtime = FakeRuntime.instances[-1]
     assert runtime.loaded == [b"XADX"] * 6
     assert runtime.export_names == ["MLIR_AIE"] * 6
     assert runtime.dispatches[0][1] == 9
     assert len(runtime.dispatches) == 15
+    assert runtime.constants == [b""] * 15
     assert runtime.synchronize_count == 15
     assert runtime.closed
     assert all(executable.closed for executable in runtime.executables)
@@ -138,6 +154,136 @@ def test_reports_output_mismatch_and_returns_failure(package_root, capsys):
     output = capsys.readouterr().out
     assert "vector_scalar_add: FAIL" in output
     assert "8/8 mismatches" in output
+
+
+def test_skips_case_with_unsupported_required_feature(package_root, capsys):
+    manifest_path = package_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cases"][0]["required_features"] = ["amdxdna-full-elf-load-pdi"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def unexpected_runtime():
+        raise AssertionError("a skipped case must not initialize HRX")
+
+    failures = runner.run_package(
+        package_root,
+        runtime_factory=unexpected_runtime,
+        supported_features=set(),
+    )
+
+    assert failures == 0
+    assert capsys.readouterr().out == (
+        "vector_scalar_add: SKIP (missing features: amdxdna-full-elf-load-pdi)\n"
+    )
+
+
+@pytest.mark.parametrize(("capabilities", "expected"), ((0, "SKIP"), (1, "PASS")))
+def test_uses_hrx_amdxdna_capability(package_root, capsys, capabilities, expected):
+    manifest_path = package_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cases"][0]["required_features"] = ["amdxdna-full-elf-load-pdi"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    failures = runner.run_package(
+        package_root,
+        runtime_factory=lambda: FakeRuntime(capabilities=capabilities),
+    )
+
+    assert failures == 0
+    assert f"vector_scalar_add: {expected}" in capsys.readouterr().out
+    assert FakeRuntime.instances[-1].closed
+
+
+def test_capability_query_failure_is_not_treated_as_unsupported(package_root):
+    manifest_path = package_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cases"][0]["required_features"] = ["amdxdna-full-elf-load-pdi"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    runtime = FakeRuntime()
+    runtime.amdxdna_capabilities = lambda: (_ for _ in ()).throw(
+        RuntimeError("capability query failed")
+    )
+    with pytest.raises(RuntimeError, match="capability query failed"):
+        runner.run_package(package_root, runtime_factory=lambda: runtime)
+    assert runtime.closed
+
+
+def test_alternates_dispatch_constants_and_expected_outputs(tmp_path, capsys):
+    FakeRuntime.instances.clear()
+    (tmp_path / "kernel.xadx").write_bytes(b"XADX")
+    source = np.arange(16, dtype=np.int32)
+    source.tofile(tmp_path / "input.bin")
+    source[:8].tofile(tmp_path / "expected-0.bin")
+    source[8:].tofile(tmp_path / "expected-8.bin")
+    (tmp_path / "constants-0.bin").write_bytes((0).to_bytes(4, "little", signed=True))
+    (tmp_path / "constants-8.bin").write_bytes((8).to_bytes(4, "little", signed=True))
+    manifest = {
+        "cases": [
+            {
+                "name": "dynamic_copy",
+                "xadx": "kernel.xadx",
+                "export": "MLIR_AIE",
+                "buffers": [
+                    {
+                        "name": "input",
+                        "direction": "input",
+                        "dtype": "int32",
+                        "shape": [16],
+                        "input": "input.bin",
+                    },
+                    {
+                        "name": "output",
+                        "direction": "output",
+                        "dtype": "int32",
+                        "shape": [8],
+                        "expected": "expected-0.bin",
+                        "rtol": 0.0,
+                        "atol": 0.0,
+                    },
+                ],
+                "dispatches": [
+                    {
+                        "name": "offset_0",
+                        "constants": "constants-0.bin",
+                        "expected": {"output": "expected-0.bin"},
+                    },
+                    {
+                        "name": "offset_8",
+                        "constants": "constants-8.bin",
+                        "expected": {"output": "expected-8.bin"},
+                    },
+                ],
+            }
+        ]
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    failures = runner.run_package(
+        tmp_path,
+        runtime_factory=FakeRuntime,
+        lifecycle_rounds=4,
+        resident_rounds=4,
+    )
+
+    assert failures == 0
+    output = capsys.readouterr().out
+    assert "[npu-test] lifecycle 4/4 dynamic_copy: complete\n" in output
+    assert "[npu-test] resident 4/4 dynamic_copy: complete\n" in output
+    assert output.endswith("dynamic_copy: PASS\n")
+    runtime = FakeRuntime.instances[-1]
+    assert [
+        int.from_bytes(value, "little", signed=True) for value in runtime.constants
+    ] == [
+        0,
+        8,
+        0,
+        8,
+        0,
+        8,
+        0,
+        8,
+    ]
 
 
 def test_bfloat16_comparison_decodes_raw_storage():

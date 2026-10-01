@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import io
+import struct
 import subprocess
 import sys
 import tempfile
@@ -492,7 +493,17 @@ class TestRocmNpuLinuxWheelNative:
 
     def _write_elf(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"\x7fELFfake")
+        data = bytearray(120)
+        data[:4] = b"\x7fELF"
+        data[4] = 2
+        data[5] = 1
+        struct.pack_into("<H", data, 16, 3)
+        struct.pack_into("<Q", data, 32, 64)
+        struct.pack_into("<H", data, 52, 64)
+        struct.pack_into("<H", data, 54, 56)
+        struct.pack_into("<H", data, 56, 1)
+        struct.pack_into("<I", data, 64, 2)
+        path.write_bytes(data)
 
     @contextmanager
     def _mock_patchelf(self, *, needed, sonames=None):

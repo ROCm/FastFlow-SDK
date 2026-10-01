@@ -63,20 +63,22 @@ jobs:
           key: uv-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements/**/*.txt', 'requirements/**/*.lock', 'dev.py', 'build_tools/**/*.py') }}
           restore-keys: uv-v1-${{ runner.os }}-${{ runner.arch }}-
 
-      # The manylinux image has the gcc-toolset but not OpenSSL dev headers, which
-      # iron-tools' bootgen needs (find_package(OpenSSL)). Retry: this is the only step
+      # The manylinux image lacks OpenSSL and Boost development headers, plus the
+      # static glibc archives required by AIEBU's release executable. Retry: this is
+      # the only step
       # that must reach the AlmaLinux mirrors. `yum` is a symlink to `dnf` here, so it
       # is not a fallback.
       - name: Install system build dependencies
         run: |
           set -eu
           for attempt in 1 2 3 4 5; do
-            if dnf install -y openssl-devel; then exit 0; fi
+            if dnf --enablerepo=powertools install -y \
+              boost-devel glibc-static openssl-devel; then exit 0; fi
             echo "dnf attempt ${attempt} failed; retrying in $(( attempt * 15 ))s"
             dnf clean metadata || true
             sleep $(( attempt * 15 ))
           done
-          echo "::error::openssl-devel could not be installed after 5 attempts"
+          echo "::error::system build dependencies could not be installed after 5 attempts"
           exit 1
 
       # --shallow: llvm-project alone is >4 GB of history this build never reads.
@@ -86,7 +88,7 @@ jobs:
       # also delete the editable install's egg-info, which `dev.py setup` puts
       # there.
       - name: Initialize submodules
-        run: python3 dev.py submodules llvm-project hrx iron-tools iron-ops --reset --clean iron-tools --shallow
+        run: python3 dev.py submodules llvm-project aiebu hrx iron-tools iron-ops --reset --clean iron-tools --shallow
       # setup creates .venv, installs requirements/compiler-stack.lock, applies the
       # temporary patches, and prefetches the eudsl sdist (the single network step).
       - name: Setup (venv + hash-pinned deps + prefetch)

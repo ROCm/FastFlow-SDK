@@ -45,9 +45,9 @@ def test_builder_rejects_empty_or_ambiguous_run_lists():
 def test_x64_public_record_layout():
     assert ctypes.sizeof(ctypes.c_void_p) == 8
     assert ctypes.sizeof(abi.HrxConstByteSpan) == 16
-    assert ctypes.sizeof(abi.HrxAmdxdnaExecutableRun) == 40
-    assert ctypes.sizeof(abi.HrxAmdxdnaExecutableEntryPoint) == 72
-    assert ctypes.sizeof(abi.HrxAmdxdnaExecutableCreateParams) == 48
+    assert ctypes.sizeof(abi.HrxAmdxdnaExecutableRun) == 72
+    assert ctypes.sizeof(abi.HrxAmdxdnaExecutableEntryPoint) == 88
+    assert ctypes.sizeof(abi.HrxAmdxdnaExecutableCreateParams) == 64
     assert abi.HrxAmdxdnaExecutableRun.transaction.offset == 8
     assert abi.HrxAmdxdnaExecutableEntryPoint.runs.offset == 56
     assert abi.HrxAmdxdnaExecutableCreateParams.xclbins.offset == 16
@@ -81,6 +81,38 @@ def test_builder_populates_records_and_retains_storage():
         ctypes.string_at(run.transaction.data, run.transaction.data_length)
         == transaction
     )
+
+
+def test_builder_populates_pdis_relocations_and_parameters():
+    description = abi.AmdxdnaExecutableDescription(
+        b"xclbin",
+        b"transaction",
+        "MLIR_AIE",
+        pdis=[b"pdi"],
+        run_pdi_relocations=[[(4, 0, -16)]],
+        run_control_parameter_relocations=[[(8, 32)]],
+        control_parameters=[("input_offset", "i32", 0, 3, 4, 1)],
+    )
+
+    assert description.params.abi_version == 1
+    assert description.entry_point.abi_version == 1
+    assert description.params.pdi_count == 1
+    assert (
+        ctypes.string_at(
+            description.params.pdis[0].data,
+            description.params.pdis[0].data_length,
+        )
+        == b"pdi"
+    )
+    run = description.entry_point.runs[0]
+    assert run.abi_version == 1
+    assert run.pdi_relocation_count == 1
+    assert run.pdi_relocations[0].addend == -16
+    assert run.control_parameter_relocation_count == 1
+    assert run.control_parameter_relocations[0].addend == 32
+    parameter = description.entry_point.control_parameters[0]
+    assert parameter.name.data[: parameter.name.size] == b"input_offset"
+    assert parameter.state_table_index == 3
 
 
 @pytest.mark.parametrize(
