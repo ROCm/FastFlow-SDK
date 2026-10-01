@@ -5,6 +5,7 @@ import email.parser
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import types
@@ -247,10 +248,16 @@ class TestRocmNpuCompilerWheels:
         executable = product / "bin" / "aie-opt"
         executable.parent.mkdir(parents=True)
         (product / "lib" / "aie").mkdir(parents=True)
-        header = bytearray(18)
+        header = bytearray(120)
         header[:4] = b"\x7fELF"
+        header[4] = 2
         header[5] = 1
-        header[16:18] = (2).to_bytes(2, "little")
+        struct.pack_into("<H", header, 16, 2)
+        struct.pack_into("<Q", header, 32, 64)
+        struct.pack_into("<H", header, 52, 64)
+        struct.pack_into("<H", header, 54, 56)
+        struct.pack_into("<H", header, 56, 1)
+        struct.pack_into("<I", header, 64, 2)
         executable.write_bytes(header)
         bootgen = product / "bin" / "bootgen"
         bootgen.write_bytes(header)

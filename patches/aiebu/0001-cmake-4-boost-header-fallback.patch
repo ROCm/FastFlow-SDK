@@ -1,0 +1,33 @@
+diff --git a/cmake/boost.cmake b/cmake/boost.cmake
+index 557de4d1..8350c2fe 100644
+--- a/cmake/boost.cmake
++++ b/cmake/boost.cmake
+@@ -6,7 +6,27 @@ endif()
+ 
+ # First, find Boost to determine the version (minimum 1.65 for property_tree support)
+ # Use MODULE mode (default) which is more flexible in finding Boost installations
+-find_package(Boost 1.65.0 REQUIRED)
++find_package(Boost 1.65.0 QUIET)
++if(NOT Boost_FOUND)
++  find_path(Boost_INCLUDE_DIRS
++    NAMES boost/version.hpp
++    HINTS "${BOOST_ROOT}" "$ENV{BOOST_ROOT}"
++    PATH_SUFFIXES include)
++  if(NOT Boost_INCLUDE_DIRS)
++    message(FATAL_ERROR
++      "Boost >= 1.65 headers are required; set BOOST_ROOT to their prefix")
++  endif()
++  file(STRINGS "${Boost_INCLUDE_DIRS}/boost/version.hpp" _boost_lib_version
++    REGEX "^#define BOOST_LIB_VERSION ")
++  string(REGEX REPLACE
++    ".*\"([0-9]+)_([0-9]+)(_[0-9]+)?\".*" "\\1.\\2"
++    Boost_VERSION_STRING "${_boost_lib_version}")
++  if(Boost_VERSION_STRING VERSION_LESS "1.65")
++    message(FATAL_ERROR "Boost >= 1.65 is required, found ${Boost_VERSION_STRING}")
++  endif()
++  set(Boost_FOUND TRUE)
++  set(Boost_VERSION "${Boost_VERSION_STRING}")
++endif()
+ 
+ message(STATUS "Boost version: ${Boost_VERSION}")
+ message(STATUS "Boost include dir: ${Boost_INCLUDE_DIRS}")

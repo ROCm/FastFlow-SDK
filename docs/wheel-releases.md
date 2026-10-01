@@ -126,11 +126,15 @@ torch-free operator in `build_tools.iron.host_compile_suite()` in parallel
 (the same small shapes as `test-iron-ops`, so `generic/` and `aie2p/` kernels
 both go through Peano from site-packages). MHA is in that compile catalog
 (`get_current_device()` via `patches/iron-ops/0001-mha-bind-get-current-device.patch`
-until IRON devel has the one-liner). SwiGLU fused ELF stays in `OPERATORS` but
-is not host-compiled until `aiebu-asm` is in the compiler wheel. NPU CI does
-not run iron-ops pytest: it dispatches the prebuilt `npu-test-package` for
-operators that have `CASE_GENERATORS`. `dev.py test-npu-iron-ops` is local
-and still compiles inside `run_test`; CPU CI is the off-device drift gate.
+until IRON devel has the one-liner). The compiler wheel includes `aiebu-asm`;
+the dynamic strided-copy row compile-checks runtime parameters in a fused ELF,
+and the fused add-to-ReLU row compile-checks multi-PDI reconfiguration and
+intermediate scratch routing. SwiGLU stays in `OPERATORS` but is not
+host-compiled because it has no packaged numeric case.
+NPU CI does not run iron-ops pytest: it dispatches the prebuilt
+`npu-test-package` for operators that have `CASE_GENERATORS`.
+`dev.py test-npu-iron-ops` is local and still compiles inside `run_test`; CPU
+CI is the off-device drift gate.
 3.13/3.14 already proved the abi3 compiler; ops is `py3-none-any`. Linux
 publishes the canonical ops wheel with the compiler wheel family (same artifact
 name; ops files are listed explicitly); Windows still packages and

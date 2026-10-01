@@ -4,6 +4,7 @@
 import json
 import os
 import platform
+import struct
 import subprocess
 import sys
 import sysconfig
@@ -57,6 +58,7 @@ def make_product(
     required_tools = []
     for name in [
         *compiler_product.NPU_PREREQ_TOOLS,
+        "aiebu-asm",
         "xclbinutil",
         "llvm-objcopy",
     ]:
@@ -383,6 +385,15 @@ def test_ci_runs_one_deep_doctor_and_uses_content_addressed_caches():
     assert cache_inputs in windows
 
 
+def test_linux_ci_installs_aiebu_static_link_dependencies():
+    workflow = (
+        ROOT / ".github" / "workflows" / "build_rocm_npu_staging_linux.yml"
+    ).read_text()
+
+    assert "--enablerepo=powertools" in workflow
+    assert "glibc-static" in workflow
+
+
 def test_ci_builds_hrx_unit_tests_without_installing_test_artifacts():
     workflows = ROOT / ".github" / "workflows"
     linux = (workflows / "build_rocm_npu_staging_linux.yml").read_text()
@@ -436,9 +447,11 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
     names = (
         "vector_scalar_add",
         "vector_scalar_add_chain4",
+        "add_relu_fused",
         "elementwise_add",
         "relu",
         "gemv",
+        "strided_copy",
     )
     for name in names:
         source = {"kind": "test", "name": name}
@@ -450,6 +463,11 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
                 npu_test_cases.generate_case(name),
                 b"\x00\x00\x00\x00XADX",
                 source,
+                required_features=(
+                    (npu_test_package.FULL_ELF_LOAD_PDI_FEATURE,)
+                    if name in ("add_relu_fused", "strided_copy")
+                    else ()
+                ),
             )
         )
 
@@ -469,7 +487,34 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
         system,
     )
 
-    assert len(manifest["cases"]) == 5
+    assert len(manifest["cases"]) == 7
+    fused = next(case for case in manifest["cases"] if case["name"] == "add_relu_fused")
+    assert fused["required_features"] == [npu_test_package.FULL_ELF_LOAD_PDI_FEATURE]
+    assert [buffer["name"] for buffer in fused["buffers"]] == [
+        "inputs",
+        "output",
+        "scratch",
+    ]
+    dynamic = next(case for case in manifest["cases"] if case["name"] == "strided_copy")
+    assert [dispatch["name"] for dispatch in dynamic["dispatches"]] == [
+        "input_offset_0",
+        "input_offset_1024",
+    ]
+    assert [
+        (stage / dispatch["constants"]).read_bytes()
+        for dispatch in dynamic["dispatches"]
+    ] == [
+        (0).to_bytes(4, "little", signed=True),
+        (1024).to_bytes(4, "little", signed=True),
+    ]
+    generated = npu_test_cases.generate_case("strided_copy")
+    assert [
+        (stage / dispatch["expected"]["output"]).read_bytes()
+        for dispatch in dynamic["dispatches"]
+    ] == [
+        dispatch["expected"]["output"].tobytes() for dispatch in generated["dispatches"]
+    ]
+    assert dynamic["required_features"] == [npu_test_package.FULL_ELF_LOAD_PDI_FEATURE]
     packaged = {path.suffix for path in stage.rglob("*") if path.is_file()}
     assert ".xclbin" not in packaged
     assert ".mlir" not in packaged
@@ -624,10 +669,16 @@ def test_linux_compiler_product_bundles_non_manylinux_dependencies(tmp_path):
     openssl = root / "openssl"
 
     def write_elf(path):
-        header = bytearray(18)
+        header = bytearray(120)
         header[:4] = b"\x7fELF"
+        header[4] = 2
         header[5] = 1
-        header[16:18] = (3).to_bytes(2, "little")
+        struct.pack_into("<H", header, 16, 3)
+        struct.pack_into("<Q", header, 32, 64)
+        struct.pack_into("<H", header, 52, 64)
+        struct.pack_into("<H", header, 54, 56)
+        struct.pack_into("<H", header, 56, 1)
+        struct.pack_into("<I", header, 64, 2)
         write_file(path, bytes(header))
 
     write_elf(product / "bin" / "bootgen")
@@ -701,6 +752,7 @@ def test_linux_archive_is_tar_gz_without_zstd(tmp_path):
 def test_relocated_toolchain_env_uses_product_paths(tmp_path):
     prefix = tmp_path
     write_file(prefix / "bin" / f"aie-opt{run_e2e.EXE}", executable=True)
+    write_file(prefix / "bin" / f"aiebu-asm{run_e2e.EXE}", executable=True)
     write_file(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", executable=True)
     write_file(prefix / "python" / "aie" / "ir.py")
     write_file(prefix / "python" / "probe.py", b"VALUE = 1\n")
@@ -728,6 +780,7 @@ def test_relocated_toolchain_env_uses_installed_wheel_bindings(tmp_path):
     site_packages = root / "site-packages"
     prefix = site_packages / "rocm_npu_compiler"
     write_file(prefix / "bin" / f"aie-opt{run_e2e.EXE}", executable=True)
+    write_file(prefix / "bin" / f"aiebu-asm{run_e2e.EXE}", executable=True)
     write_file(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", executable=True)
     write_file(site_packages / "aie" / "ir.py")
     (prefix / "peano" / "llvm-aie").mkdir(parents=True)

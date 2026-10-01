@@ -13,8 +13,8 @@ extensions are required.
 ``package-npu-test-package`` includes an iron-ops compile artifact for every
 operator name that also appears here. That is the NPU CI surface
 (``test-npu-package``): prebuilt XADX plus these NumPy oracles. dequant, rope,
-mha, and strided_copy are still CPU-compiled; they are omitted from the package
-until they have generators. SwiGLU fused ELF is not compiled on this stack.
+and mha are still CPU-compiled; they are omitted from the package until they
+have generators. SwiGLU fused ELF is not compiled on this stack.
 """
 
 
@@ -381,6 +381,69 @@ def repeat():
     }
 
 
+def add_relu_fused():
+    """Generates consolidated arenas for a fused BF16 add-to-ReLU sequence."""
+    np = _numpy()
+    indices = np.arange(4096, dtype=np.int32)
+    lhs_values = ((indices % 65) - 32).astype(np.float32)
+    rhs_values = ((indices % 17) - 8).astype(np.float32)
+    lhs = float32_to_bf16(lhs_values)
+    rhs = float32_to_bf16(rhs_values)
+    summed = float32_to_bf16(bf16_to_float32(lhs) + bf16_to_float32(rhs))
+    expected = np.maximum(bf16_to_float32(summed), np.float32(0))
+    inputs = np.concatenate((lhs, rhs))
+    scratch = np.zeros(4096, dtype=np.uint16)
+    return {
+        "name": "add_relu_fused",
+        # FULL_ELF OperatorSequence binds three consolidated arenas in this order.
+        "buffers": [
+            {
+                "name": "inputs",
+                "direction": "input",
+                "dtype": "uint16",
+                "logical_dtype": "bfloat16",
+                "shape": (8192,),
+                "data": inputs,
+            },
+            _bf16_output("output", expected, (4096,), rtol=0.0, atol=0.0),
+            {
+                "name": "scratch",
+                "direction": "input",
+                "dtype": "uint16",
+                "logical_dtype": "bfloat16",
+                "shape": (4096,),
+                "data": scratch,
+            },
+        ],
+    }
+
+
+def strided_copy():
+    """Generates one executable with alternating dynamic input offsets."""
+    np = _numpy()
+    values = ((np.arange(2048, dtype=np.int32) % 257) - 128).astype(
+        np.float32
+    ) / np.float32(16)
+    source = float32_to_bf16(values)
+    dispatches = []
+    for offset in (0, 1024):
+        dispatches.append(
+            {
+                "name": f"input_offset_{offset}",
+                "constants": np.asarray([offset], dtype="<i4").tobytes(),
+                "expected": {"output": source[offset : offset + 1024].copy()},
+            }
+        )
+    return {
+        "name": "strided_copy",
+        "buffers": [
+            _bf16_input("input", values, (2048,)),
+            _bf16_output("output", values[:1024], (1024,), rtol=0.0, atol=0.0),
+        ],
+        "dispatches": dispatches,
+    }
+
+
 CASE_GENERATORS = {
     "vector_scalar_add": vector_scalar_add,
     "vector_scalar_add_chain4": vector_scalar_add_chain4,
@@ -401,6 +464,8 @@ CASE_GENERATORS = {
     "gemm": gemm,
     "transpose": transpose,
     "repeat": repeat,
+    "add_relu_fused": add_relu_fused,
+    "strided_copy": strided_copy,
 }
 
 

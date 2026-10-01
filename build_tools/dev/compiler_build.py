@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Compiler-stack build commands for LLVM, IRON tools, and xclbinutil."""
+"""Compiler-stack build commands for LLVM, AIEBU, IRON tools, and xclbinutil."""
 
 import os
 import shutil
@@ -81,6 +81,59 @@ def cmd_build_llvm(args):
         env=environment.cmake_env(),
     )
     print("build llvm: ok ->", paths.LLVM_BUILD / "lib" / "cmake")
+
+
+def cmd_build_aiebu(args):
+    """Builds the pinned assembler used by aiecc sequence compilation."""
+    source = paths.PROJ / "aiebu"
+    if not (source / "CMakeLists.txt").is_file():
+        sys.exit("missing AIEBU checkout; run: python dev.py submodules aiebu")
+    cc, cxx = environment.compilers()
+    env = environment.cmake_env()
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "-G",
+            "Ninja",
+            "-S",
+            environment.cmake_path(source),
+            "-B",
+            environment.cmake_path(paths.AIEBU_BUILD),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_INSTALL_PREFIX={environment.cmake_path(paths.AIEBU_INSTALL)}",
+            "-DAIEBU_BUILD_TESTS=OFF",
+            *environment.cmake_compiler_flags(cc, cxx),
+            *environment.cmake_ccache_flags(),
+        ],
+        env=env,
+    )
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(paths.AIEBU_BUILD),
+            "-j",
+            NPROC,
+            "--target",
+            "aiebu-asm",
+        ],
+        env=env,
+    )
+    if paths.AIEBU_INSTALL.exists():
+        shutil.rmtree(paths.AIEBU_INSTALL)
+    install_bin = paths.AIEBU_INSTALL / "bin"
+    install_bin.mkdir(parents=True)
+    executable = "aiebu-asm.exe" if paths.is_windows() else "aiebu-asm"
+    built_assembler = paths.AIEBU_BUILD / "src" / "cpp" / "utils" / "asm" / executable
+    if not built_assembler.is_file():
+        raise RuntimeError(
+            f"AIEBU assembler build output is missing: {built_assembler}"
+        )
+    # Upstream's install target includes sibling tools that are intentionally
+    # not built here. Stage the one requested target instead of making the
+    # compiler product depend on unrelated AIEBU executables.
+    shutil.copy2(built_assembler, install_bin / executable)
+    print("build aiebu: ok ->", paths.AIEBU_INSTALL / "bin")
 
 
 def build_iron_tools(python_executable, build_dir, install_dir):

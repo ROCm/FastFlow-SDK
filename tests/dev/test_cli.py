@@ -137,6 +137,7 @@ class TestDevCli:
     def test_build_registry_has_direct_domain_handlers(self):
         expected_modules = {
             "llvm": "build_tools.dev.compiler_build",
+            "aiebu": "build_tools.dev.compiler_build",
             "iron-tools": "build_tools.dev.compiler_build",
             "hrx-xclbinutil": "build_tools.dev.compiler_build",
             "hrx": "build_tools.dev.runtime_build",
@@ -158,6 +159,7 @@ class TestDevCli:
         names = (
             (build.runtime_build, "cmd_build_rocm_npu_cli"),
             (build.compiler_build, "cmd_build_hrx_xclbinutil"),
+            (build.compiler_build, "cmd_build_aiebu"),
             (build.compiler_build, "cmd_build_llvm"),
             (build.compiler_build, "cmd_build_iron_tools"),
             (build.runtime_build, "cmd_build_hrx"),
@@ -168,7 +170,14 @@ class TestDevCli:
             )
             for owner, name in names
         ]
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+        ):
             build.cmd_build_all(SimpleNamespace(fresh=False))
         assert calls == [name for _, name in names]
 

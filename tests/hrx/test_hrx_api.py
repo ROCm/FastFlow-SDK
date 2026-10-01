@@ -43,6 +43,7 @@ class FakeLibrary:
             "hrx_gpu_shutdown",
             "hrx_gpu_device_get",
             "hrx_device_release",
+            "hrx_device_get_property",
             "hrx_stream_create",
             "hrx_stream_release",
             "hrx_stream_synchronize",
@@ -69,6 +70,7 @@ class FakeLibrary:
         self.hrx_gpu_device_get.implementation = lambda index, out: self._set_handle(
             out, 0x100
         )
+        self.hrx_device_get_property.implementation = self._get_device_property
         self.hrx_stream_create.implementation = lambda device, flags, out: (
             self._set_handle(out, 0x200)
         )
@@ -100,6 +102,14 @@ class FakeLibrary:
         ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = pointer
 
     @staticmethod
+    def _get_device_property(device, property_name, output, output_size):
+        assert property_name == hrx.HRX_DEVICE_PROPERTY_AMDXDNA_CAPABILITIES
+        assert output_size == ctypes.sizeof(ctypes.c_uint64)
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_uint64))[0] = (
+            hrx.HRX_AMDXDNA_DEVICE_CAPABILITY_FULL_ELF_LOAD_PDI
+        )
+
+    @staticmethod
     def _lookup(executable, name, output):
         ctypes.cast(output, ctypes.POINTER(ctypes.c_uint32))[0] = 7
 
@@ -108,9 +118,9 @@ def test_x64_public_record_layouts():
     assert ctypes.sizeof(ctypes.c_void_p) == 8
     assert ctypes.sizeof(hrx.HrxHostAllocator) == 16
     assert ctypes.sizeof(hrx.HrxConstByteSpan) == 16
-    assert ctypes.sizeof(hrx.HrxAmdxdnaExecutableRun) == 40
-    assert ctypes.sizeof(hrx.HrxAmdxdnaExecutableEntryPoint) == 72
-    assert ctypes.sizeof(hrx.HrxAmdxdnaExecutableCreateParams) == 48
+    assert ctypes.sizeof(hrx.HrxAmdxdnaExecutableRun) == 72
+    assert ctypes.sizeof(hrx.HrxAmdxdnaExecutableEntryPoint) == 88
+    assert ctypes.sizeof(hrx.HrxAmdxdnaExecutableCreateParams) == 64
     assert hrx.HrxAmdxdnaExecutableEntryPoint.runs.offset == 56
     assert hrx.HrxAmdxdnaExecutableCreateParams.entry_points.offset == 32
     assert ctypes.sizeof(hrx.HrxDispatchConfig) == 28
@@ -200,6 +210,10 @@ def test_runtime_loads_maps_dispatches_and_releases():
     runtime.dispatch(executable, ordinal, [buffer])
     runtime.synchronize()
     buffer.invalidate()
+    assert (
+        runtime.amdxdna_capabilities()
+        == hrx.HRX_AMDXDNA_DEVICE_CAPABILITY_FULL_ELF_LOAD_PDI
+    )
 
     load_call = library.hrx_executable_load_data.calls[0]
     assert load_call[3] == hrx.HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY

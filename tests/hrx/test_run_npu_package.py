@@ -41,7 +41,7 @@ class FakeRuntime:
         buffer.on_close = lambda: self.events.append(("buffer-close", size))
         return buffer
 
-    def dispatch(self, executable, ordinal, buffers):
+    def dispatch(self, executable, ordinal, buffers, constants=b""):
         self.events.append(("dispatch", executable.name))
         if self.fail_dispatch:
             raise RuntimeError("injected dispatch failure")

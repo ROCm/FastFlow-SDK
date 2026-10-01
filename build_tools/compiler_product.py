@@ -71,6 +71,12 @@ COMPILER_PRODUCT_LICENSES = (
     "aie-api-LICENSE",
     "aie-runtime-LICENSE.txt",
     "bootgen-LICENSE",
+    "aiebu-LICENSE",
+    "aiebu-ELFIO-LICENSE.txt",
+    "aiebu-cxxopts-LICENSE",
+    "aiebu-zstd-LICENSE",
+    "aiebu-aie-runtime-LICENSE.txt",
+    "aiebu-boost-LICENSE_1_0.txt",
 )
 IS_WINDOWS = paths.is_windows()
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -411,6 +417,11 @@ def stage_product():
     _stage(objcopy, product / relative)
     required_tools.append(relative.as_posix())
 
+    aiebu_asm = _tool(paths.AIEBU_INSTALL / "bin" / "aiebu-asm")
+    relative = Path("bin") / aiebu_asm.name
+    _stage(aiebu_asm, product / relative)
+    required_tools.append(relative.as_posix())
+
     installed_python = it / "python"
     if not installed_python.is_dir():
         raise RuntimeError(f"missing from iron-tools install: {installed_python}")
@@ -467,6 +478,27 @@ def stage_product():
             PROJ / "iron-tools" / "third_party" / "bootgen" / "LICENSE",
             "bootgen-LICENSE",
         ),
+        (PROJ / "aiebu" / "LICENSE", "aiebu-LICENSE"),
+        (
+            PROJ / "aiebu" / "src" / "cpp" / "ELFIO" / "LICENSE.txt",
+            "aiebu-ELFIO-LICENSE.txt",
+        ),
+        (
+            PROJ / "aiebu" / "src" / "cpp" / "cxxopts" / "LICENSE",
+            "aiebu-cxxopts-LICENSE",
+        ),
+        (
+            PROJ / "aiebu" / "src" / "cpp" / "zstd" / "LICENSE",
+            "aiebu-zstd-LICENSE",
+        ),
+        (
+            PROJ / "aiebu" / "src" / "cpp" / "aie-rt" / "license.txt",
+            "aiebu-aie-runtime-LICENSE.txt",
+        ),
+        (
+            PROJ / "iron-tools" / "LICENSES" / "BSL-1.0.txt",
+            "aiebu-boost-LICENSE_1_0.txt",
+        ),
     )
     for source, name in license_sources:
         if source.is_file():
@@ -489,6 +521,7 @@ def stage_product():
             "sources": {
                 "rocm-npu-staging": git_source_state(ROOT),
                 "llvm-project": git_source_state(PROJ / "llvm-project"),
+                "aiebu": git_source_state(PROJ / "aiebu"),
                 "iron-tools": git_source_state(PROJ / "iron-tools"),
                 "hrx-xclbinutil": _hrx_xclbinutil_source_state(),
             },

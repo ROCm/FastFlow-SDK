@@ -18,3 +18,7 @@
 	url = https://github.com/ROCm/FastFlowLM.git
 	branch = main
 	ignore = dirty
+[submodule "projects/aiebu"]
+	path = projects/aiebu
+	url = https://github.com/Xilinx/aiebu.git
+	ignore = dirty

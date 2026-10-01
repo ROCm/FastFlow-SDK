@@ -13,8 +13,15 @@ import shutil
 import sys
 from pathlib import Path
 
+from build_tools import (
+    aiecc_elf_xadx,
+    hrx_runtime,
+    iron,
+    npu_prereqs,
+    npu_test_cases,
+    paths,
+)
 from build_tools import archive as archive_tools
-from build_tools import hrx_runtime, iron, npu_prereqs, npu_test_cases, paths
 from build_tools.archive import (
     create_deterministic_tar_gz,
     create_deterministic_tar_zstd_cli,
@@ -26,6 +33,8 @@ from build_tools.artifact import (
 )
 
 ARCHIVE_STEM = "npu-test-package.tar"
+FULL_ELF_LOAD_PDI_FEATURE = "amdxdna-full-elf-load-pdi"
+KNOWN_REQUIRED_FEATURES = {FULL_ELF_LOAD_PDI_FEATURE}
 
 
 def find_archive(directory):
@@ -37,7 +46,7 @@ def find_archive(directory):
     return None
 
 
-def write_case(stage, generated, xadx, source):
+def write_case(stage, generated, xadx, source, required_features=()):
     """Writes one generated numeric case and returns its manifest record."""
     import numpy as np
 
@@ -63,13 +72,43 @@ def write_case(stage, generated, xadx, source):
         np.asarray(value, dtype=storage_dtype).tofile(data_path)
         record[field] = data_path.relative_to(stage).as_posix()
         buffers.append(record)
-    return {
+    case = {
         "name": generated["name"],
         "xadx": xadx_path.relative_to(stage).as_posix(),
         "export": "MLIR_AIE",
         "source": source,
         "buffers": buffers,
     }
+    if required_features:
+        case["required_features"] = list(required_features)
+    dispatches = []
+    for index, dispatch in enumerate(generated.get("dispatches", ())):
+        dispatch_name = dispatch["name"]
+        constants_path = case_dir / f"dispatch-{index}-{dispatch_name}-constants.bin"
+        constants_path.write_bytes(dispatch["constants"])
+        expected_paths = {}
+        for descriptor in generated["buffers"]:
+            if descriptor["direction"] != "output":
+                continue
+            buffer_name = descriptor["name"]
+            expected_path = (
+                case_dir / f"dispatch-{index}-{dispatch_name}-{buffer_name}.bin"
+            )
+            np.asarray(
+                dispatch["expected"][buffer_name],
+                dtype=np.dtype(descriptor["dtype"]),
+            ).tofile(expected_path)
+            expected_paths[buffer_name] = expected_path.relative_to(stage).as_posix()
+        dispatches.append(
+            {
+                "name": dispatch_name,
+                "constants": constants_path.relative_to(stage).as_posix(),
+                "expected": expected_paths,
+            }
+        )
+    if dispatches:
+        case["dispatches"] = dispatches
+    return case
 
 
 def write_manifest(stage, cases, source_revision, system, machine):
@@ -156,6 +195,15 @@ def verify_tree(package, expected_cases, source_revision, system):
         ) from error
 
     for case in cases:
+        required_features = case.get("required_features", [])
+        if (
+            not isinstance(required_features, list)
+            or len(required_features) != len(set(required_features))
+            or not set(required_features) <= KNOWN_REQUIRED_FEATURES
+        ):
+            raise RuntimeError(
+                f"{case['name']}: invalid required_features: {required_features!r}"
+            )
         data = (package / case["xadx"]).read_bytes()
         if len(data) < 8 or data[4:8] != b"XADX":
             raise RuntimeError(f"{case['name']}: malformed XADX container")
@@ -175,6 +223,35 @@ def verify_tree(package, expected_cases, source_revision, system):
                 raise RuntimeError(
                     f"{case['name']}.{buffer['name']}: missing {field} data"
                 )
+        dispatch_names = set()
+        output_names = {
+            buffer["name"]
+            for buffer in case["buffers"]
+            if buffer["direction"] == "output"
+        }
+        for dispatch in case.get("dispatches", ()):
+            dispatch_name = dispatch.get("name")
+            if not dispatch_name or dispatch_name in dispatch_names:
+                raise RuntimeError(
+                    f"{case['name']}: dispatch names must be non-empty and unique"
+                )
+            dispatch_names.add(dispatch_name)
+            if not (package / dispatch["constants"]).is_file():
+                raise RuntimeError(
+                    f"{case['name']}.{dispatch_name}: missing dispatch constants"
+                )
+            expected = dispatch.get("expected", {})
+            if set(expected) != output_names:
+                raise RuntimeError(
+                    f"{case['name']}.{dispatch_name}: expected outputs must be "
+                    f"{sorted(output_names)}, got {sorted(expected)}"
+                )
+            for buffer_name, relative_path in expected.items():
+                if not (package / relative_path).is_file():
+                    raise RuntimeError(
+                        f"{case['name']}.{dispatch_name}.{buffer_name}: "
+                        "missing expected data"
+                    )
     return manifest
 
 
@@ -194,6 +271,16 @@ def _single_artifact(directory, pattern, description):
             f"{directory}: expected one {description} ({pattern}), found {len(matches)}: {names}"
         )
     return matches[0]
+
+
+def _serialize_full_elf_xadx(elf, context_xclbin, params, serializer):
+    """Converts one internal aiecc ELF into a self-contained XADX."""
+    return aiecc_elf_xadx.convert_to_xadx(
+        serializer,
+        elf.read_bytes(),
+        context_xclbin.read_bytes(),
+        params.read_text("utf-8"),
+    )
 
 
 def cmd_package_npu_test_package(args):
@@ -244,10 +331,76 @@ def cmd_package_npu_test_package(args):
         )
     )
 
+    for sequence in iron.SEQUENCES:
+        build_dir = OUT / "iron-ops" / sequence.name
+        full_elf_dir = build_dir / "full-elf"
+        context_dir = build_dir / "context"
+        elf = _single_artifact(full_elf_dir, "*.elf", "sequence full ELF")
+        params = _single_artifact(
+            full_elf_dir,
+            "**/params.txt",
+            "sequence scratchpad parameter metadata",
+        )
+        context_xclbin = _single_artifact(
+            context_dir, "*.xclbin", "sequence context xclbin"
+        )
+        cases.append(
+            write_case(
+                NPU_TEST_PACKAGE_STAGE,
+                npu_test_cases.generate_case(sequence.name),
+                _serialize_full_elf_xadx(
+                    elf,
+                    context_xclbin,
+                    params,
+                    serializer,
+                ),
+                {
+                    "kind": "iron-ops-full-elf-sequence",
+                    "name": sequence.name,
+                    "device": "npu2",
+                    "size": sequence.size,
+                    "tile_size": sequence.tile_size,
+                    "num_aie_columns": sequence.num_aie_columns,
+                },
+                required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
+            )
+        )
+
     for operator in iron.OPERATORS:
         if operator.name not in npu_test_cases.CASE_GENERATORS:
             continue
         build_dir = OUT / "iron-ops" / operator.name
+        if operator.full_elf:
+            full_elf_dir = build_dir / "full-elf"
+            context_dir = build_dir / "context"
+            elf = _single_artifact(full_elf_dir, "*.elf", "operator full ELF")
+            params = _single_artifact(
+                full_elf_dir,
+                "**/params.txt",
+                "scratchpad parameter metadata",
+            )
+            context_xclbin = _single_artifact(context_dir, "*.xclbin", "context xclbin")
+            xadx = _serialize_full_elf_xadx(
+                elf,
+                context_xclbin,
+                params,
+                serializer,
+            )
+            cases.append(
+                write_case(
+                    NPU_TEST_PACKAGE_STAGE,
+                    npu_test_cases.generate_case(operator.name),
+                    xadx,
+                    {
+                        "kind": "iron-ops-full-elf",
+                        "name": operator.name,
+                        "device": operator.device,
+                        "build_kwargs": operator.build_kwargs,
+                    },
+                    required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
+                )
+            )
+            continue
         xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
         insts = _single_artifact(build_dir, "*.bin", "operator transaction")
         iron.require_txn_devgen(insts, operator.device)
@@ -291,10 +444,15 @@ def _source_revision():
 
 
 def verify_npu_test_package(package):
-    expected_cases = ["vector_scalar_add", "vector_scalar_add_chain4"] + [
-        operator.name
-        for operator in iron.OPERATORS
-        if operator.name in npu_test_cases.CASE_GENERATORS
+    expected_cases = [
+        "vector_scalar_add",
+        "vector_scalar_add_chain4",
+        *(sequence.name for sequence in iron.SEQUENCES),
+        *(
+            operator.name
+            for operator in iron.OPERATORS
+            if operator.name in npu_test_cases.CASE_GENERATORS
+        ),
     ]
     return verify_tree(
         package, expected_cases, _source_revision(), platform.system().lower()

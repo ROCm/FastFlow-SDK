@@ -190,8 +190,11 @@ def probe_libhrx(bundle=None, runtime_package=False):
 
 
 HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0 = 0
+HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_1 = 1
 HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0 = 0
+HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_1 = 1
 HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0 = 0
+HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_1 = 1
 HRX_AMDXDNA_CONTEXT_MODE_CREATE = 0
 
 # Canonical amdxdna heap: HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A).
@@ -207,6 +210,9 @@ HRX_MAP_READ = 0x01
 HRX_MAP_WRITE = 0x02
 HRX_MAPPING_MODE_PERSISTENT = 0x00000002
 HRX_DISPATCH_FLAG_NONE = 0
+
+HRX_DEVICE_PROPERTY_AMDXDNA_CAPABILITIES = 9
+HRX_AMDXDNA_DEVICE_CAPABILITY_FULL_ELF_LOAD_PDI = 1 << 0
 
 HRX_AMDXDNA_EXECUTABLE_TARGET_FAMILY = b"amdxdna"
 HRX_AMDXDNA_EXECUTABLE_TARGET_KEY = b"amdxdna"
@@ -240,12 +246,47 @@ class HrxConstByteSpan(ctypes.Structure):
     ]
 
 
+class HrxAmdxdnaPdiRelocation(ctypes.Structure):
+    _fields_ = [
+        ("transaction_offset", ctypes.c_uint32),
+        ("pdi_ordinal", ctypes.c_uint32),
+        ("addend", ctypes.c_int64),
+    ]
+
+
+class HrxAmdxdnaControlParameterRelocation(ctypes.Structure):
+    _fields_ = [
+        ("transaction_offset", ctypes.c_uint32),
+        ("addend", ctypes.c_int64),
+    ]
+
+
+class HrxAmdxdnaControlParameter(ctypes.Structure):
+    _fields_ = [
+        ("record_length", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("name", HrxStringView),
+        ("scalar_type", HrxStringView),
+        ("constant_offset", ctypes.c_uint32),
+        ("state_table_index", ctypes.c_uint32),
+        ("byte_length", ctypes.c_uint32),
+        ("kind", ctypes.c_uint32),
+    ]
+
+
 class HrxAmdxdnaExecutableRun(ctypes.Structure):
     _fields_ = [
         ("record_length", ctypes.c_uint32),
         ("abi_version", ctypes.c_uint32),
         ("transaction", HrxConstByteSpan),
         ("data_payload", HrxConstByteSpan),
+        ("pdi_relocations", ctypes.POINTER(HrxAmdxdnaPdiRelocation)),
+        ("pdi_relocation_count", ctypes.c_size_t),
+        (
+            "control_parameter_relocations",
+            ctypes.POINTER(HrxAmdxdnaControlParameterRelocation),
+        ),
+        ("control_parameter_relocation_count", ctypes.c_size_t),
     ]
 
 
@@ -261,6 +302,8 @@ class HrxAmdxdnaExecutableEntryPoint(ctypes.Structure):
         ("source_file", HrxStringView),
         ("runs", ctypes.POINTER(HrxAmdxdnaExecutableRun)),
         ("run_count", ctypes.c_size_t),
+        ("control_parameters", ctypes.POINTER(HrxAmdxdnaControlParameter)),
+        ("control_parameter_count", ctypes.c_size_t),
     ]
 
 
@@ -274,6 +317,8 @@ class HrxAmdxdnaExecutableCreateParams(ctypes.Structure):
         ("xclbin_count", ctypes.c_size_t),
         ("entry_points", ctypes.POINTER(HrxAmdxdnaExecutableEntryPoint)),
         ("entry_point_count", ctypes.c_size_t),
+        ("pdis", ctypes.POINTER(HrxConstByteSpan)),
+        ("pdi_count", ctypes.c_size_t),
     ]
 
 
@@ -296,7 +341,19 @@ class HrxBufferRef(ctypes.Structure):
 class AmdxdnaExecutableDescription:
     """Owns all borrowed storage referenced by an amdxdna description."""
 
-    def __init__(self, xclbin, transaction, entry_name, data_payload=b"", *, runs=None):
+    def __init__(
+        self,
+        xclbin,
+        transaction,
+        entry_name,
+        data_payload=b"",
+        *,
+        runs=None,
+        pdis=(),
+        run_pdi_relocations=None,
+        run_control_parameter_relocations=None,
+        control_parameters=(),
+    ):
         if not xclbin:
             raise ValueError("xclbin must not be empty")
         self.name_storage = entry_name.encode("utf-8")
@@ -309,11 +366,33 @@ class AmdxdnaExecutableDescription:
         runs = list(runs)
         if not runs:
             raise ValueError("runs must not be empty")
+        if run_pdi_relocations is None:
+            run_pdi_relocations = [()] * len(runs)
+        if run_control_parameter_relocations is None:
+            run_control_parameter_relocations = [()] * len(runs)
+        if len(run_pdi_relocations) != len(runs):
+            raise ValueError("PDI relocation lists must match the run count")
+        if len(run_control_parameter_relocations) != len(runs):
+            raise ValueError(
+                "control-parameter relocation lists must match the run count"
+            )
 
         self.xclbin_storage = _byte_storage(xclbin)
         self.xclbins = (HrxConstByteSpan * 1)(_span(self.xclbin_storage, len(xclbin)))
+        pdis = [bytes(pdi) for pdi in pdis]
+        if any(not pdi for pdi in pdis):
+            raise ValueError("standalone PDIs must not be empty")
+        self.pdi_storages = [_byte_storage(pdi) for pdi in pdis]
+        self.pdis = (HrxConstByteSpan * len(pdis))(
+            *(
+                _span(storage, len(pdi))
+                for storage, pdi in zip(self.pdi_storages, pdis, strict=True)
+            )
+        )
         self.transaction_storages = []
         self.data_payload_storages = []
+        self.pdi_relocation_arrays = []
+        self.control_parameter_relocation_arrays = []
         self.runs = (HrxAmdxdnaExecutableRun * len(runs))()
         for index, record in enumerate(runs):
             transaction_bytes, payload_bytes = record
@@ -325,30 +404,100 @@ class AmdxdnaExecutableDescription:
             self.data_payload_storages.append(payload_storage)
             run = self.runs[index]
             run.record_length = ctypes.sizeof(run)
-            run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0
+            run.abi_version = (
+                HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_1
+                if run_pdi_relocations[index]
+                or run_control_parameter_relocations[index]
+                else HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0
+            )
             run.transaction = _span(transaction_storage, len(transaction_bytes))
             if payload_storage is not None:
                 run.data_payload = _span(payload_storage, len(payload_bytes))
+            pdi_relocations = (
+                HrxAmdxdnaPdiRelocation * len(run_pdi_relocations[index])
+            )(
+                *(
+                    HrxAmdxdnaPdiRelocation(*relocation)
+                    for relocation in run_pdi_relocations[index]
+                )
+            )
+            parameter_relocations = (
+                HrxAmdxdnaControlParameterRelocation
+                * len(run_control_parameter_relocations[index])
+            )(
+                *(
+                    HrxAmdxdnaControlParameterRelocation(*relocation)
+                    for relocation in run_control_parameter_relocations[index]
+                )
+            )
+            self.pdi_relocation_arrays.append(pdi_relocations)
+            self.control_parameter_relocation_arrays.append(parameter_relocations)
+            run.pdi_relocations = pdi_relocations
+            run.pdi_relocation_count = len(pdi_relocations)
+            run.control_parameter_relocations = parameter_relocations
+            run.control_parameter_relocation_count = len(parameter_relocations)
         # Compatibility aliases for callers and tests that inspect a single run.
         self.transaction_storage = self.transaction_storages[0]
         self.data_payload_storage = self.data_payload_storages[0]
         self.run = self.runs[0]
 
+        control_parameters = list(control_parameters)
         self.entry_point = HrxAmdxdnaExecutableEntryPoint()
         self.entry_point.record_length = ctypes.sizeof(self.entry_point)
-        self.entry_point.abi_version = HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0
+        self.entry_point.abi_version = (
+            HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_1
+            if control_parameters
+            else HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0
+        )
         self.entry_point.name = HrxStringView(self.name_storage, len(self.name_storage))
         self.entry_point.context_mode = HRX_AMDXDNA_CONTEXT_MODE_CREATE
         self.entry_point.runs = self.runs
         self.entry_point.run_count = len(self.runs)
+        self.control_parameter_name_storages = [
+            parameter[0].encode("utf-8") for parameter in control_parameters
+        ]
+        self.control_parameter_type_storages = [
+            parameter[1].encode("utf-8") for parameter in control_parameters
+        ]
+        self.control_parameters = (
+            HrxAmdxdnaControlParameter * len(control_parameters)
+        )(
+            *(
+                HrxAmdxdnaControlParameter(
+                    ctypes.sizeof(HrxAmdxdnaControlParameter),
+                    0,
+                    HrxStringView(
+                        self.control_parameter_name_storages[index],
+                        len(self.control_parameter_name_storages[index]),
+                    ),
+                    HrxStringView(
+                        self.control_parameter_type_storages[index],
+                        len(self.control_parameter_type_storages[index]),
+                    ),
+                    parameter[2],
+                    parameter[3],
+                    parameter[4],
+                    parameter[5],
+                )
+                for index, parameter in enumerate(control_parameters)
+            )
+        )
+        self.entry_point.control_parameters = self.control_parameters
+        self.entry_point.control_parameter_count = len(self.control_parameters)
 
         self.params = HrxAmdxdnaExecutableCreateParams()
         self.params.record_length = ctypes.sizeof(self.params)
-        self.params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0
+        self.params.abi_version = (
+            HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_1
+            if pdis
+            else HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0
+        )
         self.params.xclbins = self.xclbins
         self.params.xclbin_count = 1
         self.params.entry_points = ctypes.pointer(self.entry_point)
         self.params.entry_point_count = 1
+        self.params.pdis = self.pdis
+        self.params.pdi_count = len(self.pdis)
 
 
 def _byte_storage(data):
@@ -448,6 +597,11 @@ class HrxApi:
             "hrx_gpu_device_get", _Status, [ctypes.c_int, ctypes.POINTER(_Handle)]
         )
         self.device_release = d("hrx_device_release", None, [_Handle])
+        self.device_get_property = d(
+            "hrx_device_get_property",
+            _Status,
+            [_Handle, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t],
+        )
         self.stream_create = d(
             "hrx_stream_create",
             _Status,
@@ -557,11 +711,27 @@ class HrxApi:
         data_payload=b"",
         *,
         runs=None,
+        pdis=(),
+        run_pdi_relocations=None,
+        run_control_parameter_relocations=None,
+        control_parameters=(),
     ):
         """Serializes one or more runs into an owned XADX byte string."""
         description = AmdxdnaExecutableDescription(
-            xclbin, transaction, entry_name, data_payload, runs=runs
+            xclbin,
+            transaction,
+            entry_name,
+            data_payload,
+            runs=runs,
+            pdis=pdis,
+            run_pdi_relocations=run_pdi_relocations,
+            run_control_parameter_relocations=run_control_parameter_relocations,
+            control_parameters=control_parameters,
         )
+        return self.serialize_amdxdna_description(description)
+
+    def serialize_amdxdna_description(self, description):
+        """Serializes an owned amdxdna description into XADX bytes."""
         allocator = self.host_allocator_system()
         output = ctypes.POINTER(ctypes.c_uint8)()
         output_length = ctypes.c_size_t()
@@ -766,6 +936,19 @@ class HrxRuntime:
         self.api.check(
             self.api.stream_synchronize(self.stream), "hrx_stream_synchronize"
         )
+
+    def amdxdna_capabilities(self):
+        capabilities = ctypes.c_uint64()
+        self.api.check(
+            self.api.device_get_property(
+                self.device,
+                HRX_DEVICE_PROPERTY_AMDXDNA_CAPABILITIES,
+                ctypes.byref(capabilities),
+                ctypes.sizeof(capabilities),
+            ),
+            "hrx_device_get_property(amdxdna capabilities)",
+        )
+        return capabilities.value
 
     def close(self):
         for resource in reversed(self._resources[:]):

@@ -7,7 +7,7 @@ import sys
 from build_tools import environment, paths
 
 # Submodules with nested submodules of their own, and those a patch touches.
-RECURSIVE_SUBMODULES = ("iron-tools", "FastFlowLM")
+RECURSIVE_SUBMODULES = ("aiebu", "iron-tools", "FastFlowLM")
 
 
 def cmd_deps(args):

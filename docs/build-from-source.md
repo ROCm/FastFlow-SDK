@@ -220,8 +220,9 @@ that the amdxdna HAL extracts the same PDI bytes as bootgen. Running on
 hardware needs the amdxdna driver and an NPU.
 
 Another design can be passed as `DESIGN`, but it must be Peano-capable and use
-`makefile-common`'s `jit_xclbin` rule; the `jit_xclbin_elf` designs
-additionally emit `insts.elf`, which needs `aiebu-asm` (not part of this stack).
+`makefile-common`'s `jit_xclbin` rule. The `jit_xclbin_elf` designs additionally
+emit `insts.elf` using the pinned `aiebu-asm` built by `dev.py build all` and
+shipped in the compiler product.
 
 **`test-iron-ops`** builds the same chain from the other direction: the
 `iron-ops` operator library (`ElementwiseAdd`, ...) rather than an iron-tools

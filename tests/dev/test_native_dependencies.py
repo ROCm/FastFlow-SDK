@@ -3,18 +3,22 @@
 
 import shutil
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from build_tools.native_dependencies import (
+    elf_has_dynamic_segment,
     elf_needed,
     elf_rpath,
+    elf_soname,
     is_elf,
     is_loadable_elf,
     is_pe,
     pe_imports,
+    set_elf_rpath,
 )
 
 pytestmark = pytest.mark.presubmit
@@ -53,6 +57,22 @@ def _write_pe(path: Path, *, malformed_delay_va: bool = False) -> Path:
     return path
 
 
+def _write_elf64(path: Path, *, program_type: int, truncate: bool = False) -> Path:
+    data = bytearray(64 + (0 if truncate else 56))
+    data[:4] = b"\x7fELF"
+    data[4] = 2
+    data[5] = 1
+    struct.pack_into("<H", data, 16, 2)
+    struct.pack_into("<Q", data, 32, 64)
+    struct.pack_into("<H", data, 52, 64)
+    struct.pack_into("<H", data, 54, 56)
+    struct.pack_into("<H", data, 56, 1)
+    if not truncate:
+        struct.pack_into("<I", data, 64, program_type)
+    path.write_bytes(data)
+    return path
+
+
 def test_pe_identification_and_normal_plus_delay_imports(tmp_path):
     binary = _write_pe(tmp_path / "fixture.exe")
     assert is_pe(binary)
@@ -82,6 +102,52 @@ def test_elf_identification_contract(tmp_path):
     relocatable[16:18] = (3).to_bytes(2, "little")
     path.write_bytes(relocatable)
     assert is_loadable_elf(path)
+
+
+def test_elf_dynamic_segment_identification(tmp_path):
+    dynamic = _write_elf64(tmp_path / "dynamic", program_type=2)
+    static = _write_elf64(tmp_path / "static", program_type=1)
+    assert elf_has_dynamic_segment(dynamic)
+    assert not elf_has_dynamic_segment(static)
+
+
+def test_static_elf_dependency_operations_do_not_invoke_patchelf(tmp_path, monkeypatch):
+    static = _write_elf64(tmp_path / "static", program_type=1)
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("patchelf must not run for a static ELF")
+
+    monkeypatch.setattr(
+        "build_tools.native_dependencies.subprocess.run", unexpected_run
+    )
+    assert elf_needed(static, patchelf="/unused/patchelf") == []
+    assert elf_rpath(static, patchelf="/unused/patchelf") == ""
+    assert elf_soname(static, patchelf="/unused/patchelf") is None
+    set_elf_rpath(static, "$ORIGIN", patchelf="/unused/patchelf")
+
+
+def test_dynamic_elf_dependency_operations_invoke_patchelf(tmp_path, monkeypatch):
+    dynamic = _write_elf64(tmp_path / "dynamic", program_type=2)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="libc.so.6\n")
+
+    monkeypatch.setattr("build_tools.native_dependencies.subprocess.run", run)
+    assert elf_needed(dynamic, patchelf="/test/patchelf") == ["libc.so.6"]
+    assert calls == [
+        (
+            ["/test/patchelf", "--print-needed", str(dynamic)],
+            {"capture_output": True, "check": True, "text": True},
+        )
+    ]
+
+
+def test_elf_dynamic_segment_rejects_truncated_program_headers(tmp_path):
+    truncated = _write_elf64(tmp_path / "truncated", program_type=2, truncate=True)
+    with pytest.raises(RuntimeError, match="truncated ELF program header table"):
+        elf_has_dynamic_segment(truncated)
 
 
 def test_elf_needed_and_rpath_contracts_when_patchelf_is_available():

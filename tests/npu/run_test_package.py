@@ -53,7 +53,18 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from build_tools.hrx_runtime import HrxRuntime
+from build_tools import npu_test_package
+from build_tools.hrx_runtime import (
+    HRX_AMDXDNA_DEVICE_CAPABILITY_FULL_ELF_LOAD_PDI,
+    HrxRuntime,
+)
+
+
+def _runtime_supported_features(runtime):
+    capabilities = runtime.amdxdna_capabilities()
+    if capabilities & HRX_AMDXDNA_DEVICE_CAPABILITY_FULL_ELF_LOAD_PDI:
+        return {npu_test_package.FULL_ELF_LOAD_PDI_FEATURE}
+    return set()
 
 
 def _read_array(package_root, relative_path, dtype, shape):
@@ -107,6 +118,7 @@ class PreparedCase:
         self.export_ordinal = None
         self.buffers = []
         self.output_records = []
+        self.dispatches = []
 
     def close(self):
         for buffer in reversed(self.buffers):
@@ -152,21 +164,54 @@ def _prepare_case(runtime, package_root, case):
                 )
                 prepared.output_records.append((descriptor, buffer, expected))
             buffer.flush()
+        for dispatch in case.get("dispatches", ()):
+            expected = {}
+            for descriptor, _, default_expected in prepared.output_records:
+                relative_path = dispatch.get("expected", {}).get(descriptor["name"])
+                expected[descriptor["name"]] = (
+                    _read_array(
+                        package_root,
+                        relative_path,
+                        np.dtype(descriptor["dtype"]),
+                        tuple(int(dimension) for dimension in descriptor["shape"]),
+                    )
+                    if relative_path
+                    else default_expected
+                )
+            prepared.dispatches.append(
+                (
+                    dispatch["name"],
+                    (package_root / dispatch["constants"]).read_bytes(),
+                    expected,
+                )
+            )
         return prepared
     except Exception:
         prepared.close()
         raise
 
 
-def _dispatch_and_validate(runtime, prepared):
+def _dispatch_and_validate(runtime, prepared, dispatch_index=0):
     for _, buffer, _ in prepared.output_records:
         buffer.array.fill(0)
         buffer.flush()
-    runtime.dispatch(prepared.executable, prepared.export_ordinal, prepared.buffers)
+    dispatch = (
+        prepared.dispatches[dispatch_index % len(prepared.dispatches)]
+        if prepared.dispatches
+        else (None, b"", {})
+    )
+    _, constants, expected_by_name = dispatch
+    runtime.dispatch(
+        prepared.executable,
+        prepared.export_ordinal,
+        prepared.buffers,
+        constants=constants,
+    )
     runtime.synchronize()
 
     failures = []
-    for descriptor, buffer, expected in prepared.output_records:
+    for descriptor, buffer, default_expected in prepared.output_records:
+        expected = expected_by_name.get(descriptor["name"], default_expected)
         buffer.invalidate()
         failure = _compare(
             buffer.array,
@@ -187,6 +232,7 @@ def run_package(
     stdout=None,
     lifecycle_rounds=5,
     resident_rounds=10,
+    supported_features=None,
 ):
     """Runs deterministic lifecycle and resident round-robin stress modes."""
     package_root = Path(package_root)
@@ -206,17 +252,60 @@ def run_package(
             raise ValueError(f"unknown selected case(s): {', '.join(sorted(missing))}")
         cases = [case for case in cases if case["name"] in requested]
 
-    runtime = runtime_factory()
+    required_features = {
+        feature for case in cases for feature in case.get("required_features", ())
+    }
+    runtime = None
+    if supported_features is None:
+        if required_features:
+            runtime = runtime_factory()
+            try:
+                supported_features = _runtime_supported_features(runtime)
+            except Exception:
+                runtime.close()
+                raise
+        else:
+            supported_features = set()
+    supported_features = set(supported_features)
+    skipped_by_name = {
+        case["name"]: sorted(
+            set(case.get("required_features", ())) - supported_features
+        )
+        for case in cases
+        if set(case.get("required_features", ())) - supported_features
+    }
+    runnable_cases = [case for case in cases if case["name"] not in skipped_by_name]
+
+    if runnable_cases and runtime is None:
+        runtime = runtime_factory()
     failures_by_name = {case["name"]: [] for case in cases}
+
+    def progress(message):
+        print(f"[npu-test] {message}", file=stdout, flush=True)
+
     try:
         for round_index in range(lifecycle_rounds):
-            for case in cases:
+            for case in runnable_cases:
+                name = case["name"]
                 prepared = None
+                progress(
+                    f"lifecycle {round_index + 1}/{lifecycle_rounds} {name}: preparing"
+                )
                 try:
                     prepared = _prepare_case(runtime, package_root, case)
+                    progress(
+                        f"lifecycle {round_index + 1}/{lifecycle_rounds} "
+                        f"{name}: dispatching"
+                    )
                     failures_by_name[case["name"]].extend(
                         f"lifecycle round {round_index + 1}: {failure}"
-                        for failure in _dispatch_and_validate(runtime, prepared)
+                        for failure in _dispatch_and_validate(
+                            runtime, prepared, round_index
+                        )
+                    )
+                    progress(
+                        f"lifecycle {round_index + 1}/{lifecycle_rounds} "
+                        f"{name}: complete"
                     )
                 except Exception as exc:
                     failures_by_name[case["name"]].append(
@@ -227,19 +316,32 @@ def run_package(
                         prepared.close()
 
         resident = []
-        for case in cases:
+        for case in runnable_cases:
+            name = case["name"]
+            progress(f"resident setup {name}: preparing")
             try:
                 resident.append(_prepare_case(runtime, package_root, case))
+                progress(f"resident setup {name}: complete")
             except Exception as exc:
                 failures_by_name[case["name"]].append(f"resident setup: {exc}")
         try:
             for round_index in range(resident_rounds):
                 for prepared in resident:
                     name = prepared.case["name"]
+                    progress(
+                        f"resident {round_index + 1}/{resident_rounds} "
+                        f"{name}: dispatching"
+                    )
                     try:
                         failures_by_name[name].extend(
                             f"resident round {round_index + 1}: {failure}"
-                            for failure in _dispatch_and_validate(runtime, prepared)
+                            for failure in _dispatch_and_validate(
+                                runtime, prepared, round_index
+                            )
+                        )
+                        progress(
+                            f"resident {round_index + 1}/{resident_rounds} "
+                            f"{name}: complete"
                         )
                     except Exception as exc:
                         failures_by_name[name].append(
@@ -249,9 +351,16 @@ def run_package(
             for prepared in reversed(resident):
                 prepared.close()
     finally:
-        runtime.close()
+        if runtime is not None:
+            runtime.close()
     for case in cases:
         name = case["name"]
+        if name in skipped_by_name:
+            print(
+                f"{name}: SKIP (missing features: {', '.join(skipped_by_name[name])})",
+                file=stdout,
+            )
+            continue
         failures = failures_by_name[name]
         print(f"{name}: {'FAIL' if failures else 'PASS'}", file=stdout)
         for failure in failures:

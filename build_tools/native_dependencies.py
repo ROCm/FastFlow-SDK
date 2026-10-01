@@ -153,6 +153,52 @@ def is_loadable_elf(path: Path) -> bool:
     return int.from_bytes(header[16:18], byteorder) in (2, 3)
 
 
+def elf_has_dynamic_segment(path: Path) -> bool:
+    """Returns whether an ELF executable has a PT_DYNAMIC program segment."""
+    try:
+        with Path(path).open("rb") as stream:
+            header = stream.read(64)
+            if len(header) < 18 or header[:4] != b"\x7fELF":
+                raise RuntimeError(f"not an ELF binary: {path}")
+            byteorder = {1: "little", 2: "big"}.get(header[5])
+            elf_class = header[4]
+            if byteorder is None or elf_class not in (1, 2):
+                raise RuntimeError(f"unsupported ELF encoding: {path}")
+            if elf_class == 1:
+                if len(header) < 52:
+                    raise RuntimeError(f"truncated ELF header: {path}")
+                phoff = int.from_bytes(header[28:32], byteorder)
+                phentsize = int.from_bytes(header[42:44], byteorder)
+                phnum = int.from_bytes(header[44:46], byteorder)
+                minimum_phentsize = 32
+            else:
+                if len(header) < 64:
+                    raise RuntimeError(f"truncated ELF header: {path}")
+                phoff = int.from_bytes(header[32:40], byteorder)
+                phentsize = int.from_bytes(header[54:56], byteorder)
+                phnum = int.from_bytes(header[56:58], byteorder)
+                minimum_phentsize = 56
+            if phnum == 0:
+                return False
+            if phnum == 0xFFFF:
+                raise RuntimeError(
+                    f"extended ELF program header count unsupported: {path}"
+                )
+            if phoff == 0 or phentsize < minimum_phentsize:
+                raise RuntimeError(f"invalid ELF program header table: {path}")
+            stream.seek(0, 2)
+            file_size = stream.tell()
+            if phoff > file_size or phnum > (file_size - phoff) // phentsize:
+                raise RuntimeError(f"truncated ELF program header table: {path}")
+            for index in range(phnum):
+                stream.seek(phoff + index * phentsize)
+                if int.from_bytes(stream.read(4), byteorder) == 2:  # PT_DYNAMIC
+                    return True
+            return False
+    except OSError as exc:
+        raise RuntimeError(f"cannot inspect ELF binary: {path}") from exc
+
+
 def require_patchelf() -> str:
     patchelf = shutil.which("patchelf")
     if not patchelf:
@@ -161,6 +207,8 @@ def require_patchelf() -> str:
 
 
 def elf_needed(path: Path, *, patchelf: str | None = None) -> list[str]:
+    if not elf_has_dynamic_segment(path):
+        return []
     tool = patchelf or require_patchelf()
     return subprocess.run(
         [tool, "--print-needed", str(path)],
@@ -171,6 +219,8 @@ def elf_needed(path: Path, *, patchelf: str | None = None) -> list[str]:
 
 
 def elf_rpath(path: Path, *, patchelf: str | None = None) -> str:
+    if not elf_has_dynamic_segment(path):
+        return ""
     tool = patchelf or require_patchelf()
     return subprocess.run(
         [tool, "--print-rpath", str(path)],
@@ -181,6 +231,8 @@ def elf_rpath(path: Path, *, patchelf: str | None = None) -> str:
 
 
 def elf_soname(path: Path, *, patchelf: str | None = None) -> str | None:
+    if not elf_has_dynamic_segment(path):
+        return None
     tool = patchelf or require_patchelf()
     result = subprocess.run(
         [tool, "--print-soname", str(path)],
@@ -192,5 +244,7 @@ def elf_soname(path: Path, *, patchelf: str | None = None) -> str | None:
 
 
 def set_elf_rpath(path: Path, rpath: str, *, patchelf: str | None = None) -> None:
+    if not elf_has_dynamic_segment(path):
+        return
     tool = patchelf or require_patchelf()
     subprocess.run([tool, "--set-rpath", rpath, str(path)], check=True)

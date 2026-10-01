@@ -25,6 +25,7 @@ from build_tools import (
 from build_tools.windows_npu import probe_runtime as probe_windows_npu_runtime
 
 HRX_CTS_TIMEOUT_SECONDS = 30 * 60
+NPU_TEST_PACKAGE_TIMEOUT_SECONDS = 10 * 60
 
 
 def _select_hrx_runtime(env):
@@ -48,6 +49,7 @@ def cmd_test_npu_package(args):
     env = hrx_runtime.add_hrx_install_env(os.environ.copy())
     command = [
         environment.venv_py(),
+        "-u",
         paths.ROOT / "tests" / "npu" / "run_test_package.py",
         npu_test_package.NPU_TEST_PACKAGE_EXTRACTED,
     ]
@@ -59,7 +61,20 @@ def cmd_test_npu_package(args):
         "--resident-rounds",
         str(args.resident_rounds),
     ]
-    sys.exit(environment.sh(command, env=env, check=False).returncode)
+    try:
+        result = environment.sh(
+            command,
+            env=env,
+            check=False,
+            timeout=NPU_TEST_PACKAGE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        sys.exit(
+            "test-npu-package timed out after "
+            f"{NPU_TEST_PACKAGE_TIMEOUT_SECONDS} seconds; "
+            "the last [npu-test] line identifies the blocked phase"
+        )
+    sys.exit(result.returncode)
 
 
 def cmd_npu_probe(args):

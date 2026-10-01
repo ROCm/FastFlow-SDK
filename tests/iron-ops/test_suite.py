@@ -6,6 +6,7 @@ import pytest
 from build_tools.iron import (
     DEFAULT,
     OPERATORS,
+    SEQUENCES,
     Operator,
     host_compile_suite,
     require_runtime_image,
@@ -65,6 +66,11 @@ def _shapes_from_build_kwargs(operator: Operator):
     if name == "repeat":
         rows, cols, repeat = kwargs["rows"], kwargs["cols"], kwargs["repeat"]
         return [("input", (rows, cols)), ("output", (rows * repeat, cols))]
+    if name == "strided_copy":
+        return [
+            ("input", (kwargs["input_buffer_size"],)),
+            ("output", (kwargs["output_buffer_size"],)),
+        ]
     raise AssertionError(f"{name}: no packaged shape contract")
 
 
@@ -133,15 +139,26 @@ def test_packaged_numeric_cases_cover_single_kernel_ops():
         "gemm",
         "transpose",
         "repeat",
+        "strided_copy",
     }
     assert not packaged & {
         "dequant",
         "rope",
         "mha",
-        "strided_copy",
         "swiglu_decode",
         "swiglu_prefill",
     }
+
+
+def test_packaged_fused_sequence_catalog():
+    assert [sequence.name for sequence in SEQUENCES] == ["add_relu_fused"]
+    sequence = SEQUENCES[0]
+    assert (
+        sequence.size,
+        sequence.tile_size,
+        sequence.num_aie_columns,
+    ) == (4096, 1024, 4)
+    assert sequence.name in CASE_GENERATORS
 
 
 def test_packaged_generator_shapes_match_compile_kwargs():
@@ -173,12 +190,9 @@ def test_compile_only_ops_have_no_npu_filter():
     assert by_name["swiglu_decode"].host_compile is False
     assert by_name["swiglu_prefill"].host_compile is False
     # Packaged on NPU CI; IRON pytest has no matching non-extensive compile-shape case.
-    for name in ("gemm", "softmax", "transpose", "repeat"):
+    for name in ("gemm", "softmax", "transpose", "repeat", "strided_copy"):
         assert by_name[name].host_compile is True
         assert by_name[name].hrx_pytest_filter is None
-    assert by_name["strided_copy"].hrx_pytest_filter == (
-        "test_strided_copy and (contiguous or two_channels)"
-    )
 
 
 def test_compile_job_count_caps_auto_and_honors_jobs():
