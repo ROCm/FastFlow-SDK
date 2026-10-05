@@ -1,8 +1,8 @@
-# Contributing to ROCm-NPU
+# Contributing to FastFlow SDK
 
 Contributions to code and documentation are welcome. This is an early snapshot.
 
-Open [issues](https://github.com/ROCm/rocm-npu/issues) for bugs and feature
+Open [issues](https://github.com/ROCm/FastFlow-SDK/issues) for bugs and feature
 requests. Include OS, NPU device, driver version, and the release tag or
 commit. For security reports, see [SECURITY.md](SECURITY.md).
 

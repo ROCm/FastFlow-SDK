@@ -1,19 +1,19 @@
-# ROCm NPU model qualification
+# FastFlow SDK model qualification
 
 Install the optional qualification product from the same release assets:
 
 ```bash
 python -m pip install --find-links <release-assets> \
-  "rocm-npu-qualification==<version>"
+  "fastflow-sdk-qualification==<version>"
 ```
 
-The package depends on the exact same-version `rocm-npu-fastflowlm`, which in
-turn depends on `rocm-npu-runtime`, and pins NumPy 2.4.6 and ml-dtypes 0.6.0.
+The package depends on the exact same-version `fastflow-sdk-fastflowlm`, which in
+turn depends on `fastflow-sdk-runtime`, and pins NumPy 2.4.6 and ml-dtypes 0.6.0.
 Pip resolves those binary dependencies from the package index. The candidate
 manifest binds their required versions, while each evidence bundle records the
 installed wheel tags, RECORD digest, and verified payload digest. Only the
-runtime wheel owns the `rocm-npu` entry point. The qualification wheel installs
-`rocm-npu-qualify`, discovered through the external plugin protocol.
+runtime wheel owns the `fastflow` entry point. The qualification wheel installs
+`fastflow-qualify`, discovered through the external plugin protocol.
 CI resolves Linux and Windows dependencies for every supported CPython ABI from
 the single numeric-runtime contract. Release assembly validates that complete
 dependency matrix without publishing the third-party wheels.
@@ -21,9 +21,9 @@ dependency matrix without publishing the third-party wheels.
 List and run profiles through the native core:
 
 ```bash
-rocm-npu plugin list --json
-rocm-npu qualify --list-profiles --json
-rocm-npu qualify --output qualification-evidence
+fastflow plugin list --json
+fastflow qualify --list-profiles --json
+fastflow qualify --output qualification-evidence
 ```
 
 Profiles are package JSON data conforming to `profile-v1.schema.json`.
@@ -141,7 +141,7 @@ contract is incomplete.
 
 Linux powermode roundtrip records appear as `unsupported` in `tests.json` and
 as skipped in `junit.xml`; this is the only native skip that can coexist with an
-overall passing qualification run. Use `rocm-npu powermode <mode>` manually, or
+overall passing qualification run. Use `fastflow powermode <mode>` manually, or
 run a non-Linux qualification host, when the mutating roundtrip itself must be
 exercised.
 
@@ -199,7 +199,7 @@ hashes. Release assembly creates one candidate from all Linux and Windows
 runtime/FastFlowLM wheels and the canonical wheel:
 
 ```bash
-rocm-npu qualify candidate \
+fastflow qualify candidate \
   --wheel-dir candidate/wheels \
   --output candidate/candidate-manifest.json \
   --expected-source-revision <full-commit> --json
@@ -207,7 +207,7 @@ rocm-npu qualify candidate \
 
 The command infers the source revision from every wheel and rejects disagreement.
 It writes the strict candidate v1 `candidate-manifest.json` plus
-`candidate-SHA256SUMS`; the manifest and all ROCm NPU wheels must share one
+`candidate-SHA256SUMS`; the manifest and all FastFlow SDK wheels must share one
 artifact root. Transfer that complete
 release-wide candidate artifact to every manual hardware machine without
 rebuilding or selecting only one platform's identities.
@@ -217,7 +217,7 @@ require it and verify every listed path before using `candidate-manifest.json`.
 Collect and seal one run in a single command:
 
 ```bash
-rocm-npu qualify run \
+fastflow qualify run \
   --candidate-manifest candidate/candidate-manifest.json \
   --model-cache <cache> \
   --output-dir machine-run \
@@ -228,7 +228,7 @@ The directory remains available for diagnosis. Finalized pass, fail, and
 interrupted directories can also be sealed later with:
 
 ```bash
-rocm-npu qualify pack \
+fastflow qualify pack \
   --input machine-run --output machine-run.evidence.zip --json
 ```
 
@@ -238,7 +238,7 @@ NPU hardware, the core plugin environment, network access, or repository build
 tools:
 
 ```bash
-rocm-npu qualify verify \
+fastflow qualify verify \
   --input machine-run.evidence.zip \
   --candidate-manifest candidate/candidate-manifest.json --json
 ```
@@ -250,7 +250,7 @@ After transferring independently collected machine bundles into one directory,
 assemble release intake with:
 
 ```bash
-rocm-npu qualify intake \
+fastflow qualify intake \
   --input-dir incoming \
   --candidate-manifest candidate/candidate-manifest.json \
   --output-dir assembled \
@@ -267,7 +267,7 @@ requires passing NPU2 `fast` evidence from both Windows and Linux and records
 the matched run digests in the index. Verify the final asset itself with:
 
 ```bash
-rocm-npu qualify verify \
+fastflow qualify verify \
   --input qualification-evidence-<version>.zip \
   --candidate-manifest candidate/candidate-manifest.json --json
 ```
@@ -287,7 +287,7 @@ missing or unexpected. The aggregate basename must be
 absent), matching intake:
 
 ```bash
-rocm-npu qualify stage-release \
+fastflow qualify stage-release \
   --payload-dir release \
   --aggregate qualification-evidence-<version>.zip \
   --index assembled/qualification-index.json \
@@ -300,18 +300,18 @@ Upload every top-level file from `github-upload/` to the draft prerelease.
 For a shared cache across worktrees:
 
 ```powershell
-$cache = 'C:\path\to\rocm-npu-staging\.cache\FastFlowLM-models'
-rocm-npu qualify --model-cache $cache --output qualification-evidence
-rocm-npu qualify --profile extended --model-cache $cache --output extended-evidence
-rocm-npu qualify --all-models --model-cache $cache --output all-models-evidence
-rocm-npu qualify --all-models --bench-context 1k --model-cache $cache --output all-models-1k-evidence
-rocm-npu qualify --bench all --model-cache $cache --output bench-all-evidence
-rocm-npu qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
+$cache = 'C:\path\to\fastflow-sdk\.cache\FastFlowLM-models'
+fastflow qualify --model-cache $cache --output qualification-evidence
+fastflow qualify --profile extended --model-cache $cache --output extended-evidence
+fastflow qualify --all-models --model-cache $cache --output all-models-evidence
+fastflow qualify --all-models --bench-context 1k --model-cache $cache --output all-models-1k-evidence
+fastflow qualify --bench all --model-cache $cache --output bench-all-evidence
+fastflow qualify --bench all --bench-context 4k --bench-iterations 20 --model-cache $cache --output bench-all-4k-evidence
 # HRX-vs-XRT comparison against a host XRT install (Linux and Windows)
-# rocm-npu qualify --bench all --xrt-flm C:\path\to\build\FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
-# rocm-npu qualify --all-models --models=qwen3:0.6b,llama3.2:1b --bench-context 1k --xrt-flm C:\path\to\build\FastFlowLM-xrt-install --model-cache $cache --output all-models-xrt-evidence
-rocm-npu qualify --bench dev --model-cache $cache --output bench-dev-evidence
-rocm-npu qualify --offline --no-pull --model-cache $cache --output offline-evidence
+# fastflow qualify --bench all --xrt-flm C:\path\to\build\FastFlowLM-xrt-install --model-cache $cache --output bench-all-xrt-evidence
+# fastflow qualify --all-models --models=qwen3:0.6b,llama3.2:1b --bench-context 1k --xrt-flm C:\path\to\build\FastFlowLM-xrt-install --model-cache $cache --output all-models-xrt-evidence
+fastflow qualify --bench dev --model-cache $cache --output bench-dev-evidence
+fastflow qualify --offline --no-pull --model-cache $cache --output offline-evidence
 ```
 
 On Linux, use the equivalent absolute path. `FLM_MODEL_PATH` may be set instead

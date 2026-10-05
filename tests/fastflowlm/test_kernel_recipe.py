@@ -28,7 +28,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _xadx_rounds():
     path = (
-        ROOT / "tools/rocm-npu-qualification/python/rocm_npu_qualification/contracts.py"
+        ROOT
+        / "tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification/contracts.py"
     )
     return load_module("qualification_contracts", path).XADX_ROUNDS
 
@@ -36,11 +37,11 @@ def _xadx_rounds():
 XADX_ROUNDS = _xadx_rounds()
 CAPABILITIES = (
     ROOT
-    / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+    / "tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification"
     / "fastflowlm-kernel-capabilities-v1.json"
 )
 SCHEMA = ROOT / (
-    "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+    "tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification"
     "/schemas/kernel-recipe-v1.schema.json"
 )
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]

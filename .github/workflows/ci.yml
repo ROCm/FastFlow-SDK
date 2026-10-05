@@ -1,7 +1,7 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 #
-# Entry workflow: builds + validates the rocm-npu-staging stack via reusable
+# Entry workflow: builds + validates the fastflow-sdk stack via reusable
 # workflows — Linux/Windows compiler-stack and FLM builds, each followed by
 # on-device validation on the matching NPU runners.
 # Every submodule is public, so none needs secrets.
@@ -53,7 +53,7 @@ jobs:
       - name: Resolve CI package identity
         id: release-identity
         run: |
-          python build_tools/rocm_npu_wheel_release_cli.py resolve \
+          python build_tools/fastflow_sdk_wheel_release_cli.py resolve \
             --ref "${GITHUB_REF}" \
             --publish-target none \
             --run-number "${GITHUB_RUN_NUMBER}" \
@@ -81,7 +81,7 @@ jobs:
     name: Linux
     needs: presubmit
     if: needs.presubmit.outputs.run_full_ci == 'true'
-    uses: ./.github/workflows/build_rocm_npu_staging_linux.yml
+    uses: ./.github/workflows/build_fastflow_sdk_linux.yml
     permissions:
       contents: read
       actions: read
@@ -94,7 +94,7 @@ jobs:
     name: Windows
     needs: presubmit
     if: needs.presubmit.outputs.run_full_ci == 'true'
-    uses: ./.github/workflows/build_rocm_npu_staging_windows.yml
+    uses: ./.github/workflows/build_fastflow_sdk_windows.yml
     permissions:
       contents: read
       actions: read
@@ -114,7 +114,7 @@ jobs:
     with:
       name: NPU e2e
       package_version: ${{ needs.presubmit.outputs.package_version }}
-      qualification_artifact: rocm-npu-qualification-wheel
+      qualification_artifact: fastflow-sdk-qualification-wheel
       build_artifacts: true
       run_npu_e2e: true
 
@@ -146,7 +146,7 @@ jobs:
         needs.presubmit.outputs.run_full_ci == 'true' &&
         !cancelled()
       }}
-    uses: ./.github/workflows/collect_rocm_npu_ci_release.yml
+    uses: ./.github/workflows/collect_fastflow_sdk_ci_release.yml
     permissions:
       contents: read
       actions: read

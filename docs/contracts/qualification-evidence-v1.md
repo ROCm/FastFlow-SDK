@@ -44,7 +44,7 @@ A qualification run writes a portable directory containing:
 - `SHA256SUMS`: every other evidence file in deterministic path order
 
 `evidence.json` conforms to
-`tools/rocm-npu-qualification/python/rocm_npu_qualification/schemas/evidence-v1.schema.json`.
+`tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification/schemas/evidence-v1.schema.json`.
 Status is
 written as `running` before device work begins and updated as results arrive,
 so interrupted and failed runs retain useful partial evidence. Both successes
@@ -65,8 +65,8 @@ requested path, the resolved XRT entrypoint, and the host `XILINX_XRT` prefix
 be resolved). An unresolved `--xrt-flm` still stamps `metrics.xrt` unavailable
 on every model so the report keeps XRT columns.
 
-The subject records exact versions for `rocm-npu-runtime`,
-`rocm-npu-fastflowlm`, and `rocm-npu-qualification`, the native core source
+The subject records exact versions for `fastflow-sdk-runtime`,
+`fastflow-sdk-fastflowlm`, and `fastflow-sdk-qualification`, the native core source
 revision, and the candidate manifest hash. Model identities always include a
 source, revision label, approved registry digest, and SHA-256 inventory of
 observed model-cache files. Candidate-backed runs verify installed package
@@ -88,14 +88,14 @@ from captured logs.
 
 ## Transport archive
 
-`rocm-npu qualify run --bundle-output`, or the recoverability command
-`rocm-npu qualify pack`, seals a finalized directory as a deterministic
+`fastflow qualify run --bundle-output`, or the recoverability command
+`fastflow qualify pack`, seals a finalized directory as a deterministic
 `.evidence.zip`. The archive has sorted normalized POSIX member names, fixed
 timestamps and permissions, no explicit directory entries, and contains
 exactly the files covered by the internal `SHA256SUMS`. It does not wrap them
 in an additional top-level directory.
 
-`rocm-npu qualify verify` accepts either the directory or archive form. It
+`fastflow qualify verify` accepts either the directory or archive form. It
 checks complete and exclusive checksums, safe paths and regular-file types,
 bounded expansion, canonical JUnit projection, evidence/sidecar consistency, artifact
 references, pass/fail semantics, and candidate identity. Candidate-bound
@@ -132,7 +132,7 @@ Verification does not execute device code.
 
 ## Intake index
 
-`rocm-npu qualify intake` preserves verified input archives unchanged under
+`fastflow qualify intake` preserves verified input archives unchanged under
 `runs/<sha256>.evidence.zip` and writes `qualification-index.json` conforming to
 `qualification-index-v1.schema.json`. Each sorted run entry records the source
 bundle name and digest, status, profile, timestamps, normalized platform facts,
@@ -140,7 +140,7 @@ source revision, and candidate digest. The index also records the selected
 qualification policy, each matched run digest, and satisfaction. Aggregate
 `SHA256SUMS` covers the index and every preserved bundle; the aggregate ZIP is
 deterministic and has a separate `<aggregate>.sha256` release-asset checksum.
-`rocm-npu qualify verify` validates that external checksum, the aggregate
+`fastflow qualify verify` validates that external checksum, the aggregate
 layout and index, every nested evidence bundle, and their shared candidate.
 
 Candidate release intake rejects ad-hoc or mixed-candidate evidence and fails

@@ -35,7 +35,7 @@ def test_suite_does_not_use_unittest_testcase_apis():
     violations = []
     test_roots = (
         ROOT / "tests",
-        ROOT / "tools/rocm-npu-qualification/tests",
+        ROOT / "tools/fastflow-sdk-qualification/tests",
     )
     for test_root in test_roots:
         for path in sorted(test_root.rglob("test_*.py")):
@@ -78,7 +78,7 @@ def test_presubmit_workflow_uses_marker_selection():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "python -m pytest --basetemp=.pytest-tmp -m presubmit" in workflow
     pytest_config = (ROOT / "pytest.ini").read_text(encoding="utf-8")
-    assert "tools/rocm-npu-qualification/tests" in pytest_config
+    assert "tools/fastflow-sdk-qualification/tests" in pytest_config
     assert "tmp_path_retention_policy = failed" in pytest_config
 
 
@@ -118,9 +118,9 @@ def test_build_requirements_do_not_include_test_tools(requirements):
 @pytest.mark.parametrize(
     ("workflow_path", "python"),
     (
-        (".github/workflows/build_rocm_npu_staging_linux.yml", ".venv/bin/python"),
+        (".github/workflows/build_fastflow_sdk_linux.yml", ".venv/bin/python"),
         (
-            ".github/workflows/build_rocm_npu_staging_windows.yml",
+            ".github/workflows/build_fastflow_sdk_windows.yml",
             ".venv/Scripts/python.exe",
         ),
     ),

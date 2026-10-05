@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from build_tools.artifact import reset_directory
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
     RUNTIME_DISTRIBUTION,
@@ -66,10 +66,10 @@ def binary_dir() -> Path:
     return package_root() / "bin"
 
 
-def rocm_npu_path() -> Path:
-    path = binary_dir() / ("rocm-npu.exe" if os.name == "nt" else "rocm-npu")
+def fastflow_sdk_path() -> Path:
+    path = binary_dir() / ("fastflow.exe" if os.name == "nt" else "fastflow")
     if not path.is_file():
-        raise FileNotFoundError(f"rocm-npu executable was not found: {path}")
+        raise FileNotFoundError(f"fastflow executable was not found: {path}")
     return path
 
 
@@ -130,12 +130,12 @@ activate_iron_host()
 def main() -> int:
     environment = os.environ.copy()
     scripts = str(Path(sys.executable).parent)
-    existing = environment.get("ROCM_NPU_PLUGIN_PATH")
-    environment["ROCM_NPU_PLUGIN_PATH"] = (
+    existing = environment.get("FASTFLOW_SDK_PLUGIN_PATH")
+    environment["FASTFLOW_SDK_PLUGIN_PATH"] = (
         scripts if not existing else scripts + os.pathsep + existing
     )
     return subprocess.run(
-        [str(rocm_npu_path()), *sys.argv[1:]],
+        [str(fastflow_sdk_path()), *sys.argv[1:]],
         env=environment,
         check=False,
     ).returncode
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     env.setdefault("FLM_XCLBIN_PATH", str(xclbin_path()))
     env.setdefault("FLM_MODELINFO_PATH", str(model_info_path()))
     if os.name == "nt":
-        from rocm_npu_runtime import binary_dir as runtime_binary_dir
+        from fastflow_sdk_runtime import binary_dir as runtime_binary_dir
         env["PATH"] = os.pathsep.join(
             (str(package_root() / "bin"), str(runtime_binary_dir()), env.get("PATH", ""))
         )
@@ -241,14 +241,16 @@ def prepare_runtime_wheel_trees(
     trees.fastflowlm_root.mkdir(parents=True)
     _write_runtime_module(trees.runtime_root)
     _write_fastflowlm_module(trees.fastflowlm_root)
-    _copy_relative_tree(source_bundle, "share/rocm-npu/self-test", trees.runtime_root)
+    _copy_relative_tree(
+        source_bundle, "share/fastflow-sdk/self-test", trees.runtime_root
+    )
     _copy_relative_tree(source_bundle, "share/flm", trees.fastflowlm_root)
 
     _copy_license_as(
         source_bundle,
-        "licenses/rocm-npu-staging-LICENSE",
+        "licenses/fastflow-sdk-LICENSE",
         trees.runtime_root,
-        "licenses/rocm-npu-LICENSE",
+        "licenses/fastflow-sdk-LICENSE",
     )
     _copy_license(source_bundle, "licenses/hrx-LICENSE", trees.runtime_root)
     _copy_license(
@@ -257,9 +259,9 @@ def prepare_runtime_wheel_trees(
     _copy_license(source_bundle, "licenses/THIRD_PARTY_NOTICES.md", trees.runtime_root)
     _copy_license_as(
         source_bundle,
-        "licenses/rocm-npu-staging-LICENSE",
+        "licenses/fastflow-sdk-LICENSE",
         trees.fastflowlm_root,
-        "licenses/rocm-npu-LICENSE",
+        "licenses/fastflow-sdk-LICENSE",
     )
     _copy_license(
         source_bundle,

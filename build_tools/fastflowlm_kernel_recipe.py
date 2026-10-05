@@ -474,7 +474,7 @@ def build_recipe(capabilities, catalogue, digests):
 
     return {
         "schema_version": 1,
-        "product": "rocm-npu-fastflowlm-kernel-recipe",
+        "product": "fastflow-sdk-fastflowlm-kernel-recipe",
         "target": "npu2",
         "generator_version": "kernel-recipe-generator-v1",
         "implementations": implementations,

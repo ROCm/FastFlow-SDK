@@ -13,7 +13,7 @@ import pytest
 from build_tools import fastflowlm_package
 from build_tools.artifact import write_sha256_sidecar
 from build_tools.dev import host_testing
-from build_tools.rocm_npu_linux_wheels import (
+from build_tools.fastflow_sdk_linux_wheels import (
     FASTFLOWLM_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
 )
@@ -70,7 +70,7 @@ class TestFastFlowLMWheelPackageCli:
             venv=str(wheel_directory / "venv"),
         )
         implementation = SimpleNamespace(
-            find_rocm_npu_wheels=mock.Mock(return_value=wheels),
+            find_fastflow_sdk_wheels=mock.Mock(return_value=wheels),
             verify_wheels_do_not_have_text_path_references=mock.Mock(),
         )
         with (
@@ -101,7 +101,7 @@ class TestFastFlowLMWheelPackageCli:
         real_import = builtins.__import__
 
         def import_without_wheels(name, *args, **kwargs):
-            if name in ("rocm_npu_runtime", "rocm_npu_fastflowlm"):
+            if name in ("fastflow_sdk_runtime", "fastflow_sdk_fastflowlm"):
                 raise ImportError(f"No module named {name}")
             return real_import(name, *args, **kwargs)
 
@@ -116,8 +116,8 @@ class TestFastFlowLMWheelPackageCli:
 
         message = str(error.value)
         assert "test-fastflowlm --wheel-package requires" in message
-        assert "rocm-npu-runtime" in message
-        assert "rocm-npu-fastflowlm" in message
+        assert "fastflow-sdk-runtime" in message
+        assert "fastflow-sdk-fastflowlm" in message
         assert "verify-fastflowlm-wheels" in message
 
     def test_wheel_package_sets_installed_package_smoke_env(self):
@@ -127,8 +127,8 @@ class TestFastFlowLMWheelPackageCli:
             inference_iterations=3,
         )
         modules = {
-            "rocm_npu_runtime": types.ModuleType("rocm_npu_runtime"),
-            "rocm_npu_fastflowlm": types.ModuleType("rocm_npu_fastflowlm"),
+            "fastflow_sdk_runtime": types.ModuleType("fastflow_sdk_runtime"),
+            "fastflow_sdk_fastflowlm": types.ModuleType("fastflow_sdk_fastflowlm"),
         }
         with (
             mock.patch.dict(sys.modules, modules),
@@ -151,8 +151,8 @@ class TestFastFlowLMWheelPackageCli:
         assert env["FASTFLOWLM_INSTALLED_PACKAGE"] == "1"
 
     def test_find_archive_ignores_compiler_product(self, tmp_path):
-        runtime = tmp_path / "rocm-npu-linux-x86_64.tar.zst"
-        compiler = tmp_path / "rocm-npu-compiler-linux-x86_64.tar.zst"
+        runtime = tmp_path / "fastflow-sdk-linux-x86_64.tar.zst"
+        compiler = tmp_path / "fastflow-sdk-compiler-linux-x86_64.tar.zst"
         runtime.write_bytes(b"runtime")
         compiler.write_bytes(b"compiler")
         write_sha256_sidecar(runtime)

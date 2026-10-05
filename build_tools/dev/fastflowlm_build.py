@@ -13,11 +13,11 @@ from build_tools.artifact import directory_state, git_source_state
 from build_tools.dev import patches
 from build_tools.fastflowlm_deps import dependency_errors, dependency_paths
 
-_QUALIFICATION_PYTHON = paths.ROOT / "tools" / "rocm-npu-qualification" / "python"
+_QUALIFICATION_PYTHON = paths.ROOT / "tools" / "fastflow-sdk-qualification" / "python"
 if str(_QUALIFICATION_PYTHON) not in sys.path:
     sys.path.insert(0, str(_QUALIFICATION_PYTHON))
 
-from rocm_npu_qualification import host_xrt
+from fastflow_sdk_qualification import host_xrt
 
 _directory_has_xrt_runtime = host_xrt.directory_has_xrt_runtime
 _has_xrt_headers = host_xrt.has_xrt_headers

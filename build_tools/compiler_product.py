@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Relocatable ROCm NPU compiler product staging and verification."""
+"""Relocatable FastFlow SDK compiler product staging and verification."""
 
 import hashlib
 import json
@@ -46,9 +46,9 @@ ROOT = paths.ROOT
 PROJ = paths.PROJ
 BUILD = paths.BUILD
 IRON_TOOLS_INSTALL = paths.IRON_TOOLS_INSTALL
-COMPILER_PRODUCT_STAGE = paths.BUILD / "rocm-npu-compiler-product"
-COMPILER_PRODUCT_EXTRACTED = paths.BUILD / "rocm-npu-compiler-extracted"
-COMPILER_PRODUCT_RELOCATED = paths.BUILD / "rocm-npu-compiler-relocated"
+COMPILER_PRODUCT_STAGE = paths.BUILD / "fastflow-sdk-compiler-product"
+COMPILER_PRODUCT_EXTRACTED = paths.BUILD / "fastflow-sdk-compiler-extracted"
+COMPILER_PRODUCT_RELOCATED = paths.BUILD / "fastflow-sdk-compiler-relocated"
 COMPILER_ARTIFACTS = paths.BUILD / "artifacts"
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27
@@ -64,7 +64,7 @@ NPU_PREREQ_TOOLS = [
     "register_database",
 ]
 COMPILER_PRODUCT_LICENSES = (
-    "rocm-npu-staging-LICENSE",
+    "fastflow-sdk-LICENSE",
     "iron-tools-LICENSE",
     "hrx-xclbinutil-LICENSE",
     "llvm-LICENSE.txt",
@@ -147,7 +147,7 @@ def _platform_machine(machine=None):
 
 
 def _compiler_product_name(system=None, machine=None):
-    return f"rocm-npu-compiler-{(system or platform.system()).lower()}-{_platform_machine(machine)}"
+    return f"fastflow-sdk-compiler-{(system or platform.system()).lower()}-{_platform_machine(machine)}"
 
 
 def _assert_no_symlinks(root):
@@ -458,7 +458,7 @@ def stage_product():
     relocated_rpaths = {} if IS_WINDOWS else relocate_linux_compiler_rpaths(product)
 
     license_sources = (
-        (ROOT / "LICENSE", "rocm-npu-staging-LICENSE"),
+        (ROOT / "LICENSE", "fastflow-sdk-LICENSE"),
         (PROJ / "iron-tools" / "LICENSE", "iron-tools-LICENSE"),
         # hrx-xclbinutil declares Apache-2.0 in its checked-in CMakeLists.txt,
         # but the copy vendored under mlir-aie's third_party does not carry a
@@ -509,7 +509,7 @@ def stage_product():
         product,
         {
             "schema_version": 1,
-            "product": "rocm-npu-compiler",
+            "product": "fastflow-sdk-compiler",
             "artifact": product.name,
             "platform": {"system": platform.system(), "machine": platform.machine()},
             "required_tools": required_tools,
@@ -519,7 +519,7 @@ def stage_product():
                 "path": "peano/llvm-aie",
             },
             "sources": {
-                "rocm-npu-staging": git_source_state(ROOT),
+                "fastflow-sdk": git_source_state(ROOT),
                 "llvm-project": git_source_state(PROJ / "llvm-project"),
                 "aiebu": git_source_state(PROJ / "aiebu"),
                 "iron-tools": git_source_state(PROJ / "iron-tools"),
@@ -593,14 +593,14 @@ def _find_compiler_product_archive(directory):
     directory = Path(directory)
     archives = sorted(
         [
-            *directory.glob("rocm-npu-compiler-*.zip"),
-            *directory.glob("rocm-npu-compiler-*.tar.gz"),
-            *directory.glob("rocm-npu-compiler-*.tar.zst"),
+            *directory.glob("fastflow-sdk-compiler-*.zip"),
+            *directory.glob("fastflow-sdk-compiler-*.tar.gz"),
+            *directory.glob("fastflow-sdk-compiler-*.tar.zst"),
         ]
     )
     if len(archives) != 1:
         raise RuntimeError(
-            f"expected exactly one rocm-npu-compiler artifact in {directory}, "
+            f"expected exactly one fastflow-sdk-compiler artifact in {directory}, "
             f"found {len(archives)}"
         )
     archive = archives[0]
@@ -610,8 +610,8 @@ def _find_compiler_product_archive(directory):
 
 def verify_product_inventory(product):
     manifest = verify_bundle(product)
-    if manifest.get("product") != "rocm-npu-compiler":
-        raise RuntimeError(f"not a rocm-npu-compiler product: {product}")
+    if manifest.get("product") != "fastflow-sdk-compiler":
+        raise RuntimeError(f"not a fastflow-sdk-compiler product: {product}")
     artifact = str(manifest.get("artifact", ""))
     if "staging" in artifact:
         raise RuntimeError(
@@ -686,7 +686,7 @@ def _relocate_compiler_product(product):
     relocated = COMPILER_PRODUCT_RELOCATED / product.name
     _stage(product, relocated)
     _smoke_compiler_product(relocated)
-    env = dict(os.environ, ROCM_NPU_COMPILER_PREFIX=str(relocated))
+    env = dict(os.environ, FASTFLOW_SDK_COMPILER_PREFIX=str(relocated))
     rc = sh(
         [
             venv_py(),

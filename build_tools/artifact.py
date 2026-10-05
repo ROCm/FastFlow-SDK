@@ -138,11 +138,17 @@ def file_inventory(
     root = Path(root)
     excluded = {Path(path) for path in exclude_paths}
     excluded_names = set(exclude_names)
-    return [
-        file_record(root, path)
-        for path in sorted(item for item in root.rglob("*") if item.is_file())
-        if path not in excluded and path.name not in excluded_names
+    # pathlib.Path ordering is case-insensitive on Windows. Sort the POSIX
+    # relative path so FastFlowLM-* and fastflow-sdk-* stay in the same
+    # order as a Linux build; that order is stored in package manifests and
+    # hashed into the wheel RECORD.
+    files = [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path not in excluded and path.name not in excluded_names
     ]
+    files.sort(key=lambda path: path.relative_to(root).as_posix())
+    return [file_record(root, path) for path in files]
 
 
 def directory_state(

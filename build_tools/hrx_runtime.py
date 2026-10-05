@@ -77,11 +77,11 @@ def _numpy():
 def libhrx_path(bundle=None, runtime_package=False):
     if runtime_package:
         try:
-            import rocm_npu_runtime
+            import fastflow_sdk_runtime
 
-            return Path(rocm_npu_runtime.libhrx_path()).resolve()
+            return Path(fastflow_sdk_runtime.libhrx_path()).resolve()
         except (ImportError, FileNotFoundError) as error:
-            print(f"  [MISS] installed rocm-npu-runtime package: {error}")
+            print(f"  [MISS] installed fastflow-sdk-runtime package: {error}")
             return None
     if bundle:
         relative = "bin/hrx.dll" if paths.is_windows() else "lib/libhrx.so"

@@ -60,7 +60,7 @@ jobs:
     timeout-minutes: 120
     env:
       RNS_BUILD_IMAGE: azure-windows-scale-rocm
-      ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
+      FASTFLOW_SDK_PACKAGE_VERSION: ${{ inputs.package_version }}
     steps:
       - name: Configure git for LF checkouts
         shell: powershell
@@ -182,11 +182,11 @@ jobs:
       - name: Build HRX
         run: .venv/Scripts/python.exe dev.py build hrx --fresh
 
-      - name: Build and test native rocm-npu CLI
+      - name: Build and test native fastflow CLI
         shell: powershell
         run: |
-          .venv/Scripts/python.exe dev.py build rocm-npu-cli --fresh
-          .venv/Scripts/ctest.exe --test-dir build/rocm-npu-cli `
+          .venv/Scripts/python.exe dev.py build fastflow-cli --fresh
+          .venv/Scripts/ctest.exe --test-dir build/fastflow-cli `
             --output-on-failure
 
       - name: Build FastFlowLM
@@ -205,39 +205,39 @@ jobs:
       - name: Package runtime
         run: .venv/Scripts/python.exe dev.py package-fastflowlm
 
-      - name: Package rocm-npu runtime wheels
-        run: .venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py package
+      - name: Package fastflow runtime wheels
+        run: .venv/Scripts/python.exe build_tools/fastflow_sdk_windows_wheel_cli.py package
 
       - name: Validate wheel metadata
-        run: .venv/Scripts/python.exe -m twine check --strict "build/artifacts/rocm_npu_*.whl"
+        run: .venv/Scripts/python.exe -m twine check --strict "build/artifacts/fastflow_sdk_*.whl"
 
-      - name: Install-test rocm-npu runtime wheels
-        run: .venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py verify
+      - name: Install-test fastflow runtime wheels
+        run: .venv/Scripts/python.exe build_tools/fastflow_sdk_windows_wheel_cli.py verify
 
       - name: Attest Windows release artifacts
         if: ${{ inputs.attest_wheels }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
-            build/artifacts/rocm_npu_*.whl
-            build/artifacts/rocm-npu-windows-x86_64.zip
+            build/artifacts/fastflow_sdk_*.whl
+            build/artifacts/fastflow-sdk-windows-x86_64.zip
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-windows-x86_64
-          path: build/artifacts/rocm-npu-windows-x86_64.zip*
+          name: fastflow-sdk-windows-x86_64
+          path: build/artifacts/fastflow-sdk-windows-x86_64.zip*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
-      - name: Upload rocm-npu runtime wheel artifacts
+      - name: Upload fastflow runtime wheel artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-runtime-fastflowlm-windows-x86_64
+          name: fastflow-sdk-runtime-fastflowlm-windows-x86_64
           path: |
-            build/artifacts/rocm_npu_runtime-*.whl*
-            build/artifacts/rocm_npu_fastflowlm-*.whl*
+            build/artifacts/fastflow_sdk_runtime-*.whl*
+            build/artifacts/fastflow_sdk_fastflowlm-*.whl*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -245,8 +245,8 @@ jobs:
       - name: Upload local qualification wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-qualification-wheel-windows-local
-          path: build/qualification-artifacts/rocm_npu_qualification-*.whl*
+          name: fastflow-sdk-qualification-wheel-windows-local
+          path: build/qualification-artifacts/fastflow_sdk_qualification-*.whl*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -287,10 +287,10 @@ jobs:
         with:
           python-version: '3.12.10'
 
-      - name: Download rocm-npu runtime wheel artifacts
+      - name: Download fastflow runtime wheel artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rocm-npu-runtime-fastflowlm-windows-x86_64
+          name: fastflow-sdk-runtime-fastflowlm-windows-x86_64
           path: .artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -298,7 +298,7 @@ jobs:
       - name: Download standalone runtime archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rocm-npu-windows-x86_64
+          name: fastflow-sdk-windows-x86_64
           path: .native-artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -306,7 +306,7 @@ jobs:
       - name: Download qualification plugin wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.qualification_artifact || 'rocm-npu-qualification-wheel-windows-local' }}
+          name: ${{ inputs.qualification_artifact || 'fastflow-sdk-qualification-wheel-windows-local' }}
           path: .qualification-artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -315,7 +315,7 @@ jobs:
         if: ${{ inputs.qualification_artifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rocm-npu-qualification-wheel-windows-local
+          name: fastflow-sdk-qualification-wheel-windows-local
           path: .qualification-artifact-windows-local
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -327,29 +327,29 @@ jobs:
           --canonical .qualification-artifact
           --candidate .qualification-artifact-windows-local
 
-      - name: Install and verify rocm-npu runtime wheels
-        run: python build_tools/rocm_npu_windows_wheel_cli.py verify --dir .artifact
+      - name: Install and verify fastflow runtime wheels
+        run: python build_tools/fastflow_sdk_windows_wheel_cli.py verify --dir .artifact
 
       - name: Install qualification plugin wheel and numeric runtime
         shell: powershell
         run: |
           $wheel = Get-ChildItem .qualification-artifact `
-            -Filter rocm_npu_qualification-*.whl | Select-Object -First 1
+            -Filter fastflow_sdk_qualification-*.whl | Select-Object -First 1
           if (-not $wheel) { throw "qualification wheel was not found" }
-          build/rocm-npu-windows-wheel-venv/Scripts/python.exe -m pip install `
+          build/fastflow-sdk-windows-wheel-venv/Scripts/python.exe -m pip install `
             --disable-pip-version-check --only-binary=:all: `
             $wheel.FullName
-          build/rocm-npu-windows-wheel-venv/Scripts/python.exe -m pip check
-          build/rocm-npu-windows-wheel-venv/Scripts/rocm-npu.exe plugin list --json
-          build/rocm-npu-windows-wheel-venv/Scripts/rocm-npu.exe qualify --list-profiles --json
+          build/fastflow-sdk-windows-wheel-venv/Scripts/python.exe -m pip check
+          build/fastflow-sdk-windows-wheel-venv/Scripts/fastflow.exe plugin list --json
+          build/fastflow-sdk-windows-wheel-venv/Scripts/fastflow.exe qualify --list-profiles --json
 
       - name: Probe NPU driver, firmware, and packaged libHRX
-        run: build/rocm-npu-windows-wheel-venv/Scripts/python.exe build_tools/rocm_npu_windows_wheel_cli.py probe
+        run: build/fastflow-sdk-windows-wheel-venv/Scripts/python.exe build_tools/fastflow_sdk_windows_wheel_cli.py probe
 
       - name: Run native runtime diagnostics and self-test
         run: >-
-          python build_tools/validate_rocm_npu_cli.py
-          --cli build/rocm-npu-windows-wheel-venv/Scripts/rocm-npu.exe
+          python build_tools/validate_fastflow_cli.py
+          --cli build/fastflow-sdk-windows-wheel-venv/Scripts/fastflow.exe
           --output-dir .native-reports
           --prefix wheel-
           --require-hardware
@@ -358,23 +358,23 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = Get-ChildItem .native-artifact -Recurse -File -Filter rocm-npu-windows-x86_64.zip |
+          $archive = Get-ChildItem .native-artifact -Recurse -File -Filter fastflow-sdk-windows-x86_64.zip |
             Select-Object -First 1
           if (-not $archive) { throw 'standalone runtime archive was not downloaded' }
           $checksum = (Get-Content "$($archive.FullName).sha256" -Raw).Trim().Split()[0]
           $actual = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $checksum) { throw 'standalone runtime archive checksum mismatch' }
           Expand-Archive $archive.FullName .native-runtime
-          $cli = Get-ChildItem .native-runtime -Recurse -File -Filter rocm-npu.exe |
+          $cli = Get-ChildItem .native-runtime -Recurse -File -Filter fastflow.exe |
             Where-Object { $_.Directory.Name -eq 'bin' } |
             Select-Object -First 1
-          if (-not $cli) { throw 'standalone rocm-npu.exe was not found' }
+          if (-not $cli) { throw 'standalone fastflow.exe was not found' }
           New-Item .native-reports -ItemType Directory -Force | Out-Null
           function Invoke-NativeReport {
             param([string[]]$CommandArguments, [string]$Output, [switch]$ReturnReport)
             $lines = & $cli.FullName @CommandArguments --json
             if ($LASTEXITCODE -ne 0) {
-              throw "standalone rocm-npu $CommandArguments failed with $LASTEXITCODE"
+              throw "standalone fastflow $CommandArguments failed with $LASTEXITCODE"
             }
             $text = ($lines -join "`n") + "`n"
             [IO.File]::WriteAllText(
@@ -390,7 +390,7 @@ jobs:
 
       - name: Run bounded kernel and model qualification through native dispatch
         run: >-
-          build/rocm-npu-windows-wheel-venv/Scripts/rocm-npu.exe qualify run
+          build/fastflow-sdk-windows-wheel-venv/Scripts/fastflow.exe qualify run
           --fast
           --model-cache build/FastFlowLM-models
           --output-dir .qualification-evidence
@@ -400,14 +400,14 @@ jobs:
       - name: Verify qualification evidence archive
         shell: powershell
         run: |
-          build/rocm-npu-windows-wheel-venv/Scripts/rocm-npu.exe qualify verify `
+          build/fastflow-sdk-windows-wheel-venv/Scripts/fastflow.exe qualify verify `
             --input .qualification-run.evidence.zip --json
 
       - name: Upload qualification evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-qualification-evidence-${{ matrix.runner_label }}
+          name: fastflow-sdk-qualification-evidence-${{ matrix.runner_label }}
           path: |
             .qualification-run.evidence.zip
             .qualification-evidence
@@ -419,7 +419,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-native-reports-${{ matrix.runner_label }}
+          name: fastflow-sdk-native-reports-${{ matrix.runner_label }}
           path: .native-reports/*.json
           if-no-files-found: warn
           include-hidden-files: true

@@ -2,7 +2,7 @@
 
 `build_tools` contains repository-local automation shared by developers, CI
 workflows, tests, packaging jobs, and release jobs. It is not limited to CI,
-and it is not part of a shipped ROCm NPU product.
+and it is not part of a shipped FastFlow SDK product.
 
 The root `dev.py` command is the primary developer entry point.
 `build_tools/dev` owns its parser, dispatch, setup, source preparation, build,

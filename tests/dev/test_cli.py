@@ -112,7 +112,7 @@ class TestDevCli:
         )
         assert (
             choices["package-ops-wheels"]._defaults["_handler"].__module__
-            == "build_tools.rocm_npu_ops_wheels"
+            == "build_tools.fastflow_sdk_ops_wheels"
         )
         assert (
             choices["install-compiler-wheels"]._defaults["_handler"].__module__
@@ -120,7 +120,7 @@ class TestDevCli:
         )
         assert (
             choices["verify-ops-wheels"]._defaults["_handler"].__module__
-            == "build_tools.rocm_npu_ops_wheels"
+            == "build_tools.fastflow_sdk_ops_wheels"
         )
         verify_ops = choices["verify-ops-wheels"]
         assert any(option.dest == "reuse_venv" for option in verify_ops._actions)
@@ -141,7 +141,7 @@ class TestDevCli:
             "iron-tools": "build_tools.dev.compiler_build",
             "hrx-xclbinutil": "build_tools.dev.compiler_build",
             "hrx": "build_tools.dev.runtime_build",
-            "rocm-npu-cli": "build_tools.dev.runtime_build",
+            "fastflow-cli": "build_tools.dev.runtime_build",
             "fastflowlm": "build_tools.dev.fastflowlm_build",
             "fastflowlm-xrt": "build_tools.dev.fastflowlm_build",
             "all": "build_tools.dev.build",
@@ -157,7 +157,7 @@ class TestDevCli:
     def test_build_all_preserves_compiler_stack_sequence(self):
         calls = []
         names = (
-            (build.runtime_build, "cmd_build_rocm_npu_cli"),
+            (build.runtime_build, "cmd_build_fastflow_cli"),
             (build.compiler_build, "cmd_build_hrx_xclbinutil"),
             (build.compiler_build, "cmd_build_aiebu"),
             (build.compiler_build, "cmd_build_llvm"),

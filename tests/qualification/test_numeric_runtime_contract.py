@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from build_tools import download_qualification_numeric_wheels as downloader
+from build_tools import fastflow_sdk_qualification_wheel as qualification_wheel
 from build_tools import release_policy
-from build_tools import rocm_npu_qualification_wheel as qualification_wheel
 from build_tools import verify_qualification_dependencies as dependency_verifier
 from tests.support.modules import load_module
 
@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
 def _shipping_numeric_runtime():
     path = (
         release_policy.ROOT
-        / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+        / "tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification"
         / "numeric_runtime.py"
     )
     return load_module("shipping_numeric_runtime", path)
@@ -69,9 +69,9 @@ def test_dependency_verifier_uses_numeric_packages_from_contract(monkeypatch, tm
     contract_path = tmp_path / "numeric-runtime.json"
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     expected = {
-        "rocm-npu-qualification": "7.8.9",
-        "rocm-npu-fastflowlm": "7.8.9",
-        "rocm-npu-runtime": "7.8.9",
+        "fastflow-sdk-qualification": "7.8.9",
+        "fastflow-sdk-fastflowlm": "7.8.9",
+        "fastflow-sdk-runtime": "7.8.9",
         **contract["packages"],
     }
     monkeypatch.setattr(

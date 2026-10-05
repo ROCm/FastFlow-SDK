@@ -27,7 +27,7 @@ def cmd_test(args):
 
 def _require_fastflowlm_wheel_packages():
     missing = []
-    for module in ("rocm_npu_runtime", "rocm_npu_fastflowlm"):
+    for module in ("fastflow_sdk_runtime", "fastflow_sdk_fastflowlm"):
         try:
             __import__(module)
         except ImportError:
@@ -38,8 +38,8 @@ def _require_fastflowlm_wheel_packages():
         ) / paths.executable_name("python")
         sys.exit(
             "test-fastflowlm --wheel-package requires running dev.py with a "
-            "Python environment where the rocm-npu-runtime and "
-            "rocm-npu-fastflowlm wheels are installed; missing "
+            "Python environment where the fastflow-sdk-runtime and "
+            "fastflow-sdk-fastflowlm wheels are installed; missing "
             f"{', '.join(missing)}. Run `python dev.py verify-fastflowlm-wheels` "
             f"first, then use `{executable} dev.py test-fastflowlm --wheel-package`."
         )

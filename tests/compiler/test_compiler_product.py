@@ -51,7 +51,7 @@ def write_file(path: Path, data: bytes = b"x", executable: bool = False) -> None
 
 def make_product(
     root: Path,
-    artifact: str = "rocm-npu-compiler-linux-x86_64",
+    artifact: str = "fastflow-sdk-compiler-linux-x86_64",
     include_build_metadata: bool = False,
 ) -> Path:
     product = root / artifact
@@ -91,7 +91,7 @@ def make_product(
         json.dumps(
             {
                 "schema_version": 1,
-                "product": "rocm-npu-compiler",
+                "product": "fastflow-sdk-compiler",
                 "artifact": artifact,
                 "required_tools": required_tools,
                 "files": files,
@@ -105,7 +105,7 @@ def make_product(
 def test_product_name_is_public_and_platform_normalized():
     assert (
         compiler_product._compiler_product_name("Linux", "AMD64")
-        == "rocm-npu-compiler-linux-x86_64"
+        == "fastflow-sdk-compiler-linux-x86_64"
     )
     assert "staging" not in compiler_product._compiler_product_name("Windows", "x86_64")
 
@@ -185,10 +185,10 @@ def test_wheel_verification_runs_binding_conformance_with_current_minor():
 
 
 def test_install_compiler_wheels_installs_core_and_bindings(tmp_path):
-    core = tmp_path / "rocm_npu_compiler_core-0.1.0-py3-none-any.whl"
-    bindings = tmp_path / "rocm_npu_compiler_bindings-0.1.0-py3-none-any.whl"
-    meta = tmp_path / "rocm_npu_compiler-0.1.0-py3-none-any.whl"
-    ops = tmp_path / "rocm_npu_ops-0.1.0-py3-none-any.whl"
+    core = tmp_path / "fastflow_sdk_compiler_core-0.1.0-py3-none-any.whl"
+    bindings = tmp_path / "fastflow_sdk_compiler_bindings-0.1.0-py3-none-any.whl"
+    meta = tmp_path / "fastflow_sdk_compiler-0.1.0-py3-none-any.whl"
+    ops = tmp_path / "fastflow_sdk_ops-0.1.0-py3-none-any.whl"
     for wheel in (core, bindings, meta, ops):
         wheel.write_bytes(b"wheel")
     args = SimpleNamespace(dir=str(tmp_path))
@@ -236,8 +236,8 @@ def test_consumer_root_exports_only_cross_minor_compiler_packages(tmp_path):
     site_packages = root / "site-packages"
     write_file(site_packages / "aie" / "__init__.py", b"")
     write_file(site_packages / "aie" / "__pycache__" / "bad.cpython-312.pyc")
-    write_file(site_packages / "rocm_npu_compiler" / "__init__.py", b"")
-    write_file(site_packages / "rocm_npu_compiler_core-1.0.dist-info" / "METADATA")
+    write_file(site_packages / "fastflow_sdk_compiler" / "__init__.py", b"")
+    write_file(site_packages / "fastflow_sdk_compiler_core-1.0.dist-info" / "METADATA")
     write_file(site_packages / "numpy" / "__init__.py", b"")
     destination = root / "build" / "consumer"
     with (
@@ -251,7 +251,7 @@ def test_consumer_root_exports_only_cross_minor_compiler_packages(tmp_path):
         compiler_wheels._export_compiler_consumer_root(Path("python"), destination)
 
     assert (destination / "aie" / "__init__.py").is_file()
-    assert (destination / "rocm_npu_compiler" / "__init__.py").is_file()
+    assert (destination / "fastflow_sdk_compiler" / "__init__.py").is_file()
     assert not (destination / "aie" / "__pycache__").exists()
     assert not (destination / "numpy").exists()
 
@@ -266,7 +266,7 @@ def test_latest_minor_consumer_can_run_one_e2e(tmp_path):
     root = tmp_path
     consumer_root = root / "consumer"
     write_file(consumer_root / "aie" / "__init__.py", b"")
-    write_file(consumer_root / "rocm_npu_compiler" / "__init__.py", b"")
+    write_file(consumer_root / "fastflow_sdk_compiler" / "__init__.py", b"")
     args = SimpleNamespace(
         consumer_root=str(consumer_root),
         consumer_e2e=True,
@@ -282,10 +282,10 @@ def test_latest_minor_consumer_can_run_one_e2e(tmp_path):
 
     e2e = run.call_args_list[-1]
     assert str(e2e.args[0][1]).endswith("run_e2e.py")
-    assert e2e.kwargs["env"]["ROCM_NPU_COMPILER_PREFIX"] == str(
-        consumer_root / "rocm_npu_compiler"
+    assert e2e.kwargs["env"]["FASTFLOW_SDK_COMPILER_PREFIX"] == str(
+        consumer_root / "fastflow_sdk_compiler"
     )
-    assert e2e.kwargs["env"]["ROCM_NPU_CMAKE"] == compiler_wheels.cmake_bin()
+    assert e2e.kwargs["env"]["FASTFLOW_SDK_CMAKE"] == compiler_wheels.cmake_bin()
 
 
 def test_compiler_product_can_extract_to_explicit_short_root(tmp_path):
@@ -300,7 +300,7 @@ def test_compiler_product_can_extract_to_explicit_short_root(tmp_path):
         mock.patch.object(
             compiler_product,
             "extract_archive_atomic",
-            return_value=short_root / "rocm-npu-compiler-windows-x86_64",
+            return_value=short_root / "fastflow-sdk-compiler-windows-x86_64",
         ) as extract,
     ):
         compiler_product.cmd_unpack_compiler_product(
@@ -318,11 +318,11 @@ def test_compiler_product_can_extract_to_explicit_short_root(tmp_path):
 def test_inventory_accepts_complete_product(tmp_path):
     product = make_product(tmp_path)
     manifest = compiler_product.verify_product_inventory(product)
-    assert manifest["product"] == "rocm-npu-compiler"
+    assert manifest["product"] == "fastflow-sdk-compiler"
 
 
 def test_inventory_rejects_staging_artifact_name(tmp_path):
-    product = make_product(tmp_path, "rocm-npu-staging-compiler-linux-x86_64")
+    product = make_product(tmp_path, "fastflow-sdk-staging-compiler-linux-x86_64")
     with pytest.raises(RuntimeError, match="must not include staging"):
         compiler_product.verify_product_inventory(product)
 
@@ -367,8 +367,8 @@ def test_runtime_staging_excludes_build_intermediates(tmp_path):
 
 def test_ci_runs_one_deep_doctor_and_uses_content_addressed_caches():
     workflows = ROOT / ".github" / "workflows"
-    linux = (workflows / "build_rocm_npu_staging_linux.yml").read_text()
-    windows = (workflows / "build_rocm_npu_staging_windows.yml").read_text()
+    linux = (workflows / "build_fastflow_sdk_linux.yml").read_text()
+    windows = (workflows / "build_fastflow_sdk_windows.yml").read_text()
 
     assert "dev.py doctor compiler-stack --deep" in linux
     assert "dev.py doctor compiler-stack --deep" not in windows
@@ -387,7 +387,7 @@ def test_ci_runs_one_deep_doctor_and_uses_content_addressed_caches():
 
 def test_linux_ci_installs_aiebu_static_link_dependencies():
     workflow = (
-        ROOT / ".github" / "workflows" / "build_rocm_npu_staging_linux.yml"
+        ROOT / ".github" / "workflows" / "build_fastflow_sdk_linux.yml"
     ).read_text()
 
     assert "--enablerepo=powertools" in workflow
@@ -396,8 +396,8 @@ def test_linux_ci_installs_aiebu_static_link_dependencies():
 
 def test_ci_builds_hrx_unit_tests_without_installing_test_artifacts():
     workflows = ROOT / ".github" / "workflows"
-    linux = (workflows / "build_rocm_npu_staging_linux.yml").read_text()
-    windows = (workflows / "build_rocm_npu_staging_windows.yml").read_text()
+    linux = (workflows / "build_fastflow_sdk_linux.yml").read_text()
+    windows = (workflows / "build_fastflow_sdk_windows.yml").read_text()
     runtime_build = (ROOT / "build_tools" / "dev" / "runtime_build.py").read_text()
 
     assert "dev.py build all --include-tests" in linux
@@ -410,7 +410,7 @@ def test_ci_builds_hrx_unit_tests_without_installing_test_artifacts():
 
 def test_windows_ci_retries_transient_chocolatey_llvm_lookup_failures():
     workflow = (
-        ROOT / ".github" / "workflows" / "build_rocm_npu_staging_windows.yml"
+        ROOT / ".github" / "workflows" / "build_fastflow_sdk_windows.yml"
     ).read_text()
 
     assert "*NuGetResolverInputException*" in workflow
@@ -522,7 +522,7 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
 
 def test_windows_tar_zst_is_deterministic_and_extracts_valid_files(tmp_path):
     root = tmp_path
-    product = make_product(root, artifact="rocm-npu-compiler-windows-x86_64")
+    product = make_product(root, artifact="fastflow-sdk-compiler-windows-x86_64")
     with mock.patch.object(compiler_product, "IS_WINDOWS", True):
         first = compiler_product._create_compiler_product_archive(
             product, root / "first"
@@ -765,7 +765,7 @@ def test_relocated_toolchain_env_uses_product_paths(tmp_path):
     assert env["PYTHONPATH"] == str(prefix / "python")
     assert env["PEANO_INSTALL_DIR"] == str(prefix / "peano" / "llvm-aie")
     assert env["AIEOPT_DIR"] == str(prefix / "third_party" / "aie_api")
-    assert env["ROCM_NPU_COMPILER_PREFIX"] == str(prefix)
+    assert env["FASTFLOW_SDK_COMPILER_PREFIX"] == str(prefix)
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     subprocess.run([sys.executable, "-c", "import probe"], env=env, check=True)
     assert not (prefix / "python" / "__pycache__").exists()
@@ -778,7 +778,7 @@ def test_relocated_toolchain_env_uses_product_paths(tmp_path):
 def test_relocated_toolchain_env_uses_installed_wheel_bindings(tmp_path):
     root = tmp_path
     site_packages = root / "site-packages"
-    prefix = site_packages / "rocm_npu_compiler"
+    prefix = site_packages / "fastflow_sdk_compiler"
     write_file(prefix / "bin" / f"aie-opt{run_e2e.EXE}", executable=True)
     write_file(prefix / "bin" / f"aiebu-asm{run_e2e.EXE}", executable=True)
     write_file(prefix / "bin" / f"xclbinutil{run_e2e.EXE}", executable=True)

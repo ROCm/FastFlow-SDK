@@ -3,7 +3,7 @@
 #
 # CodeQL static analysis. Python needs no build; C/C++ is built manually
 # because the repository root has no build file for autobuild to discover --
-# the CLI lives in tools/rocm-npu and is the only C++ target that builds
+# the CLI lives in tools/fastflow and is the only C++ target that builds
 # without the full compiler stack.
 #
 # C/C++ runs on both platforms deliberately: src/platform/windows.cc and
@@ -140,12 +140,12 @@ jobs:
           queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
 
-      # Mirrors dev.py build rocm-npu-cli: Release, pip-provided cmake. Build
+      # Mirrors dev.py build fastflow-cli: Release, pip-provided cmake. Build
       # type and config are both passed because the generators differ per
       # platform, and each generator ignores the flag meant for the other.
-      - name: Build rocm-npu CLI
+      - name: Build fastflow CLI
         run: |
-          cmake -G "${{ matrix.generator }}" -S tools/rocm-npu -B build/cli -DCMAKE_BUILD_TYPE=Release
+          cmake -G "${{ matrix.generator }}" -S tools/fastflow -B build/cli -DCMAKE_BUILD_TYPE=Release
           cmake --build build/cli --config Release
 
       - name: Perform CodeQL analysis

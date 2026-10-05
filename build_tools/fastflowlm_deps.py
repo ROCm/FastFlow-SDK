@@ -131,7 +131,7 @@ def dependency_policy(
     manifest = manifest_path.read_bytes()
     triplet_contents = triplet_path.read_bytes()
     identity = hashlib.sha256(
-        b"rocm-npu-staging-fastflowlm-vcpkg-v1\0" + manifest + b"\0" + triplet_contents
+        b"fastflow-sdk-fastflowlm-vcpkg-v1\0" + manifest + b"\0" + triplet_contents
     ).hexdigest()
     return {
         "identity": identity,

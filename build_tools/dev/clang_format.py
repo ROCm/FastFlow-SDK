@@ -14,8 +14,8 @@ from build_tools.dev import format_tools
 
 CXX_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp"}
 FIRST_PARTY_PREFIXES = (
-    "tools/rocm-npu/",
-    "tools/rocm-npu-qualification/native/",
+    "tools/fastflow/",
+    "tools/fastflow-sdk-qualification/native/",
     "tests/hal-contract/",
 )
 PINNED_VERSION = format_tools.requirement_pin("clang-format")

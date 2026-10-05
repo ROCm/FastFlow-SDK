@@ -1,6 +1,6 @@
 # Native runtime CLI JSON contract
 
-`rocm-npu --json <command>` writes exactly one UTF-8 JSON document followed by
+`fastflow --json <command>` writes exactly one UTF-8 JSON document followed by
 a newline to standard output. Diagnostics that are not part of the report are
 written to standard error. A failed health check or self-test still produces a
 complete report. If `--json` is present but invocation parsing fails, the CLI

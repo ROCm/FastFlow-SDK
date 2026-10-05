@@ -1,0 +1,7 @@
+{
+  "build_platform": "@FASTFLOW_SDK_BUILD_PLATFORM@",
+  "product": "FastFlow SDK native runtime CLI",
+  "schema_version": 1,
+  "source_revision": "@FASTFLOW_SDK_SOURCE_REVISION@",
+  "version": "@FASTFLOW_SDK_VERSION@"
+}

@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "kind": "fastflow-sdk-fastflowlm-kernel-qualification-capabilities",
+  "contract_id": "fastflowlm-kernel-qualification-v1",
+  "provenance": {
+    "scope": "shipping-qualification-contract",
+    "public_fastflowlm_abi": false,
+    "sources": [
+      "FastFlowLM public transaction-generator APIs",
+      "observed production-xclbin behavior"
+    ],
+    "note": "This qualification-owned manifest records measured target facts. It is not an upstream FastFlowLM ABI specification."
+  },
+  "shape": {
+    "m": 1024,
+    "k": 1024,
+    "n": 128
+  },
+  "contracts": {
+    "dequant_output_layout": "observed-q4nx-mm-bit-permutation-v1",
+    "gemm_activation_layout": "observed-k1024-n128-bit-permutation-v1",
+    "gemm_output_layout": "row-major-m1024-n128",
+    "bindings": "generic-output-weight-activation-v1"
+  },
+  "test_policy": {
+    "relative_tolerance": 0.01,
+    "structured_absolute_tolerance": 0.0625
+  },
+  "recipe_policy": {
+    "note": "Bounds the qualification recipe applies. These are not the per-family gemm_policy bounds and must not be taken from them: the recipe builds its MM weight under logical semantics whatever implementation runs, so the population depends on the profile alone and no family bound describes it. Each bound is one BF16 unit in the last place at the magnitude that population reaches, measured on device across every reachable MM implementation.",
+    "relative_tolerance": 0.01,
+    "gemm_absolute_tolerance": {
+      "shared-subset": 0.0625,
+      "full-nibble": 0.125,
+      "full-affine": 0.125
+    },
+    "chained_absolute_tolerance": {
+      "note": "Chaining permutes the weight, which puts differently scaled rows into one accumulation and so reaches larger sums than the plain product. Each bound is one BF16 unit in the last place at the magnitude the chain actually reaches, measured across every pair.",
+      "shared-subset": 0.0625,
+      "full-nibble": 0.125,
+      "full-affine": 1.0
+    }
+  },
+  "implementations": {
+    "note": "One entry per unique shipped kernel implementation, identified by xclbin content hash. Every field is on-device evidence: which transaction builder reaches the implementation, which Q4NX chunk shape its packing uses, which dequantization contract it applies, and which order it writes its result in. None of it is derivable from the xclbin, so re-measuring is the only way to refresh it.",
+    "wide_shape": {
+      "m": 1024,
+      "k": 1024,
+      "n": 512
+    },
+    "entries": {
+      "dequant-122f128af9bdad35": {
+        "builder": "q4_1",
+        "transaction_source": "production",
+        "shape": "production",
+        "q4nx_blocks": {"row_block": 32, "col_block": 256, "parallel": 16},
+        "dequant_semantics": "lfm-affine",
+        "dequant_output_order": "mm"
+      },
+      "dequant-4e4da9a7be6b28db": {
+        "builder": "gemma-dequant",
+        "transaction_source": "sweep",
+        "shape": "wide",
+        "q4nx_blocks": {"row_block": 32, "col_block": 128, "parallel": 16},
+        "dequant_semantics": "qwen-affine",
+        "dequant_output_order": "gpt-oss"
+      },
+      "dequant-ef0bd861e763be8c": {
+        "builder": "gemma-dequant",
+        "transaction_source": "sweep",
+        "shape": "wide",
+        "q4nx_blocks": {"row_block": 16, "col_block": 128, "parallel": 16},
+        "dequant_semantics": "qwen-affine",
+        "dequant_output_order": "gemma-text"
+      },
+      "dequant-575d45e47993315f": {
+        "builder": "q4_1",
+        "transaction_source": "production",
+        "shape": "production",
+        "q4nx_blocks": {"row_block": 32, "col_block": 256, "parallel": 16},
+        "dequant_semantics": "qwen-affine",
+        "dequant_output_order": "mm"
+      },
+      "dequant-a613e23410d827e5": {
+        "builder": "q4_1",
+        "transaction_source": "production",
+        "shape": "production",
+        "q4nx_blocks": {"row_block": 32, "col_block": 256, "parallel": 16},
+        "dequant_semantics": "qwen-affine",
+        "dequant_output_order": "mm"
+      },
+      "mm-4afc2a6f2459c0dd": {
+        "builder": "gemm",
+        "transaction_source": "sweep",
+        "shape": "wide",
+        "execution_variants": [
+          {
+            "id": "production",
+            "builder": "gemm",
+            "transaction_source": "production",
+            "shape": "production"
+          }
+        ]
+      },
+      "mm-eb616bbe2a08405e": {
+        "builder": "gemma-gemm",
+        "transaction_source": "sweep",
+        "shape": "wide"
+      }
+    },
+    "unreached": {
+      "mm-8d5bc2adebe8c362": "FastFlowLM exposes only an undeclared free-function builder from a prebuilt library. The Windows library executes an unsupported host instruction on the baseline runner, and there is no supported source-level API from which qualification can reproduce its transaction.",
+      "mm-2bbc1cbf355661de": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
+      "mm-f09ce18ed0176ccd": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
+      "mm-6f1e5507b84d4545": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
+      "dequant-c64cce52830381a3": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
+      "mm-6c7ef8716b6c744d": "FastFlowLM exports GPT_OSS_Gemm symbols but ships no class declaration. Re-declaring the class locally is an ODR violation and can corrupt memory; this implementation remains a coverage limit until FastFlowLM ships a supported builder API."
+    },
+    "undeclared_builders": []
+  },
+  "families": [
+    {
+      "name": "Qwen3-0.6B-NPU2",
+      "xclbin_directory": "Qwen3-0.6B-NPU2",
+      "xclbins": {
+        "dequant": "dequant.xclbin",
+        "mm": "mm.xclbin"
+      },
+      "implementation_groups": {
+        "dequant": "qwen-q4-dequant-v1",
+        "mm": "shared-generic-mm-v1",
+        "shared_subset": "unsigned-0-through-7-v1"
+      },
+      "nibble_semantics": "unsigned",
+      "zero_point_semantics": "add-after-scale",
+      "gemm_policy": {
+        "full_nibble_absolute_tolerance": 0.125,
+        "full_affine_absolute_tolerance": 0.5
+      }
+    },
+    {
+      "name": "LFM2-1.2B-NPU2",
+      "xclbin_directory": "LFM2-1.2B-NPU2",
+      "xclbins": {
+        "dequant": "dequant.xclbin",
+        "mm": "mm.xclbin"
+      },
+      "implementation_groups": {
+        "dequant": "lfm-signed-q4-dequant-v1",
+        "mm": "shared-generic-mm-v1",
+        "shared_subset": "unsigned-0-through-7-v1"
+      },
+      "nibble_semantics": "signed-twos-complement",
+      "zero_point_semantics": "ignored",
+      "gemm_policy": {
+        "full_nibble_absolute_tolerance": 0.0625,
+        "full_affine_absolute_tolerance": 0.0625
+      }
+    }
+  ]
+}

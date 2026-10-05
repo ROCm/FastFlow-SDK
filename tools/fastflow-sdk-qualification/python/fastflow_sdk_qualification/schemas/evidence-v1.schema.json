@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocm.docs.amd.com/fastflow-sdk/qualification-evidence-v1.schema.json",
+  "title": "FastFlow SDK qualification evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "subject",
+    "observed_platform",
+    "profile",
+    "models",
+    "tests",
+    "started_at",
+    "finished_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["running", "pass", "fail", "interrupted"]},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "source_revision",
+        "candidate_binding",
+        "packages",
+        "numeric_runtime"
+      ],
+      "properties": {
+        "version": {"type": "string", "minLength": 1},
+        "source_revision": {"type": "string"},
+        "candidate_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present", "manifest_sha256"],
+          "properties": {
+            "present": {"type": "boolean"},
+            "manifest_sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"present": {"const": true}}},
+              "then": {"properties": {"manifest_sha256": {"type": "string"}}},
+              "else": {"properties": {"manifest_sha256": {"const": null}}}
+            }
+          ]
+        },
+        "packages": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fastflow-sdk-runtime",
+            "fastflow-sdk-fastflowlm",
+            "fastflow-sdk-qualification"
+          ],
+          "properties": {
+            "fastflow-sdk-runtime": {"type": "string", "minLength": 1},
+            "fastflow-sdk-fastflowlm": {"type": "string", "minLength": 1},
+            "fastflow-sdk-qualification": {"type": "string", "minLength": 1}
+          }
+        },
+        "numeric_runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["numpy", "ml-dtypes"],
+          "properties": {
+            "numpy": {"$ref": "#/$defs/numeric_runtime_identity"},
+            "ml-dtypes": {"$ref": "#/$defs/numeric_runtime_identity"}
+          }
+        },
+        "flm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["package_version", "command", "version_output"],
+          "properties": {
+            "package_version": {"type": "string", "minLength": 1},
+            "command": {"type": "string", "minLength": 1},
+            "version_output": {"type": "string"}
+          }
+        }
+      }
+    },
+    "observed_platform": {"type": "object"},
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "candidate_bound"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+        "description": {"type": "string", "minLength": 1},
+        "candidate_bound": {"type": "boolean"}
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/model"}
+    },
+    "tests": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/test"}
+    },
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": ["string", "null"], "format": "date-time"}
+  },
+  "$defs": {
+    "numeric_runtime_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version", "compatibility_tags", "record_sha256", "payload_sha256"
+      ],
+      "properties": {
+        "version": {"type": "string", "minLength": 1},
+        "compatibility_tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "record_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "payload_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "identity_policy",
+        "source",
+        "revision",
+        "status",
+        "files"
+      ],
+      "properties": {
+        "tag": {"type": "string", "minLength": 1},
+        "identity_policy": {
+          "enum": ["revision-sha256", "content-sha256"]
+        },
+        "source": {"type": "string", "minLength": 1},
+        "revision": {"type": ["string", "null"]},
+        "status": {"enum": ["pass", "fail"]},
+        "cache_directory": {"type": "string", "minLength": 1},
+        "registry_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pulled": {"type": "boolean"},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
+        "error": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "pass"}}},
+          "then": {
+            "required": ["cache_directory", "registry_sha256", "pulled"],
+            "properties": {"files": {"minItems": 1}}
+          },
+          "else": {"required": ["error"]}
+        }
+      ]
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "name",
+        "kind",
+        "status",
+        "duration_seconds",
+        "log"
+      ],
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "kind": {
+          "enum": [
+            "native",
+            "model-resolution",
+            "run",
+            "bench",
+            "serve",
+            "xclbin",
+            "xadx",
+            "qualification"
+          ]
+        },
+        "status": {"enum": ["pass", "fail", "unsupported"]},
+        "returncode": {"type": "integer"},
+        "timed_out": {"type": "boolean"},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "log": {"type": "string"},
+        "turn_count": {"type": "integer", "minimum": 0},
+        "process_iteration": {"type": "integer", "minimum": 1},
+        "soak_iterations": {"type": "integer", "minimum": 1},
+        "rounds": {"type": "integer", "minimum": 0},
+        "metrics": {"type": "object"},
+        "artifacts": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "error": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"enum": ["fail", "unsupported"]}}},
+          "then": {"required": ["error"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "run"}}},
+          "then": {
+            "required": [
+              "turn_count",
+              "process_iteration",
+              "metrics",
+              "artifacts"
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "bench"}}},
+          "then": {"required": ["metrics", "artifacts"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "xadx"}}},
+          "then": {"required": ["rounds", "metrics", "artifacts"]}
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "pass"}}},
+      "then": {
+        "properties": {
+          "finished_at": {"type": "string"},
+          "subject": {
+            "required": ["flm"],
+            "properties": {
+              "source_revision": {"pattern": "^[0-9a-f]{40,64}$"}
+            }
+          },
+          "models": {
+            "minItems": 1,
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/model"},
+                {"properties": {"status": {"const": "pass"}}}
+              ]
+            }
+          },
+          "tests": {
+            "minItems": 1,
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/test"},
+                {"properties": {"status": {"enum": ["pass", "unsupported"]}}}
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

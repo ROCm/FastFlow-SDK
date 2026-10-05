@@ -22,9 +22,9 @@ def expected_distributions(
 ) -> dict:
     packages = release_policy.numeric_package_versions(contract_path)
     return {
-        "rocm-npu-qualification": version,
-        "rocm-npu-fastflowlm": version,
-        "rocm-npu-runtime": version,
+        "fastflow-sdk-qualification": version,
+        "fastflow-sdk-fastflowlm": version,
+        "fastflow-sdk-runtime": version,
         **packages,
     }
 

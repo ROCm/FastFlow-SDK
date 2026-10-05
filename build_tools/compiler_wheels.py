@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""ROCm NPU compiler wheel packaging and verification orchestration."""
+"""FastFlow SDK compiler wheel packaging and verification orchestration."""
 
 import json
 import os
@@ -11,9 +11,7 @@ from pathlib import Path
 
 from build_tools import compiler_product, environment, paths
 from build_tools.artifact import git_source_state, validate_directory_target
-from build_tools.manylinux_audit import auditwheel_policy
-from build_tools.package_version import default_package_version
-from build_tools.rocm_npu_compiler_wheels import (
+from build_tools.fastflow_sdk_compiler_wheels import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
@@ -26,20 +24,22 @@ from build_tools.rocm_npu_compiler_wheels import (
     verify_linux_compiler_wheels,
     verify_windows_compiler_wheels,
 )
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.fastflow_sdk_wheel_common import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_PACKAGE,
     find_distribution_wheels,
     verify_wheel_checksums,
     verify_wheel_source_revision,
 )
+from build_tools.manylinux_audit import auditwheel_policy
+from build_tools.package_version import default_package_version
 
 ROOT = paths.ROOT
 BUILD = paths.BUILD
 IRON_TOOLS_INSTALL = paths.IRON_TOOLS_INSTALL
 COMPILER_WHEEL_ARTIFACTS = compiler_product.COMPILER_ARTIFACTS
-COMPILER_WHEEL_STAGE = paths.BUILD / "rocm-npu-compiler-wheel-stage"
-COMPILER_WHEEL_VENV = paths.BUILD / "rocm-npu-compiler-wheel-venv"
+COMPILER_WHEEL_STAGE = paths.BUILD / "fastflow-sdk-compiler-wheel-stage"
+COMPILER_WHEEL_VENV = paths.BUILD / "fastflow-sdk-compiler-wheel-venv"
 IS_WINDOWS = paths.is_windows()
 _VBIN = "Scripts" if IS_WINDOWS else "bin"
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -106,7 +106,9 @@ def cmd_package_compiler_wheels(args):
         binding_root = _compiler_binding_root(args.binding)
         platform_tag = "win_amd64" if IS_WINDOWS else "manylinux_2_28_x86_64"
         report = compiler_product_report(product)
-        report_path = COMPILER_WHEEL_ARTIFACTS / "rocm-npu-compiler-wheel-report.json"
+        report_path = (
+            COMPILER_WHEEL_ARTIFACTS / "fastflow-sdk-compiler-wheel-report.json"
+        )
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -173,7 +175,7 @@ def _compiler_installed_prefix(python):
         [
             python,
             "-c",
-            "import rocm_npu_compiler as c; print(c.compiler_prefix())",
+            "import fastflow_sdk_compiler as c; print(c.compiler_prefix())",
         ],
         check=True,
         capture_output=True,
@@ -198,8 +200,8 @@ def _verify_installed_compiler_bindings(python, env=None):
 
 def _compiler_e2e_env(prefix, env=None):
     result = dict(os.environ if env is None else env)
-    result["ROCM_NPU_COMPILER_PREFIX"] = str(prefix)
-    result["ROCM_NPU_CMAKE"] = cmake_bin()
+    result["FASTFLOW_SDK_COMPILER_PREFIX"] = str(prefix)
+    result["FASTFLOW_SDK_CMAKE"] = cmake_bin()
     return result
 
 
@@ -289,7 +291,7 @@ def _verify_compiler_wheel_consumer(args):
             python,
             "-c",
             "import aie.dialects.transform.interpreter; "
-            "import rocm_npu_compiler as c; "
+            "import fastflow_sdk_compiler as c; "
             "print(c.compiler_prefix()); print(c.native_library_dir())",
         ],
         check=True,
@@ -361,7 +363,7 @@ def cmd_verify_compiler_wheels(args):
             python,
             "-c",
             "import aie.dialects.transform.interpreter; "
-            "import rocm_npu_compiler as c; "
+            "import fastflow_sdk_compiler as c; "
             "print(c.compiler_prefix()); print(c.native_library_dir())",
         ],
         check=True,

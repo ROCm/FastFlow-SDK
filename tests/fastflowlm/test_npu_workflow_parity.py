@@ -52,38 +52,38 @@ class TestNpuWorkflowParity:
         # local IRON pytest and is not part of NPU CI.
         expected = {"test-hrx-cts", "test-npu-package"}
         assert (
-            _logical_test_commands("build_rocm_npu_staging_linux.yml", "npu_e2e")
+            _logical_test_commands("build_fastflow_sdk_linux.yml", "npu_e2e")
             == expected
         )
         assert (
-            _logical_test_commands("build_rocm_npu_staging_windows.yml", "npu_e2e")
+            _logical_test_commands("build_fastflow_sdk_windows.yml", "npu_e2e")
             == expected
         )
 
     def test_compiler_npu_e2e_stays_execute_only(self):
         for filename in (
-            "build_rocm_npu_staging_linux.yml",
-            "build_rocm_npu_staging_windows.yml",
+            "build_fastflow_sdk_linux.yml",
+            "build_fastflow_sdk_windows.yml",
         ):
             e2e = workflow_job(read_workflow(filename), "npu_e2e")
-            assert "rocm-npu-compiler-wheels-" not in e2e
-            assert "rocm-npu-compiler-bindings-" not in e2e
+            assert "fastflow-sdk-compiler-wheels-" not in e2e
+            assert "fastflow-sdk-compiler-bindings-" not in e2e
             assert "dev.py install-compiler-wheels" not in e2e
             assert "test-npu-jit" not in e2e
             assert "--build-only" not in e2e
 
     def test_compiler_npu_examples_compile_and_run_on_primary_sku(self):
         linux = workflow_job(
-            read_workflow("build_rocm_npu_staging_linux.yml"), "npu_examples"
+            read_workflow("build_fastflow_sdk_linux.yml"), "npu_examples"
         )
         windows = workflow_job(
-            read_workflow("build_rocm_npu_staging_windows.yml"), "npu_examples"
+            read_workflow("build_fastflow_sdk_windows.yml"), "npu_examples"
         )
         assert _logical_test_commands(
-            "build_rocm_npu_staging_linux.yml", "npu_examples"
+            "build_fastflow_sdk_linux.yml", "npu_examples"
         ) == {"test-npu-jit"}
         assert _logical_test_commands(
-            "build_rocm_npu_staging_windows.yml", "npu_examples"
+            "build_fastflow_sdk_windows.yml", "npu_examples"
         ) == {"test-npu-jit"}
         for job, label in (
             (linux, "linux-gfx1150-gpu-rocm-npu"),
@@ -91,7 +91,7 @@ class TestNpuWorkflowParity:
         ):
             assert f"runs-on: {label}" in job
             assert "strategy:" not in job
-            assert "rocm-npu-compiler-wheels-" in job
+            assert "fastflow-sdk-compiler-wheels-" in job
             assert "npu-prereqs-" in job
             assert "npu-test-package-" not in job
             assert "dev.py install-compiler-wheels" in job
@@ -109,8 +109,8 @@ class TestNpuWorkflowParity:
 
     def test_compiler_workflows_do_not_ship_bindings_only_jit_surrogate(self):
         for filename in (
-            "build_rocm_npu_staging_linux.yml",
-            "build_rocm_npu_staging_windows.yml",
+            "build_fastflow_sdk_linux.yml",
+            "build_fastflow_sdk_windows.yml",
         ):
             text = read_workflow(filename)
             assert "--bindings-only" not in text
@@ -119,7 +119,7 @@ class TestNpuWorkflowParity:
             assert "iron-jit/" not in text
 
     def test_fastflowlm_npu_matrices_use_kernel_and_fast_qualification(self):
-        # Kernel qualification is part of `rocm-npu qualify run`; no separate
+        # Kernel qualification is part of `fastflow qualify run`; no separate
         # helper artifact or legacy dev.py test is allowed in the NPU jobs.
         expected = set()
         for filename in (
@@ -131,10 +131,10 @@ class TestNpuWorkflowParity:
             assert "npu_examples:" not in text
             assert "qualify run" in text
             assert "test-fastflowlm-kernels" not in text
-            assert re.search(r"rocm-npu(?:\.exe)? qualify", text)
+            assert re.search(r"fastflow(?:\.exe)? qualify", text)
             assert "--fast" in text
             assert "--candidate-manifest" not in text
-            assert re.search(r"rocm-npu(?:\.exe)? qualify verify", text)
+            assert re.search(r"fastflow(?:\.exe)? qualify verify", text)
             assert "qualify candidate" not in text
             assert "qualify intake" not in text
             assert "--bundle-output .qualification-run.evidence.zip" in text
@@ -142,8 +142,8 @@ class TestNpuWorkflowParity:
 
     def test_all_declared_runner_labels_are_covered_by_shared_matrix_jobs(self):
         compiler_labels = _runner_labels(
-            "build_rocm_npu_staging_linux.yml"
-        ) | _runner_labels("build_rocm_npu_staging_windows.yml")
+            "build_fastflow_sdk_linux.yml"
+        ) | _runner_labels("build_fastflow_sdk_windows.yml")
         assert compiler_labels == {
             "linux-gfx1150-gpu-rocm-npu",
             "linux-gfx1151-gpu-rocm",
@@ -158,12 +158,12 @@ class TestNpuWorkflowParity:
         (
             (
                 "linux",
-                ("build_rocm_npu_staging_linux.yml", "fastflowlm_hrx_linux.yml"),
+                ("build_fastflow_sdk_linux.yml", "fastflowlm_hrx_linux.yml"),
             ),
             (
                 "windows",
                 (
-                    "build_rocm_npu_staging_windows.yml",
+                    "build_fastflow_sdk_windows.yml",
                     "fastflowlm_hrx_windows.yml",
                 ),
             ),

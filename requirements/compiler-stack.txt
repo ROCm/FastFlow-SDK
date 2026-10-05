@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-# rocm-npu-staging Python dependencies (installed into .venv by `dev.py setup`).
+# fastflow-sdk Python dependencies (installed into .venv by `dev.py setup`).
 #
 # Policy: Peano (llvm-aie) is the ONLY wheel-sourced toolchain piece. Everything
 # else — LLVM/MLIR, mlir-aie (aie-opt/aie-translate/aiecc), bootgen, aie_api,

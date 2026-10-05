@@ -44,7 +44,7 @@ def test_ruff_config_covers_first_party_python_only():
     ]
     assert "E402" in config["lint"]["ignore"]
     assert "build_tools" in config["lint"]["isort"]["known-first-party"]
-    assert "rocm_npu_qualification" in config["lint"]["isort"]["known-first-party"]
+    assert "fastflow_sdk_qualification" in config["lint"]["isort"]["known-first-party"]
     assert f"ruff=={config['required-version'].lstrip('=')}" in (
         ROOT / "requirements" / "test.txt"
     ).read_text(encoding="utf-8")
@@ -63,8 +63,8 @@ def test_presubmit_runs_config_driven_ruff_via_format():
 @pytest.mark.parametrize(
     "workflow_name",
     (
-        "build_rocm_npu_staging_linux.yml",
-        "build_rocm_npu_staging_windows.yml",
+        "build_fastflow_sdk_linux.yml",
+        "build_fastflow_sdk_windows.yml",
     ),
 )
 def test_build_jobs_do_not_rerun_ruff(workflow_name):

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amd.com/fastflow-sdk/schemas/candidate-v1.schema.json",
+  "title": "FastFlow SDK release candidate manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version", "product", "version", "source_revision",
+    "packages", "numeric_runtime", "qualification_contract"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "product": {"const": "fastflow-sdk-release-candidate"},
+    "version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9.!+_-]+$"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "packages": {
+      "type": "object",
+      "required": [
+        "fastflow-sdk-runtime", "fastflow-sdk-fastflowlm", "fastflow-sdk-qualification"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fastflow-sdk-runtime": {"$ref": "#/$defs/package_list"},
+        "fastflow-sdk-fastflowlm": {"$ref": "#/$defs/package_list"},
+        "fastflow-sdk-qualification": {"$ref": "#/$defs/package_list"}
+      }
+    },
+    "numeric_runtime": {
+      "type": "object",
+      "required": ["numpy", "ml-dtypes"],
+      "additionalProperties": false,
+      "properties": {
+        "numpy": {"type": "string", "minLength": 1},
+        "ml-dtypes": {"type": "string", "minLength": 1}
+      }
+    },
+    "qualification_contract": {
+      "$ref": "qualification-contract-v1.schema.json"
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "package_list": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "filename", "version", "sha256", "package_manifest_sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "filename": {"type": "string", "pattern": "^[A-Za-z0-9_.+-]+\\.whl$"},
+          "version": {"type": "string"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "package_manifest_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  }
+}

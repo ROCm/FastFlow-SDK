@@ -15,6 +15,11 @@ from build_tools.artifact import (
     validate_directory_target,
     verify_sha256_sidecar,
 )
+from build_tools.fastflow_sdk_wheel_common import (
+    FASTFLOWLM_DISTRIBUTION,
+    RUNTIME_DISTRIBUTION,
+    verify_wheel_checksums,
+)
 from build_tools.fastflowlm_artifact import (
     create_archive,
     extract_archive,
@@ -26,11 +31,6 @@ from build_tools.fastflowlm_artifact import (
 from build_tools.fastflowlm_deps import require_fastflowlm_linux_packaging_tools
 from build_tools.manylinux_audit import auditwheel_policy
 from build_tools.package_version import default_package_version
-from build_tools.rocm_npu_wheel_common import (
-    FASTFLOWLM_DISTRIBUTION,
-    RUNTIME_DISTRIBUTION,
-    verify_wheel_checksums,
-)
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ
@@ -42,10 +42,10 @@ FASTFLOWLM_ARTIFACTS = paths.BUILD / "artifacts"
 FASTFLOWLM_EXTRACTED = paths.BUILD / "FastFlowLM-extracted"
 FRESH_BUILD_MARKER = ".rns-fresh-build.json"
 IS_WINDOWS = paths.is_windows()
-FASTFLOWLM_WHEEL_STAGE = paths.BUILD / "rocm-npu-wheel-stage"
-FASTFLOWLM_WHEEL_VENV = paths.BUILD / "rocm-npu-wheel-venv"
-WINDOWS_WHEEL_STAGE = paths.BUILD / "rocm-npu-windows-wheel-stage"
-WINDOWS_WHEEL_VENV = paths.BUILD / "rocm-npu-windows-wheel-venv"
+FASTFLOWLM_WHEEL_STAGE = paths.BUILD / "fastflow-sdk-wheel-stage"
+FASTFLOWLM_WHEEL_VENV = paths.BUILD / "fastflow-sdk-wheel-venv"
+WINDOWS_WHEEL_STAGE = paths.BUILD / "fastflow-sdk-windows-wheel-stage"
+WINDOWS_WHEEL_VENV = paths.BUILD / "fastflow-sdk-windows-wheel-venv"
 FASTFLOWLM_MODEL_CACHE = paths.BUILD / "FastFlowLM-models"
 _EXE = ".exe" if IS_WINDOWS else ""
 sh = environment.sh
@@ -53,12 +53,12 @@ sh = environment.sh
 
 def _wheel_implementation():
     if IS_WINDOWS:
-        from build_tools import rocm_npu_windows_wheels
+        from build_tools import fastflow_sdk_windows_wheels
 
-        return rocm_npu_windows_wheels
-    from build_tools import rocm_npu_linux_wheels
+        return fastflow_sdk_windows_wheels
+    from build_tools import fastflow_sdk_linux_wheels
 
-    return rocm_npu_linux_wheels
+    return fastflow_sdk_linux_wheels
 
 
 def _verify_fastflowlm_fresh_installs():
@@ -105,7 +105,7 @@ def package_fastflowlm_wheels(version: str | None) -> dict[str, Path]:
 
 
 def cmd_package_fastflowlm_wheels(args):
-    """Build split rocm-npu-runtime and rocm-npu-fastflowlm wheels."""
+    """Build split fastflow-sdk-runtime and fastflow-sdk-fastflowlm wheels."""
     wheels = package_fastflowlm_wheels(args.version)
     print("package fastflowlm wheels: ok")
     for product in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
@@ -126,7 +126,7 @@ def cmd_audit_fastflowlm_wheels(args):
     if IS_WINDOWS:
         sys.exit("audit-fastflowlm-wheels is Linux-only")
     implementation = _wheel_implementation()
-    wheels = implementation.find_rocm_npu_wheels(Path(args.dir))
+    wheels = implementation.find_fastflow_sdk_wheels(Path(args.dir))
     verify_wheel_checksums(wheels)
     expected_tags = {
         RUNTIME_DISTRIBUTION: implementation.LINUX_WHEEL_TAG,
@@ -152,7 +152,7 @@ def verify_fastflowlm_wheels(wheel_directory: Path, venv_dir: Path) -> None:
     """Verifies and smoke-tests a platform-native runtime wheel pair."""
     wheel_directory = Path(wheel_directory)
     implementation = _wheel_implementation()
-    wheels = implementation.find_rocm_npu_wheels(wheel_directory)
+    wheels = implementation.find_fastflow_sdk_wheels(wheel_directory)
     verify_wheel_checksums(wheels)
     implementation.verify_wheels_do_not_have_text_path_references(wheels, (ROOT,))
 
@@ -179,7 +179,7 @@ def verify_fastflowlm_wheels(wheel_directory: Path, venv_dir: Path) -> None:
     smoke = (
         "import os, sysconfig; "
         "from pathlib import Path; "
-        "import rocm_npu_runtime as r, rocm_npu_fastflowlm as f; "
+        "import fastflow_sdk_runtime as r, fastflow_sdk_fastflowlm as f; "
         "print('runtime', r.self_test(load=True)); "
         "print('flm', f.flm_path()); "
         "script = Path(sysconfig.get_path('scripts')) / ('flm.exe' if os.name == 'nt' else 'flm'); "
@@ -198,25 +198,25 @@ def cmd_verify_fastflowlm_wheels(args):
 
 def probe_runtime_package() -> int:
     """Probes libHRX supplied by an installed runtime wheel."""
-    import rocm_npu_runtime
+    import fastflow_sdk_runtime
 
     from build_tools.windows_npu import probe_runtime
 
-    return probe_runtime(rocm_npu_runtime.libhrx_path())
+    return probe_runtime(fastflow_sdk_runtime.libhrx_path())
 
 
 def smoke_fastflowlm(iterations: int) -> int:
     """Runs the FastFlowLM smoke test against installed wheel packages."""
-    import rocm_npu_fastflowlm
-    import rocm_npu_runtime
+    import fastflow_sdk_fastflowlm
+    import fastflow_sdk_runtime
 
     env = os.environ.copy()
     env["FLM_BIN"] = str(
         Path(sysconfig.get_path("scripts")) / ("flm.exe" if IS_WINDOWS else "flm")
     )
-    env["HRX_LIBHRX"] = str(rocm_npu_runtime.libhrx_path())
-    env["FLM_CONFIG_PATH"] = str(rocm_npu_fastflowlm.config_path())
-    env["FLM_XCLBIN_PATH"] = str(rocm_npu_fastflowlm.xclbin_path())
+    env["HRX_LIBHRX"] = str(fastflow_sdk_runtime.libhrx_path())
+    env["FLM_CONFIG_PATH"] = str(fastflow_sdk_fastflowlm.config_path())
+    env["FLM_XCLBIN_PATH"] = str(fastflow_sdk_fastflowlm.xclbin_path())
     env.setdefault("FLM_MODEL_PATH", str(FASTFLOWLM_MODEL_CACHE))
     result = subprocess.run(
         [
@@ -233,13 +233,13 @@ def smoke_fastflowlm(iterations: int) -> int:
 
 def _find_fastflowlm_archive(directory):
     directory = Path(directory)
-    # Match rocm-npu-{os}-{arch} only; do not pick up rocm-npu-compiler-*.
+    # Match fastflow-sdk-{os}-{arch} only; do not pick up fastflow-sdk-compiler-*.
     archives = sorted(
         [
-            *directory.glob("rocm-npu-linux-*.zip"),
-            *directory.glob("rocm-npu-linux-*.tar.zst"),
-            *directory.glob("rocm-npu-windows-*.zip"),
-            *directory.glob("rocm-npu-windows-*.tar.zst"),
+            *directory.glob("fastflow-sdk-linux-*.zip"),
+            *directory.glob("fastflow-sdk-linux-*.tar.zst"),
+            *directory.glob("fastflow-sdk-windows-*.zip"),
+            *directory.glob("fastflow-sdk-windows-*.tar.zst"),
         ]
     )
     if len(archives) != 1:
@@ -288,7 +288,7 @@ def cmd_verify_fastflowlm(args):
         text=True,
     ).stdout.strip()
     source_revision = (
-        manifest.get("sources", {}).get("rocm-npu-staging", {}).get("revision")
+        manifest.get("sources", {}).get("fastflow-sdk", {}).get("revision")
     )
     if source_revision != current_revision:
         sys.exit("FastFlowLM artifact source revision does not match this checkout")

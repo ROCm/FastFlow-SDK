@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Shared CodeQL configuration for the CI workflow and local CLI runs.
-name: rocm-npu-staging
+name: fastflow-sdk
 
 # Submodules under projects/ are separate repositories that carry their own
 # scanning, and third_party/ is vendored upstream source we do not patch.
@@ -11,7 +11,7 @@ name: rocm-npu-staging
 #
 # This applies to Python only. CodeQL does not support path filtering for
 # C/C++, where the database contains exactly what the traced build compiled --
-# for us that is tools/rocm-npu plus the headers it pulls in. Vendored headers
+# for us that is tools/fastflow plus the headers it pulls in. Vendored headers
 # therefore still reach the C/C++ results; security-extended reports nothing in
 # them today, but a broader suite would need advanced-security/filter-sarif.
 paths-ignore:

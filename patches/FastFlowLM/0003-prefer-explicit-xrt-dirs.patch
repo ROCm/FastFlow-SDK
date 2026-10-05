@@ -1,4 +1,4 @@
-From: ROCm NPU staging <rocm-npu@amd.com>
+From: FastFlow SDK <fastflow-sdk@amd.com>
 Subject: [PATCH] Prefer explicit XRT include/lib dirs over pkg-config
 
 When the caller already set XRT_INCLUDE_DIR and XRT_LIB_DIR (for example

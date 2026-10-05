@@ -62,7 +62,7 @@ jobs:
       image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
     env:
       RNS_BUILD_IMAGE: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
-      ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}
+      FASTFLOW_SDK_PACKAGE_VERSION: ${{ inputs.package_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -155,10 +155,10 @@ jobs:
       - name: Build HRX
         run: .venv/bin/python dev.py build hrx --fresh
 
-      - name: Build and test native rocm-npu CLI
+      - name: Build and test native fastflow CLI
         run: |
-          .venv/bin/python dev.py build rocm-npu-cli --fresh
-          .venv/bin/ctest --test-dir build/rocm-npu-cli --output-on-failure
+          .venv/bin/python dev.py build fastflow-cli --fresh
+          .venv/bin/ctest --test-dir build/fastflow-cli --output-on-failure
 
       - name: Build FastFlowLM
         run: .venv/bin/python dev.py build fastflowlm --fresh
@@ -176,16 +176,16 @@ jobs:
       - name: Package runtime
         run: .venv/bin/python dev.py package-fastflowlm
 
-      - name: Package rocm-npu runtime wheels
+      - name: Package fastflow runtime wheels
         run: .venv/bin/python dev.py package-fastflowlm-wheels
 
-      - name: Audit rocm-npu runtime wheels
+      - name: Audit fastflow runtime wheels
         run: .venv/bin/python dev.py audit-fastflowlm-wheels
 
       - name: Validate wheel metadata
-        run: .venv/bin/python -m twine check --strict build/artifacts/rocm_npu_*.whl
+        run: .venv/bin/python -m twine check --strict build/artifacts/fastflow_sdk_*.whl
 
-      - name: Install-test rocm-npu runtime wheels
+      - name: Install-test fastflow runtime wheels
         run: .venv/bin/python dev.py verify-fastflowlm-wheels
 
       - name: Attest Linux release artifacts
@@ -193,26 +193,26 @@ jobs:
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
-            build/artifacts/rocm_npu_*.whl
-            build/artifacts/rocm-npu-linux-x86_64.tar.zst
-            build/qualification-artifacts/rocm_npu_qualification-*.whl
+            build/artifacts/fastflow_sdk_*.whl
+            build/artifacts/fastflow-sdk-linux-x86_64.tar.zst
+            build/qualification-artifacts/fastflow_sdk_qualification-*.whl
 
       - name: Upload runtime archive artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-linux-x86_64
-          path: build/artifacts/rocm-npu-linux-x86_64.tar.zst*
+          name: fastflow-sdk-linux-x86_64
+          path: build/artifacts/fastflow-sdk-linux-x86_64.tar.zst*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
-      - name: Upload rocm-npu runtime wheel artifacts
+      - name: Upload fastflow runtime wheel artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-runtime-fastflowlm-linux-x86_64
+          name: fastflow-sdk-runtime-fastflowlm-linux-x86_64
           path: |
-            build/artifacts/rocm_npu_runtime-*.whl*
-            build/artifacts/rocm_npu_fastflowlm-*.whl*
+            build/artifacts/fastflow_sdk_runtime-*.whl*
+            build/artifacts/fastflow_sdk_fastflowlm-*.whl*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -220,8 +220,8 @@ jobs:
       - name: Upload local qualification wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ inputs.qualification_artifact || 'rocm-npu-qualification-wheel' }}
-          path: build/qualification-artifacts/rocm_npu_qualification-*.whl*
+          name: ${{ inputs.qualification_artifact || 'fastflow-sdk-qualification-wheel' }}
+          path: build/qualification-artifacts/fastflow_sdk_qualification-*.whl*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -255,10 +255,10 @@ jobs:
       - name: Trust the job checkout
         run: git config --global --add safe.directory "$PWD"
 
-      - name: Download rocm-npu runtime wheel artifacts
+      - name: Download fastflow runtime wheel artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rocm-npu-runtime-fastflowlm-linux-x86_64
+          name: fastflow-sdk-runtime-fastflowlm-linux-x86_64
           path: .artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -266,7 +266,7 @@ jobs:
       - name: Download standalone runtime archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rocm-npu-linux-x86_64
+          name: fastflow-sdk-linux-x86_64
           path: .native-artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
@@ -274,30 +274,30 @@ jobs:
       - name: Download qualification plugin wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.qualification_artifact || 'rocm-npu-qualification-wheel' }}
+          name: ${{ inputs.qualification_artifact || 'fastflow-sdk-qualification-wheel' }}
           path: .qualification-artifact
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
-      - name: Install and verify rocm-npu runtime wheels
+      - name: Install and verify fastflow runtime wheels
         run: python3 dev.py verify-fastflowlm-wheels --dir .artifact
 
       - name: Install qualification plugin wheel and numeric runtime
         run: |
-          build/rocm-npu-wheel-venv/bin/python -m pip install \
+          build/fastflow-sdk-wheel-venv/bin/python -m pip install \
             --disable-pip-version-check --only-binary=:all: \
-            .qualification-artifact/rocm_npu_qualification-*.whl
-          build/rocm-npu-wheel-venv/bin/python -m pip check
-          build/rocm-npu-wheel-venv/bin/rocm-npu plugin list --json
-          build/rocm-npu-wheel-venv/bin/rocm-npu qualify --list-profiles --json
+            .qualification-artifact/fastflow_sdk_qualification-*.whl
+          build/fastflow-sdk-wheel-venv/bin/python -m pip check
+          build/fastflow-sdk-wheel-venv/bin/fastflow plugin list --json
+          build/fastflow-sdk-wheel-venv/bin/fastflow qualify --list-profiles --json
 
       - name: Probe NPU driver, firmware, and packaged libHRX
-        run: build/rocm-npu-wheel-venv/bin/python dev.py npu-probe --runtime-package
+        run: build/fastflow-sdk-wheel-venv/bin/python dev.py npu-probe --runtime-package
 
       - name: Run native runtime diagnostics and self-test
         run: >-
-          python3 build_tools/validate_rocm_npu_cli.py
-          --cli build/rocm-npu-wheel-venv/bin/rocm-npu
+          python3 build_tools/validate_fastflow_cli.py
+          --cli build/fastflow-sdk-wheel-venv/bin/fastflow
           --output-dir .native-reports
           --prefix wheel-
           --require-hardware
@@ -306,7 +306,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$(realpath "$(find .native-artifact -name 'rocm-npu-linux-x86_64.tar.zst' -type f -print -quit)")"
+          archive="$(realpath "$(find .native-artifact -name 'fastflow-sdk-linux-x86_64.tar.zst' -type f -print -quit)")"
           test -n "${archive}"
           (
             cd "$(dirname "${archive}")"
@@ -317,7 +317,7 @@ jobs:
             cd .native-runtime
             cmake -E tar xvf "${archive}"
           )
-          cli="$(find .native-runtime -path '*/bin/rocm-npu' -type f -print -quit)"
+          cli="$(find .native-runtime -path '*/bin/fastflow' -type f -print -quit)"
           test -x "${cli}"
           "${cli}" version --json > .native-reports/archive-version.json
           "${cli}" probe --json > .native-reports/archive-probe.json
@@ -328,7 +328,7 @@ jobs:
 
       - name: Run bounded kernel and model qualification through native dispatch
         run: >-
-          build/rocm-npu-wheel-venv/bin/rocm-npu qualify run
+          build/fastflow-sdk-wheel-venv/bin/fastflow qualify run
           --fast
           --model-cache build/FastFlowLM-models
           --output-dir .qualification-evidence
@@ -337,14 +337,14 @@ jobs:
 
       - name: Verify qualification evidence archive
         run: |
-          build/rocm-npu-wheel-venv/bin/rocm-npu qualify verify \
+          build/fastflow-sdk-wheel-venv/bin/fastflow qualify verify \
             --input .qualification-run.evidence.zip --json
 
       - name: Upload qualification evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-qualification-evidence-${{ matrix.runner_label }}
+          name: fastflow-sdk-qualification-evidence-${{ matrix.runner_label }}
           path: |
             .qualification-run.evidence.zip
             .qualification-evidence
@@ -356,7 +356,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rocm-npu-native-reports-${{ matrix.runner_label }}
+          name: fastflow-sdk-native-reports-${{ matrix.runner_label }}
           path: .native-reports/*.json
           if-no-files-found: warn
           include-hidden-files: true

@@ -16,7 +16,7 @@ from build_tools.dev.fastflowlm_build import (
     _windows_install_roots,
     preset_cache_variables,
 )
-from rocm_npu_qualification import host_xrt, runner
+from fastflow_sdk_qualification import host_xrt, runner
 
 pytestmark = pytest.mark.presubmit
 

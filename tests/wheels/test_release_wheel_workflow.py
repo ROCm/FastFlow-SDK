@@ -20,7 +20,7 @@ pytestmark = [
 ]
 
 
-class TestRocmNpuReleaseWheelWorkflow:
+class TestFastflowSdkReleaseWheelWorkflow:
     def test_linux_vcpkg_identity_does_not_trigger_pipefail_sigpipe(self):
         workflow = read_workflow("fastflowlm_hrx_linux.yml")
         assert "ldd --version | head" not in workflow
@@ -44,9 +44,9 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "test-fastflowlm-kernels --wheel-package" not in workflow
             assert "fastflowlm-kernel-smoke-" not in workflow
             assert "if: ${{ inputs.qualification_artifact == '' }}" not in workflow
-        assert "rocm-npu-qualification-wheel'" in linux
-        assert "build/qualification-artifacts/rocm_npu_qualification-*.whl" in linux
-        assert "rocm-npu-qualification-wheel-windows-local" in windows
+        assert "fastflow-sdk-qualification-wheel'" in linux
+        assert "build/qualification-artifacts/fastflow_sdk_qualification-*.whl" in linux
+        assert "fastflow-sdk-qualification-wheel-windows-local" in windows
         assert "verify_qualification_wheel_parity.py" in windows
 
     def test_hidden_qualification_evidence_is_uploaded(self):
@@ -59,7 +59,7 @@ class TestRocmNpuReleaseWheelWorkflow:
             )
 
     def test_release_dependency_closure_uses_tested_helper(self):
-        workflow = read_workflow("release_rocm_npu_wheels.yml")
+        workflow = read_workflow("release_fastflow_sdk_wheels.yml")
         section = workflow[
             workflow.index("Resolve qualification dependencies") : workflow.index(
                 "Resolve compiler core"
@@ -72,10 +72,10 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert '"${numeric_requirements[@]}"' in section
         assert "numeric-runtime.json" in section
         assert 'rm -rf "${target}"' in section
-        assert "ROCM_NPU_INSTALL_TARGET" not in section
+        assert "FASTFLOW_SDK_INSTALL_TARGET" not in section
 
     def test_release_compiler_and_ops_resolution_uses_tested_helper(self):
-        workflow = read_workflow("release_rocm_npu_wheels.yml")
+        workflow = read_workflow("release_fastflow_sdk_wheels.yml")
         compiler_resolution = workflow.split(
             "- name: Resolve compiler core and bindings", 1
         )[1].split("- name: Resolve ops wheel", 1)[0]
@@ -92,16 +92,17 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "python -m build_tools.resolve_release_wheel" in ops_resolution
         assert "--product ops" in ops_resolution
         assert '"${ops_wheel}"' in ops_resolution
-        assert "rocm-npu-ops==${ROCM_NPU_PACKAGE_VERSION}" not in ops_resolution
+        assert "fastflow-sdk-ops==${FASTFLOW_SDK_PACKAGE_VERSION}" not in ops_resolution
         assert "--abi abi3" not in ops_resolution
 
     def test_release_platform_jobs_validate_their_own_qualification_wheels(self):
         ci = read_workflow("ci.yml")
-        assert ci.count("qualification_artifact: rocm-npu-qualification-wheel") == 1
+        assert ci.count("qualification_artifact: fastflow-sdk-qualification-wheel") == 1
 
-        release = read_workflow("release_rocm_npu_wheels.yml")
+        release = read_workflow("release_fastflow_sdk_wheels.yml")
         assert (
-            release.count("qualification_artifact: rocm-npu-qualification-wheel") == 2
+            release.count("qualification_artifact: fastflow-sdk-qualification-wheel")
+            == 2
         )
         for job in ("windows_wheels", "windows_publish_wheels"):
             section = _job(release, job)
@@ -110,7 +111,7 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "run_npu_e2e: true" in section
         assert "windows_wheels_npu:" not in release
         assert "windows_publish_wheels_npu:" not in release
-        assert "rocm-npu-qualification-wheel-windows-local" in release
+        assert "fastflow-sdk-qualification-wheel-windows-local" in release
         assert "verify_qualification_wheel_parity.py" in release
 
     def test_ci_runs_presubmit_before_expensive_jobs(self):
@@ -123,7 +124,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "python dev.py format --check" in workflow
         assert "python -m ruff check" not in workflow
         assert "--select F821" not in workflow
-        assert "rocm_npu_wheel_release_cli.py resolve" in workflow
+        assert "fastflow_sdk_wheel_release_cli.py resolve" in workflow
         assert "--publish-target none" in workflow
         assert "default_package_version" not in workflow
         for name in ("linux", "windows", "linux_flm", "windows_flm"):
@@ -143,22 +144,24 @@ class TestRocmNpuReleaseWheelWorkflow:
     def test_pr_ci_compares_independently_generated_qualification_wheels(self):
         workflow = read_workflow("ci.yml")
         collect = _job(workflow, "collect_releases")
-        collector = read_workflow("collect_rocm_npu_ci_release.yml")
+        collector = read_workflow("collect_fastflow_sdk_ci_release.yml")
         assert "needs:" in collect
         for producer in ("linux", "windows", "linux_flm", "windows_flm"):
             assert f"- {producer}" in collect
         assert "always() &&" in collect
         assert "!cancelled()" in collect
-        assert "uses: ./.github/workflows/collect_rocm_npu_ci_release.yml" in collect
+        assert (
+            "uses: ./.github/workflows/collect_fastflow_sdk_ci_release.yml" in collect
+        )
         assert (
             "package_version: ${{ needs.presubmit.outputs.package_version }}" in collect
         )
-        assert "name: rocm-npu-qualification-wheel" in collector
-        assert "name: rocm-npu-qualification-wheel-windows-local" in collector
-        assert "name: rocm-npu-linux-x86_64" in collector
-        assert "name: rocm-npu-windows-x86_64" in collector
+        assert "name: fastflow-sdk-qualification-wheel" in collector
+        assert "name: fastflow-sdk-qualification-wheel-windows-local" in collector
+        assert "name: fastflow-sdk-linux-x86_64" in collector
+        assert "name: fastflow-sdk-windows-x86_64" in collector
         assert "verify_qualification_wheel_parity.py" in collector
-        assert "rocm_npu_wheel_release_cli.py prepare" in collector
+        assert "fastflow_sdk_wheel_release_cli.py prepare" in collector
         assert "Create release-wide qualification candidate" in collector
         assert "download_qualification_numeric_wheels.py" not in collector
         assert (
@@ -172,7 +175,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "numeric-runtime-cp312.lock" not in collector
 
     def test_release_is_dispatch_only_and_reuses_both_npu_validations(self):
-        workflow = read_workflow("release_rocm_npu_wheels.yml")
+        workflow = read_workflow("release_fastflow_sdk_wheels.yml")
 
         assert "workflow_dispatch:" in workflow
         assert "pull_request:" not in workflow
@@ -185,10 +188,10 @@ class TestRocmNpuReleaseWheelWorkflow:
             "windows_wheels": "fastflowlm_hrx_windows.yml",
             "linux_publish_wheels": "fastflowlm_hrx_linux.yml",
             "windows_publish_wheels": "fastflowlm_hrx_windows.yml",
-            "linux_compiler_wheels": "build_rocm_npu_staging_linux.yml",
-            "windows_compiler_wheels": "build_rocm_npu_staging_windows.yml",
-            "linux_publish_compiler_wheels": "build_rocm_npu_staging_linux.yml",
-            "windows_publish_compiler_wheels": "build_rocm_npu_staging_windows.yml",
+            "linux_compiler_wheels": "build_fastflow_sdk_linux.yml",
+            "windows_compiler_wheels": "build_fastflow_sdk_windows.yml",
+            "linux_publish_compiler_wheels": "build_fastflow_sdk_linux.yml",
+            "windows_publish_compiler_wheels": "build_fastflow_sdk_windows.yml",
         }
         for job, reusable in reusable_jobs.items():
             section = _job(workflow, job)
@@ -207,17 +210,17 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "fetch-depth: 0" in workflow
         assert "--release-platform" not in workflow
         assert '--publish-target "${INPUT_PUBLISH_TARGET}"' in workflow
-        assert "rocm-npu-runtime-fastflowlm-linux-x86_64" in workflow
-        assert "rocm-npu-runtime-fastflowlm-windows-x86_64" in workflow
-        assert "rocm-npu-linux-x86_64" in workflow
-        assert "rocm-npu-windows-x86_64" in workflow
+        assert "fastflow-sdk-runtime-fastflowlm-linux-x86_64" in workflow
+        assert "fastflow-sdk-runtime-fastflowlm-windows-x86_64" in workflow
+        assert "fastflow-sdk-linux-x86_64" in workflow
+        assert "fastflow-sdk-windows-x86_64" in workflow
         assert "--archive-dir archives" in workflow
         assert "release/*.zip,release/*.tar.zst" in workflow
         assert "release/*.zip.manifest.json" in workflow
         assert "release/*.tar.zst.manifest.json" in workflow
-        assert "rocm-npu-compiler-wheels-linux-x86_64" in workflow
-        assert "rocm-npu-compiler-wheels-windows-x86_64" in workflow
-        assert "rocm-npu-qualification-wheel" in workflow
+        assert "fastflow-sdk-compiler-wheels-linux-x86_64" in workflow
+        assert "fastflow-sdk-compiler-wheels-windows-x86_64" in workflow
+        assert "fastflow-sdk-qualification-wheel" in workflow
         assert "build_qualification_wheel.yml" not in workflow
         assert "path: wheelhouse/qualification" in workflow
         assert '"${SOURCE_SHA}" != "${GITHUB_SHA}"' in workflow
@@ -226,7 +229,7 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "download_qualification_numeric_wheels.py" not in workflow
         assert "numeric-runtime-cp312.lock" not in workflow
         assert "python -m twine check --strict wheelhouse/*/*.whl" in workflow
-        assert "python build_tools/rocm_npu_wheel_release_cli.py" in workflow
+        assert "python build_tools/fastflow_sdk_wheel_release_cli.py" in workflow
         assert "--expected-wheel-tag py3-none-manylinux_2_28_x86_64" in workflow
         assert "--expected-wheel-tag py3-none-linux_x86_64" in workflow
         assert "--expected-wheel-tag py3-none-win_amd64" in workflow
@@ -280,7 +283,7 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "id-token: write" not in validation
             assert "attestations: write" not in validation
         publish = workflow.split("\n  publish_github_prerelease:", 1)[1]
-        assert "vars.ROCM_NPU_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
+        assert "vars.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
         assert "Create draft GitHub prerelease (disabled)" in publish
 
     def test_qualification_candidate_is_release_wide(self):
@@ -289,7 +292,7 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "qualify candidate" not in workflow
             assert "qualify verify" in workflow
             assert "qualify intake" not in workflow
-        release = read_workflow("release_rocm_npu_wheels.yml")
+        release = read_workflow("release_fastflow_sdk_wheels.yml")
         assert "Create release-wide qualification candidate" in release
         assert "--wheel-dir release" in release
         assert "--output release/candidate-manifest.json" in release
@@ -297,21 +300,22 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "draft: true" in release
         assert "immutableCreate: true" not in release
         publish = release.split("\n  publish_github_prerelease:", 1)[1]
-        assert "vars.ROCM_NPU_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
+        assert "vars.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
 
     def test_release_uses_neutral_public_names_and_shared_release_lock(self):
-        workflow = read_workflow("release_rocm_npu_wheels.yml")
+        workflow = read_workflow("release_fastflow_sdk_wheels.yml")
 
         assert (
-            "rocm-npu-wheels-${{ needs.prepare.outputs.package_version }}" in workflow
+            "fastflow-sdk-wheels-${{ needs.prepare.outputs.package_version }}"
+            in workflow
         )
         assert "tag: ${{ needs.prepare.outputs.tag_name }}" in workflow
         assert "name: ${{ needs.prepare.outputs.release_name }}" in workflow
-        assert "environment: rocm-npu-prerelease" in workflow
+        assert "environment: fastflow-sdk-prerelease" in workflow
         assert "requirements/release-wheels.lock" in workflow
         assert "0.1.0" not in workflow
-        assert "rocm-npu-staging" not in workflow
-        assert not (WORKFLOWS / "release_rocm_npu_wheels_windows.yml").exists()
+        assert "rocm-npu" not in workflow
+        assert not (WORKFLOWS / "release_fastflow_sdk_wheels_windows.yml").exists()
 
     @pytest.mark.parametrize("platform", ("linux", "windows"))
     def test_platform_wheel_ci_accepts_release_ref_and_version_inputs(self, platform):
@@ -319,7 +323,7 @@ class TestRocmNpuReleaseWheelWorkflow:
 
     @pytest.mark.parametrize("platform", ("linux", "windows"))
     def test_compiler_workflows_inherit_caller_permissions(self, platform):
-        workflow = read_workflow(f"build_rocm_npu_staging_{platform}.yml")
+        workflow = read_workflow(f"build_fastflow_sdk_{platform}.yml")
         workflow_header = workflow.split("\njobs:", 1)[0]
         assert "\npermissions:" not in workflow_header, (
             "reusable workflow permissions would cap the caller's "
@@ -329,7 +333,7 @@ class TestRocmNpuReleaseWheelWorkflow:
     def test_pr_compiler_ci_builds_once_and_tests_every_python_minor(self):
         ci = read_workflow("ci.yml")
         for platform in ("linux", "windows"):
-            workflow_name = f"build_rocm_npu_staging_{platform}.yml"
+            workflow_name = f"build_fastflow_sdk_{platform}.yml"
             assert ci.count(f"uses: ./.github/workflows/{workflow_name}") == 1
             build_job = _job(ci, platform)
             assert "run_npu_e2e: true" in build_job
@@ -340,7 +344,7 @@ class TestRocmNpuReleaseWheelWorkflow:
                 compact = minor.replace(".", "")
                 assert f"compiler-wheel-verify-{compact[-3:]}" in workflow
             assert "dev.py package-compiler-wheels" in workflow
-            assert "--product build/rocm-npu-compiler-product" in workflow
+            assert "--product build/fastflow-sdk-compiler-product" in workflow
             assert "dev.py verify-compiler-wheels" in workflow
             assert "dev.py package-ops-wheels" in workflow
             assert "dev.py verify-ops-wheels" in workflow
@@ -354,7 +358,10 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "ops-wheel-verify-314" not in workflow
             assert "--skip-compile" not in workflow
             assert "actions/attest-build-provenance@" in workflow
-            assert "ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}" in workflow
+            assert (
+                "FASTFLOW_SDK_PACKAGE_VERSION: ${{ inputs.package_version }}"
+                in workflow
+            )
             assert workflow.count("--consumer-only") == 2
             assert workflow.count("--consumer-root build/compiler-wheel-consumer") == 3
             assert workflow.count("--consumer-e2e") == 2
@@ -362,24 +369,25 @@ class TestRocmNpuReleaseWheelWorkflow:
             assert "build/caches/uv" in workflow
             assert '"setuptools>=64" wheel' not in workflow
 
-        linux_workflow = read_workflow("build_rocm_npu_staging_linux.yml")
+        linux_workflow = read_workflow("build_fastflow_sdk_linux.yml")
         assert "actions/setup-python@" not in linux_workflow
         assert "--require-hashes -r requirements/packaging-linux.lock" in linux_workflow
-        assert "build/artifacts/rocm_npu_ops*.whl" in linux_workflow
+        assert "build/artifacts/fastflow_sdk_ops*.whl" in linux_workflow
         assert "subject-path:" in linux_workflow
         for tag in ("cp313-cp313", "cp314-cp314"):
             assert f"/opt/python/{tag}/bin/python" in linux_workflow
 
-        windows_workflow = read_workflow("build_rocm_npu_staging_windows.yml")
+        windows_workflow = read_workflow("build_fastflow_sdk_windows.yml")
         for cache in ("Python package caches", "vcpkg binary packages", "ccache"):
             assert f"Restore {cache}" in windows_workflow
             assert f"Save {cache}" in windows_workflow
         assert "build/caches/pip" in windows_workflow
         assert "vcpkg-downloads" not in windows_workflow
         assert (
-            "subject-path: build/artifacts/rocm_npu_compiler_*.whl" in windows_workflow
+            "subject-path: build/artifacts/fastflow_sdk_compiler_*.whl"
+            in windows_workflow
         )
-        assert "build/artifacts/rocm_npu_ops*.whl" not in windows_workflow
+        assert "build/artifacts/fastflow_sdk_ops*.whl" not in windows_workflow
         assert "{core,bindings}" not in windows_workflow
 
     def _assert_platform_workflow_contract(self, platform: str):
@@ -395,17 +403,20 @@ class TestRocmNpuReleaseWheelWorkflow:
         assert "\npermissions:\n" not in workflow
         build_header = workflow.split("\n  build:", 1)[1].split("\n    steps:", 1)[0]
         assert "permissions:" not in build_header
-        assert "ROCM_NPU_PACKAGE_VERSION: ${{ inputs.package_version }}" in workflow
+        assert "FASTFLOW_SDK_PACKAGE_VERSION: ${{ inputs.package_version }}" in workflow
         metadata_check = workflow.index("-m twine check --strict")
         transitive_command = (
-            "build_tools/rocm_npu_windows_wheel_cli.py verify"
+            "build_tools/fastflow_sdk_windows_wheel_cli.py verify"
             if platform == "windows"
             else "dev.py verify-fastflowlm-wheels"
         )
         transitive_install = workflow.index(transitive_command)
         attestation = workflow.index("actions/attest-build-provenance@")
         archive_suffix = ".zip" if platform == "windows" else ".tar.zst"
-        assert f"build/artifacts/rocm-npu-{platform}-x86_64{archive_suffix}" in workflow
+        assert (
+            f"build/artifacts/fastflow-sdk-{platform}-x86_64{archive_suffix}"
+            in workflow
+        )
         artifact_upload = workflow.index("name: Upload runtime")
         npu_job = workflow.index("\n  npu:")
         assert metadata_check < transitive_install

@@ -18,13 +18,13 @@ BUILD_HANDLERS = {
     # Diagnostic-only XRT-backed FastFlowLM build for HRX-vs-XRT benchmark
     # comparisons (qualify --bench --xrt-flm). Never packaged into wheels.
     "fastflowlm-xrt": fastflowlm_build.cmd_build_fastflowlm_xrt,
-    "rocm-npu-cli": runtime_build.cmd_build_rocm_npu_cli,
+    "fastflow-cli": runtime_build.cmd_build_fastflow_cli,
 }
 
 
 def cmd_build_all(args):
     """Build the complete compiler-stack developer toolchain."""
-    runtime_build.cmd_build_rocm_npu_cli(args)
+    runtime_build.cmd_build_fastflow_cli(args)
     compiler_build.cmd_build_hrx_xclbinutil(args)
     compiler_build.cmd_build_aiebu(args)
     compiler_build.cmd_build_llvm(args)

@@ -1,6 +1,6 @@
-# Build ROCm-NPU from source
+# Build FastFlow SDK from source
 
-Use this guide to build ROCm-NPU from this checkout instead of installing a
+Use this guide to build FastFlow SDK from this checkout instead of installing a
 release. The steps below build the runtime (HRX and FastFlowLM): a minimal HRX
 with the `amdxdna` HAL and the pinned FastFlowLM app, which can pull
 `qwen3:0.6b` and run a smoke test. The compiler-stack instructions cover the
@@ -58,8 +58,8 @@ native command shell:
 Windows (PowerShell):
 
 ```powershell
-git clone https://github.com/ROCm/rocm-npu.git
-cd rocm-npu
+git clone https://github.com/ROCm/FastFlow-SDK.git
+cd fastflow
 
 git submodule update --init projects/hrx
 git submodule update --init --recursive projects/FastFlowLM
@@ -74,8 +74,8 @@ python dev.py test-fastflowlm
 Linux (Bash):
 
 ```bash
-git clone https://github.com/ROCm/rocm-npu.git
-cd rocm-npu
+git clone https://github.com/ROCm/FastFlow-SDK.git
+cd fastflow
 
 git submodule update --init projects/hrx
 git submodule update --init --recursive projects/FastFlowLM
@@ -93,8 +93,8 @@ It links the host XRT install discovered from `$XILINX_XRT`, the platform
 default (`/opt/xilinx/xrt` on Linux; Program Files or `C:\Xilinx\XRT` on
 Windows), or an XRT runtime already on `PATH`. It installs an FHS `bin/flm`
 tree; it does not bundle a relocatable XRT runtime. Point
-`rocm-npu qualify --bench --xrt-flm <path>` or
-`rocm-npu qualify --all-models --xrt-flm <path>` at this tree for the optional
+`fastflow qualify --bench --xrt-flm <path>` or
+`fastflow qualify --all-models --xrt-flm <path>` at this tree for the optional
 HRX-vs-XRT comparison (decode metrics on `--bench`; greedy numerical match of
 the single-prompt run on `--all-models`). Qualification sets `XILINX_XRT` and
 the loader path (`LD_LIBRARY_PATH` on Linux, `PATH` on Windows) only on that

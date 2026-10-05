@@ -27,7 +27,7 @@ from build_tools.fastflowlm_qualification_native import (
 
 HRX_INSTALL = paths.HRX_INSTALL
 XADX_STAGE = paths.BUILD / "fastflowlm-xadx-assets"
-XADX_PRODUCT = "rocm-npu-fastflowlm-xadx"
+XADX_PRODUCT = "fastflow-sdk-fastflowlm-xadx"
 XADX_IMPLEMENTATION_PROBE_TARGET = "fastflowlm-xadx-implementation-probe"
 
 
@@ -305,8 +305,14 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
     shutil.rmtree(probe_root)
     files = [
         file_record(destination, path)
-        for path in sorted(destination.rglob("*"))
-        if path.is_file() and path.name != "manifest.json"
+        for path in sorted(
+            (
+                path
+                for path in destination.rglob("*")
+                if path.is_file() and path.name != "manifest.json"
+            ),
+            key=lambda path: path.relative_to(destination).as_posix(),
+        )
     ]
     manifest = {
         "schema_version": 1,

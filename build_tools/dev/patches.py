@@ -71,7 +71,7 @@ def _patch_state(patch, sub):
 
 def apply_patches(submodule_names=None):
     """Apply the temporary submodule patches (idempotent). These live only in
-    rocm-npu-staging and are upstreamable as-is; see patches/README.md."""
+    fastflow-sdk and are upstreamable as-is; see patches/README.md."""
     if not paths.PATCHES.exists():
         return
     selected = set(submodule_names) if submodule_names is not None else None

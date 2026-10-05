@@ -174,8 +174,8 @@ class TestFastFlowLMSmoke:
         with mock.patch.dict(
             sys.modules,
             {
-                "rocm_npu_fastflowlm": fastflowlm,
-                "rocm_npu_runtime": runtime,
+                "fastflow_sdk_fastflowlm": fastflowlm,
+                "fastflow_sdk_runtime": runtime,
             },
         ):
             paths = smoke.installed_package_paths()
@@ -207,8 +207,8 @@ class TestFastFlowLMSmoke:
             mock.patch.dict(
                 sys.modules,
                 {
-                    "rocm_npu_fastflowlm": fastflowlm,
-                    "rocm_npu_runtime": runtime,
+                    "fastflow_sdk_fastflowlm": fastflowlm,
+                    "fastflow_sdk_runtime": runtime,
                 },
             ),
             mock.patch.object(smoke.sysconfig, "get_path", return_value=str(scripts)),

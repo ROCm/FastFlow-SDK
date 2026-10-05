@@ -125,10 +125,10 @@ def test_non_dev_build_tools_modules_do_not_import_dev():
 
 def test_product_domains_do_not_import_sibling_orchestration_layers():
     forbidden = {
-        "fastflowlm_artifact.py": {"build_tools.rocm_npu_wheel_common"},
-        "compiler_product.py": {"build_tools.rocm_npu_compiler_wheels"},
-        "compiler_wheels.py": {"build_tools.rocm_npu_linux_wheels"},
-        "manylinux_audit.py": {"build_tools.rocm_npu_wheel_common"},
+        "fastflowlm_artifact.py": {"build_tools.fastflow_sdk_wheel_common"},
+        "compiler_product.py": {"build_tools.fastflow_sdk_compiler_wheels"},
+        "compiler_wheels.py": {"build_tools.fastflow_sdk_linux_wheels"},
+        "manylinux_audit.py": {"build_tools.fastflow_sdk_wheel_common"},
     }
     violations = []
     build_tools = ROOT / "build_tools"
@@ -146,8 +146,8 @@ def test_product_domains_do_not_import_sibling_orchestration_layers():
     package = build_tools / "fastflowlm_package.py"
     tree = ast.parse(package.read_text(encoding="utf-8"), filename=str(package))
     platform_modules = {
-        "build_tools.rocm_npu_linux_wheels",
-        "build_tools.rocm_npu_windows_wheels",
+        "build_tools.fastflow_sdk_linux_wheels",
+        "build_tools.fastflow_sdk_windows_wheels",
     }
     for node in tree.body:
         for imported_module in sorted(_imported_modules(node) & platform_modules):

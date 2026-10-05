@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-# rocm-npu-staging — version manifest (the pin authority). 2026-06-26.
+# fastflow-sdk — version manifest (the pin authority). 2026-06-26.
 # Exact revisions the NPU stack is built/validated against. projects/ are
 # git submodules; this file records their pins. Build orchestration is in dev.py,
 # Python deps in requirements/compiler-stack.txt.
@@ -39,7 +39,7 @@ repo     = "github.com/Xilinx/aiebu"
 commit   = "f8d3c32861249d8fcf92185dab5f50f23d887c6a"
 branch   = "main-ge"
 provides = ["aiebu-asm"]
-note     = "Builds the assembler from source and ships it in the compiler product. IRON OperatorSequence FULL_ELF compilation invokes this tool; without it, ROCm-NPU cannot produce dynamic XADX NPU-test artifacts."
+note     = "Builds the assembler from source and ships it in the compiler product. IRON OperatorSequence FULL_ELF compilation invokes this tool; without it, FastFlow SDK cannot produce dynamic XADX NPU-test artifacts."
 patches  = ["patches/aiebu/0001-cmake-4-boost-header-fallback.patch"]
 
 [iron_ops]                      # projects/iron-ops — the IRON operator library (pure Python)

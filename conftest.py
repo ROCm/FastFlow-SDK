@@ -10,7 +10,7 @@ import pytest
 PROFILE_MARKERS = frozenset({"presubmit", "compiler_stack", "fastflowlm"})
 ROOT = Path(__file__).resolve().parent
 TEST_IMPORT_ROOTS = (
-    ROOT / "tools" / "rocm-npu-qualification" / "python",
+    ROOT / "tools" / "fastflow-sdk-qualification" / "python",
     ROOT / "tests" / "npu",
 )
 

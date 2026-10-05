@@ -9,7 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
-PACKAGE_VERSION_ENV = "ROCM_NPU_PACKAGE_VERSION"
+PACKAGE_VERSION_ENV = "FASTFLOW_SDK_PACKAGE_VERSION"
 _VERSION_RE = re.compile(
     r"^[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+|\.post[0-9]+|\.dev[0-9]+)?"
     r"(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$"
@@ -19,7 +19,7 @@ _VERSION_RE = re.compile(
 def validate_version(version: str) -> str:
     """Validates the supported, normalized subset of PEP 440 versions."""
     if not _VERSION_RE.fullmatch(version):
-        raise RuntimeError(f"invalid PEP 440 package version for rocm-npu: {version}")
+        raise RuntimeError(f"invalid PEP 440 package version for fastflow: {version}")
     return version
 
 
