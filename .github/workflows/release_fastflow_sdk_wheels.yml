@@ -1,0 +1,551 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+name: Release FastFlow SDK Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to validate; publication requires main history
+        required: false
+        default: ""
+      package_version:
+        description: PEP 440 version; defaults to the configured development release train
+        required: false
+        default: ""
+      publish_target:
+        description: Where to publish after validation
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - github-prerelease
+
+permissions:
+  contents: read
+
+run-name: fastflow Linux + Windows wheels ${{ inputs.package_version || 'auto-version' }}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.release.outputs.ref }}
+      source_sha: ${{ steps.source.outputs.sha }}
+      package_version: ${{ steps.release.outputs.package_version }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+      release_name: ${{ steps.release.outputs.release_name }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Checkout requested release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Freeze source ref to commit
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Require reviewed main history
+        if: ${{ inputs.publish_target == 'github-prerelease' }}
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/heads/main ]]; then
+            echo "Release workflow must be dispatched from main, got ${GITHUB_REF}" >&2
+            exit 1
+          fi
+          if [[ "${SOURCE_SHA}" != "${GITHUB_SHA}" ]]; then
+            echo "Published release source must equal the dispatch commit so " \
+                 "provenance identifies the built source" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${SOURCE_SHA}" origin/main; then
+            echo "Release source ${SOURCE_SHA} is not reviewed main history" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Resolve ref and package version
+        id: release
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_PACKAGE_VERSION: ${{ inputs.package_version }}
+          INPUT_PUBLISH_TARGET: ${{ inputs.publish_target }}
+        run: |
+          set -euo pipefail
+          python build_tools/fastflow_sdk_wheel_release_cli.py resolve \
+            --ref "${INPUT_REF:-${GITHUB_REF_NAME}}" \
+            --package-version "${INPUT_PACKAGE_VERSION}" \
+            --publish-target "${INPUT_PUBLISH_TARGET}" \
+            --run-number "${GITHUB_RUN_NUMBER}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+  linux_wheels:
+    name: Build and validate Linux wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/fastflowlm_hrx_linux.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Linux wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+      qualification_artifact: fastflow-sdk-qualification-wheel
+      build_artifacts: true
+      run_npu_e2e: true
+
+  windows_wheels:
+    name: Build and validate Windows wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/fastflowlm_hrx_windows.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Windows wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+      build_artifacts: true
+      run_npu_e2e: true
+
+  linux_publish_wheels:
+    name: Build, validate, and attest Linux wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    uses: ./.github/workflows/fastflowlm_hrx_linux.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      name: Linux wheel prerelease
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: true
+      qualification_artifact: fastflow-sdk-qualification-wheel
+      build_artifacts: true
+      run_npu_e2e: true
+
+  windows_publish_wheels:
+    name: Build, validate, and attest Windows wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    uses: ./.github/workflows/fastflowlm_hrx_windows.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      name: Windows wheel prerelease
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: true
+      build_artifacts: true
+      run_npu_e2e: true
+
+  linux_compiler_wheels:
+    name: Build and validate Linux compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/build_fastflow_sdk_linux.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Linux compiler wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+      run_npu_e2e: false
+
+  windows_compiler_wheels:
+    name: Build and validate Windows compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'none' }}
+    uses: ./.github/workflows/build_fastflow_sdk_windows.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      name: Windows compiler wheel release validation
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: false
+      run_npu_e2e: false
+
+  linux_publish_compiler_wheels:
+    name: Build, validate, and attest Linux compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    uses: ./.github/workflows/build_fastflow_sdk_linux.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      name: Linux compiler wheel prerelease
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: true
+      run_npu_e2e: false
+
+  windows_publish_compiler_wheels:
+    name: Build, validate, and attest Windows compiler wheels
+    needs: prepare
+    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    uses: ./.github/workflows/build_fastflow_sdk_windows.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    with:
+      name: Windows compiler wheel prerelease
+      ref: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      attest_wheels: true
+      run_npu_e2e: false
+
+  collect:
+    name: Collect release artifacts
+    needs:
+      - prepare
+      - linux_wheels
+      - windows_wheels
+      - linux_publish_wheels
+      - windows_publish_wheels
+      - linux_compiler_wheels
+      - windows_compiler_wheels
+      - linux_publish_compiler_wheels
+      - windows_publish_compiler_wheels
+    if: >-
+      ${{
+        always() &&
+        needs.prepare.result == 'success' &&
+        (
+          (
+            inputs.publish_target == 'none' &&
+            needs.linux_wheels.result == 'success' &&
+            needs.windows_wheels.result == 'success' &&
+            needs.linux_compiler_wheels.result == 'success' &&
+            needs.windows_compiler_wheels.result == 'success'
+          ) ||
+          (
+            inputs.publish_target == 'github-prerelease' &&
+            needs.linux_publish_wheels.result == 'success' &&
+            needs.windows_publish_wheels.result == 'success' &&
+            needs.linux_publish_compiler_wheels.result == 'success' &&
+            needs.windows_publish_compiler_wheels.result == 'success'
+          )
+        )
+      }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Download tested Linux wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-runtime-fastflowlm-linux-x86_64
+          path: wheelhouse/linux
+
+      - name: Download tested Windows wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-runtime-fastflowlm-windows-x86_64
+          path: wheelhouse/windows
+
+      - name: Download tested Linux compiler wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-compiler-wheels-linux-x86_64
+          path: wheelhouse/linux
+
+      - name: Download tested Windows compiler wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-compiler-wheels-windows-x86_64
+          path: wheelhouse/windows
+
+      - name: Download cross-platform qualification wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-qualification-wheel
+          path: wheelhouse/qualification
+
+      - name: Download independently generated Windows qualification wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-qualification-wheel-windows-local
+          path: qualification-parity/windows
+
+      - name: Download tested Linux standalone archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-linux-x86_64
+          path: archives/linux
+
+      - name: Download tested Windows standalone archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-windows-x86_64
+          path: archives/windows
+
+      - name: Install release validation tools
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements/release-wheels.lock
+
+      - name: Verify Windows XADX parity with canonical qualification wheel
+        run: >-
+          python build_tools/verify_qualification_wheel_parity.py
+          --canonical wheelhouse/qualification
+          --candidate qualification-parity/windows
+
+      - name: Validate wheel metadata
+        run: python -m twine check --strict wheelhouse/*/*.whl
+
+      - name: Prepare release payload
+        shell: bash
+        env:
+          FASTFLOW_SDK_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          FASTFLOW_SDK_RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          FASTFLOW_SDK_RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+          FASTFLOW_SDK_RELEASE_TAG: ${{ needs.prepare.outputs.tag_name }}
+          FASTFLOW_SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python build_tools/fastflow_sdk_wheel_release_cli.py prepare \
+            --dir wheelhouse \
+            --archive-dir archives \
+            --output-dir release \
+            --version "${FASTFLOW_SDK_PACKAGE_VERSION}" \
+            --release-name "${FASTFLOW_SDK_RELEASE_NAME}" \
+            --tag-name "${FASTFLOW_SDK_RELEASE_TAG}" \
+            --source-ref "${FASTFLOW_SDK_RELEASE_REF}" \
+            --source-sha "${FASTFLOW_SDK_SOURCE_SHA}" \
+            --expected-wheel-tag py3-none-any \
+            --expected-wheel-tag py3-none-manylinux_2_28_x86_64 \
+            --expected-wheel-tag py3-none-linux_x86_64 \
+            --expected-wheel-tag py3-none-win_amd64 \
+            --expected-wheel-tag cp312-abi3-manylinux_2_28_x86_64 \
+            --expected-wheel-tag cp312-abi3-win_amd64
+          # Copies into release/ are done; drop duplicate downloads before
+          # the multi-target pip resolution loops.
+          rm -rf wheelhouse archives qualification-parity
+
+      - name: Create release-wide qualification candidate
+        shell: bash
+        env:
+          PYTHONPATH: tools/fastflow-sdk-qualification/python
+          FASTFLOW_SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python -m fastflow_sdk_qualification.cli candidate \
+            --wheel-dir release \
+            --expected-source-revision "${FASTFLOW_SDK_SOURCE_SHA}" \
+            --output release/candidate-manifest.json \
+            --json
+
+      - name: Resolve qualification dependencies for every supported target
+        shell: bash
+        env:
+          FASTFLOW_SDK_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          qualification_wheels=(
+            release/fastflow_sdk_qualification-"${FASTFLOW_SDK_PACKAGE_VERSION}"-*.whl
+          )
+          [[ "${#qualification_wheels[@]}" -eq 1 ]]
+          qualification_wheel="${qualification_wheels[0]}"
+          test -f "${qualification_wheel}"
+          mapfile -t numeric_requirements < <(
+            python -c 'import json; from pathlib import Path; contract = json.loads(Path("tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification/numeric-runtime.json").read_text()); print(*(f"{name}=={version}" for name, version in sorted(contract["packages"].items())), sep="\n")'
+          )
+          for platform in linux windows; do
+            if [[ "${platform}" == linux ]]; then
+              platform_args=(
+                --platform linux_x86_64
+                --platform manylinux_2_28_x86_64
+              )
+            else
+              platform_args=(--platform win_amd64)
+            fi
+            for python_minor in 3.11 3.12 3.13 3.14; do
+              python_tag="cp${python_minor/./}"
+              target="qualification-release-install-${platform}-${python_tag}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-cache-dir \
+                --no-index \
+                --find-links release \
+                --only-binary=:all: \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                "${platform_args[@]}" \
+                --target "${target}" \
+                "fastflow-sdk-runtime==${FASTFLOW_SDK_PACKAGE_VERSION}" \
+                "fastflow-sdk-fastflowlm==${FASTFLOW_SDK_PACKAGE_VERSION}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-cache-dir \
+                --no-index \
+                --no-deps \
+                --target "${target}" \
+                "${qualification_wheel}"
+              python -m pip install \
+                --disable-pip-version-check \
+                --no-cache-dir \
+                --only-binary=:all: \
+                --implementation cp \
+                --python-version "${python_minor}" \
+                --abi "${python_tag}" \
+                "${platform_args[@]}" \
+                --target "${target}" \
+                "${numeric_requirements[@]}"
+              python -m build_tools.verify_qualification_dependencies \
+                --target "${target}" \
+                --version "${FASTFLOW_SDK_PACKAGE_VERSION}"
+              rm -rf "${target}"
+            done
+          done
+
+      - name: Resolve compiler core and bindings for every supported Python
+        shell: bash
+        env:
+          FASTFLOW_SDK_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          compiler_meta="release/fastflow_sdk_compiler-${FASTFLOW_SDK_PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "${compiler_meta}"
+          python -m build_tools.resolve_release_wheel \
+            --wheel "${compiler_meta}" \
+            --find-links release \
+            --version "${FASTFLOW_SDK_PACKAGE_VERSION}" \
+            --product compiler
+
+      - name: Resolve ops wheel
+        shell: bash
+        env:
+          FASTFLOW_SDK_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          ops_wheel="release/fastflow_sdk_ops-${FASTFLOW_SDK_PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "${ops_wheel}"
+          python -m build_tools.resolve_release_wheel \
+            --wheel "${ops_wheel}" \
+            --find-links release \
+            --version "${FASTFLOW_SDK_PACKAGE_VERSION}" \
+            --product ops
+
+      - name: Upload release payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fastflow-sdk-wheels-${{ needs.prepare.outputs.package_version }}
+          path: release/**
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish_github_prerelease:
+    name: Create draft GitHub prerelease (disabled)
+    needs:
+      - prepare
+      - collect
+    # Releases remain fully manual unless an administrator explicitly enables
+    # the repository-level publication gate after operational validation.
+    if: >-
+      ${{
+        inputs.publish_target == 'github-prerelease' &&
+        vars.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'
+      }}
+    runs-on: ubuntu-24.04
+    environment: fastflow-sdk-prerelease
+    permissions:
+      contents: write
+    steps:
+      - name: Download release payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-wheels-${{ needs.prepare.outputs.package_version }}
+          path: release
+
+      - name: Create draft prerelease for qualification evidence
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+        with:
+          tag: ${{ needs.prepare.outputs.tag_name }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          commit: ${{ needs.prepare.outputs.source_sha }}
+          body: |
+            Linux and Windows prerelease wheels for the FastFlow SDK compiler,
+            operator library, runtime, and FastFlowLM. Compiler bindings
+            support CPython 3.12, 3.13, and 3.14.
+            Tested standalone Linux `.tar.zst` and Windows `.zip` runtime
+            archives are attached to this release.
+
+            Source ref: ${{ needs.prepare.outputs.ref }}
+            Source commit: ${{ needs.prepare.outputs.source_sha }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            This release remains a draft until the Windows and Linux NPU
+            evidence for `candidate-manifest.json` has been manually verified,
+            aggregated under the packaged `release` policy, and attached with
+            the aggregate `.sha256` sidecar.
+
+            Install FastFlowLM and its matching runtime dependency with:
+
+            ```console
+            python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" fastflow-sdk-fastflowlm==${{ needs.prepare.outputs.package_version }}
+            ```
+
+            Install the matching compiler core and CPython bindings with:
+
+            ```console
+            python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" fastflow-sdk-compiler==${{ needs.prepare.outputs.package_version }}
+            ```
+
+            Install the IRON operator library (depends on the compiler) with:
+
+            ```console
+            python -m pip install --find-links "${{ github.server_url }}/${{ github.repository }}/releases/expanded_assets/${{ needs.prepare.outputs.tag_name }}" fastflow-sdk-ops==${{ needs.prepare.outputs.package_version }}
+            ```
+          artifacts: "release/*.whl,release/*.zip,release/*.tar.zst,release/*.sha256,release/*.zip.manifest.json,release/*.tar.zst.manifest.json,release/SHA256SUMS,release/candidate-SHA256SUMS,release/candidate-manifest.json,release/fastflow-sdk-release-manifest.json,release/index.html"
+          artifactErrorsFailBuild: true
+          draft: true
+          prerelease: true
+          makeLatest: false
+          allowUpdates: false

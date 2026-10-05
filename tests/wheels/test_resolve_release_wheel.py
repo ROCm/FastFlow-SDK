@@ -5,6 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from build_tools.fastflow_sdk_wheel_common import (
+    COMPILER_BINDINGS_DISTRIBUTION,
+    COMPILER_CORE_DISTRIBUTION,
+    COMPILER_DISTRIBUTION,
+    OPS_DISTRIBUTION,
+)
 from build_tools.resolve_release_wheel import (
     bindings_runtime_pins,
     expected_distributions,
@@ -12,12 +18,6 @@ from build_tools.resolve_release_wheel import (
     python_tag,
     resolve_release_wheel,
     verify_installed,
-)
-from build_tools.rocm_npu_wheel_common import (
-    COMPILER_BINDINGS_DISTRIBUTION,
-    COMPILER_CORE_DISTRIBUTION,
-    COMPILER_DISTRIBUTION,
-    OPS_DISTRIBUTION,
 )
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
@@ -27,7 +27,7 @@ def test_resolver_does_not_import_compiler_wheel_builder():
     source = Path(resolve_release_wheel.__code__.co_filename).read_text(
         encoding="utf-8"
     )
-    assert "rocm_npu_compiler_wheels" not in source
+    assert "fastflow_sdk_compiler_wheels" not in source
 
 
 def test_expected_compiler_includes_bindings_pins():
@@ -59,7 +59,7 @@ def test_unknown_product_is_rejected():
 
 
 def test_pip_install_command_uses_wheel_file_and_abi3(tmp_path):
-    wheel = tmp_path / "rocm_npu_ops-1.2.3-py3-none-any.whl"
+    wheel = tmp_path / "fastflow_sdk_ops-1.2.3-py3-none-any.whl"
     command = pip_install_command(
         python="python",
         wheel=wheel,
@@ -79,7 +79,7 @@ def test_pip_install_command_uses_wheel_file_and_abi3(tmp_path):
     assert command[command.index("--platform") + 1] == "manylinux_2_28_x86_64"
     assert "linux_x86_64" not in command
     assert command[-1] == str(wheel)
-    assert all("rocm-npu-ops==" not in item for item in command)
+    assert all("fastflow-sdk-ops==" not in item for item in command)
 
 
 def test_verify_installed_allows_extra_packages(monkeypatch, tmp_path):
@@ -119,7 +119,7 @@ def test_verify_installed_rejects_missing_or_wrong_version(monkeypatch, tmp_path
 
 
 def test_resolve_release_wheel_covers_policy_matrix(tmp_path, monkeypatch):
-    wheel = tmp_path / "rocm_npu_compiler-1.2.3-py3-none-any.whl"
+    wheel = tmp_path / "fastflow_sdk_compiler-1.2.3-py3-none-any.whl"
     wheel.write_bytes(b"pk")
     find_links = tmp_path / "release"
     find_links.mkdir()

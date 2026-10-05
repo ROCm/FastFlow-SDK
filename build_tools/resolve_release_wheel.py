@@ -15,7 +15,7 @@ from packaging.utils import canonicalize_name
 
 from build_tools import release_policy
 from build_tools.environment import sh
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.fastflow_sdk_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,

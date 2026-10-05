@@ -26,7 +26,7 @@ def test_native_qualification_sources_have_single_owner():
     ]
     assert legacy_native_sources == []
     assert not (Path(__file__).parent / "CMakeLists.txt").exists()
-    native = root / "tools/rocm-npu-qualification/native"
+    native = root / "tools/fastflow-sdk-qualification/native"
     assert {
         "kernel_capabilities.cpp",
         "kernel_capabilities.hpp",

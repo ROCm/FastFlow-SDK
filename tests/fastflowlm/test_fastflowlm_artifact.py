@@ -72,12 +72,12 @@ def _init_git_repository(root: Path, files: dict[str, str]) -> Path:
 
 
 class TestFastFlowLMArtifact:
-    def test_artifact_name_uses_rocm_npu_product_stem(self):
-        assert artifact_name("Linux", "x86_64") == "rocm-npu-linux-x86_64"
-        assert artifact_name("Windows", "AMD64") == "rocm-npu-windows-x86_64"
+    def test_artifact_name_uses_fastflow_sdk_product_stem(self):
+        assert artifact_name("Linux", "x86_64") == "fastflow-sdk-linux-x86_64"
+        assert artifact_name("Windows", "AMD64") == "fastflow-sdk-windows-x86_64"
 
     def make_bundle(self, root):
-        bundle = root / "rocm-npu-test-x86_64"
+        bundle = root / "fastflow-sdk-test-x86_64"
         payload = bundle / "bin" / ("flm.exe" if os.name == "nt" else "flm")
         payload.parent.mkdir(parents=True)
         payload.write_bytes(b"runtime")
@@ -204,7 +204,7 @@ class TestFastFlowLMArtifact:
         hrx_binary = hrx_install / "hrx.dll"
         hrx_binary.write_bytes(b"hrx")
         install = tmp_path / "install"
-        cli_name = "rocm-npu.exe" if os.name == "nt" else "rocm-npu"
+        cli_name = "fastflow.exe" if os.name == "nt" else "fastflow"
         (install / "bin").mkdir(parents=True)
         (install / "bin" / cli_name).write_bytes(b"cli")
         marker_name = ".fresh.json"
@@ -467,7 +467,7 @@ class TestFastFlowLMArtifact:
         ).stdout.strip()
         manifest = {
             "sources": {
-                "rocm-npu-staging": {"revision": revision, "dirty": False},
+                "fastflow-sdk": {"revision": revision, "dirty": False},
                 "hrx": {"revision": versions["hrx"]["commit"]},
                 "FastFlowLM": {"revision": versions["fastflowlm"]["commit"]},
             }
@@ -477,7 +477,7 @@ class TestFastFlowLMArtifact:
         with pytest.raises(RuntimeError, match="hrx revision"):
             validate_source_policy(manifest, root)
         manifest["sources"]["hrx"]["revision"] = versions["hrx"]["commit"]
-        manifest["sources"]["rocm-npu-staging"]["dirty"] = True
+        manifest["sources"]["fastflow-sdk"]["dirty"] = True
         with pytest.raises(RuntimeError, match="dirty staging"):
             validate_source_policy(manifest, root)
 

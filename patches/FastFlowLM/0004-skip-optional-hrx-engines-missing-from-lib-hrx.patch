@@ -1,4 +1,4 @@
-From: ROCm NPU staging <rocm-npu@amd.com>
+From: FastFlow SDK <fastflow-sdk@amd.com>
 Subject: [PATCH] Skip optional HRX engines missing from lib/hrx
 
 HRX engine coverage can lag FastFlowLM main: new families may ship only

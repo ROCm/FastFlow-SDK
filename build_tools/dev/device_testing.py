@@ -207,7 +207,7 @@ def _require_hrx_runtime(compiler_prefix=None):
     if _hrxruntime_discovery(compiler_prefix) is None:
         sys.exit(
             "hrxruntime missing from the aie package — rebuild iron-tools "
-            "or install rocm-npu-compiler-bindings"
+            "or install fastflow-sdk-compiler-bindings"
         )
     if not hrx_runtime.libhrx_path():
         library_name = "hrx.dll" if paths.is_windows() else "libhrx.so"

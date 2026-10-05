@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""ROCm NPU developer build, test, setup, and packaging commands.
+"""FastFlow SDK developer build, test, setup, and packaging commands.
 
 Run ``python dev.py --help`` for the complete command inventory.
 """
@@ -11,13 +11,13 @@ import sys
 from build_tools import (
     compiler_product,
     compiler_wheels,
+    fastflow_sdk_ops_wheels,
+    fastflow_sdk_qualification_wheel,
     fastflowlm_package,
     fastflowlm_xadx_assets,
     hrx_runtime,
     npu_prereqs,
     npu_test_package,
-    rocm_npu_ops_wheels,
-    rocm_npu_qualification_wheel,
 )
 from build_tools import (
     iron as dev_iron,
@@ -151,7 +151,8 @@ def create_parser():
     t = _add_command(sub, "test", host_testing.cmd_test)
     t.add_argument("design", nargs="?")
     t.add_argument(
-        "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product prefix to test",
     )
     t.add_argument("design_args", nargs="*", help="extra aieargs for the design script")
     tf = _add_command(sub, "test-fastflowlm", host_testing.cmd_test_fastflowlm)
@@ -159,7 +160,7 @@ def create_parser():
     tf.add_argument(
         "--wheel-package",
         action="store_true",
-        help="run from installed rocm-npu-runtime/fastflowlm wheels",
+        help="run from installed fastflow-sdk-runtime/fastflowlm wheels",
     )
     tf.add_argument(
         "--inference-iterations",
@@ -188,7 +189,8 @@ def create_parser():
         help="operator to build (default: every one in build_tools/iron.py)",
     )
     to.add_argument(
-        "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product prefix to test",
     )
     to.add_argument(
         "--device",
@@ -228,7 +230,7 @@ def create_parser():
     pqw = _add_command(
         sub,
         "package-qualification-wheel",
-        rocm_npu_qualification_wheel.cmd_package_qualification_wheel,
+        fastflow_sdk_qualification_wheel.cmd_package_qualification_wheel,
     )
     pqw.add_argument(
         "--version", help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})"
@@ -242,30 +244,30 @@ def create_parser():
     powh = _add_command(
         sub,
         "package-ops-wheels",
-        rocm_npu_ops_wheels.cmd_package_ops_wheels,
+        fastflow_sdk_ops_wheels.cmd_package_ops_wheels,
     )
     powh.add_argument(
         "--version", help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})"
     )
     powh.add_argument(
         "--dir",
-        default=str(rocm_npu_ops_wheels.OPS_WHEEL_ARTIFACTS),
+        default=str(fastflow_sdk_ops_wheels.OPS_WHEEL_ARTIFACTS),
         help="wheel output directory",
     )
     vow = _add_command(
         sub,
         "verify-ops-wheels",
-        rocm_npu_ops_wheels.cmd_verify_ops_wheels,
+        fastflow_sdk_ops_wheels.cmd_verify_ops_wheels,
     )
     vow.add_argument(
         "--dir",
-        default=str(rocm_npu_ops_wheels.OPS_WHEEL_ARTIFACTS),
+        default=str(fastflow_sdk_ops_wheels.OPS_WHEEL_ARTIFACTS),
         help="directory containing the ops wheel and matching compiler wheels",
     )
     vow.add_argument("--version")
     vow.add_argument(
         "--venv",
-        default=str(rocm_npu_ops_wheels.OPS_WHEEL_VENV),
+        default=str(fastflow_sdk_ops_wheels.OPS_WHEEL_VENV),
         help="venv used to install and import the ops wheel",
     )
     vow.add_argument(
@@ -291,7 +293,7 @@ def create_parser():
     afw.add_argument(
         "--dir",
         default=str(fastflowlm_package.FASTFLOWLM_ARTIFACTS),
-        help="directory containing the produced rocm-npu wheels",
+        help="directory containing the produced fastflow wheels",
     )
     vfw = _add_command(
         sub, "verify-fastflowlm-wheels", fastflowlm_package.cmd_verify_fastflowlm_wheels
@@ -299,7 +301,7 @@ def create_parser():
     vfw.add_argument(
         "--dir",
         default=str(fastflowlm_package.FASTFLOWLM_ARTIFACTS),
-        help="directory containing the produced rocm-npu wheels",
+        help="directory containing the produced fastflow wheels",
     )
     vfw.add_argument(
         "--venv",
@@ -452,7 +454,7 @@ def create_parser():
     np.add_argument(
         "--runtime-package",
         action="store_true",
-        help="probe libHRX from an installed rocm-npu-runtime wheel",
+        help="probe libHRX from an installed fastflow-sdk-runtime wheel",
     )
     c = _add_command(
         sub,
@@ -469,7 +471,8 @@ def create_parser():
         help="operator to run on the NPU (default: every one in build_tools/iron.py)",
     )
     tno.add_argument(
-        "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product prefix to test",
     )
     tnj = _add_command(sub, "test-npu-jit", device_testing.cmd_test_npu_jit)
     tnj.add_argument(
@@ -478,12 +481,14 @@ def create_parser():
         help="compile the smoke design but do not dispatch it (no NPU needed)",
     )
     tnj.add_argument(
-        "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product prefix to test",
     )
     tn = _add_command(sub, "test-npu", device_testing.cmd_test_npu)
     tn.add_argument("design", nargs="?")
     tn.add_argument(
-        "--compiler-prefix", help="relocated rocm-npu-compiler product prefix to test"
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product prefix to test",
     )
     tn.add_argument(
         "--device",

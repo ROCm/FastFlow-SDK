@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""rocm-npu-staging e2e BUILD test (no NPU run).
+"""fastflow-sdk e2e BUILD test (no NPU run).
 
 Proves the chain:
 
@@ -107,7 +107,7 @@ def build_loader(env: dict[str, str]) -> Path:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="rocm-npu-staging e2e build test")
+    parser = argparse.ArgumentParser(description="fastflow-sdk e2e build test")
     parser.add_argument(
         "design",
         nargs="?",
@@ -124,7 +124,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--compiler-prefix",
         type=Path,
         default=compiler_prefix_from_env(),
-        help="relocated rocm-npu compiler product prefix to use instead of build trees",
+        help="relocated fastflow compiler product prefix to use instead of build trees",
     )
     args = parser.parse_args(argv)
     if args.design and args.design.startswith("-"):

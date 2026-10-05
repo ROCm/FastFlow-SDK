@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from build_tools import validate_rocm_npu_cli
-from build_tools.validate_rocm_npu_cli import run_reports, validate_report
+from build_tools import validate_fastflow_cli
+from build_tools.validate_fastflow_cli import run_reports, validate_report
 
 pytestmark = pytest.mark.presubmit
 
@@ -42,8 +42,8 @@ def test_nlohmann_json_vendored_files_match_approved_contents(relative, expected
 
 
 def test_native_cli_does_not_link_forbidden_product_dependencies():
-    cmake = (ROOT / "tools/rocm-npu/CMakeLists.txt").read_text(encoding="utf-8")
-    assert "rocm_npu_nlohmann_json" in cmake
+    cmake = (ROOT / "tools/fastflow/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "fastflow_sdk_nlohmann_json" in cmake
     assert "JSON_USE_IMPLICIT_CONVERSIONS=0" in cmake
     assert 'PATTERN "README.md" EXCLUDE' in cmake
     assert 'PATTERN "regenerate-*.sh" EXCLUDE' in cmake
@@ -64,14 +64,14 @@ def test_native_cli_json_contract_documents_stable_v1_envelope():
     assert "runtime.abi" in contract
     assert "self_test.cleanup" in contract
     assert "self_test.output" in contract
-    assert "rocm-npu-report-v1.schema.json" not in contract
+    assert "fastflow-sdk-report-v1.schema.json" not in contract
 
 
 def test_self_test_fixture_hashes_match_provenance():
     fixture = (
         ROOT
         / "tools"
-        / "rocm-npu"
+        / "fastflow"
         / "testdata"
         / "self-test"
         / "npu2-vector-scalar-add"
@@ -120,7 +120,7 @@ def test_self_test_fixture_hashes_match_provenance():
 
 
 def test_self_test_is_explicitly_scoped_to_npu2():
-    source = (ROOT / "tools/rocm-npu/src/commands/self_test.cc").read_text(
+    source = (ROOT / "tools/fastflow/src/commands/self_test.cc").read_text(
         encoding="utf-8"
     )
     docs = (ROOT / "docs/runtime-cli.md").read_text(encoding="utf-8")
@@ -145,10 +145,10 @@ def test_hardware_report_runner_skips_npu1_self_test(monkeypatch, tmp_path):
         }
         return SimpleNamespace(stdout=json.dumps(report), stderr="", returncode=0)
 
-    monkeypatch.setattr(validate_rocm_npu_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(validate_rocm_npu_cli, "validate_report", lambda *a, **k: None)
+    monkeypatch.setattr(validate_fastflow_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(validate_fastflow_cli, "validate_report", lambda *a, **k: None)
     run_reports(
-        Path("rocm-npu"),
+        Path("fastflow"),
         tmp_path,
         require_hardware=True,
         prefix="",
@@ -162,9 +162,9 @@ def test_hardware_report_runner_skips_npu1_self_test(monkeypatch, tmp_path):
 )
 def test_runtime_workflows_build_and_execute_native_cli(workflow):
     source = (ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8")
-    assert "dev.py build rocm-npu-cli --fresh" in source
+    assert "dev.py build fastflow-cli --fresh" in source
     assert "ctest" in source
-    assert "validate_rocm_npu_cli.py" in source
+    assert "validate_fastflow_cli.py" in source
     assert source.count("--require-hardware") == 1
     assert "Upload native CLI hardware reports" in source
     assert "Download standalone runtime archive" in source
@@ -174,14 +174,14 @@ def test_runtime_workflows_build_and_execute_native_cli(workflow):
     archive_step = source.split(
         "- name: Test standalone runtime archive without Python", 1
     )[1].split("- name: Upload native CLI hardware reports", 1)[0]
-    assert "validate_rocm_npu_cli.py" not in archive_step
+    assert "validate_fastflow_cli.py" not in archive_step
     if workflow.endswith("linux.yml"):
         assert "cmake -E tar xvf" in archive_step
         assert "dnf install" not in archive_step
     else:
         assert "shell: powershell" in archive_step
         assert "shell: pwsh" not in archive_step
-    assert "rocm-npu" in archive_step
+    assert "fastflow" in archive_step
     assert "archive-probe.json" in archive_step
 
 
@@ -297,17 +297,17 @@ def test_hardware_report_validator_allows_optional_ioctl_errors():
 
 @pytest.mark.parametrize(
     "module",
-    ("rocm_npu_linux_wheels.py", "rocm_npu_windows_wheels.py"),
+    ("fastflow_sdk_linux_wheels.py", "fastflow_sdk_windows_wheels.py"),
 )
 def test_runtime_wheels_ship_native_cli(module):
     source = (ROOT / "build_tools" / module).read_text(encoding="utf-8")
-    assert "rocm-npu" in source
-    assert 'console_scripts={"rocm-npu": f"{RUNTIME_PACKAGE}:main"}' in source
+    assert "fastflow" in source
+    assert 'console_scripts={"fastflow": f"{RUNTIME_PACKAGE}:main"}' in source
 
 
 def test_runtime_wheel_staging_ships_fixture_and_license():
     source = (ROOT / "build_tools" / "runtime_wheel_staging.py").read_text(
         encoding="utf-8"
     )
-    assert "share/rocm-npu/self-test" in source
+    assert "share/fastflow-sdk/self-test" in source
     assert "nlohmann-json-LICENSE.MIT" in source

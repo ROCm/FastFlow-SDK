@@ -1,12 +1,12 @@
-# ROCm NPU wheel releases
+# FastFlow SDK wheel releases
 
 > [!NOTE]
 > This document is the **release-operator** policy for versioning, validating,
 > and publishing wheels. To *install* a published build, use
-> [GitHub Releases](https://github.com/ROCm/rocm-npu/releases) and the
+> [GitHub Releases](https://github.com/ROCm/FastFlow-SDK/releases) and the
 > [README install section](../README.md#install-a-release-and-run-models).
 
-ROCm NPU compiler, ops, runtime, and FastFlowLM wheels use
+FastFlow SDK compiler, ops, runtime, and FastFlowLM wheels use
 [PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/)
 versions. The release train targets one stable version while development and
 release-candidate builds approach that version:
@@ -63,8 +63,8 @@ version. FastFlowLM requires the runtime wheel at exactly that version. Never
 replace or reuse a published version; produce a new development or release
 candidate version instead.
 
-`rocm-npu-qualification` is `py3-none-any` and requires
-`rocm-npu-fastflowlm` at exactly the same version plus NumPy 2.4.6 and
+`fastflow-sdk-qualification` is `py3-none-any` and requires
+`fastflow-sdk-fastflowlm` at exactly the same version plus NumPy 2.4.6 and
 ml-dtypes 0.6.0. Pip resolves the numeric wheels from the package index for
 CPython 3.11 through 3.14 on Linux and Windows. Candidate v1 binds the required
 versions, and qualification evidence records the installed wheel tags, RECORD
@@ -95,10 +95,10 @@ runtime wheel, while manylinux policy evaluates each wheel independently.
 
 The compiler is a coordinated split distribution:
 
-- `rocm-npu-compiler` is the platform-neutral user-facing meta-package.
-- `rocm-npu-compiler-core` contains the LLVM/MLIR/IRON tools, headers, Peano
+- `fastflow-sdk-compiler` is the platform-neutral user-facing meta-package.
+- `fastflow-sdk-compiler-core` contains the LLVM/MLIR/IRON tools, headers, Peano
   payload, and Python-independent native libraries once per platform.
-- `rocm-npu-compiler-bindings` contains the `aie` Python package and native
+- `fastflow-sdk-compiler-bindings` contains the `aie` Python package and native
   extensions built once against CPython 3.12's stable ABI. Its wheel tag is
   `cp312-abi3`, which supports the validated Python 3.12 through 3.14 range.
 
@@ -106,13 +106,13 @@ Both the meta-package and bindings require the matching core at exactly the
 same version. Moving the 127 MB `AIEAggregateCAPI` library into the core avoids
 duplicating it in every CPython bindings wheel. Importing `aie` activates the
 core wheel's native-library directory before loading its extension modules.
-When `rocm-npu-runtime` is also installed, the same import selects HRX for
+When `fastflow-sdk-runtime` is also installed, the same import selects HRX for
 in-process IRON (`NPU_RUNTIME`, `IRON_RUNTIME`, and `HRX_LIBHRX` from
-`rocm_npu_runtime.libhrx_path()`) if those variables are unset. Compiler
+`fastflow_sdk_runtime.libhrx_path()`) if those variables are unset. Compiler
 wheels do not depend on the runtime package; a compiler-only install skips
-the hook. Importing `rocm_npu_runtime` performs the same HRX selection.
+the hook. Importing `fastflow_sdk_runtime` performs the same HRX selection.
 
-`rocm-npu-ops` is `py3-none-any` and requires `rocm-npu-compiler` at exactly
+`fastflow-sdk-ops` is `py3-none-any` and requires `fastflow-sdk-compiler` at exactly
 the same version. It ships the IRON `iron` package plus the `aie_kernels`
 sources that `AIEContext.base_dir` resolves next to it, so
 `from iron.operators import ElementwiseAdd` works after a wheel install.
@@ -147,20 +147,20 @@ with `python -m build_tools.resolve_release_wheel` for every
 
 The unified workflow builds and validates Linux and Windows wheels from one
 source commit. An operator may publish the validated payload manually under
-`rocm-npu-v<version>` after evidence intake succeeds.
+`fastflow-sdk-v<version>` after evidence intake succeeds.
 
 ## Manual workflow
 
-The `Release ROCm NPU Wheels` workflow defaults to validation only. With
+The `Release FastFlow SDK Wheels` workflow defaults to validation only. With
 `publish_target=none`, it builds and validates both platform wheel sets and
 uploads a temporary Actions artifact. `publish_target=github-prerelease` also
 builds and attests the release payload, but its GitHub publication job is
 disabled; it does not create or push a tag.
 The same payload includes the tested standalone FastFlowLM + HRX runtime
-archives (`rocm-npu-linux-x86_64.tar.zst` and `rocm-npu-windows-x86_64.zip`),
+archives (`fastflow-sdk-linux-x86_64.tar.zst` and `fastflow-sdk-windows-x86_64.zip`),
 checksum sidecars, and detached bundle provenance manifests. Compiler CI also
-builds relocatable product archives (`rocm-npu-compiler-linux-x86_64.tar.gz` /
-`rocm-npu-compiler-windows-x86_64.tar.zst`) for packaging and verification, but
+builds relocatable product archives (`fastflow-sdk-compiler-linux-x86_64.tar.gz` /
+`fastflow-sdk-compiler-windows-x86_64.tar.zst`) for packaging and verification, but
 only compiler and ops wheels are collected into this release payload. The ops
 wheel is the canonical Linux `py3-none-any` file from the Linux compiler-wheels
 artifact. Release assembly
@@ -184,13 +184,13 @@ Release collection emits one self-contained candidate containing every Linux
 and Windows runtime/FastFlowLM wheel, the shared qualification wheel,
 `candidate-manifest.json`, and `SHA256SUMS`. Every operator machine runs against
 that same manifest. The operator collects deterministic `.evidence.zip`
-bundles, transfers them to an intake machine, runs `rocm-npu qualify verify`
-and `rocm-npu qualify intake --policy release --require-status pass`, and
+bundles, transfers them to an intake machine, runs `fastflow qualify verify`
+and `fastflow qualify intake --policy release --require-status pass`, and
 reviews the recorded policy satisfaction in `qualification-index.json`.
 
 The GitHub prerelease publication job is currently disabled. Download the
 complete collected Actions artifact, create the draft release and tag manually,
-then run `rocm-npu qualify stage-release` to assemble a single flat upload
+then run `fastflow qualify stage-release` to assemble a single flat upload
 directory from that payload plus the intake aggregate
 (`qualification-evidence-<version>.zip`), sidecar, and
 `qualification-index.json` into an empty output directory. Upload every
@@ -200,7 +200,7 @@ Do not upload nested `simple/` trees. Before publishing, recheck that every
 staged wheel still has the hash recorded in the candidate manifest. Any
 rebuilt or replaced wheel invalidates the evidence and requires a new candidate
 plus new runs.
-Verify the aggregate ZIP with `rocm-npu qualify verify` before staging or
+Verify the aggregate ZIP with `fastflow qualify verify` before staging or
 manually publishing. No workflow creates or publishes the release, transfers
 manual evidence, or signs evidence.
 
@@ -224,16 +224,16 @@ from clean Linux and Windows environments:
 
 ```powershell
 py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
-  "rocm-npu-fastflowlm==<version>"
+  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" `
+  "fastflow-sdk-fastflowlm==<version>"
 py -m pip check
 py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
-  "rocm-npu-compiler==<version>"
+  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" `
+  "fastflow-sdk-compiler==<version>"
 py -m pip check
 py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" `
-  "rocm-npu-ops==<version>"
+  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" `
+  "fastflow-sdk-ops==<version>"
 py -m pip check
 python -c "from iron.operators import ElementwiseAdd; print(ElementwiseAdd.__name__)"
 aie-opt --version
@@ -242,16 +242,16 @@ aiecc --help
 
 ```bash
 python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
-  "rocm-npu-fastflowlm==<version>"
+  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" \
+  "fastflow-sdk-fastflowlm==<version>"
 python3 -m pip check
 python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
-  "rocm-npu-compiler==<version>"
+  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" \
+  "fastflow-sdk-compiler==<version>"
 python3 -m pip check
 python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" \
-  "rocm-npu-ops==<version>"
+  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" \
+  "fastflow-sdk-ops==<version>"
 python3 -m pip check
 python3 -c "from iron.operators import ElementwiseAdd; print(ElementwiseAdd.__name__)"
 aie-opt --version

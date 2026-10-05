@@ -1,7 +1,7 @@
 # Temporary submodule patches
 
 Transitional patches `dev.py` applies to submodules at `fetch`/`setup` time.
-They live **only here** in rocm-npu-staging and are kept as plain `git apply`-able
+They live **only here** in fastflow-sdk and are kept as plain `git apply`-able
 diffs so each is **directly upstreamable** (`git apply` → commit → PR) once the
 underlying issue is fixed upstream. Layout: `patches/<submodule>/NNNN-*.patch`.
 

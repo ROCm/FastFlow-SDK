@@ -10,17 +10,17 @@ import json
 import zipfile
 from pathlib import Path
 
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION as _FASTFLOWLM_DISTRIBUTION,
 )
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.fastflow_sdk_wheel_common import (
     QUALIFICATION_DISTRIBUTION as _QUALIFICATION_DISTRIBUTION,
 )
-from rocm_npu_qualification import installation
-from rocm_npu_qualification.candidate import (
+from fastflow_sdk_qualification import installation
+from fastflow_sdk_qualification.candidate import (
     canonical_candidate_bytes as _canonical_candidate_bytes,
 )
-from rocm_npu_qualification.contracts import (
+from fastflow_sdk_qualification.contracts import (
     NATIVE_CHECKS,
     POWER_MODE_ROUNDTRIP,
     POWER_MODE_ROUNDTRIP_ARTIFACTS,
@@ -29,8 +29,8 @@ from rocm_npu_qualification.contracts import (
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
 )
-from rocm_npu_qualification.evidence import EvidenceWriter
-from rocm_npu_qualification.numeric_runtime import (
+from fastflow_sdk_qualification.evidence import EvidenceWriter
+from fastflow_sdk_qualification.numeric_runtime import (
     NUMERIC_RUNTIME as _NUMERIC_RUNTIME,
 )
 
@@ -83,7 +83,7 @@ def write_candidate_wheel(
             "schema_version": 1,
             "product": distribution,
             "version": "1.2.3",
-            "sources": {"rocm-npu-staging": {"revision": "a" * 40}},
+            "sources": {"fastflow-sdk": {"revision": "a" * 40}},
             "files": [],
         },
         sort_keys=True,
@@ -98,18 +98,18 @@ def write_candidate_wheel(
             archive.writestr(f"{package}/__init__.py", b"")
         if distribution == _FASTFLOWLM_DISTRIBUTION:
             archive.writestr(
-                "rocm_npu_fastflowlm/share/flm/xclbins/xclbins/test.xclbin",
+                "fastflow_sdk_fastflowlm/share/flm/xclbins/xclbins/test.xclbin",
                 b"xclbin",
             )
         if distribution == _QUALIFICATION_DISTRIBUTION:
-            code = zipfile.ZipInfo("rocm_npu_qualification/__init__.py")
+            code = zipfile.ZipInfo("fastflow_sdk_qualification/__init__.py")
             code.external_attr = qualification_mode << 16
             archive.writestr(code, qualification_code)
             transaction_data = b"transaction"
             xclbin_sha = hashlib.sha256(b"xclbin").hexdigest()
             recipe = {
                 "schema_version": 1,
-                "product": "rocm-npu-fastflowlm-kernel-recipe",
+                "product": "fastflow-sdk-fastflowlm-kernel-recipe",
                 "target": "npu2",
                 "generator_version": "kernel-recipe-generator-v1",
                 "implementations": [
@@ -182,11 +182,11 @@ def write_candidate_wheel(
                 ],
             }
             archive.writestr(
-                "rocm_npu_qualification/profiles/fast.json",
+                "fastflow_sdk_qualification/profiles/fast.json",
                 json.dumps(profile),
             )
             archive.writestr(
-                "rocm_npu_qualification/xadx_assets/manifest.json",
+                "fastflow_sdk_qualification/xadx_assets/manifest.json",
                 json.dumps(
                     {
                         "schema_version": 1,
@@ -209,17 +209,17 @@ def write_candidate_wheel(
                 ),
             )
             archive.writestr(
-                "rocm_npu_qualification/xadx_assets/recipe.json", recipe_bytes
+                "fastflow_sdk_qualification/xadx_assets/recipe.json", recipe_bytes
             )
             archive.writestr(
-                "rocm_npu_qualification/xadx_assets/xadx/test.xadx", xadx_data
+                "fastflow_sdk_qualification/xadx_assets/xadx/test.xadx", xadx_data
             )
             archive.writestr(
-                "rocm_npu_qualification/xadx_assets/transactions/test.bin",
+                "fastflow_sdk_qualification/xadx_assets/transactions/test.bin",
                 transaction_data,
             )
             archive.writestr(
-                "rocm_npu_qualification/policies/release.json",
+                "fastflow_sdk_qualification/policies/release.json",
                 json.dumps(
                     {
                         "schema_version": 1,
@@ -300,7 +300,7 @@ def make_candidate(revision: str = "a" * 40) -> dict[str, object]:
     digest = "b" * 64
     return {
         "schema_version": 1,
-        "product": "rocm-npu-release-candidate",
+        "product": "fastflow-sdk-release-candidate",
         "version": "1.2.3",
         "source_revision": revision,
         "packages": {

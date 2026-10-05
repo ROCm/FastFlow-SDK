@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amd.com/fastflow-sdk/schemas/kernel-recipe-v1.schema.json",
+  "title": "FastFlowLM kernel qualification recipe v1",
+  "type": "object",
+  "required": [
+    "schema_version", "product", "target", "generator_version",
+    "implementations", "coverage_limits", "cases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "product": {"const": "fastflow-sdk-fastflowlm-kernel-recipe"},
+    "target": {"const": "npu2"},
+    "generator_version": {"const": "kernel-recipe-generator-v1"},
+    "implementations": {
+      "type": "array", "minItems": 1, "maxItems": 128,
+      "items": {"$ref": "#/$defs/implementation"}
+    },
+    "coverage_limits": {
+      "type": "array", "maxItems": 128,
+      "items": {"$ref": "#/$defs/coverage_limit"}
+    },
+    "cases": {
+      "type": "array", "minItems": 1, "maxItems": 512,
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"},
+    "shape": {
+      "type": "object", "required": ["m", "k", "n"],
+      "additionalProperties": false,
+      "properties": {
+        "m": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "k": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "n": {"type": "integer", "minimum": 1, "maximum": 4096}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "id", "builder", "shape", "transaction", "transaction_sha256",
+        "xadx", "xadx_sha256", "export"
+      ],
+      "properties": {
+        "id": {"type": "string"}, "builder": {"type": "string"},
+        "shape": {"$ref": "#/$defs/shape"},
+        "transaction": {"$ref": "#/$defs/path"},
+        "transaction_sha256": {"$ref": "#/$defs/sha256"},
+        "xadx": {"$ref": "#/$defs/path"},
+        "xadx_sha256": {"$ref": "#/$defs/sha256"},
+        "export": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "implementation": {
+      "type": "object",
+      "required": [
+        "id", "kernel", "builder", "shape", "xclbin_sha256", "xclbin_path",
+        "transaction", "transaction_sha256", "xadx", "xadx_sha256",
+        "export", "families"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^(dequant|mm)-[0-9a-f]{16}$"},
+        "kernel": {"enum": ["dequant", "mm"]},
+        "builder": {"type": "string"},
+        "builder_declared": {"type": "boolean"},
+        "shape": {"$ref": "#/$defs/shape"},
+        "xclbin_sha256": {"$ref": "#/$defs/sha256"},
+        "xclbin_bytes": {"type": "integer", "minimum": 1},
+        "xclbin_path": {"$ref": "#/$defs/path"},
+        "transaction": {"$ref": "#/$defs/path"},
+        "transaction_sha256": {"$ref": "#/$defs/sha256"},
+        "xadx": {"$ref": "#/$defs/path"},
+        "xadx_sha256": {"$ref": "#/$defs/sha256"},
+        "export": {"type": "string"},
+        "representative": {"type": "string"},
+        "families": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "execution_variants": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": {"$ref": "#/$defs/execution"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "coverage_limit": {
+      "type": "object",
+      "required": [
+        "id", "scope", "kernel", "representative", "xclbin_sha256",
+        "families", "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^(dequant|mm)-[0-9a-f]{16}$"},
+        "scope": {"enum": ["dispatch", "numeric"]},
+        "kernel": {"enum": ["dequant", "mm"]},
+        "representative": {"type": "string"},
+        "xclbin_sha256": {"$ref": "#/$defs/sha256"},
+        "families": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"}
+      }
+    },
+    "generator": {
+      "type": "object", "required": ["id", "parameters", "sha256"],
+      "additionalProperties": false,
+      "oneOf": [
+        {"properties": {"id": {"const": "zero"}, "parameters": {"$ref": "#/$defs/zero_parameters"}}},
+        {"properties": {"id": {"const": "q4nx-packed"}, "parameters": {"$ref": "#/$defs/q4nx_parameters"}}},
+        {"properties": {"id": {"const": "q4nx-dequant-expected"}, "parameters": {"$ref": "#/$defs/dequant_parameters"}}},
+        {"properties": {"id": {"const": "chained-weight"}, "parameters": {"$ref": "#/$defs/dequant_parameters"}}},
+        {"properties": {"id": {"const": "mm-weight"}, "parameters": {"$ref": "#/$defs/weight_parameters"}}},
+        {"properties": {"id": {"const": "mm-activation-layout"}, "parameters": {"$ref": "#/$defs/activation_parameters"}}},
+        {"properties": {"id": {"const": "gemm-reference"}, "parameters": {"$ref": "#/$defs/gemm_parameters"}}},
+        {"properties": {"id": {"const": "chained-reference"}, "parameters": {"$ref": "#/$defs/chained_parameters"}}}
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "zero", "q4nx-packed", "q4nx-dequant-expected", "chained-weight", "mm-weight",
+            "mm-activation-layout", "gemm-reference", "chained-reference"
+          ]
+        },
+        "parameters": {"type": "object"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "dimension": {"type": "integer", "minimum": 1, "maximum": 1048576},
+    "profile": {"enum": ["shared-subset", "full-nibble", "full-affine"]},
+    "semantics": {
+      "enum": ["logical", "signed-nibble", "qwen-affine", "lfm-affine"]
+    },
+    "order": {"enum": ["mm", "gpt-oss", "gemma-text"]},
+    "zero_parameters": {
+      "type": "object", "required": ["size"], "additionalProperties": false,
+      "properties": {"size": {"type": "integer", "minimum": 1, "maximum": 16777216}}
+    },
+    "q4nx_parameters": {
+      "type": "object",
+      "required": ["m", "k", "profile", "row_block", "col_block", "parallel"],
+      "additionalProperties": false,
+      "properties": {
+        "m": {"$ref": "#/$defs/dimension"}, "k": {"$ref": "#/$defs/dimension"},
+        "profile": {"$ref": "#/$defs/profile"},
+        "row_block": {"type": "integer", "minimum": 2, "maximum": 4096},
+        "col_block": {"type": "integer", "minimum": 32, "maximum": 4096},
+        "parallel": {"type": "integer", "minimum": 2, "maximum": 4096}
+      }
+    },
+    "dequant_parameters": {
+      "type": "object", "required": ["m", "k", "profile", "semantics", "order"],
+      "additionalProperties": false,
+      "properties": {
+        "m": {"$ref": "#/$defs/dimension"}, "k": {"$ref": "#/$defs/dimension"},
+        "profile": {"$ref": "#/$defs/profile"},
+        "semantics": {"$ref": "#/$defs/semantics"}, "order": {"$ref": "#/$defs/order"}
+      }
+    },
+    "weight_parameters": {
+      "type": "object", "required": ["m", "k", "profile"], "additionalProperties": false,
+      "properties": {
+        "m": {"$ref": "#/$defs/dimension"}, "k": {"$ref": "#/$defs/dimension"},
+        "profile": {"$ref": "#/$defs/profile"}
+      }
+    },
+    "activation_parameters": {
+      "type": "object", "required": ["k", "n", "salt", "builder"],
+      "additionalProperties": false,
+      "properties": {
+        "k": {"$ref": "#/$defs/dimension"}, "n": {"enum": [128, 512]},
+        "salt": {"type": "integer", "minimum": 0, "maximum": 255},
+        "builder": {"enum": ["gemm", "gpt-oss-gemm", "gemma-gemm"]}
+      }
+    },
+    "gemm_parameters": {
+      "type": "object", "required": ["m", "k", "n", "profile", "salt"],
+      "additionalProperties": false,
+      "properties": {
+        "m": {"$ref": "#/$defs/dimension"}, "k": {"$ref": "#/$defs/dimension"},
+        "n": {"$ref": "#/$defs/dimension"}, "profile": {"$ref": "#/$defs/profile"},
+        "salt": {"type": "integer", "minimum": 0, "maximum": 255}
+      }
+    },
+    "chained_parameters": {
+      "type": "object",
+      "required": ["m", "k", "n", "profile", "salt", "semantics", "order"],
+      "additionalProperties": false,
+      "properties": {
+        "m": {"$ref": "#/$defs/dimension"}, "k": {"$ref": "#/$defs/dimension"},
+        "n": {"$ref": "#/$defs/dimension"}, "profile": {"$ref": "#/$defs/profile"},
+        "salt": {"type": "integer", "minimum": 0, "maximum": 255},
+        "semantics": {"$ref": "#/$defs/semantics"}, "order": {"$ref": "#/$defs/order"}
+      }
+    },
+    "stage_output": {
+      "type": "object", "required": ["stage_output"], "additionalProperties": false,
+      "properties": {
+        "stage_output": {"type": "string", "pattern": "^[^.]+\\.[^.]+$"}
+      }
+    },
+    "source": {
+      "oneOf": [
+        {"$ref": "#/$defs/generator"},
+        {"$ref": "#/$defs/stage_output"}
+      ]
+    },
+    "comparison": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["kind"], "additionalProperties": false,
+          "properties": {"kind": {"const": "exact"}}
+        },
+        {
+          "type": "object", "required": ["kind", "atol", "rtol"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "bf16-tolerance"},
+            "atol": {"type": "number", "minimum": 0},
+            "rtol": {"type": "number", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "buffer": {
+      "type": "object", "required": ["name", "direction", "size"],
+      "properties": {
+        "name": {"type": "string"}, "direction": {"enum": ["input", "output"]},
+        "size": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "source": {"$ref": "#/$defs/source"}, "expected": {"$ref": "#/$defs/generator"},
+        "preserved": {"$ref": "#/$defs/generator"},
+        "comparison": {"$ref": "#/$defs/comparison"}
+      },
+      "additionalProperties": false
+    },
+    "stage": {
+      "type": "object", "required": ["name", "implementation", "buffers"],
+      "properties": {
+        "name": {"type": "string"}, "implementation": {"type": "string"},
+        "execution": {"type": "string"},
+        "buffers": {
+          "type": "array", "minItems": 1, "maxItems": 16,
+          "items": {"$ref": "#/$defs/buffer"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object", "required": ["name", "stages"],
+      "properties": {
+        "name": {"type": "string"},
+        "stages": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": {"$ref": "#/$defs/stage"}
+        },
+        "readback_variants": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": {"$ref": "#/$defs/readback_variant"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "readback_variant": {
+      "type": "object",
+      "required": ["stage", "buffer", "source", "expected"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "buffer": {"type": "string", "minLength": 1},
+        "source": {"$ref": "#/$defs/generator"},
+        "expected": {"$ref": "#/$defs/generator"}
+      }
+    }
+  }
+}

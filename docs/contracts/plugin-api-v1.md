@@ -1,13 +1,13 @@
-# ROCm NPU external plugin API v1
+# FastFlow SDK external plugin API v1
 
-`rocm-npu <name> ...` resolves and directly executes
-`rocm-npu-<name>` (`rocm-npu-<name>.exe` on Windows). Built-in commands always
+`fastflow <name> ...` resolves and directly executes
+`fastflow-<name>` (`fastflow-<name>.exe` on Windows). Built-in commands always
 win. Names are limited to lowercase ASCII letters, digits, and dashes.
 
 Resolution order is:
 
-1. `ROCM_NPU_PLUGIN_PATH`
-2. the directory containing the native `rocm-npu` executable
+1. `FASTFLOW_SDK_PLUGIN_PATH`
+2. the directory containing the native `fastflow` executable
 3. `PATH`
 
 Empty path entries are ignored, so the current working directory is never
@@ -27,15 +27,15 @@ when JSON output is requested.
 
 The child receives:
 
-- `ROCM_NPU_PLUGIN_API=1`
-- `ROCM_NPU_CORE_VERSION`
-- `ROCM_NPU_CORE_EXECUTABLE` as an absolute path
-- `ROCM_NPU_RUNTIME_PATH` when a packaged or explicit HRX runtime resolves
-- `ROCM_NPU_OUTPUT_FORMAT=human|json`
+- `FASTFLOW_SDK_PLUGIN_API=1`
+- `FASTFLOW_SDK_CORE_VERSION`
+- `FASTFLOW_SDK_CORE_EXECUTABLE` as an absolute path
+- `FASTFLOW_SDK_RUNTIME_PATH` when a packaged or explicit HRX runtime resolves
+- `FASTFLOW_SDK_OUTPUT_FORMAT=human|json`
 
 Plugins must reject absent or unsupported protocol versions. `--json` is a core
 global option and is removed from plugin arguments; its canonical value is
-communicated through `ROCM_NPU_OUTPUT_FORMAT`. Therefore `--json` before and
+communicated through `FASTFLOW_SDK_OUTPUT_FORMAT`. Therefore `--json` before and
 after the external command is equivalent.
 
 Plugin search paths are executable-code trust boundaries. Administrators must

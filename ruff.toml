@@ -7,7 +7,7 @@ required-version = "==0.15.21"
 target-version = "py312"
 line-length = 88
 extend-exclude = ["projects", "patches"]
-src = [".", "tools/rocm-npu-qualification/python"]
+src = [".", "tools/fastflow-sdk-qualification/python"]
 
 [format]
 quote-style = "double"
@@ -30,4 +30,4 @@ ignore = [
 ]
 
 [lint.isort]
-known-first-party = ["build_tools", "rocm_npu_qualification"]
+known-first-party = ["build_tools", "fastflow_sdk_qualification"]

@@ -39,8 +39,8 @@ def test_presubmit_runs_pinned_clang_format_check():
 @pytest.mark.parametrize(
     "workflow_name",
     (
-        "build_rocm_npu_staging_linux.yml",
-        "build_rocm_npu_staging_windows.yml",
+        "build_fastflow_sdk_linux.yml",
+        "build_fastflow_sdk_windows.yml",
     ),
 )
 def test_build_jobs_do_not_rerun_clang_format(workflow_name):

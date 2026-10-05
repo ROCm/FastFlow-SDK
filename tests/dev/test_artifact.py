@@ -41,6 +41,18 @@ def test_file_inventory_is_portable_deterministic_and_verifiable(tmp_path):
         verify_file_inventory(root, records)
 
 
+def test_file_inventory_orders_mixed_case_paths_like_linux(tmp_path):
+    licenses = tmp_path / "licenses"
+    licenses.mkdir()
+    (licenses / "fastflow-sdk-LICENSE").write_bytes(b"sdk")
+    (licenses / "FastFlowLM-LICENSE_RUNTIME.txt").write_bytes(b"flm")
+
+    assert [record["path"] for record in file_inventory(tmp_path)] == [
+        "licenses/FastFlowLM-LICENSE_RUNTIME.txt",
+        "licenses/fastflow-sdk-LICENSE",
+    ]
+
+
 def test_directory_state_honors_excluded_names(tmp_path):
     (tmp_path / "payload").write_text("content", encoding="utf-8")
     marker = tmp_path / ".marker"

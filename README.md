@@ -1,6 +1,6 @@
-# ROCm-NPU
+# FastFlow SDK
 
-ROCm-NPU is a new software stack that brings together emerging capabilities,
+FastFlow SDK is a new software stack that brings together emerging capabilities,
 tools, and runtimes for developing custom GenAI applications for AMD XDNA Neural
 Processing Engines (NPUs).
 
@@ -10,7 +10,7 @@ Processing Engines (NPUs).
 > out-of-the-box FastFlowLM models on AMD Ryzen AI XDNA2 NPUs using the new HRX
 > runtime. Interfaces, packages, models, and supported
 > hardware or driver combinations can change between snapshots. Use a
-> [GitHub Release](https://github.com/ROCm/rocm-npu/releases) for
+> [GitHub Release](https://github.com/ROCm/FastFlow-SDK/releases) for
 > installable artifacts and for the driver versions validated with that
 > build. These packages are not published to PyPI.
 
@@ -27,7 +27,7 @@ It consists of:
   (AIE) array, formerly MLIR-AIE
 - **iron-ops**: example machine-learning operators built with *iron-tools*
 
-The native `rocm-npu` CLI ships with the runtime and reports device, driver,
+The native `fastflow` CLI ships with the runtime and reports device, driver,
 and runtime health. Building from this repository also pulls additional
 subproject requirements; each subproject has more details. See
 [CONTRIBUTING.md](CONTRIBUTING.md) if you want to change the stack.
@@ -47,7 +47,7 @@ subproject requirements; each subproject has more details. See
 This early-access release enables developers to use hands-on utilities for
 custom application development with the `iron-tools` compiler stack, run FastFlowLM
 models on AMD Ryzen AI XDNA2 NPUs using the HRX runtime, and validate the NPU
-runtime with `rocm-npu`.
+runtime with `fastflow`.
 
 ## Supported models
 
@@ -67,12 +67,12 @@ This early-access release targets **Linux and Windows** on **x86_64**, with
 native PowerShell; WSL is not the supported Windows path.
 
 Validated NPU driver versions are listed in each GitHub release. After
-installing or changing a driver, run `rocm-npu self-test`. If that fails,
+installing or changing a driver, run `fastflow self-test`. If that fails,
 reboot and retry; a hot package switch can occasionally leave the device
 unhealthy even when the OS reports the new driver as installed.
-`rocm-npu probe` and `rocm-npu doctor` report the active driver, firmware, NPU
-power mode where supported, and runtime health. `rocm-npu powermode` reports the
-current mode. Use `rocm-npu powermode <mode>` to change it. Power-mode changes
+`fastflow probe` and `fastflow doctor` report the active driver, firmware, NPU
+power mode where supported, and runtime health. `fastflow powermode` reports the
+current mode. Use `fastflow powermode <mode>` to change it. Power-mode changes
 may require elevated privileges depending on the installed driver.
 
 Runtime and FastFlowLM Python wheels require Python 3.11 or newer. Compiler
@@ -83,12 +83,12 @@ archives do not require Python.
 
 - [I want to **install a release** and run models.](#install-a-release-and-run-models)
 - [I want to **develop my own models** and applications.](#develop-your-own-models-and-applications-using-iron-tools)
-- [I want to **build ROCm-NPU from source**.](docs/build-from-source.md)
+- [I want to **build FastFlow SDK from source**.](docs/build-from-source.md)
 
 ## Install a release and run models
 
 You can either download and unpack binaries from a
-[GitHub Release](https://github.com/ROCm/rocm-npu/releases) directly,
+[GitHub Release](https://github.com/ROCm/FastFlow-SDK/releases) directly,
 or install everything into a Python virtual environment. The latter path is
 required if you plan to develop your own applications.
 
@@ -96,37 +96,37 @@ required if you plan to develop your own applications.
 
 Each release includes a relocatable FastFlowLM + HRX archive:
 
-- Windows: `rocm-npu-windows-x86_64.zip`
-- Linux: `rocm-npu-linux-x86_64.tar.zst`
+- Windows: `fastflow-sdk-windows-x86_64.zip`
+- Linux: `fastflow-sdk-linux-x86_64.tar.zst`
 
 Extract it and run the binaries from the archive root (`bin/flm` and
-`bin/rocm-npu`):
+`bin/fastflow`):
 
 ```powershell
 # Windows
-Expand-Archive .\rocm-npu-windows-x86_64.zip -DestinationPath .
-cd .\rocm-npu-windows-x86_64
-.\bin\rocm-npu.exe version
-.\bin\rocm-npu.exe probe --json
-.\bin\rocm-npu.exe doctor
-.\bin\rocm-npu.exe self-test
+Expand-Archive .\fastflow-sdk-windows-x86_64.zip -DestinationPath .
+cd .\fastflow-sdk-windows-x86_64
+.\bin\fastflow.exe version
+.\bin\fastflow.exe probe --json
+.\bin\fastflow.exe doctor
+.\bin\fastflow.exe self-test
 .\bin\flm.exe list
 .\bin\flm.exe run qwen3:0.6b
 ```
 
 ```bash
 # Linux
-tar --zstd -xf rocm-npu-linux-x86_64.tar.zst
-cd rocm-npu-linux-x86_64
-./bin/rocm-npu version
-./bin/rocm-npu probe --json
-./bin/rocm-npu doctor
-./bin/rocm-npu self-test
+tar --zstd -xf fastflow-sdk-linux-x86_64.tar.zst
+cd fastflow-sdk-linux-x86_64
+./bin/fastflow version
+./bin/fastflow probe --json
+./bin/fastflow doctor
+./bin/fastflow self-test
 ./bin/flm list
 ./bin/flm run qwen3:0.6b
 ```
 
-`rocm-npu self-test` also dispatches a packaged NPU2 fixture. The first
+`fastflow self-test` also dispatches a packaged NPU2 fixture. The first
 `flm run` downloads model assets and needs Hugging Face access.
 Inside the interactive `flm run` prompt, use `/bye` to exit. `flm list` shows
 the models included in that build.
@@ -136,7 +136,7 @@ The archive cannot compile NPU programs; use the wheels in Option B for that.
 ### Option B: Python wheels
 
 Wheels ship on the same GitHub release, not on PyPI. Installing
-`rocm-npu-fastflowlm` pulls the matching `rocm-npu-runtime` wheel.
+`fastflow-sdk-fastflowlm` pulls the matching `fastflow-sdk-runtime` wheel.
 
 Install Python and create a virtual environment. Activate the environment
 before every command below:
@@ -144,33 +144,33 @@ before every command below:
 ```powershell
 # Windows
 winget install --exact --id Python.Python.3.12
-py -3.12 -m venv $HOME\rocm-npu
-& $HOME\rocm-npu\Scripts\Activate.ps1
+py -3.12 -m venv $HOME\fastflow
+& $HOME\fastflow\Scripts\Activate.ps1
 ```
 
 ```bash
 # Linux
 sudo apt-get install -y python3.12 python3.12-venv
-python3.12 -m venv ~/rocm-npu
-source ~/rocm-npu/bin/activate
+python3.12 -m venv ~/fastflow
+source ~/fastflow/bin/activate
 ```
 
 Replace `<tag>` and `<version>` with the values from the release. For example,
-if the release tag is `rocm-npu-v0.1.0.dev202609130034`, then use
-`<tag> = rocm-npu-v0.1.0.dev202609130034` and
+if the release tag is `fastflow-sdk-v0.1.0.dev202609130034`, then use
+`<tag> = fastflow-sdk-v0.1.0.dev202609130034` and
 `<version> = 0.1.0.dev202609130034`.
 
 ```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-fastflowlm==<version>"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-fastflowlm==<version>"
 ```
 
 To validate the runtime, use the following commands:
 
 ```bash
-rocm-npu version
-rocm-npu probe --json
-rocm-npu doctor
-rocm-npu self-test
+fastflow version
+fastflow probe --json
+fastflow doctor
+fastflow self-test
 flm list
 flm run qwen3:0.6b
 ```
@@ -178,7 +178,7 @@ flm run qwen3:0.6b
 To also compile your own NPU programs, see
 [Develop your own models and applications](#develop-your-own-models-and-applications-using-iron-tools).
 
-See [native runtime CLI](docs/runtime-cli.md) for `rocm-npu` commands.
+See [native runtime CLI](docs/runtime-cli.md) for `fastflow` commands.
 
 ## Develop your own models and applications using *iron-tools*
 
@@ -191,40 +191,40 @@ targets the AI Engine (AIE) array in the AMD NPU. *FastFlowLM* was built using
 > so you might see references to both of these terms. They mean the same
 > thing.
 
-`iron-tools` ships as a vendored part of ROCm-NPU in the `rocm-npu-compiler`
+`iron-tools` ships as a vendored part of FastFlow SDK in the `fastflow-sdk-compiler`
 package. It needs a Python 3.12, 3.13, or 3.14 virtual environment. Set up
 and activate the environment before running the commands below; instructions
 are the same as in the previous section.
 
-Install `rocm-npu-compiler` and `rocm-npu-runtime` from a
-[GitHub Release](https://github.com/ROCm/rocm-npu/releases): the compiler builds
+Install `fastflow-sdk-compiler` and `fastflow-sdk-runtime` from a
+[GitHub Release](https://github.com/ROCm/FastFlow-SDK/releases): the compiler builds
 the design, and the runtime dispatches it on the NPU. Replace `<tag>` and
 `<version>` with values from that release (tags look like
-`rocm-npu-v<version>`):
+`fastflow-sdk-v<version>`):
 
 ```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-compiler==<version>" "rocm-npu-runtime==<version>"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-compiler==<version>" "fastflow-sdk-runtime==<version>"
 ```
 
 For example:
 ```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/rocm-npu-v0.1.0.dev202608250029" "rocm-npu-compiler==0.1.0.dev202608250029" "rocm-npu-runtime==0.1.0.dev202608250029"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/fastflow-sdk-v0.1.0.dev202608250029" "fastflow-sdk-compiler==0.1.0.dev202608250029" "fastflow-sdk-runtime==0.1.0.dev202608250029"
 ```
 
 ### Install the IRON operator library
 
-`rocm-npu-ops` is the IRON operator library
+`fastflow-sdk-ops` is the IRON operator library
 (`from iron.operators import ElementwiseAdd`).
-It depends on `rocm-npu-compiler` at the same version, so a compiler install
+It depends on `fastflow-sdk-compiler` at the same version, so a compiler install
 above is enough, or this command will pull the compiler if it is missing:
 
 ```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/rocm-npu/releases/expanded_assets/<tag>" "rocm-npu-ops==<version>"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-ops==<version>"
 ```
 
 If you need bleeding-edge `iron-tools` features, you may also choose to install
 directly from the [upstream repository](https://github.com/Xilinx/mlir-aie)
-instead of the vendored `rocm-npu-compiler` package; see instructions there.
+instead of the vendored `fastflow-sdk-compiler` package; see instructions there.
 
 ### Hello world example
 
@@ -232,7 +232,7 @@ instead of the vendored `rocm-npu-compiler` package; see instructions there.
 program that we can compile for the NPU using `iron-tools`. It copies a buffer
 DDR -> MemTile -> DDR: pure DMA, no compute kernel.
 
-After installing `rocm-npu-compiler` and `rocm-npu-runtime`, clone or download
+After installing `fastflow-sdk-compiler` and `fastflow-sdk-runtime`, clone or download
 this repository and run:
 
 ```bash
@@ -248,10 +248,10 @@ python tests/npu/jit_smoke.py
   designs from `passthrough_kernel` up to matrix multiplication.
 
 Both assume an MLIR-AIE source checkout with Makefiles and XRT. The
-`rocm-npu-compiler` wheel already gives you the toolchain, and the runtime here
+`fastflow-sdk-compiler` wheel already gives you the toolchain, and the runtime here
 is HRX, so read the IRON design code and skip their setup steps.
 
-To build ROCm-NPU from this checkout instead of installing a release, follow
+To build FastFlow SDK from this checkout instead of installing a release, follow
 the [build from source guide](docs/build-from-source.md). It covers the runtime,
 FastFlowLM, compiler stack, platform prerequisites, packaging, and tests.
 
@@ -262,21 +262,21 @@ FastFlowLM, compiler stack, platform prerequisites, packaging, and tests.
   does not yet support or validate the required preemption save/restore
   payloads end-to-end, so FastFlowLM preemption must remain disabled when using
   this flow.
-- **`load_pdi` and control scratchpad:** ROCm NPU packaging does not yet carry
+- **`load_pdi` and control scratchpad:** FastFlow SDK packaging does not yet carry
   standalone PDIs, `load_pdi` relocations, or scratchpad parameter metadata.
   IRON sequences using `load_pdi` or `ScratchpadParameter` are therefore not
   currently supported.
 
 ## Additional documentation
 
-- [Native runtime CLI](docs/runtime-cli.md): `rocm-npu version`, `probe`,
+- [Native runtime CLI](docs/runtime-cli.md): `fastflow version`, `probe`,
   `doctor`, `self-test`, and `powermode`
 - [tests/npu/jit_smoke.py](tests/npu/jit_smoke.py): compiler/JIT smoke test
   and the smallest complete iron-tools design
 - iron-tools programming:
   [guide](https://xilinx.github.io/mlir-aie/dev/) and
   [examples](https://github.com/Xilinx/mlir-aie/tree/main/programming_examples)
-- [Model qualification](docs/qualification.md): optional `rocm-npu qualify`
+- [Model qualification](docs/qualification.md): optional `fastflow qualify`
   profiles and evidence bundles for validating releases
 - [Third-party notices](docs/third-party-notices.md)
 - [Contributing](CONTRIBUTING.md)

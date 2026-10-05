@@ -14,9 +14,9 @@ RELEASE_POLICY_PATH = ROOT / "release.toml"
 NUMERIC_RUNTIME_CONTRACT_PATH = (
     ROOT
     / "tools"
-    / "rocm-npu-qualification"
+    / "fastflow-sdk-qualification"
     / "python"
-    / "rocm_npu_qualification"
+    / "fastflow_sdk_qualification"
     / "numeric-runtime.json"
 )
 COMPILER_STABLE_ABI_MINOR = "3.12"

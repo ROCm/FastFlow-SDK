@@ -73,7 +73,7 @@ def cmake_path(path: Path) -> str:
 
 
 def cmake_candidate() -> Path:
-    override = os.environ.get("ROCM_NPU_CMAKE")
+    override = os.environ.get("FASTFLOW_SDK_CMAKE")
     return Path(override) if override else VENV_BIN / f"cmake{EXE}"
 
 
@@ -112,7 +112,7 @@ def resolve_design_dir(pin: E2EPin, design: str | None) -> Path:
 
 
 def compiler_prefix_from_env() -> Path | None:
-    value = os.environ.get("ROCM_NPU_COMPILER_PREFIX")
+    value = os.environ.get("FASTFLOW_SDK_COMPILER_PREFIX")
     return Path(value).resolve() if value else None
 
 
@@ -146,7 +146,7 @@ def require_xclbinutil(compiler_prefix: Path | None = None) -> Path:
 def toolchain_env(
     xclbinutil: Path, compiler_prefix: Path | None = None
 ) -> dict[str, str]:
-    """IRON toolchain env from either build trees or a relocated rocm-npu-compiler product."""
+    """IRON toolchain env from either build trees or a relocated fastflow-sdk-compiler product."""
     if compiler_prefix:
         aie_bin = compiler_prefix / "bin"
         aiebu_bin = aie_bin
@@ -207,9 +207,9 @@ def toolchain_env(
         # A verified product is immutable input. Importing its Python modules
         # must not add unmanifested __pycache__ files to the product tree.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["ROCM_NPU_COMPILER_PREFIX"] = str(compiler_prefix)
+        env["FASTFLOW_SDK_COMPILER_PREFIX"] = str(compiler_prefix)
         print(
-            f"== toolchain: relocated rocm-npu compiler product ({compiler_prefix}) =="
+            f"== toolchain: relocated fastflow compiler product ({compiler_prefix}) =="
         )
     else:
         print(

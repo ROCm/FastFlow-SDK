@@ -1,4 +1,4 @@
-From: ROCm NPU staging <rocm-npu@amd.com>
+From: FastFlow SDK <fastflow-sdk@amd.com>
 Subject: [PATCH] Remove configured paths from installed runtime
 
 The executable already resolves model metadata and xclbins relative to itself,

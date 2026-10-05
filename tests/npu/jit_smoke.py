@@ -8,7 +8,7 @@ DDR, with no compute kernel -- and dispatches it. That covers the whole chain:
 IRON -> MLIR -> aiecc -> bootgen -> xclbin -> HRX -> NPU.
 
 Run it with `python dev.py test-npu-jit [--build-only]`, or directly once
-rocm-npu-compiler is installed.
+fastflow-sdk-compiler is installed.
 
 For the programming abstractions (ObjectFifo, Worker, tiling, C++ kernels) and
 many more designs, see the iron-tools/MLIR-AIE programming guide

@@ -14,12 +14,12 @@ from build_tools import (
     compiler_product,
     compiler_wheels,
     environment,
+    fastflow_sdk_ops_wheels,
     fastflowlm_package,
     iron,
     npu_prereqs,
     npu_test_package,
     paths,
-    rocm_npu_ops_wheels,
 )
 from build_tools.dev import compiler_build, device_testing, runtime_build, sources
 
@@ -61,8 +61,8 @@ class TestPathOwnership:
             "HRX_CMAKE_BUILD",
             "HRX_INSTALL",
             "HRX_PACKAGE_SMOKE_BUILD",
-            "ROCM_NPU_CLI_BUILD",
-            "ROCM_NPU_CLI_INSTALL",
+            "FASTFLOW_SDK_CLI_BUILD",
+            "FASTFLOW_SDK_CLI_INSTALL",
             "FASTFLOWLM_BUILD",
             "FASTFLOWLM_INSTALL",
             "FASTFLOWLM_MODEL_CACHE",
@@ -71,18 +71,18 @@ class TestPathOwnership:
     def test_domain_paths_are_derived_by_their_owners(self):
         assert paths.HRX_INSTALL == paths.BUILD / "hrx-install"
         assert fastflowlm_package.FASTFLOWLM_WHEEL_VENV == (
-            paths.BUILD / "rocm-npu-wheel-venv"
+            paths.BUILD / "fastflow-sdk-wheel-venv"
         )
         assert compiler_product.COMPILER_PRODUCT_STAGE == (
-            paths.BUILD / "rocm-npu-compiler-product"
+            paths.BUILD / "fastflow-sdk-compiler-product"
         )
         assert compiler_wheels.COMPILER_WHEEL_STAGE == (
-            paths.BUILD / "rocm-npu-compiler-wheel-stage"
+            paths.BUILD / "fastflow-sdk-compiler-wheel-stage"
         )
-        assert rocm_npu_ops_wheels.OPS_WHEEL_VENV == (
-            paths.BUILD / "rocm-npu-ops-wheel-venv"
+        assert fastflow_sdk_ops_wheels.OPS_WHEEL_VENV == (
+            paths.BUILD / "fastflow-sdk-ops-wheel-venv"
         )
-        assert rocm_npu_ops_wheels.OPS_WHEEL_ARTIFACTS == (
+        assert fastflow_sdk_ops_wheels.OPS_WHEEL_ARTIFACTS == (
             compiler_product.COMPILER_ARTIFACTS
         )
         assert npu_prereqs.NPU_PREREQ_DIR == paths.BUILD / "artifacts"

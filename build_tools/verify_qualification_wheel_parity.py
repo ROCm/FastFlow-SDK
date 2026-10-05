@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
+sys.path.insert(0, str(ROOT / "tools" / "fastflow-sdk-qualification" / "python"))
 
-from rocm_npu_qualification.candidate import (
+from fastflow_sdk_qualification.candidate import (
     verify_qualification_wheel_parity,
 )
 
@@ -20,7 +20,7 @@ from rocm_npu_qualification.candidate import (
 def _one_wheel(value: Path) -> Path:
     if value.is_file():
         return value
-    wheels = sorted(value.glob("rocm_npu_qualification-*.whl"))
+    wheels = sorted(value.glob("fastflow_sdk_qualification-*.whl"))
     if len(wheels) != 1:
         raise ValueError(
             f"expected one qualification wheel in {value}, found {len(wheels)}"

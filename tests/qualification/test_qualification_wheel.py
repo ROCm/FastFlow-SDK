@@ -18,15 +18,15 @@ from pathlib import Path
 
 import pytest
 
-from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
-from build_tools.rocm_npu_qualification_wheel import build_qualification_wheel
-from build_tools.rocm_npu_wheel_common import (
+from build_tools.fastflow_sdk_qualification_wheel import build_qualification_wheel
+from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
 )
-from rocm_npu_qualification.candidate import canonical_candidate_bytes
-from rocm_npu_qualification.numeric_runtime import NUMERIC_RUNTIME
+from build_tools.fastflowlm_xadx_assets import verify_kernel_recipe_assets
+from fastflow_sdk_qualification.candidate import canonical_candidate_bytes
+from fastflow_sdk_qualification.numeric_runtime import NUMERIC_RUNTIME
 from tests.support.qualification import (
     make_candidate,
     make_evidence,
@@ -124,7 +124,7 @@ def _fake_xadx_assets(root: Path) -> Path:
     ]
     recipe = {
         "schema_version": 1,
-        "product": "rocm-npu-fastflowlm-kernel-recipe",
+        "product": "fastflow-sdk-fastflowlm-kernel-recipe",
         "target": "npu2",
         "generator_version": "kernel-recipe-generator-v1",
         "implementations": executables,
@@ -169,7 +169,7 @@ def _fake_xadx_assets(root: Path) -> Path:
     records = [record(path) for path in sorted(root.rglob("*")) if path.is_file()]
     manifest = {
         "schema_version": 1,
-        "product": "rocm-npu-fastflowlm-xadx",
+        "product": "fastflow-sdk-fastflowlm-xadx",
         "target": "npu2",
         "serializer": {
             "api": "hrx_amdxdna_xadx_serialize",
@@ -221,60 +221,65 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
         xadx_assets=assets,
         version="1.2.3",
     )
-    assert wheel.name == "rocm_npu_qualification-1.2.3-py3-none-any.whl"
+    assert wheel.name == "fastflow_sdk_qualification-1.2.3-py3-none-any.whl"
     with zipfile.ZipFile(wheel) as archive:
         entry_points = archive.read(
-            "rocm_npu_qualification-1.2.3.dist-info/entry_points.txt"
+            "fastflow_sdk_qualification-1.2.3.dist-info/entry_points.txt"
         ).decode()
         metadata_text = archive.read(
-            "rocm_npu_qualification-1.2.3.dist-info/METADATA"
+            "fastflow_sdk_qualification-1.2.3.dist-info/METADATA"
         ).decode()
         package_manifest = json.loads(
-            archive.read("rocm_npu_qualification/manifest.json")
+            archive.read("fastflow_sdk_qualification/manifest.json")
         )
         sbom = json.loads(
-            archive.read("rocm_npu_qualification-1.2.3.dist-info/sboms/cyclonedx.json")
+            archive.read(
+                "fastflow_sdk_qualification-1.2.3.dist-info/sboms/cyclonedx.json"
+            )
         )
         names = set(archive.namelist())
         installed = tmp_path / "installed"
         archive.extractall(installed)
-    assert "rocm-npu-qualify = rocm_npu_qualification.cli:main" in entry_points
-    assert "\nrocm-npu =" not in entry_points
-    assert "Requires-Dist: rocm-npu-fastflowlm ==1.2.3" in metadata_text
+    assert "fastflow-qualify = fastflow_sdk_qualification.cli:main" in entry_points
+    assert "\nfastflow =" not in entry_points
+    assert "Requires-Dist: fastflow-sdk-fastflowlm ==1.2.3" in metadata_text
     assert "Requires-Dist: numpy ==2.4.6" in metadata_text
     assert "Requires-Dist: ml-dtypes ==0.6.0" in metadata_text
     assert "Requires-Python: >=3.11,<3.15" in metadata_text
     assert (
         "License-Expression: MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms"
     ) in metadata_text
-    assert "rocm_npu_qualification/xadx_assets/manifest.json" in names
-    assert "rocm_npu_qualification/xadx_assets/recipe.json" in names
-    assert "rocm_npu_qualification/recipe_generators.py" in names
+    assert "fastflow_sdk_qualification/xadx_assets/manifest.json" in names
+    assert "fastflow_sdk_qualification/xadx_assets/recipe.json" in names
+    assert "fastflow_sdk_qualification/recipe_generators.py" in names
     assert not any(name.endswith(".xclbin") for name in names)
     assert not any(
         "/xadx_assets/data/" in name and name.endswith(".bin") for name in names
     )
-    assert "rocm_npu_qualification/candidate.py" in names
-    assert "rocm_npu_qualification/offline.py" in names
-    assert "rocm_npu_qualification/schemas/qualification-index-v1.schema.json" in names
-    assert "rocm_npu_qualification/schemas/candidate-v1.schema.json" in names
+    assert "fastflow_sdk_qualification/candidate.py" in names
+    assert "fastflow_sdk_qualification/offline.py" in names
     assert (
-        "rocm_npu_qualification/schemas/qualification-contract-v1.schema.json" in names
+        "fastflow_sdk_qualification/schemas/qualification-index-v1.schema.json" in names
     )
-    assert "rocm_npu_qualification/schemas/kernel-recipe-v1.schema.json" in names
-    assert "rocm_npu_qualification/schemas/xadx-report-v1.schema.json" in names
-    assert "rocm_npu_qualification/bench/bench_1k_smoke.json" in names
-    assert "rocm_npu_qualification/bench/bench_4k_smoke.json" in names
-    assert "rocm_npu_qualification/bench/bench_8k_smoke.json" in names
-    assert "rocm_npu_qualification/licenses/FastFlowLM-LICENSE_RUNTIME.txt" in names
-    assert "rocm_npu_qualification/licenses/FastFlowLM-TERMS.md" in names
+    assert "fastflow_sdk_qualification/schemas/candidate-v1.schema.json" in names
+    assert (
+        "fastflow_sdk_qualification/schemas/qualification-contract-v1.schema.json"
+        in names
+    )
+    assert "fastflow_sdk_qualification/schemas/kernel-recipe-v1.schema.json" in names
+    assert "fastflow_sdk_qualification/schemas/xadx-report-v1.schema.json" in names
+    assert "fastflow_sdk_qualification/bench/bench_1k_smoke.json" in names
+    assert "fastflow_sdk_qualification/bench/bench_4k_smoke.json" in names
+    assert "fastflow_sdk_qualification/bench/bench_8k_smoke.json" in names
+    assert "fastflow_sdk_qualification/licenses/FastFlowLM-LICENSE_RUNTIME.txt" in names
+    assert "fastflow_sdk_qualification/licenses/FastFlowLM-TERMS.md" in names
     # The reference transcript is vendored in git, so every wheel must carry it;
     # the paired audio clip is copied from the FastFlowLM checkout, so it must be
     # present whenever the submodule is (a pin bump that drops it fails the build
     # via _stage_asr_sample).
-    assert "rocm_npu_qualification/assets/asr_sample.reference.txt" in names
+    assert "fastflow_sdk_qualification/assets/asr_sample.reference.txt" in names
     if (ROOT / "projects/FastFlowLM/src").is_dir():
-        assert "rocm_npu_qualification/assets/asr_sample.wav" in names
+        assert "fastflow_sdk_qualification/assets/asr_sample.wav" in names
     provenance = package_manifest["embedded_binaries"]["fastflowlm_xadx"]
     assert provenance["target"] == "npu2"
     assert (
@@ -296,7 +301,7 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
             [
                 sys.executable,
                 "-m",
-                "rocm_npu_qualification.cli",
+                "fastflow_sdk_qualification.cli",
                 command,
                 "--help",
                 "--json",
@@ -335,12 +340,12 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
         write_candidate_wheel(
             staged_products,
             RUNTIME_DISTRIBUTION,
-            "rocm_npu_runtime",
+            "fastflow_sdk_runtime",
         ),
         write_candidate_wheel(
             staged_products,
             FASTFLOWLM_DISTRIBUTION,
-            "rocm_npu_fastflowlm",
+            "fastflow_sdk_fastflowlm",
         ),
     ]
     environment_root = tmp_path / "venv"
@@ -378,7 +383,7 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
     resource_script = r"""
 import json
 from importlib import resources
-from rocm_npu_qualification import xadx
+from fastflow_sdk_qualification import xadx
 
 class Runtime:
     def __init__(self):
@@ -402,7 +407,7 @@ class Runtime:
     def close(self):
         self.resources.clear()
 
-package = resources.files("rocm_npu_qualification")
+package = resources.files("fastflow_sdk_qualification")
 assert package.joinpath("bench", "bench_1k_smoke.json").is_file()
 assert package.joinpath("bench", "bench_4k_smoke.json").is_file()
 assert package.joinpath("bench", "bench_8k_smoke.json").is_file()
@@ -424,12 +429,12 @@ assert report["status"] == "pass", report
     )
 
     wheels = tmp_path / "candidate-wheels"
-    write_candidate_wheel(wheels, RUNTIME_DISTRIBUTION, "rocm_npu_runtime")
-    write_candidate_wheel(wheels, FASTFLOWLM_DISTRIBUTION, "rocm_npu_fastflowlm")
+    write_candidate_wheel(wheels, RUNTIME_DISTRIBUTION, "fastflow_sdk_runtime")
+    write_candidate_wheel(wheels, FASTFLOWLM_DISTRIBUTION, "fastflow_sdk_fastflowlm")
     write_candidate_wheel(
         wheels,
         QUALIFICATION_DISTRIBUTION,
-        "rocm_npu_qualification",
+        "fastflow_sdk_qualification",
     )
 
     def run_cli(*arguments: object) -> dict[str, object]:
@@ -437,7 +442,7 @@ assert report["status"] == "pass", report
             [
                 python,
                 "-m",
-                "rocm_npu_qualification.cli",
+                "fastflow_sdk_qualification.cli",
                 *(str(argument) for argument in arguments),
                 "--json",
             ],
@@ -495,7 +500,7 @@ assert report["status"] == "pass", report
     reason="FastFlowLM submodule is not checked out",
 )
 def test_qualification_license_snapshots_match_fastflowlm():
-    snapshots = ROOT / "tools/rocm-npu-qualification/licenses"
+    snapshots = ROOT / "tools/fastflow-sdk-qualification/licenses"
     upstream = ROOT / "projects/FastFlowLM"
 
     def normalized(path):
@@ -510,7 +515,7 @@ def test_qualification_license_snapshots_match_fastflowlm():
 
 
 def test_stage_asr_sample_fails_when_checkout_present_but_clip_missing(tmp_path):
-    from build_tools.rocm_npu_qualification_wheel import _stage_asr_sample
+    from build_tools.fastflow_sdk_qualification_wheel import _stage_asr_sample
 
     root = tmp_path / "root"
     (root / "projects/FastFlowLM/src").mkdir(parents=True)
@@ -521,7 +526,7 @@ def test_stage_asr_sample_fails_when_checkout_present_but_clip_missing(tmp_path)
 
 
 def test_stage_asr_sample_omits_clip_when_checkout_absent(tmp_path):
-    from build_tools.rocm_npu_qualification_wheel import _stage_asr_sample
+    from build_tools.fastflow_sdk_qualification_wheel import _stage_asr_sample
 
     root = tmp_path / "root"
     package_root = root / "package"
@@ -535,7 +540,7 @@ def test_stage_asr_sample_omits_clip_when_checkout_absent(tmp_path):
     reason="FastFlowLM submodule is not checked out",
 )
 def test_qualification_wheel_vendors_pinned_asr_sample(tmp_path):
-    from build_tools.rocm_npu_qualification_wheel import ASR_SAMPLE_SHA256
+    from build_tools.fastflow_sdk_qualification_wheel import ASR_SAMPLE_SHA256
 
     assets = _fake_xadx_assets(tmp_path / "xadx")
     wheel = build_qualification_wheel(
@@ -544,7 +549,7 @@ def test_qualification_wheel_vendors_pinned_asr_sample(tmp_path):
         xadx_assets=assets,
         version="1.2.3",
     )
-    member = "rocm_npu_qualification/assets/asr_sample.wav"
+    member = "fastflow_sdk_qualification/assets/asr_sample.wav"
     with zipfile.ZipFile(wheel) as archive:
         assert member in set(archive.namelist())
         digest = hashlib.sha256(archive.read(member)).hexdigest()

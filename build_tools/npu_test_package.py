@@ -116,7 +116,7 @@ def write_manifest(stage, cases, source_revision, system, machine):
     stage = Path(stage)
     manifest = {
         "schema_version": 1,
-        "product": "rocm-npu-test-package",
+        "product": "fastflow-sdk-test-package",
         "source_revision": source_revision,
         "platform": {"system": system, "machine": machine},
         "cases": cases,
@@ -165,8 +165,8 @@ def verify_tree(package, expected_cases, source_revision, system):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1:
         raise RuntimeError("unsupported NPU test package schema")
-    if manifest.get("product") != "rocm-npu-test-package":
-        raise RuntimeError("not a rocm-npu-test-package manifest")
+    if manifest.get("product") != "fastflow-sdk-test-package":
+        raise RuntimeError("not a fastflow-sdk-test-package manifest")
     if manifest.get("source_revision") != source_revision:
         raise RuntimeError(
             "NPU test package source revision does not match this checkout"

@@ -16,17 +16,17 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tools" / "rocm-npu-qualification" / "python"))
+sys.path.insert(0, str(ROOT / "tools" / "fastflow-sdk-qualification" / "python"))
 
-from rocm_npu_qualification.fastflowlm import (
+from fastflow_sdk_qualification.fastflowlm import (
     extract_raw_outputs,
     smoke_phrase_matches,
     verify_xclbin_inventory,
 )
-from rocm_npu_qualification.fastflowlm import (
+from fastflow_sdk_qualification.fastflowlm import (
     require_1k_checkpoint as _require_1k_checkpoint,
 )
-from rocm_npu_qualification.profiles import load_profile
+from fastflow_sdk_qualification.profiles import load_profile
 
 IS_WINDOWS = os.name == "nt"
 
@@ -272,18 +272,20 @@ def require_file(path, label):
 
 def installed_package_paths():
     try:
-        import rocm_npu_fastflowlm
-        import rocm_npu_runtime
+        import fastflow_sdk_fastflowlm
+        import fastflow_sdk_runtime
     except ImportError as error:
         raise SmokeFailure(
-            f"installed rocm-npu wheel package is unavailable: {error}"
+            f"installed fastflow wheel package is unavailable: {error}"
         ) from error
     script = Path(sysconfig.get_path("scripts")) / ("flm.exe" if IS_WINDOWS else "flm")
     return {
-        "flm_bin": script if script.is_file() else Path(rocm_npu_fastflowlm.flm_path()),
-        "hrx_runtime": Path(rocm_npu_runtime.libhrx_path()),
-        "config_path": Path(rocm_npu_fastflowlm.config_path()),
-        "xclbin_prefix": Path(rocm_npu_fastflowlm.xclbin_path()),
+        "flm_bin": script
+        if script.is_file()
+        else Path(fastflow_sdk_fastflowlm.flm_path()),
+        "hrx_runtime": Path(fastflow_sdk_runtime.libhrx_path()),
+        "config_path": Path(fastflow_sdk_fastflowlm.config_path()),
+        "xclbin_prefix": Path(fastflow_sdk_fastflowlm.xclbin_path()),
     }
 
 
@@ -349,9 +351,9 @@ def main():
         or (
             ROOT
             / "tools"
-            / "rocm-npu-qualification"
+            / "fastflow-sdk-qualification"
             / "python"
-            / "rocm_npu_qualification"
+            / "fastflow_sdk_qualification"
             / "bench"
             / "bench_1k_smoke.json"
         )

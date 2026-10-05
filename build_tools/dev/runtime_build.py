@@ -31,7 +31,7 @@ def _hrx_test_cmake_options(include_tests, include_cts):
 
 def _prepare_fresh_cmake_tree(path):
     """Clear generated CMake state in an owned runtime build tree."""
-    allowed = {paths.HRX_CMAKE_BUILD.resolve(), paths.ROCM_NPU_CLI_BUILD.resolve()}
+    allowed = {paths.HRX_CMAKE_BUILD.resolve(), paths.FASTFLOW_SDK_CLI_BUILD.resolve()}
     if path.resolve() not in allowed:
         raise RuntimeError(f"refusing to clear unexpected build directory: {path}")
     path.mkdir(parents=True, exist_ok=True)
@@ -216,12 +216,12 @@ def _smoke_installed_hrx(source, cc, cxx, env):
         )
 
 
-def cmd_build_rocm_npu_cli(args):
+def cmd_build_fastflow_cli(args):
     """Builds the standalone C++ runtime CLI without linking HRX."""
     env = environment.cmake_env()
     fresh = getattr(args, "fresh", False)
     if fresh:
-        _prepare_fresh_cmake_tree(paths.ROCM_NPU_CLI_BUILD)
+        _prepare_fresh_cmake_tree(paths.FASTFLOW_SDK_CLI_BUILD)
     version = default_package_version(paths.ROOT)
     source_revision = git_source_state(paths.ROOT)["revision"]
     cc, cxx = environment.compilers()
@@ -232,13 +232,13 @@ def cmd_build_rocm_npu_cli(args):
             "-G",
             "Ninja",
             "-S",
-            environment.cmake_path(paths.ROOT / "tools" / "rocm-npu"),
+            environment.cmake_path(paths.ROOT / "tools" / "fastflow"),
             "-B",
-            environment.cmake_path(paths.ROCM_NPU_CLI_BUILD),
+            environment.cmake_path(paths.FASTFLOW_SDK_CLI_BUILD),
             "-DCMAKE_BUILD_TYPE=Release",
-            f"-DROCM_NPU_VERSION={version}",
-            f"-DROCM_NPU_SOURCE_REVISION={source_revision}",
-            f"-DCMAKE_INSTALL_PREFIX={environment.cmake_path(paths.ROCM_NPU_CLI_INSTALL)}",
+            f"-DFASTFLOW_SDK_VERSION={version}",
+            f"-DFASTFLOW_SDK_SOURCE_REVISION={source_revision}",
+            f"-DCMAKE_INSTALL_PREFIX={environment.cmake_path(paths.FASTFLOW_SDK_CLI_INSTALL)}",
             *environment.cmake_compiler_flags(cc, cxx),
         ],
         env=env,
@@ -247,25 +247,27 @@ def cmd_build_rocm_npu_cli(args):
         [
             environment.cmake_bin(),
             "--build",
-            environment.cmake_path(paths.ROCM_NPU_CLI_BUILD),
+            environment.cmake_path(paths.FASTFLOW_SDK_CLI_BUILD),
             *(["--clean-first"] if fresh else []),
             "-j",
             BUILD_JOBS,
         ],
         env=env,
     )
-    shutil.rmtree(paths.ROCM_NPU_CLI_INSTALL, ignore_errors=True)
+    shutil.rmtree(paths.FASTFLOW_SDK_CLI_INSTALL, ignore_errors=True)
     environment.sh(
         [
             environment.cmake_bin(),
             "--install",
-            environment.cmake_path(paths.ROCM_NPU_CLI_BUILD),
+            environment.cmake_path(paths.FASTFLOW_SDK_CLI_BUILD),
         ],
         env=env,
     )
-    installed = paths.ROCM_NPU_CLI_INSTALL / "bin" / paths.executable_name("rocm-npu")
+    installed = (
+        paths.FASTFLOW_SDK_CLI_INSTALL / "bin" / paths.executable_name("fastflow")
+    )
     if not installed.exists():
-        sys.exit(f"rocm-npu CLI install did not produce {installed}")
+        sys.exit(f"fastflow CLI install did not produce {installed}")
     if fresh:
         marker = {
             "source": git_source_state(paths.ROOT),
@@ -273,11 +275,11 @@ def cmd_build_rocm_npu_cli(args):
             "version": version,
             "compilers": {"c": str(cc), "cxx": str(cxx)},
             "install": directory_state(
-                paths.ROCM_NPU_CLI_INSTALL,
+                paths.FASTFLOW_SDK_CLI_INSTALL,
                 exclude_names=(FRESH_BUILD_MARKER,),
             ),
         }
-        (paths.ROCM_NPU_CLI_INSTALL / FRESH_BUILD_MARKER).write_text(
+        (paths.FASTFLOW_SDK_CLI_INSTALL / FRESH_BUILD_MARKER).write_text(
             json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8"
         )
-    print("build rocm-npu-cli: ok ->", installed)
+    print("build fastflow-cli: ok ->", installed)

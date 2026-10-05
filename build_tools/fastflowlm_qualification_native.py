@@ -23,15 +23,15 @@ NATIVE_TEST_TARGETS = (
 VECTORS = paths.BUILD / "fastflowlm-q4nx-vectors"
 CAPABILITIES_SOURCE = (
     paths.ROOT
-    / "tools/rocm-npu-qualification/python/rocm_npu_qualification"
+    / "tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification"
     / "fastflowlm-kernel-capabilities-v1.json"
 )
 KERNEL_RECIPE_SCHEMA = (
     paths.ROOT
     / "tools"
-    / "rocm-npu-qualification"
+    / "fastflow-sdk-qualification"
     / "python"
-    / "rocm_npu_qualification"
+    / "fastflow_sdk_qualification"
     / "schemas"
     / "kernel-recipe-v1.schema.json"
 )
@@ -41,7 +41,8 @@ def load_capabilities(path=CAPABILITIES_SOURCE):
     result = json.loads(Path(path).read_text(encoding="utf-8"))
     if (
         result.get("schema_version") != 1
-        or result.get("kind") != "rocm-npu-fastflowlm-kernel-qualification-capabilities"
+        or result.get("kind")
+        != "fastflow-sdk-fastflowlm-kernel-qualification-capabilities"
         or result.get("provenance", {}).get("public_fastflowlm_abi") is not False
         or result.get("shape") != {"m": 1024, "k": 1024, "n": 128}
         or not result.get("families")
@@ -71,7 +72,7 @@ def load_capabilities(path=CAPABILITIES_SOURCE):
 
 
 def configure_qualification_tools(*, fresh=False):
-    source = paths.ROOT / "tools" / "rocm-npu-qualification" / "native"
+    source = paths.ROOT / "tools" / "fastflow-sdk-qualification" / "native"
     fastflowlm_source = paths.PROJ / "FastFlowLM" / "src"
     hrx_config = HRX_INSTALL / "lib" / "cmake" / "hrx" / "hrx-config.cmake"
     if not hrx_config.is_file():
@@ -182,7 +183,7 @@ def run_native_qualification_tests(*, configure=True):
 def recipe_generators():
     path = CAPABILITIES_SOURCE.with_name("recipe_generators.py")
     module_spec = importlib.util.spec_from_file_location(
-        "rocm_npu_qualification_recipe_generator_parity", path
+        "fastflow_sdk_qualification_recipe_generator_parity", path
     )
     if module_spec is None or module_spec.loader is None:
         raise RuntimeError("cannot load qualification recipe generators")

@@ -103,19 +103,19 @@ def verify_cli_fresh_install(
     marker_name: str,
 ) -> dict[str, object]:
     """Verifies that the installed native CLI matches this source checkout."""
-    cli_name = "rocm-npu.exe" if os.name == "nt" else "rocm-npu"
+    cli_name = "fastflow.exe" if os.name == "nt" else "fastflow"
     if not (cli_install / "bin" / cli_name).is_file():
         raise RuntimeError(
-            "rocm-npu CLI is not installed; run: "
-            "python dev.py build rocm-npu-cli --fresh"
+            "fastflow CLI is not installed; run: "
+            "python dev.py build fastflow-cli --fresh"
         )
     marker = cli_install / marker_name
     if not marker.is_file():
-        raise RuntimeError("rocm-npu CLI was not built with --fresh")
+        raise RuntimeError("fastflow CLI was not built with --fresh")
     recorded = json.loads(marker.read_text(encoding="utf-8"))
     if recorded.get("source") != git_source_state(root):
         raise RuntimeError(
-            "rocm-npu CLI sources changed after the fresh build; rebuild with --fresh"
+            "fastflow CLI sources changed after the fresh build; rebuild with --fresh"
         )
     hrx_marker_path = hrx_install / marker_name
     if not hrx_marker_path.is_file():
@@ -127,7 +127,7 @@ def verify_cli_fresh_install(
         or hrx_marker.get("source") != hrx_headers
     ):
         raise RuntimeError(
-            "rocm-npu CLI was built against different HRX headers; "
+            "fastflow CLI was built against different HRX headers; "
             "rebuild HRX and the CLI with --fresh"
         )
     if hrx_marker.get("install") != directory_state(
@@ -135,12 +135,12 @@ def verify_cli_fresh_install(
     ):
         raise RuntimeError("HRX install changed since its fresh build")
     if recorded.get("version") != default_package_version(root):
-        raise RuntimeError("rocm-npu CLI version does not match the package version")
+        raise RuntimeError("fastflow CLI version does not match the package version")
     if recorded.get("install") != directory_state(
         cli_install, exclude_names=(marker_name,)
     ):
         raise RuntimeError(
-            "rocm-npu CLI install changed after the fresh build; rebuild with --fresh"
+            "fastflow CLI install changed after the fresh build; rebuild with --fresh"
         )
     return recorded
 
@@ -153,7 +153,7 @@ def validate_source_policy(manifest: dict[str, object], root: Path) -> None:
     if not isinstance(sources, dict):
         raise RuntimeError("artifact source provenance is missing")
     expected = {
-        "rocm-npu-staging": _git_revision(root),
+        "fastflow-sdk": _git_revision(root),
         "hrx": versions["hrx"]["commit"],
         "FastFlowLM": versions["fastflowlm"]["commit"],
     }
@@ -163,7 +163,7 @@ def validate_source_policy(manifest: dict[str, object], root: Path) -> None:
             raise RuntimeError(
                 f"artifact {component} revision does not match the pinned revision"
             )
-    staging_state = sources["rocm-npu-staging"]
+    staging_state = sources["fastflow-sdk"]
     if staging_state.get("dirty"):
         raise RuntimeError("artifact was produced from a dirty staging checkout")
 
@@ -752,7 +752,7 @@ def _linux_dependencies_and_licenses(
 def artifact_name(system: str | None = None, machine: str | None = None) -> str:
     system = (system or platform.system()).lower()
     machine = (machine or platform.machine()).lower().replace("amd64", "x86_64")
-    return f"rocm-npu-{system}-{machine}"
+    return f"fastflow-sdk-{system}-{machine}"
 
 
 def _patch_manifest(root: Path) -> list[dict[str, object]]:
@@ -849,7 +849,7 @@ def stage_runtime_bundle(
     root: Path, flm_install: Path, hrx_install: Path, destination: Path
 ) -> Path:
     """Creates the bundle root and writes its complete hash manifest."""
-    cli_install = root / "build" / "rocm-npu-cli-install"
+    cli_install = root / "build" / "fastflow-cli-install"
     cli_marker = verify_cli_fresh_install(
         root=root,
         cli_install=cli_install,
@@ -871,9 +871,9 @@ def stage_runtime_bundle(
             hrx_install / "bin" / "hrx-amdxdna-resource-pressure.exe",
             bundle / "bin" / "hrx-amdxdna-resource-pressure.exe",
         )
-        cli_name = "rocm-npu.exe"
+        cli_name = "fastflow.exe"
     else:
-        cli_name = "rocm-npu"
+        cli_name = "fastflow"
         hrx_libraries = sorted((hrx_install / "lib").glob("libhrx.so*"))
         if not hrx_libraries:
             raise RuntimeError(
@@ -887,14 +887,14 @@ def stage_runtime_bundle(
         )
 
     _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
-    fixture_source = cli_install / "share" / "rocm-npu" / "self-test"
+    fixture_source = cli_install / "share" / "fastflow-sdk" / "self-test"
     if not fixture_source.is_dir():
         raise RuntimeError(
-            f"installed rocm-npu self-test data not found: {fixture_source}"
+            f"installed fastflow self-test data not found: {fixture_source}"
         )
     shutil.copytree(
         fixture_source,
-        bundle / "share" / "rocm-npu" / "self-test",
+        bundle / "share" / "fastflow-sdk" / "self-test",
         dirs_exist_ok=True,
     )
     if os.name == "nt":
@@ -906,7 +906,7 @@ def stage_runtime_bundle(
         binary_dependencies = _normalize_and_verify_linux_elf(bundle)
 
     license_sources = [
-        (root / "LICENSE", "rocm-npu-staging-LICENSE"),
+        (root / "LICENSE", "fastflow-sdk-LICENSE"),
         (root / "projects" / "hrx" / "LICENSE", "hrx-LICENSE"),
         (
             root / "projects" / "FastFlowLM" / "LICENSE_RUNTIME.txt",
@@ -955,7 +955,7 @@ def stage_runtime_bundle(
         "artifact": artifact_name(),
         "platform": {"system": platform.system(), "machine": platform.machine()},
         "sources": {
-            "rocm-npu-staging": git_source_state(root),
+            "fastflow-sdk": git_source_state(root),
             "hrx": git_source_state(root / "projects" / "hrx"),
             "FastFlowLM": git_source_state(root / "projects" / "FastFlowLM"),
         },

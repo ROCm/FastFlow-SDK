@@ -1,7 +1,0 @@
-// Copyright Advanced Micro Devices, Inc.
-// SPDX-License-Identifier: MIT
-#pragma once
-
-#define ROCM_NPU_VERSION "@ROCM_NPU_VERSION@"
-#define ROCM_NPU_SOURCE_REVISION "@ROCM_NPU_SOURCE_REVISION@"
-#define ROCM_NPU_BUILD_PLATFORM "@ROCM_NPU_BUILD_PLATFORM@"
