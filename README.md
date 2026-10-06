@@ -156,9 +156,9 @@ source ~/fastflow/bin/activate
 ```
 
 Replace `<tag>` and `<version>` with the values from the release. For example,
-if the release tag is `fastflow-sdk-v0.1.0.dev202609130034`, then use
-`<tag> = fastflow-sdk-v0.1.0.dev202609130034` and
-`<version> = 0.1.0.dev202609130034`.
+if the release tag is `fastflow-sdk-v0.1.0.dev202610050001`, then use
+`<tag> = fastflow-sdk-v0.1.0.dev202610050001` and
+`<version> = 0.1.0.dev202610050001`.
 
 ```bash
 python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-fastflowlm==<version>"
@@ -208,7 +208,7 @@ python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/
 
 For example:
 ```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/fastflow-sdk-v0.1.0.dev202608250029" "fastflow-sdk-compiler==0.1.0.dev202608250029" "fastflow-sdk-runtime==0.1.0.dev202608250029"
+python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/fastflow-sdk-v0.1.0.dev202610050001" "fastflow-sdk-compiler==0.1.0.dev202610050001" "fastflow-sdk-runtime==0.1.0.dev202610050001"
 ```
 
 ### Install the IRON operator library
