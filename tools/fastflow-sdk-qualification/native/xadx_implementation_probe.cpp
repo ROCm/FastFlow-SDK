@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "hrx_amdxdna.h"
-#include "models/gemma_text/gemma_text_dequant.hpp"
-#include "models/gemma_text/gemma_text_gemm.hpp"
+#include "models/gemma_text/flm/aie2p/gemma_text_dequant.hpp"
+#include "models/gemma_text/flm/aie2p/gemma_text_gemm.hpp"
 #include "modules/dequant.hpp"
 #include "modules/gemm.hpp"
 

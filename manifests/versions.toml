@@ -77,9 +77,9 @@ full_elf_note = "Adds self-contained FULL_ELF XADX records with standalone PDI p
 repo       = "github.com/ROCm/FastFlowLM"
 upstream   = "github.com/ROCm/FastFlowLM"
 branch     = "main"
-pr         = "ROCm/FastFlowLM#703"
-commit     = "dae4c7545bb8c4119e884fa0b83e7472efc1630c"
-note       = "FastFlowLM upstream main after PR #703 (Abhishek-Varma/update_hrx_binaries). App/catalog follow this pin (FLM v1.0.5 today); python dev.py build fastflowlm stamps -DFLM_VERSION/-DNPU_VERSION from src/CMakePresets.json. lib/hrx is the merged 1.0.3 engine set and may lag new families on main (gemma4-12b and hunyuan are XRT-only at this pin). patches/FastFlowLM/0004 skips those missing HRX engines and fails closed if they are requested. Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
+pr         = "ROCm/FastFlowLM#768"
+commit     = "8d6768dab2fd8616ea3b814f611ff01a0758681f"
+note       = "FastFlowLM upstream main (8d6768da, merge of PR #768), 63 commits after the v1.0.7 tag. v1.0.7 registers qwen3.8-mtp, qwen3vl-flash, and gemma4e-flash, but the Windows HRX engines for those families land later in PR #766; this pin includes them, and lib/hrx now covers every model engine under lib/xrt, so the former patches/FastFlowLM/0004 skip is dropped. CMakePresets still stamps FLM_VERSION 1.0.7. python dev.py build fastflowlm stamps -DFLM_VERSION/-DNPU_VERSION from src/CMakePresets.json. Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003 (applied by `dev.py build fastflowlm` / `fastflowlm-xrt`)."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"

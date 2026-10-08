@@ -55,6 +55,7 @@ from fastflow_sdk_qualification.fastflowlm import (
 from fastflow_sdk_qualification.hashing import (
     canonical_json_sha256,
     file_inventory,
+    sha256_file,
 )
 from fastflow_sdk_qualification.numeric_runtime import NUMERIC_RUNTIME
 from fastflow_sdk_qualification.offline import EvidenceError, pack_evidence
@@ -716,6 +717,22 @@ def test_profile_registry_digest_matches_fastflowlm_source():
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     profile_digest = load_profile("fast")["models"][0]["registry_sha256"]
     assert profile_digest == canonical_json_sha256(registry)
+
+
+def test_profile_xclbin_inventory_matches_fastflowlm_source():
+    xclbin_root = ROOT / "projects" / "FastFlowLM" / "src" / "xclbins"
+    if not xclbin_root.is_dir():
+        pytest.skip("FastFlowLM xclbins are not initialized")
+    mismatches = []
+    for name in ("fast", "default", "extended"):
+        for model in load_profile(name)["models"]:
+            for expected in model.get("xclbins", []):
+                path = xclbin_root / expected["path"]
+                if not path.is_file():
+                    mismatches.append(f"{name} missing {expected['path']}")
+                elif sha256_file(path) != expected["sha256"]:
+                    mismatches.append(f"{name} SHA256 mismatch for {expected['path']}")
+    assert mismatches == []
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows DLL search-path contract")
