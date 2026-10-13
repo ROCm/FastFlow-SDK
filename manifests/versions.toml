@@ -61,8 +61,8 @@ note  = "LLVM 21 (lags ROCm's 24). Folding the AIE backend onto ROCm LLVM is fut
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/ROCm/hrx-system"                # canonical ROCm remote (no fork in the chain)
 branch     = "users/jtuyls/amdxdna-hal-native-rel"
-commit     = "e67d47db67cd957a719d7418a255f9926fcb07f1"
-mapped_ctrl_note = "One commit ahead of amdxdna-hal-native-rel a7929e99. Cached single commands are keyed by executable identity, and the TXN template is copied onto the mapped instruction BO. This commit is the tip of amdxdna-hal-native-rel."
+commit     = "e53f2997faa23329621e69ed3024fe34eee30698"
+mapped_ctrl_note = "Tip of users/jtuyls/amdxdna-hal-native-rel. Two commits ahead of upstream hrx-system e67d47db6, which still copies the TXN template onto the mapped instruction BO. f4151e05f drops the host-buffer reuse cache and unleased hardware contexts from the amdxdna executable destructor when the last executable is released, and libhrx only releases the HAL executable and the device. e53f2997f keys retained single commands by shape (control-word count and binding count) as well as executable identity, so a same-identity shape change is a cache miss."
 aie4_note  = "Linux KMQ START_DPU on amdxdna-hal-native-rel, parent c023c3e7d. One ert_dpu_data per occupied ELF column; a single column stays a direct packet. CERT's full ERT-header wipe is restored only for START_DPU, so AIE2P cache reuse still keeps rewritten arg VAs. Empty AIE4 contexts are cached by partition column count."
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
 reclaim_note = "Classify IPU-remapped CreateContext 0xc01e0009 as pool exhaustion. Windows drivers 32.0.203.280, .314, and .329 expose a larger virtual-context budget than their firmware-active limit; cap their cache one below the hardware-specific active limit (Phoenix 6, Strix 8, Strix B0/Halo/Krackan 16) so LRU eviction occurs before the defective virtual-context suspend/resume path. Other Windows drivers and Linux retain the existing policy, with one-shot evict-and-retry remaining as a fallback."
