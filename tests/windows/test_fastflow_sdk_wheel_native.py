@@ -56,6 +56,14 @@ class TestFastflowSdkWheelNative:
             path = source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(contents, encoding="utf-8")
+        headers = source / "include" / "hrx"
+        headers.mkdir(parents=True)
+        (headers / "hrx_runtime.h").write_text("runtime\n", encoding="utf-8")
+        (headers / "hrx_amdxdna.h").write_text("amdxdna\n", encoding="utf-8")
+        cmake = source / "lib" / "cmake" / "hrx"
+        cmake.mkdir(parents=True)
+        (cmake / "hrx-config.cmake").write_text("find_package\n", encoding="utf-8")
+        (source / "lib" / "hrx.lib").write_bytes(b"implib")
         manifest = {
             "schema_version": 1,
             "sources": {"FastFlowLM": {"revision": "abc123"}},
@@ -105,7 +113,12 @@ class TestFastflowSdkWheelNative:
         fastflowlm = products[FASTFLOWLM_DISTRIBUTION] / FASTFLOWLM_PACKAGE
         assert (runtime / "bin" / "Runtime.DLL").is_file()
         assert (runtime / "bin" / "hrx-amdxdna-resource-pressure.exe").is_file()
+        assert (runtime / "bin" / "hrx.dll").is_file()
         assert (runtime / "bin" / "fastflow.exe").is_file()
+        for package in (runtime, fastflowlm):
+            assert not (package / "include" / "hrx").exists()
+            assert not (package / "lib" / "cmake" / "hrx").exists()
+            assert not (package / "lib" / "hrx.lib").exists()
         assert (
             runtime / "share" / "fastflow-sdk" / "self-test" / "case" / "kernel.xadx"
         ).is_file()

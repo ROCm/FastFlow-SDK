@@ -18,6 +18,7 @@ import pytest
 
 from build_tools.artifact import (
     directory_state,
+    file_inventory,
     git_source_state,
     sha256_file,
 )
@@ -26,6 +27,7 @@ from build_tools.fastflowlm_artifact import (
     _is_linux_system_runtime,
     _linux_dependencies_and_licenses,
     _linux_package_owner_candidates,
+    _stage_hrx_development_files,
     _strip_windows_system_dlls,
     _system_license_destination,
     artifact_name,
@@ -611,3 +613,112 @@ class TestFastFlowLMArtifact:
         )
         with pytest.raises(RuntimeError, match="links and special files"):
             extract_archive(archive, root / "extracted", allowed_root=root)
+
+    def _write_hrx_install(self, install: Path, *, cmake_text: str) -> None:
+        include_dir = install / "include" / "hrx"
+        include_dir.mkdir(parents=True)
+        (include_dir / "hrx_runtime.h").write_text("runtime\n", encoding="utf-8")
+        (include_dir / "hrx_amdxdna.h").write_text("amdxdna\n", encoding="utf-8")
+        (include_dir / "detail" / "extra.h").parent.mkdir()
+        (include_dir / "detail" / "extra.h").write_text("extra\n", encoding="utf-8")
+        if os.name == "nt":
+            library = install / "lib" / "hrx.lib"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"implib")
+        package = install / "lib" / "cmake" / "hrx"
+        package.mkdir(parents=True)
+        (package / "hrx-config.cmake").write_text(cmake_text, encoding="utf-8")
+        (package / "hrx-targets.cmake").write_text(
+            'include("${CMAKE_CURRENT_LIST_DIR}/hrx-config.cmake")\n',
+            encoding="utf-8",
+        )
+
+    def test_hrx_development_files_keep_install_relative_paths(self, tmp_path):
+        install = tmp_path / "build" / "hrx-install"
+        prefix = install.resolve().as_posix()
+        cmake_text = (
+            "set_target_properties(hrx::hrx PROPERTIES\n"
+            f'  IMPORTED_IMPLIB_RELEASE "{prefix}/lib/hrx.lib"\n'
+            f'  INTERFACE_INCLUDE_DIRECTORIES "{prefix}/include/hrx"\n'
+            ")\n"
+        )
+        self._write_hrx_install(install, cmake_text=cmake_text)
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+
+        _stage_hrx_development_files(install, bundle)
+
+        assert (bundle / "include" / "hrx" / "hrx_runtime.h").read_text(
+            encoding="utf-8"
+        ) == "runtime\n"
+        assert (bundle / "include" / "hrx" / "hrx_amdxdna.h").is_file()
+        assert (bundle / "include" / "hrx" / "detail" / "extra.h").is_file()
+        packaged = (bundle / "lib" / "cmake" / "hrx" / "hrx-config.cmake").read_text(
+            encoding="utf-8"
+        )
+        assert prefix not in packaged
+        assert (
+            'IMPORTED_IMPLIB_RELEASE "${CMAKE_CURRENT_LIST_DIR}/../../../lib/hrx.lib"'
+            in packaged
+        )
+        assert (
+            'INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include/hrx"'
+            in packaged
+        )
+        assert (install / "lib" / "cmake" / "hrx" / "hrx-config.cmake").read_text(
+            encoding="utf-8"
+        ) == cmake_text
+        recorded = [record["path"] for record in file_inventory(bundle)]
+        assert "include/hrx/hrx_runtime.h" in recorded
+        assert "include/hrx/hrx_amdxdna.h" in recorded
+        assert "lib/cmake/hrx/hrx-config.cmake" in recorded
+        assert "lib/cmake/hrx/hrx-targets.cmake" in recorded
+        if os.name == "nt":
+            assert (bundle / "lib" / "hrx.lib").read_bytes() == b"implib"
+            assert "lib/hrx.lib" in recorded
+
+    def test_relocatable_hrx_cmake_package_is_copied_unchanged(self, tmp_path):
+        install = tmp_path / "hrx-install"
+        cmake_text = (
+            "set_target_properties(hrx::hrx PROPERTIES\n"
+            '  IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/bin/hrx.dll"\n'
+            ")\n"
+        )
+        self._write_hrx_install(install, cmake_text=cmake_text)
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+
+        _stage_hrx_development_files(install, bundle)
+
+        assert (bundle / "lib" / "cmake" / "hrx" / "hrx-config.cmake").read_bytes() == (
+            install / "lib" / "cmake" / "hrx" / "hrx-config.cmake"
+        ).read_bytes()
+
+    def test_hrx_cmake_rewrite_ignores_sibling_install_prefixes(self, tmp_path):
+        install = tmp_path / "build" / "hrx-install"
+        prefix = install.resolve().as_posix()
+        cmake_text = f'set(OTHER "{prefix}-extra/lib/hrx.lib")\n'
+        self._write_hrx_install(install, cmake_text=cmake_text)
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+
+        _stage_hrx_development_files(install, bundle)
+
+        assert (bundle / "lib" / "cmake" / "hrx" / "hrx-config.cmake").read_text(
+            encoding="utf-8"
+        ) == cmake_text
+
+    def test_hrx_development_files_require_public_headers_and_config(self, tmp_path):
+        install = tmp_path / "hrx-install"
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        self._write_hrx_install(install, cmake_text="ok\n")
+        (install / "include" / "hrx" / "hrx_amdxdna.h").unlink()
+        with pytest.raises(RuntimeError, match="hrx_amdxdna.h"):
+            _stage_hrx_development_files(install, bundle)
+        (install / "include" / "hrx" / "hrx_amdxdna.h").write_text(
+            "amdxdna\n", encoding="utf-8"
+        )
+        (install / "lib" / "cmake" / "hrx" / "hrx-config.cmake").unlink()
+        with pytest.raises(RuntimeError, match="hrx-config.cmake"):
+            _stage_hrx_development_files(install, bundle)

@@ -845,6 +845,104 @@ def _cmake_configuration(cache: Path, root: Path) -> dict[str, str]:
     return dict(sorted(values.items()))
 
 
+def _install_prefix_patterns(install: Path) -> list[re.Pattern[str]]:
+    """Matches an install prefix written with either slash style."""
+    prefixes = []
+    for candidate in (install, install.absolute(), install.resolve()):
+        text = str(candidate)
+        if text not in prefixes:
+            prefixes.append(text)
+    flags = re.IGNORECASE if os.name == "nt" else 0
+    patterns = []
+    seen = set()
+    for prefix in sorted(prefixes, key=len, reverse=True):
+        parts = [part.rstrip("\\/") for part in Path(prefix).parts]
+        parts = [part for part in parts if part]
+        if len(parts) < 2:
+            raise RuntimeError(
+                f"refusing to rewrite HRX CMake paths from a short prefix: {prefix}"
+            )
+        body = r"[\\/]+".join(re.escape(part) for part in parts)
+        if Path(prefix).is_absolute() and os.name != "nt":
+            body = r"[\\/]+" + body
+        expression = rf"(?<![A-Za-z0-9_.-]){body}(?![A-Za-z0-9_.-])"
+        if expression in seen:
+            continue
+        seen.add(expression)
+        patterns.append(re.compile(expression, flags))
+    return patterns
+
+
+def _cmake_install_prefix_expression(cmake_file: Path, bundle: Path) -> str:
+    depth = len(cmake_file.parent.relative_to(bundle).parts)
+    if depth == 0:
+        return "${CMAKE_CURRENT_LIST_DIR}"
+    return "${CMAKE_CURRENT_LIST_DIR}/" + "/".join(".." for _ in range(depth))
+
+
+def _rewrite_hrx_cmake_text(text: str, install: Path, replacement: str) -> str:
+    patterns = _install_prefix_patterns(install)
+    for pattern in patterns:
+        text = pattern.sub(lambda _match: replacement, text)
+    if any(pattern.search(text) for pattern in patterns):
+        raise RuntimeError(
+            "packaged HRX CMake files still reference the build install prefix"
+        )
+    return text
+
+
+def _make_hrx_cmake_relocatable(cmake_file: Path, install: Path, bundle: Path) -> None:
+    if cmake_file.suffix != ".cmake":
+        return
+    original = cmake_file.read_bytes()
+    text = original.decode("utf-8")
+    updated = _rewrite_hrx_cmake_text(
+        text, install, _cmake_install_prefix_expression(cmake_file, bundle)
+    )
+    if updated != text:
+        cmake_file.write_bytes(updated.encode("utf-8"))
+
+
+def _stage_hrx_development_files(hrx_install: Path, bundle: Path) -> None:
+    """Copies HRX headers, the CMake package, and the Windows import library.
+
+    Linux already stages the ``libhrx.so`` SONAME with the runtime libraries.
+    Installed CMake files that still point at ``hrx_install`` are rewritten so
+    ``find_package(hrx)`` resolves inside the extracted archive.
+    """
+    include_dir = hrx_install / "include" / "hrx"
+    required_headers = ("hrx_runtime.h", "hrx_amdxdna.h")
+    missing_headers = [
+        name for name in required_headers if not (include_dir / name).is_file()
+    ]
+    if missing_headers:
+        raise RuntimeError(
+            "installed HRX public headers missing: " + ", ".join(missing_headers)
+        )
+    for source in sorted(path for path in include_dir.rglob("*") if path.is_file()):
+        _copy_checked(source, bundle / source.relative_to(hrx_install))
+
+    if os.name == "nt":
+        import_library = hrx_install / "lib" / "hrx.lib"
+        if not import_library.is_file():
+            raise RuntimeError(
+                f"installed HRX import library not found: {import_library}"
+            )
+        _copy_checked(import_library, bundle / "lib" / "hrx.lib")
+
+    package_dir = hrx_install / "lib" / "cmake" / "hrx"
+    config = package_dir / "hrx-config.cmake"
+    if not config.is_file():
+        raise RuntimeError(f"installed HRX CMake package not found: {config}")
+    staged_cmake = []
+    for source in sorted(path for path in package_dir.rglob("*") if path.is_file()):
+        destination = bundle / source.relative_to(hrx_install)
+        _copy_checked(source, destination)
+        staged_cmake.append(destination)
+    for destination in staged_cmake:
+        _make_hrx_cmake_relocatable(destination, hrx_install, bundle)
+
+
 def stage_runtime_bundle(
     root: Path, flm_install: Path, hrx_install: Path, destination: Path
 ) -> Path:
@@ -886,6 +984,7 @@ def stage_runtime_bundle(
             bundle / "bin" / "hrx-amdxdna-resource-pressure",
         )
 
+    _stage_hrx_development_files(hrx_install, bundle)
     _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
     fixture_source = cli_install / "share" / "fastflow-sdk" / "self-test"
     if not fixture_source.is_dir():

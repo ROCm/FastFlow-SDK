@@ -87,6 +87,9 @@ class TestFastFlowLMWheelPackageCli:
                 return_value=Path("python"),
             ),
             mock.patch.object(fastflowlm_package, "sh") as sh,
+            mock.patch.object(
+                fastflowlm_package, "verify_hrx_package_split"
+            ) as hrx_split,
         ):
             fastflowlm_package.cmd_verify_fastflowlm_wheels(args)
 
@@ -96,6 +99,7 @@ class TestFastFlowLMWheelPackageCli:
         assert fastflowlm_wheel in install
         assert runtime_wheel not in install
         implementation.verify_wheels_do_not_have_text_path_references.assert_called_once()
+        hrx_split.assert_called_once_with(wheel_directory, wheels)
 
     def test_wheel_package_requires_installed_wheels(self):
         real_import = builtins.__import__
