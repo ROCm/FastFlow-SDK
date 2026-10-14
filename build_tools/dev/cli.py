@@ -215,8 +215,12 @@ def create_parser():
     )
     sm.add_argument("--shallow", action="store_true", help="--depth 1 --jobs 4")
     _add_command(sub, "package-npu-prereqs", npu_prereqs.cmd_package_npu_prereqs)
-    _add_command(
+    package_tests = _add_command(
         sub, "package-npu-test-package", npu_test_package.cmd_package_npu_test_package
+    )
+    package_tests.add_argument(
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product that built the flm artifacts",
     )
     _add_command(sub, "package-fastflowlm", fastflowlm_package.cmd_package_fastflowlm)
     pfw = _add_command(

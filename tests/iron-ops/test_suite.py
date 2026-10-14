@@ -1,6 +1,8 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
+import os
+
 import pytest
 
 from build_tools.iron import (
@@ -9,6 +11,7 @@ from build_tools.iron import (
     SEQUENCES,
     Operator,
     host_compile_suite,
+    require_host_library,
     require_runtime_image,
     select,
 )
@@ -102,6 +105,13 @@ def test_suite_covers_the_operator_catalog():
         "mha",
         "swiglu_decode",
         "swiglu_prefill",
+        "flm.gemm",
+        "flm.dequant",
+        "flm.layer",
+        "flm.lm_head",
+        "flm.prefill_attn",
+        "flm.prefill_sliding_attn",
+        "flm.mm_prebuilt",
     }
     assert set(names) == expected
     for operator in OPERATORS:
@@ -147,6 +157,13 @@ def test_packaged_numeric_cases_cover_single_kernel_ops():
         "mha",
         "swiglu_decode",
         "swiglu_prefill",
+        "flm.gemm",
+        "flm.dequant",
+        "flm.layer",
+        "flm.lm_head",
+        "flm.prefill_attn",
+        "flm.prefill_sliding_attn",
+        "flm.mm_prebuilt",
     }
 
 
@@ -195,6 +212,53 @@ def test_compile_only_ops_have_no_npu_filter():
         assert by_name[name].hrx_pytest_filter is None
 
 
+def test_flm_ports_use_the_smallest_upstream_shape():
+    by_name = {operator.name: operator for operator in OPERATORS}
+    compiled = {
+        "flm.gemm",
+        "flm.dequant",
+        "flm.layer",
+        "flm.lm_head",
+        "flm.prefill_attn",
+        "flm.prefill_sliding_attn",
+        "flm.mm_prebuilt",
+    }
+    for name in compiled:
+        assert by_name[name].host_compile is True
+        assert by_name[name].hrx_pytest_filter is None
+        assert name in {operator.name for operator in host_compile_suite()}
+    assert by_name["flm.prefill_attn"].class_name == "PrefillAttention"
+    sliding = by_name["flm.prefill_sliding_attn"]
+    assert sliding.module == "flm.prefill_attn"
+    assert sliding.class_name == "PrefillSlidingAttention"
+    assert by_name["flm.layer"].build_kwargs["geometry"] == "FLM_GEMMA4_E2B_DECODE"
+    assert by_name["flm.gemm"].build_kwargs == {"M": 256, "K": 512, "N": 1024}
+    assert by_name["flm.lm_head"].build_kwargs == {
+        "dim": 1536,
+        "vocab": 4096,
+        "softcap": 1000.0,
+    }
+
+
+def test_flm_ports_are_in_the_prebuilt_package():
+    from build_tools.flm_npu_cases import CASE_NAMES
+    from build_tools.npu_test_package import npu_case_names
+
+    names = set(npu_case_names())
+    assert set(CASE_NAMES) <= names
+    assert {
+        "flm.gemm",
+        "flm.dequant",
+        "flm.lm_head",
+        "flm.prefill_attn",
+        "flm.prefill_sliding_attn",
+        "flm.mm_prebuilt",
+        "flm.layer-5",
+        "flm.layer-700",
+    } == set(CASE_NAMES)
+    assert not set(CASE_NAMES) & set(CASE_GENERATORS)
+
+
 def test_compile_job_count_caps_auto_and_honors_jobs():
     from build_tools.iron import compile_job_count
 
@@ -225,3 +289,20 @@ def test_require_runtime_image_rejects_empty_and_non_elf(tmp_path):
     xclbin = tmp_path / "ok.xclbin"
     xclbin.write_bytes(b"xclb")
     require_runtime_image(xclbin)
+
+
+def test_require_host_library_checks_the_host_image(tmp_path):
+    missing = tmp_path / "missing.dll"
+    with pytest.raises(RuntimeError, match="was not produced"):
+        require_host_library(missing)
+    empty = tmp_path / "empty.dll"
+    empty.write_bytes(b"")
+    with pytest.raises(RuntimeError, match="was not produced"):
+        require_host_library(empty)
+    junk = tmp_path / "junk.dll"
+    junk.write_bytes(b"not a library")
+    with pytest.raises(RuntimeError, match="is not a"):
+        require_host_library(junk)
+    library = tmp_path / ("ok.dll" if os.name == "nt" else "ok.so")
+    library.write_bytes((b"MZ" if os.name == "nt" else b"\x7fELF") + b"\0" * 12)
+    require_host_library(library)

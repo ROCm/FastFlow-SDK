@@ -3,13 +3,12 @@
 # What iron-ops' OWN pytest suite needs, on top of compiler-stack.txt. Installed only by
 # `dev.py setup --iron-ops-tests` for the local `dev.py test-npu-iron-ops` path.
 #
-# CI does not install this. CPU jobs compile operators without torch (lazy imports,
-# IRON #163). NPU e2e jobs use `npu-test-runtime` (numpy + ml-dtypes) and dispatch
-# prebuilt XADX via `test-npu-package`; they never run iron-ops pytest, so they do
-# not need torch for IRON goldens.
+# CI does not install this. The flm compile and the prebuilt NPU package oracles
+# use NumPy. NPU e2e jobs use `npu-test-runtime` (numpy + ml-dtypes) and dispatch
+# the prebuilt package; they never run iron-ops pytest.
 #
-# torch: iron-ops' golden references and its test harness are written against it. CPU only
-# -- nothing here runs on a GPU.
+# torch: iron-ops' own golden references and its test harness are written against it.
+# CPU only -- nothing here runs on a GPU. The compiler and package jobs do not import it.
 #
 # Pinned by exact wheel URL rather than `--extra-index-url https://download.pytorch.org/whl/cpu`
 # plus a version. Two reasons: a plain `torch` on Linux resolves to the CUDA wheel and drags

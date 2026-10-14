@@ -79,28 +79,34 @@ upstream.
 
 ## patches/iron-ops/
 
-### 0001-mha-bind-get-current-device.patch
-Binds MHA's compile-time `dev` to `aie_utils.get_current_device()`, matching
-GEMM, softmax, and the other operators. The pin still uses
-`DefaultNPURuntime.device()`, which is `None` under `IRON_RUNTIME=cpu`, so the
-CPU compile gate cannot build MHA without this patch.
+### 0001-windows-dispatch-library-copy.patch
+`_build_dispatch_lib` links the artifact path at the content-addressed library
+aiecc produced. Windows CI does not have `SeCreateSymbolicLinkPrivilege`
+(WinError 1314), so the link fails and the host-compile gate never sees the
+dispatch DLL. The patch copies the library when symlink creation fails.
 
-**Remove when:** IRON devel uses `get_current_device()` for MHA compile.
+**Remove when:** IRON copies or hardlinks the dispatch library on Windows.
 
-### 0002-mem-copy-pass-bit-width.patch
-Passes `-DBIT_WIDTH=16` when compiling `mem_copy`'s `passThrough.cc`. The
-design uses bfloat16; MHA already sends the same define for this kernel.
-mlir-aie v1.4.3 Peano compiles with `-Werror=undef`, so an unset `BIT_WIDTH`
-fails `test-iron-ops`. IRON still builds against the mlir_aie 1.4.2.dev wheel,
-which did not error on the undef.
+### 0002-numpy-weight-packing.patch
+`flm` weight packing is NumPy. Importing `flm.gemm` no longer imports torch, and
+`pack_B` returns a NumPy array. A torch tensor is still accepted and converted
+only when a caller passes one. The IRON test harness turns that array into a
+device tensor without going back through torch.
 
-**Remove when:** IRON `mem_copy` passes `-DBIT_WIDTH` (or the kernel no longer
-requires it).
+**Remove when:** IRON packs B with NumPy upstream.
 
-The former XRT-free host stack, lazy operator imports, and Windows aiecc copy
-fallback landed upstream as IRON #165, #163, and #162. The former aiecc native
-CLI patch was dropped earlier: IRON #145/#150 compile through mlir-aie's
-`compile_mlir_module()`, which already emits native `aiecc --get-*` flags.
+### 0003-absolute-dispatch-cpp-path.patch
+`aiecc` writes a relative `--npu-cpp-name` under `--output-dir`. The dispatch
+work directory is already that output directory, so a relative
+`dispatch_gen.cpp` landed one level too deep and the host compile could not
+see it. The path passed to `aiecc` is now absolute. An absolute name is written
+verbatim.
+
+**Remove when:** IRON passes an absolute `--npu-cpp-name`.
+
+MHA binds `get_current_device()` itself, and `mem_copy` compiles the mlir-aie
+passthrough kernel. The patches that used to do those two things were dropped
+at ea09aaa.
 
 ## patches/llvm-project/
 
@@ -244,3 +250,15 @@ no-op on Linux.
 
 **Remove when:** upstream mlir-aie compiles `tools/aiecc/Utils.h` cleanly under
 clang-cl (annotates the fields, or `#if`-guards them out on Windows).
+
+### 0008-clang-cl-dispatch-dumpmachine.patch
+`host_shared_lib_cmd` builds the dispatch DLL with GCC flags (`-shared`,
+`-std=c++17`, `-Wl,/Brepro`) and probes the compiler with `-dumpmachine`.
+Windows CI sets `CXX` to `clang-cl`. That driver ignores `-shared` and
+`-std=c++17`, reads `-Wl,/Brepro` as a warning name, and does not implement
+`-dumpmachine`. The generated transaction source is C++17, so the ignored
+standard flag fails the compile on `std::optional`. `clang-cl` and `cl` now
+get `/LD`, `/std:c++17`, and `/link /Brepro`. GCC-style drivers still report
+their triple.
+
+**Remove when:** mlir-aie builds this DLL with the driver's own flag spelling.

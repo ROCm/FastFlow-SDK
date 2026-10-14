@@ -369,8 +369,8 @@ jobs:
       # operator library is compiled on Windows at all, so it is also what would catch a
       # POSIX-ism in IRON's compilation rules (it shells out to Peano's clang++ and aiecc).
       # Auto jobs (0 = min(8, CPUs)), one process per operator.
-      # NPU e2e later dispatches a CASE_GENERATORS subset via test-npu-package;
-      # it does not run iron-ops pytest.
+      # NPU e2e later dispatches these artifacts via test-npu-package, including
+      # every flm port. It does not run iron-ops pytest.
       - name: iron-ops (build operators off-device)
         run: .venv/Scripts/python.exe dev.py test-iron-ops --compiler-prefix build/fastflow-sdk-compiler-relocated/fastflow-sdk-compiler-windows-x86_64 --jobs 0
 
@@ -449,10 +449,11 @@ jobs:
         if: ${{ inputs.run_npu_e2e }}
         run: .venv/Scripts/python.exe dev.py package-npu-prereqs
 
-      # XADX + NumPy oracles for CASE_GENERATORS (not the full host_compile catalog).
+      # XADX, dispatch transactions, and numeric oracles for CASE_GENERATORS
+      # plus every flm port.
       - name: Package prebuilt NPU tests
         if: ${{ inputs.run_npu_e2e }}
-        run: .venv/Scripts/python.exe dev.py package-npu-test-package
+        run: .venv/Scripts/python.exe dev.py package-npu-test-package --compiler-prefix build/fastflow-sdk-compiler-relocated/fastflow-sdk-compiler-windows-x86_64
 
       - name: Verify run prerequisites (off-device)
         if: ${{ inputs.run_npu_e2e }}

@@ -60,6 +60,7 @@ def make_product(
         *compiler_product.NPU_PREREQ_TOOLS,
         "aiebu-asm",
         "xclbinutil",
+        "llvm-nm",
         "llvm-objcopy",
     ]:
         tool = f"{name}{compiler_product._EXE}"

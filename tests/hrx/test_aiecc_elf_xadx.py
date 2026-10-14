@@ -147,6 +147,13 @@ def test_parses_typed_parameter_layout():
     ]
 
 
+def test_parses_parameter_ranges_and_joint_bounds():
+    assert aiecc_elf_xadx.parse_params("0\n0\n") == []
+    assert aiecc_elf_xadx.parse_params(
+        "1\ninput_offset 3 i32 addr 0 1024\n1\ninput_offset vector_size 1 4096\n"
+    ) == [("input_offset", "i32", 0, 3, 4, 1)]
+
+
 def test_rejects_invalid_parameter_metadata():
     with pytest.raises(ValueError, match="count is 2"):
         aiecc_elf_xadx.parse_params("2\nvector_size 0 i32 core\n")

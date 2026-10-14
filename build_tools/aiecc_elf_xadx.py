@@ -168,54 +168,86 @@ def _scalar_byte_length(scalar_type):
 
 
 def parse_params(params_text):
-    """Parses aiecc scratchpad metadata into HRX control-parameter records."""
+    """Parses aiecc scratchpad metadata into HRX control-parameter records.
+
+    The file is a parameter count, one record per parameter, then a joint-bound
+    count and one record per bound. A parameter record is ``name slot type
+    kind`` or, since mlir-aie v1.4.4, those four fields plus ``min max``
+    (``- -`` when the parameter has no range). Joint bounds are host-side DMA
+    limits and are not part of the XADX control-parameter table.
+    """
     lines = [line.strip() for line in params_text.splitlines() if line.strip()]
     if not lines:
         raise ValueError("scratchpad parameter metadata is empty")
-    try:
-        expected_count = int(lines[0])
-    except ValueError as error:
-        raise ValueError("scratchpad parameter count is not an integer") from error
-    if expected_count != len(lines) - 1:
+    expected_count = _leading_count(lines[0], "scratchpad parameter count")
+    records = lines[1:]
+    if len(records) < expected_count:
         raise ValueError(
             f"scratchpad parameter count is {expected_count}, "
-            f"but {len(lines) - 1} records follow"
+            f"but {len(records)} records follow"
         )
-    parameters = []
-    constant_offset = 0
-    for line in lines[1:]:
-        fields = line.split()
-        if len(fields) != 4:
-            raise ValueError(f"malformed scratchpad parameter record {line!r}")
-        name, state_table_index_text, scalar_type, kind_text = fields
-        try:
-            state_table_index = int(state_table_index_text)
-        except ValueError as error:
+    parameters = [
+        _parse_parameter_record(line, constant_offset)
+        for constant_offset, line in _parameter_offsets(records[:expected_count])
+    ]
+    rest = records[expected_count:]
+    if rest:
+        joint_count = _leading_count(rest[0], "scratchpad joint-bound count")
+        joint_lines = rest[1:]
+        if joint_count != len(joint_lines):
             raise ValueError(
-                f"scratchpad parameter {name!r} has a non-integer slot"
-            ) from error
-        if not 0 <= state_table_index < 32:
-            raise ValueError(
-                f"scratchpad parameter {name!r} slot {state_table_index} "
-                "is outside [0, 32)"
+                f"scratchpad joint-bound count is {joint_count}, "
+                f"but {len(joint_lines)} records follow"
             )
-        if kind_text not in ("core", "addr"):
-            raise ValueError(
-                f"scratchpad parameter {name!r} has unknown kind {kind_text!r}"
-            )
-        byte_length = _scalar_byte_length(scalar_type)
-        parameters.append(
-            (
-                name,
-                scalar_type,
-                constant_offset,
-                state_table_index,
-                byte_length,
-                1 if kind_text == "addr" else 0,
-            )
-        )
-        constant_offset += byte_length
+        for line in joint_lines:
+            if len(line.split()) != 4:
+                raise ValueError(f"malformed scratchpad joint bound {line!r}")
     return parameters
+
+
+def _leading_count(line, label):
+    try:
+        return int(line)
+    except ValueError as error:
+        raise ValueError(f"{label} is not an integer") from error
+
+
+def _parameter_offsets(lines):
+    offset = 0
+    for line in lines:
+        record = _parse_parameter_record(line, offset)
+        yield offset, line
+        offset += record[4]
+
+
+def _parse_parameter_record(line, constant_offset):
+    fields = line.split()
+    if len(fields) not in (4, 6):
+        raise ValueError(f"malformed scratchpad parameter record {line!r}")
+    name, state_table_index_text, scalar_type, kind_text = fields[:4]
+    try:
+        state_table_index = int(state_table_index_text)
+    except ValueError as error:
+        raise ValueError(
+            f"scratchpad parameter {name!r} has a non-integer slot"
+        ) from error
+    if not 0 <= state_table_index < 32:
+        raise ValueError(
+            f"scratchpad parameter {name!r} slot {state_table_index} is outside [0, 32)"
+        )
+    if kind_text not in ("core", "addr"):
+        raise ValueError(
+            f"scratchpad parameter {name!r} has unknown kind {kind_text!r}"
+        )
+    byte_length = _scalar_byte_length(scalar_type)
+    return (
+        name,
+        scalar_type,
+        constant_offset,
+        state_table_index,
+        byte_length,
+        1 if kind_text == "addr" else 0,
+    )
 
 
 def convert_to_xadx(api, elf_data, context_xclbin, params_text, entry_name="MLIR_AIE"):

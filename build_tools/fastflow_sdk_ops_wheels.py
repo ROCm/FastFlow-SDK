@@ -136,19 +136,24 @@ def stage_ops_tree(
     destination = Path(destination)
     iron_root = source_root / "iron"
     kernels_root = source_root / "aie_kernels"
+    if not kernels_root.is_dir():
+        kernels_root = paths.PROJ / "iron-tools" / "aie_kernels"
     if not iron_root.is_dir() or not kernels_root.is_dir():
         raise RuntimeError(
-            "projects/iron-ops is missing iron/ or aie_kernels/; "
-            "run: python dev.py submodules iron-ops"
+            "projects/iron-ops is missing iron/, and neither iron-ops nor "
+            "iron-tools has aie_kernels/; run: python dev.py submodules iron-ops iron-tools"
         )
     reset_directory(destination, destination.parent)
     _copy_tree_filtered(iron_root, destination / "iron")
     _copy_tree_filtered(kernels_root, destination / "aie_kernels")
     if not (destination / "iron" / "operators" / "__init__.py").is_file():
         raise RuntimeError("staged IRON ops wheel is missing iron.operators")
-    if not (destination / "aie_kernels" / "generic" / "add.cc").is_file():
+    if not (
+        (destination / "aie_kernels" / "generic" / "add.cc").is_file()
+        or (destination / "aie_kernels" / "eltwise" / "add.cc").is_file()
+    ):
         raise RuntimeError(
-            "staged IRON ops wheel is missing aie_kernels/generic/add.cc"
+            "staged IRON ops wheel is missing aie_kernels add.cc (generic/ or eltwise/)"
         )
 
     package_root = destination / OPS_PACKAGE
@@ -249,8 +254,9 @@ def _torch_is_missing(error: BaseException) -> bool:
 def probe_operator_modules(operators, *, torch_at_import: frozenset[str]):
     """Import every ``iron.operators.<pkg>.op``; skip only ``torch_at_import``.
 
-    Discovery is ``*/op.py`` next to ``iron.operators`` (IRON operator packages
-    have no ``__init__.py``, so ``pkgutil.iter_modules`` would miss them). The
+    Discovery is ``*/op.py`` next to ``iron.operators``, plus one nested level
+    (``flm/<name>/op.py``). IRON operator packages have no ``__init__.py``, so
+    ``pkgutil.iter_modules`` would miss them. The
     discovered set must equal imported ∪ skipped. Every skip-list package must
     be present and must fail with missing torch. A skip-list package that
     imports is a stale allowlist (drop it). Lazy ``__all__`` exports are
@@ -265,18 +271,28 @@ def probe_operator_modules(operators, *, torch_at_import: frozenset[str]):
     imported = []
     skipped = []
     for child in sorted(operators_root.iterdir()):
-        if not child.is_dir() or not (child / "op.py").is_file():
+        if not child.is_dir():
             continue
-        discovered.append(child.name)
-        name = f"{operators.__name__}.{child.name}.op"
-        try:
-            importlib.import_module(name)
-        except ModuleNotFoundError as error:
-            if child.name in torch_at_import and _torch_is_missing(error):
-                skipped.append(name)
-                continue
-            raise
-        imported.append(name)
+        packages = []
+        if (child / "op.py").is_file():
+            packages.append(child.name)
+        else:
+            packages.extend(
+                f"{child.name}.{nested.name}"
+                for nested in sorted(child.iterdir())
+                if nested.is_dir() and (nested / "op.py").is_file()
+            )
+        for package in packages:
+            discovered.append(package)
+            name = f"{operators.__name__}.{package}.op"
+            try:
+                importlib.import_module(name)
+            except ModuleNotFoundError as error:
+                if package in torch_at_import and _torch_is_missing(error):
+                    skipped.append(name)
+                    continue
+                raise
+            imported.append(name)
 
     discovered_set = set(discovered)
     missing_skips = sorted(torch_at_import - discovered_set)
@@ -324,7 +340,8 @@ def probe_operator_modules(operators, *, torch_at_import: frozenset[str]):
             ):
                 raise
             continue
-        if getattr(value, "__name__", None) != export:
+        module_name = getattr(value, "__name__", None)
+        if module_name != export and module_name != f"{operators.__name__}.{export}":
             raise RuntimeError(f"iron.operators.{export} resolved to {value!r}")
 
     return imported, skipped
@@ -337,7 +354,6 @@ import importlib.metadata
 from pathlib import Path
 
 import iron.operators as operators
-from iron.common.context import AIEContext
 
 """
         + inspect.getsource(_torch_is_missing)
@@ -346,9 +362,10 @@ from iron.common.context import AIEContext
         + f"""
 assert importlib.metadata.version("fastflow-sdk-ops")
 import fastflow_sdk_ops
-kernel = AIEContext.base_dir / "aie_kernels" / "generic" / "add.cc"
+kernel = fastflow_sdk_ops.kernels_root() / "eltwise" / "add.cc"
+if not kernel.is_file():
+    kernel = fastflow_sdk_ops.kernels_root() / "generic" / "add.cc"
 assert kernel.is_file(), kernel
-assert (fastflow_sdk_ops.kernels_root() / "generic" / "add.cc").is_file()
 assert fastflow_sdk_ops.manifest()["product"] == "fastflow-sdk-ops"
 imported, skipped = probe_operator_modules(
     operators, torch_at_import=frozenset({sorted(_TORCH_AT_IMPORT)!r})
@@ -375,16 +392,21 @@ def _ops_compile_specs() -> tuple[dict[str, object], ...]:
         raise RuntimeError(
             "OPERATORS includes torch-at-import packages: " + ", ".join(overlap)
         )
-    operators = tuple(
-        {
+    operators = []
+    for operator in host_compile_suite():
+        spec = {
             "name": operator.name,
             "kind": "operator",
             "kwargs": dict(operator.build_kwargs),
             "device": operator.device,
             "full_elf": operator.full_elf,
         }
-        for operator in host_compile_suite()
-    )
+        if operator.module:
+            spec["module"] = operator.module
+        if operator.class_name:
+            spec["class_name"] = operator.class_name
+        operators.append(spec)
+    operators = tuple(operators)
     sequences = tuple(
         {
             "name": sequence.name,
@@ -412,7 +434,9 @@ def _installed_ops_compile(build_dir: Path) -> str:
     from build_tools.iron import (
         classify_compiled_images,
         compile_job_count,
+        require_host_library,
         require_runtime_image,
+        resolve_build_kwargs,
     )
 
     specs = _ops_compile_specs()
@@ -441,9 +465,13 @@ if not (prefix / "include").is_dir():
 """
         + inspect.getsource(require_runtime_image)
         + "\n"
+        + inspect.getsource(require_host_library)
+        + "\n"
         + inspect.getsource(classify_compiled_images)
         + "\n"
         + inspect.getsource(compile_job_count)
+        + "\n"
+        + inspect.getsource(resolve_build_kwargs)
         + f"""
 
 SPECS = {specs!r}
@@ -542,7 +570,9 @@ def compile_one(spec, build_root):
         )
         return name
 
-    module = importlib.import_module(f"iron.operators.{{name}}.op")
+    module_name = spec.get("module") or name
+    class_name = spec.get("class_name")
+    module = importlib.import_module(f"iron.operators.{{module_name}}.op")
     found = [
         value
         for value in vars(module).values()
@@ -550,6 +580,8 @@ def compile_one(spec, build_root):
         and issubclass(value, AIEOperatorBase)
         and value.__module__ == module.__name__
     ]
+    if class_name:
+        found = [value for value in found if value.__name__ == class_name]
     if len(found) != 1:
         names = ", ".join(sorted(cls.__name__ for cls in found)) or "none"
         raise SystemExit(
@@ -557,15 +589,16 @@ def compile_one(spec, build_root):
             f"{{len(found)}} ({{names}})"
         )
     cls = found[0]
+    kwargs = resolve_build_kwargs(spec["kwargs"])
     params = inspect.signature(cls.__init__).parameters
-    unknown = [key for key in spec["kwargs"] if key not in params]
+    unknown = [key for key in kwargs if key not in params]
     if unknown:
         raise SystemExit(f"{{name}}: unsupported constructor args {{unknown}}")
     if spec["full_elf"]:
         full_elf_dir = op_dir / "full-elf"
         context_dir = op_dir / "context"
         operator = cls(
-            **spec["kwargs"], context=AIEContext(build_dir=full_elf_dir)
+            **kwargs, context=AIEContext(build_dir=full_elf_dir)
         )
         sequence = OperatorSequence(
             name=f"{{name}}_dynamic",
@@ -585,7 +618,7 @@ def compile_one(spec, build_root):
         except RuntimeError as error:
             raise SystemExit(f"{{name}}: {{error}}") from error
 
-        context_kwargs = dict(spec["kwargs"])
+        context_kwargs = dict(kwargs)
         for key in tuple(context_kwargs):
             if key.endswith("_parameter"):
                 context_kwargs[key] = None
@@ -611,12 +644,14 @@ def compile_one(spec, build_root):
         )
         return name
 
-    operator = cls(**spec["kwargs"], context=AIEContext(build_dir=op_dir))
+    operator = cls(**kwargs, context=AIEContext(build_dir=op_dir))
     operator.compile()
     try:
         kind, produced = classify_compiled_images(operator.artifacts)
         for path in produced:
             require_runtime_image(path, elf=(kind == "elf"))
+        if kind == "dispatch":
+            require_host_library(produced[1])
     except RuntimeError as error:
         raise SystemExit(f"{{name}}: {{error}}") from error
     print("ops compile: ok", name, *(path.name for path in produced), flush=True)

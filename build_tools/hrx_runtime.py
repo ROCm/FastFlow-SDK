@@ -839,6 +839,14 @@ class HrxRuntime:
         if resource in self._resources:
             self._resources.remove(resource)
 
+    def load_xclbin_transaction(self, xclbin, transaction, entry_name="MLIR_AIE"):
+        """Loads one xclbin with a transaction generated for this dispatch."""
+        if not xclbin:
+            raise ValueError("xclbin must not be empty")
+        if not transaction:
+            raise ValueError("transaction must not be empty")
+        return self.load_xadx(self.api.serialize_xadx(xclbin, transaction, entry_name))
+
     def load_xadx(self, xadx):
         """Loads an already serialized amdxdna XADX executable."""
         storage = _byte_storage(xadx)

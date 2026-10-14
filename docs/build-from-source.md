@@ -226,7 +226,7 @@ shipped in the compiler product.
 
 **`test-iron-ops`** builds the same chain from the other direction: the
 `iron-ops` operator library (`ElementwiseAdd`, ...) rather than an iron-tools
-example, compiling the operator's own `aie_kernels/*.cc` through Peano.
+example, compiling mlir-aie's `aie_kernels/*.cc` through Peano.
 iron-ops is developed against the `mlir_aie` *wheel*, so this is what catches
 its drift from our source pin, without an NPU. Which operators it covers is
 [`build_tools/iron.py`](../build_tools/iron.py) `OPERATORS`; adding a row

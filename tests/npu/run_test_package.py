@@ -91,6 +91,56 @@ def _comparison_arrays(actual, expected, logical_dtype):
     return actual, expected
 
 
+def _rel_l2(actual, expected):
+    actual = np.asarray(actual, dtype=np.float64).reshape(-1)
+    expected = np.asarray(expected, dtype=np.float64).reshape(-1)
+    return float(
+        np.linalg.norm(actual - expected) / max(float(np.linalg.norm(expected)), 1e-30)
+    )
+
+
+def _check_region(descriptor, actual, expected, limits, failures, label):
+    """Elementwise, mean, or relative-L2 check of one active region."""
+    name = descriptor["name"]
+    rel_limit = (limits.get("rel_l2") or {}).get(name)
+    if rel_limit is not None:
+        compared_actual, compared_expected = _comparison_arrays(
+            actual, expected, descriptor.get("logical_dtype")
+        )
+        error = _rel_l2(compared_actual, compared_expected)
+        if error > float(rel_limit):
+            failures.append(f"{name}{label}: relative L2 {error:.4f} > {rel_limit}")
+        return
+    failure = _compare(
+        actual,
+        expected,
+        descriptor.get("logical_dtype"),
+        float(descriptor.get("rtol", 0.0)),
+        float(descriptor.get("atol", 0.0)),
+    )
+    if failure:
+        failures.append(f"{name}{label}: {failure}")
+        return
+    mean_limit = (limits.get("mean_atol") or {}).get(name)
+    if mean_limit is None:
+        return
+    compared_actual, compared_expected = _comparison_arrays(
+        actual, expected, descriptor.get("logical_dtype")
+    )
+    mean_error = float(
+        np.mean(
+            np.abs(
+                compared_actual.astype(np.float64)
+                - compared_expected.astype(np.float64)
+            )
+        )
+    )
+    if mean_error > float(mean_limit):
+        failures.append(
+            f"{name}{label}: mean abs error {mean_error:.4f} > {mean_limit}"
+        )
+
+
 def _compare(actual, expected, logical_dtype, rtol, atol):
     actual, expected = _comparison_arrays(actual, expected, logical_dtype)
     if np.issubdtype(actual.dtype, np.inexact):
@@ -119,6 +169,7 @@ class PreparedCase:
         self.buffers = []
         self.output_records = []
         self.dispatches = []
+        self.xclbin = b""
 
     def close(self):
         for buffer in reversed(self.buffers):
@@ -133,17 +184,21 @@ def _prepare_case(runtime, package_root, case):
     name = case["name"]
     prepared = PreparedCase(case)
     try:
-        prepared.executable = runtime.load_xadx(
-            (package_root / case["xadx"]).read_bytes()
-        )
-        prepared.export_ordinal = prepared.executable.lookup_export(case["export"])
+        prepared.xclbin = b""
+        if case.get("xclbin"):
+            prepared.xclbin = (package_root / case["xclbin"]).read_bytes()
+        if case.get("xadx"):
+            prepared.executable = runtime.load_xadx(
+                (package_root / case["xadx"]).read_bytes()
+            )
+            prepared.export_ordinal = prepared.executable.lookup_export(case["export"])
 
         for descriptor in case["buffers"]:
             buffer_name = descriptor["name"]
             direction = descriptor["direction"]
-            if direction not in ("input", "output"):
+            if direction not in ("input", "output", "inout"):
                 raise ValueError(
-                    f"{name}.{buffer_name}: direction must be input or output"
+                    f"{name}.{buffer_name}: direction must be input, output, or inout"
                 )
             dtype = np.dtype(descriptor["dtype"])
             shape = tuple(int(dimension) for dimension in descriptor["shape"])
@@ -154,19 +209,22 @@ def _prepare_case(runtime, package_root, case):
 
             buffer = runtime.allocate_buffer(shape, dtype)
             prepared.buffers.append(buffer)
-            if direction == "input":
-                source = _read_array(package_root, descriptor["input"], dtype, shape)
-                np.copyto(buffer.array, source, casting="no")
+            initial = None
+            expected = None
+            if direction in ("input", "inout"):
+                initial = _read_array(package_root, descriptor["input"], dtype, shape)
+                np.copyto(buffer.array, initial, casting="no")
             else:
                 buffer.array.fill(0)
+            if direction in ("output", "inout"):
                 expected = _read_array(
                     package_root, descriptor["expected"], dtype, shape
                 )
-                prepared.output_records.append((descriptor, buffer, expected))
+                prepared.output_records.append((descriptor, buffer, expected, initial))
             buffer.flush()
         for dispatch in case.get("dispatches", ()):
             expected = {}
-            for descriptor, _, default_expected in prepared.output_records:
+            for descriptor, _, default_expected, _initial in prepared.output_records:
                 relative_path = dispatch.get("expected", {}).get(descriptor["name"])
                 expected[descriptor["name"]] = (
                     _read_array(
@@ -178,11 +236,25 @@ def _prepare_case(runtime, package_root, case):
                     if relative_path
                     else default_expected
                 )
+            if "transaction" in dispatch:
+                payload = (package_root / dispatch["transaction"]).read_bytes()
+                constants = b""
+                transaction = payload
+            else:
+                constants = (package_root / dispatch["constants"]).read_bytes()
+                transaction = b""
             prepared.dispatches.append(
                 (
                     dispatch["name"],
-                    (package_root / dispatch["constants"]).read_bytes(),
+                    constants,
+                    transaction,
                     expected,
+                    {
+                        "compare_prefix": dispatch.get("compare_prefix") or {},
+                        "mean_atol": dispatch.get("mean_atol") or {},
+                        "compare_slices": dispatch.get("compare_slices") or {},
+                        "rel_l2": dispatch.get("rel_l2") or {},
+                    },
                 )
             )
         return prepared
@@ -192,36 +264,77 @@ def _prepare_case(runtime, package_root, case):
 
 
 def _dispatch_and_validate(runtime, prepared, dispatch_index=0):
-    for _, buffer, _ in prepared.output_records:
-        buffer.array.fill(0)
+    for descriptor, buffer, _expected, initial in prepared.output_records:
+        if descriptor["direction"] == "inout":
+            np.copyto(buffer.array, initial, casting="no")
+        else:
+            buffer.array.fill(0)
         buffer.flush()
     dispatch = (
         prepared.dispatches[dispatch_index % len(prepared.dispatches)]
         if prepared.dispatches
-        else (None, b"", {})
+        else (None, b"", b"", {}, {})
     )
-    _, constants, expected_by_name = dispatch
-    runtime.dispatch(
-        prepared.executable,
-        prepared.export_ordinal,
-        prepared.buffers,
-        constants=constants,
-    )
+    _, constants, transaction, expected_by_name, limits = dispatch
+    executable = prepared.executable
+    export_ordinal = prepared.export_ordinal
+    owned_executable = None
+    if transaction:
+        owned_executable = runtime.load_xclbin_transaction(
+            prepared.xclbin, transaction, prepared.case["export"]
+        )
+        executable = owned_executable
+        export_ordinal = executable.lookup_export(prepared.case["export"])
+    try:
+        runtime.dispatch(
+            executable,
+            export_ordinal,
+            prepared.buffers,
+            constants=constants,
+        )
+    finally:
+        if owned_executable is not None:
+            owned_executable.close()
     runtime.synchronize()
 
     failures = []
-    for descriptor, buffer, default_expected in prepared.output_records:
-        expected = expected_by_name.get(descriptor["name"], default_expected)
+    for descriptor, buffer, default_expected, _initial in prepared.output_records:
+        expected = np.asarray(
+            expected_by_name.get(descriptor["name"], default_expected)
+        ).reshape(-1)
         buffer.invalidate()
-        failure = _compare(
-            buffer.array,
-            expected,
-            descriptor.get("logical_dtype"),
-            float(descriptor.get("rtol", 0.0)),
-            float(descriptor.get("atol", 0.0)),
-        )
-        if failure:
-            failures.append(f"{descriptor['name']}: {failure}")
+        actual = buffer.array.reshape(-1)
+        slices = (limits.get("compare_slices") or {}).get(descriptor["name"])
+        prefix = (limits.get("compare_prefix") or {}).get(descriptor["name"])
+        if slices:
+            mask = np.zeros(actual.shape, dtype=bool)
+            for start, end in slices:
+                start, end = int(start), int(end)
+                mask[start:end] = True
+                _check_region(
+                    descriptor,
+                    actual[start:end],
+                    expected[start:end],
+                    limits,
+                    failures,
+                    f"[{start}:{end}]",
+                )
+            if not np.array_equal(actual[~mask], expected[~mask]):
+                failures.append(f"{descriptor['name']}: wrote outside its active rows")
+        elif prefix is not None:
+            prefix = int(prefix)
+            _check_region(
+                descriptor,
+                actual[:prefix],
+                expected[:prefix],
+                limits,
+                failures,
+                "",
+            )
+            if not np.array_equal(actual[prefix:], expected[prefix:]):
+                failures.append(f"{descriptor['name']}: wrote past its active rows")
+        else:
+            _check_region(descriptor, actual, expected, limits, failures, "")
     return failures
 
 

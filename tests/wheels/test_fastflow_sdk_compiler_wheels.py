@@ -567,6 +567,23 @@ class TestFastflowSdkCompilerWheels:
         assert 'os.getenv("FASTFLOW_SDK_COMPILER_PREFIX")' in text
         assert "return '.'" in text
 
+    def test_rewrite_clears_the_build_llvm_bin_directory(self, tmp_path):
+        configure = tmp_path / "configure.py"
+        configure.write_text(
+            "import os\n"
+            "\n"
+            'llvm_tools_binary_dir = r"""/__w/FastFlow-SDK/FastFlow-SDK/build/llvm/bin"""\n'
+            "\n"
+            "def install_path():\n"
+            "    return '.'\n",
+            encoding="utf-8",
+        )
+        _rewrite_configure_install_path(configure)
+        text = configure.read_text(encoding="utf-8")
+        assert 'llvm_tools_binary_dir = ""' in text
+        assert "/__w/FastFlow-SDK" not in text
+        assert 'os.getenv("FASTFLOW_SDK_COMPILER_PREFIX")' in text
+
     def test_binding_stage_skips_missing_configure_py(self, tmp_path):
         root = tmp_path
         python_root = self.make_python_root(root)

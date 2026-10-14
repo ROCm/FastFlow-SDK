@@ -37,7 +37,7 @@ aiofiles
 
 # --- Peano: AIE hardware codegen (the only wheel-sourced toolchain piece) ---
 --find-links https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
-llvm-aie==21.0.0.2026061501+acc2a72c
+llvm-aie==22.0.0.2026092101+0006955e
 
 # --- iron-ops (projects/iron-ops, the IRON operator library) ---
 # The package itself is installed from the SUBMODULE, editable and --no-deps (see dev.py

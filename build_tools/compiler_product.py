@@ -52,7 +52,7 @@ COMPILER_PRODUCT_RELOCATED = paths.BUILD / "fastflow-sdk-compiler-relocated"
 COMPILER_ARTIFACTS = paths.BUILD / "artifacts"
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27
-PEANO_WHEEL = "llvm-aie==21.0.0.2026061501+acc2a72c"
+PEANO_WHEEL = "llvm-aie==22.0.0.2026092101+0006955e"
 PEANO_INDEX = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
 NPU_PREREQ_TOOLS = [
     "aiecc",
@@ -409,13 +409,15 @@ def stage_product():
     _stage(xclbinutil, product / relative)
     required_tools.append(relative.as_posix())
 
-    # The IRON JIT external-kernel path needs LLVM's objcopy because GNU
-    # binutils objcopy cannot parse AIEngine ELF objects. Iron-tools installs
-    # it into its bin directory, so the relocated product must ship it too.
-    objcopy = _tool(it / "bin" / "llvm-objcopy")
-    relative = Path("bin") / objcopy.name
-    _stage(objcopy, product / relative)
-    required_tools.append(relative.as_posix())
+    # The IRON JIT external-kernel path lists symbols with llvm-nm and rewrites
+    # them with llvm-objcopy. GNU binutils objcopy cannot parse AIEngine ELF
+    # objects. Iron-tools installs both into its bin directory, so the
+    # relocated product must ship them too.
+    for tool_name in ("llvm-nm", "llvm-objcopy"):
+        tool = _tool(it / "bin" / tool_name)
+        relative = Path("bin") / tool.name
+        _stage(tool, product / relative)
+        required_tools.append(relative.as_posix())
 
     aiebu_asm = _tool(paths.AIEBU_INSTALL / "bin" / "aiebu-asm")
     relative = Path("bin") / aiebu_asm.name

@@ -288,12 +288,20 @@ class TestOpsOperatorProbe:
         operators = IRON_OPS_SOURCE / "iron" / "operators"
         if not operators.is_dir():
             pytest.skip("iron-ops source is not checked out for this CI profile")
-        packages = {
-            child.name
-            for child in operators.iterdir()
-            if child.is_dir() and (child / "op.py").is_file()
+        packages = set()
+        for child in operators.iterdir():
+            if not child.is_dir():
+                continue
+            if (child / "op.py").is_file():
+                packages.add(child.name)
+                continue
+            for nested in child.iterdir():
+                if nested.is_dir() and (nested / "op.py").is_file():
+                    packages.add(f"{child.name}.{nested.name}")
+        catalog = {op.name for op in OPERATORS} | {
+            op.module for op in OPERATORS if op.module
         }
-        leftover = packages - {op.name for op in OPERATORS} - set(_TORCH_AT_IMPORT)
+        leftover = packages - catalog - set(_TORCH_AT_IMPORT)
         assert leftover == set()
 
     def test_reuse_venv_keeps_existing_interpreter(self, tmp_path, monkeypatch):
