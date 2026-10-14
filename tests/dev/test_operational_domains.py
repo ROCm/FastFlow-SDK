@@ -133,7 +133,8 @@ class TestBuildDomain:
         assert "hrx-xclbinutil" in compile_command
         assert "pdi_transform_test" in compile_command
 
-    def test_llvm_build_includes_objcopy_for_relocated_products(self):
+    def test_llvm_build_includes_binutils_for_aie_objects(self):
+        assert "llvm-nm" in compiler_build.LLVM_BUILD_TARGETS
         assert "llvm-objcopy" in compiler_build.LLVM_BUILD_TARGETS
 
 

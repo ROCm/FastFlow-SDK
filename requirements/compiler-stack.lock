@@ -159,8 +159,8 @@ kaitaistruct==0.11 \
     --hash=sha256:053ee764288e78b8e53acf748e9733268acbd579b8d82a427b1805453625d74b \
     --hash=sha256:5c6ce79177b4e193a577ecd359e26516d1d6d000a0bffd6e1010f2a46a62a561
     # via abi3audit
-llvm-aie==21.0.0.2026061501+acc2a72c \
-    --hash=sha256:2050846f7277734cffc659f5cebee6959366461381bddb3af095a2d35c9b9ae7
+llvm-aie==22.0.0.2026092101+0006955e \
+    --hash=sha256:c26ba76475d23768bdf5125f4ec54b5e74eda9eee8d42ee33e57e4f4641753ef
     # via -r requirements/compiler-stack.txt
 markdown-it-py==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \

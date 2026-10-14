@@ -64,13 +64,16 @@ def write_case(stage, generated, xadx, source, required_features=()):
         }
         storage_dtype = np.dtype(record["dtype"])
         record["dtype"] = storage_dtype.str
-        if descriptor["direction"] == "input":
-            field, value = "input", descriptor["data"]
-        else:
-            field, value = "expected", descriptor["expected"]
-        data_path = case_dir / f"{descriptor['name']}.bin"
-        np.asarray(value, dtype=storage_dtype).tofile(data_path)
-        record[field] = data_path.relative_to(stage).as_posix()
+        direction = descriptor["direction"]
+        if direction in ("input", "inout"):
+            data_path = case_dir / f"{descriptor['name']}.bin"
+            np.asarray(descriptor["data"], dtype=storage_dtype).tofile(data_path)
+            record["input"] = data_path.relative_to(stage).as_posix()
+        if direction in ("output", "inout"):
+            suffix = "-expected.bin" if direction == "inout" else ".bin"
+            data_path = case_dir / f"{descriptor['name']}{suffix}"
+            np.asarray(descriptor["expected"], dtype=storage_dtype).tofile(data_path)
+            record["expected"] = data_path.relative_to(stage).as_posix()
         buffers.append(record)
     case = {
         "name": generated["name"],
@@ -108,6 +111,87 @@ def write_case(stage, generated, xadx, source, required_features=()):
         )
     if dispatches:
         case["dispatches"] = dispatches
+    return case
+
+
+def write_dispatch_case(stage, generated, xclbin, source, required_features=()):
+    """Writes one xclbin plus one generated transaction per dispatch.
+
+    ``generated["dispatches"]`` entries carry ``transaction`` bytes instead of
+    ``constants``. The runner builds an executable from the shared xclbin and
+    that transaction for each dispatch.
+    """
+    import numpy as np
+
+    stage = Path(stage)
+    case_dir = stage / "cases" / generated["name"]
+    case_dir.mkdir(parents=True)
+    xclbin_path = case_dir / "kernel.xclbin"
+    xclbin_path.write_bytes(xclbin)
+    buffers = []
+    for descriptor in generated["buffers"]:
+        record = {
+            key: (list(value) if key == "shape" else value)
+            for key, value in descriptor.items()
+            if key not in ("data", "expected")
+        }
+        storage_dtype = np.dtype(record["dtype"])
+        record["dtype"] = storage_dtype.str
+        direction = descriptor["direction"]
+        if direction in ("input", "inout"):
+            data_path = case_dir / f"{descriptor['name']}.bin"
+            np.asarray(descriptor["data"], dtype=storage_dtype).tofile(data_path)
+            record["input"] = data_path.relative_to(stage).as_posix()
+        if direction in ("output", "inout"):
+            suffix = "-expected.bin" if direction == "inout" else ".bin"
+            data_path = case_dir / f"{descriptor['name']}{suffix}"
+            np.asarray(descriptor["expected"], dtype=storage_dtype).tofile(data_path)
+            record["expected"] = data_path.relative_to(stage).as_posix()
+        buffers.append(record)
+    case = {
+        "name": generated["name"],
+        "xclbin": xclbin_path.relative_to(stage).as_posix(),
+        "export": "MLIR_AIE",
+        "source": source,
+        "buffers": buffers,
+    }
+    if required_features:
+        case["required_features"] = list(required_features)
+    dispatches = []
+    for index, dispatch in enumerate(generated["dispatches"]):
+        dispatch_name = dispatch["name"]
+        transaction_path = case_dir / f"dispatch-{index}-{dispatch_name}.bin"
+        transaction_path.write_bytes(dispatch["transaction"])
+        expected_paths = {}
+        for descriptor in generated["buffers"]:
+            if descriptor["direction"] not in ("output", "inout"):
+                continue
+            buffer_name = descriptor["name"]
+            values = dispatch.get("expected", {}).get(buffer_name)
+            if values is None:
+                if descriptor["direction"] == "output":
+                    raise RuntimeError(
+                        f"{generated['name']}: dispatch {dispatch_name} "
+                        f"missing expected {buffer_name}"
+                    )
+                continue
+            expected_path = (
+                case_dir / f"dispatch-{index}-{dispatch_name}-{buffer_name}.bin"
+            )
+            np.asarray(values, dtype=np.dtype(descriptor["dtype"])).tofile(
+                expected_path
+            )
+            expected_paths[buffer_name] = expected_path.relative_to(stage).as_posix()
+        record = {
+            "name": dispatch_name,
+            "transaction": transaction_path.relative_to(stage).as_posix(),
+            "expected": expected_paths,
+        }
+        for key in ("compare_prefix", "mean_atol", "compare_slices", "rel_l2"):
+            if dispatch.get(key):
+                record[key] = dispatch[key]
+        dispatches.append(record)
+    case["dispatches"] = dispatches
     return case
 
 
@@ -204,9 +288,24 @@ def verify_tree(package, expected_cases, source_revision, system):
             raise RuntimeError(
                 f"{case['name']}: invalid required_features: {required_features!r}"
             )
-        data = (package / case["xadx"]).read_bytes()
-        if len(data) < 8 or data[4:8] != b"XADX":
-            raise RuntimeError(f"{case['name']}: malformed XADX container")
+        dispatch_modes = {
+            "transaction" if "transaction" in dispatch else "constants"
+            for dispatch in case.get("dispatches", ())
+        }
+        if len(dispatch_modes) > 1:
+            raise RuntimeError(
+                f"{case['name']}: dispatches must all carry transactions or all "
+                "carry constants"
+            )
+        uses_transactions = "transaction" in dispatch_modes
+        if uses_transactions:
+            xclbin = case.get("xclbin")
+            if not xclbin or not (package / xclbin).is_file():
+                raise RuntimeError(f"{case['name']}: missing dispatch xclbin")
+        else:
+            data = (package / case["xadx"]).read_bytes()
+            if len(data) < 8 or data[4:8] != b"XADX":
+                raise RuntimeError(f"{case['name']}: malformed XADX container")
         if case["name"] == "vector_scalar_add_chain4":
             source = case.get("source", {})
             if (
@@ -218,16 +317,32 @@ def verify_tree(package, expected_cases, source_revision, system):
                     "vector_scalar_add with run_count 4"
                 )
         for buffer in case["buffers"]:
-            field = "input" if buffer["direction"] == "input" else "expected"
-            if not (package / buffer[field]).is_file():
+            direction = buffer["direction"]
+            fields = []
+            if direction in ("input", "inout"):
+                fields.append("input")
+            if direction in ("output", "inout"):
+                fields.append("expected")
+            if not fields:
                 raise RuntimeError(
-                    f"{case['name']}.{buffer['name']}: missing {field} data"
+                    f"{case['name']}.{buffer['name']}: direction must be "
+                    "input, output, or inout"
                 )
+            for field in fields:
+                if not (package / buffer[field]).is_file():
+                    raise RuntimeError(
+                        f"{case['name']}.{buffer['name']}: missing {field} data"
+                    )
         dispatch_names = set()
         output_names = {
             buffer["name"]
             for buffer in case["buffers"]
             if buffer["direction"] == "output"
+        }
+        compared_names = {
+            buffer["name"]
+            for buffer in case["buffers"]
+            if buffer["direction"] in ("output", "inout")
         }
         for dispatch in case.get("dispatches", ()):
             dispatch_name = dispatch.get("name")
@@ -236,15 +351,27 @@ def verify_tree(package, expected_cases, source_revision, system):
                     f"{case['name']}: dispatch names must be non-empty and unique"
                 )
             dispatch_names.add(dispatch_name)
-            if not (package / dispatch["constants"]).is_file():
+            has_transaction = "transaction" in dispatch
+            has_constants = "constants" in dispatch
+            if has_transaction == has_constants:
                 raise RuntimeError(
-                    f"{case['name']}.{dispatch_name}: missing dispatch constants"
+                    f"{case['name']}.{dispatch_name}: a dispatch carries a "
+                    "transaction or constants, not both and not neither"
+                )
+            payload = (
+                dispatch["transaction"] if has_transaction else dispatch["constants"]
+            )
+            if not (package / payload).is_file():
+                raise RuntimeError(
+                    f"{case['name']}.{dispatch_name}: missing dispatch "
+                    f"{'transaction' if has_transaction else 'constants'}"
                 )
             expected = dispatch.get("expected", {})
-            if set(expected) != output_names:
+            if not output_names <= set(expected) or not set(expected) <= compared_names:
                 raise RuntimeError(
-                    f"{case['name']}.{dispatch_name}: expected outputs must be "
-                    f"{sorted(output_names)}, got {sorted(expected)}"
+                    f"{case['name']}.{dispatch_name}: expected outputs must cover "
+                    f"{sorted(output_names)} and stay within "
+                    f"{sorted(compared_names)}, got {sorted(expected)}"
                 )
             for buffer_name, relative_path in expected.items():
                 if not (package / relative_path).is_file():
@@ -420,6 +547,15 @@ def cmd_package_npu_test_package(args):
             )
         )
 
+    from build_tools import flm_npu_cases
+
+    flm_npu_cases.append_cases(
+        NPU_TEST_PACKAGE_STAGE,
+        cases,
+        serializer,
+        getattr(args, "compiler_prefix", None),
+    )
+
     write_manifest(
         NPU_TEST_PACKAGE_STAGE,
         cases,
@@ -434,7 +570,7 @@ def cmd_package_npu_test_package(args):
         npu_prereqs.archive_codec(),
     )
     print(
-        f"package-npu-test-package: ok ({len(cases)} XADX cases) -> "
+        f"package-npu-test-package: ok ({len(cases)} cases) -> "
         f"{archive} ({archive.stat().st_size / 1e6:.1f} MB)"
     )
 
@@ -443,8 +579,11 @@ def _source_revision():
     return git_revision(ROOT)
 
 
-def verify_npu_test_package(package):
-    expected_cases = [
+def npu_case_names():
+    """Manifest names the prebuilt package must contain."""
+    from build_tools.flm_npu_cases import CASE_NAMES
+
+    return [
         "vector_scalar_add",
         "vector_scalar_add_chain4",
         *(sequence.name for sequence in iron.SEQUENCES),
@@ -453,9 +592,13 @@ def verify_npu_test_package(package):
             for operator in iron.OPERATORS
             if operator.name in npu_test_cases.CASE_GENERATORS
         ),
+        *CASE_NAMES,
     ]
+
+
+def verify_npu_test_package(package):
     return verify_tree(
-        package, expected_cases, _source_revision(), platform.system().lower()
+        package, npu_case_names(), _source_revision(), platform.system().lower()
     )
 
 

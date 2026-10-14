@@ -26,6 +26,7 @@ LLVM_BUILD_TARGETS = [
     "not",
     "count",
     "llvm-config",
+    "llvm-nm",
     "llvm-objcopy",
 ]
 

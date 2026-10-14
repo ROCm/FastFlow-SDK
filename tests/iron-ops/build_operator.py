@@ -11,12 +11,11 @@ Proves the chain the operator library actually walks:
 
 `run_e2e.py` proves the same toolchain against an iron-tools programming example. This
 proves it against projects/iron-ops, and the difference is the point: iron-ops is developed
-against the mlir_aie WHEEL (1.4.2.dev), while this stack builds the aie package from SOURCE at
-the [iron_tools] pin (mlir-aie v1.4.3). When the two drift, an operator stops compiling -- and
+against the mlir_aie wheel (v1.4.4), while this stack builds the aie package from SOURCE at
+the [iron_tools] pin (mlir-aie v1.4.4). When the two drift, an operator stops compiling -- and
 it should say so here,
-on a CPU runner, not an hour later on the one machine that has an NPU. This also compiles
-the operator's own aie_kernels/*.cc through Peano, which the examples' @iron.jit path never
-does.
+on a CPU runner, not an hour later on the one machine that has an NPU. Kernel sources come
+from mlir-aie's aie_kernels, which the examples' @iron.jit path never compiles on its own.
 
 Which operators, at what size: build_tools/iron.py. Runs on Linux and Windows.
 
@@ -61,12 +60,13 @@ class BuildError(RuntimeError):
     """A fatal failure. main() turns this into a non-zero exit."""
 
 
-def find_operator_class(name: str) -> type:
+def find_operator_class(name: str, class_name: str | None = None) -> type:
     """The AIEOperatorBase subclass defined in iron.operators.<name>.op.
 
     Resolved by inspection rather than by a name table: the directory-to-class mapping is
     not mechanical (rms_norm -> RMSNorm, mha -> MHA, rope -> RoPE), and a table here would
-    be one more thing to keep in step with the submodule.
+    be one more thing to keep in step with the submodule. ``class_name`` selects one class
+    when a module defines several (flm prefill attention).
     """
     try:
         module = importlib.import_module(f"iron.operators.{name}.op")
@@ -80,6 +80,8 @@ def find_operator_class(name: str) -> type:
         and issubclass(value, AIEOperatorBase)
         and value.__module__ == module.__name__
     ]
+    if class_name:
+        found = [value for value in found if value.__name__ == class_name]
     if len(found) != 1:
         names = ", ".join(sorted(c.__name__ for c in found)) or "none"
         raise BuildError(
@@ -93,19 +95,20 @@ def instantiate(
     cls: type, operator_spec: iron.Operator, context: AIEContext
 ) -> AIEOperatorBase:
     """The operator shape declared in OPERATORS."""
+    kwargs = iron.resolve_build_kwargs(operator_spec.build_kwargs)
     params = inspect.signature(cls.__init__).parameters
-    unknown = [p for p in operator_spec.build_kwargs if p not in params]
+    unknown = [p for p in kwargs if p not in params]
     if unknown:
         takes = ", ".join(p for p in params if p != "self")
         raise BuildError(
             f"{operator_spec.name}: OPERATORS passes unsupported constructor arg(s) "
             f"{', '.join(unknown)} to {cls.__name__}; it takes ({takes})."
         )
-    return cls(**operator_spec.build_kwargs, context=context)
+    return cls(**kwargs, context=context)
 
 
 def check_runtime_images(operator: AIEOperatorBase, device: str) -> None:
-    """Require a full ELF or the xclbin+insts pair, then the matching checks."""
+    """Require a full ELF, xclbin+insts, or xclbin+dispatch library."""
     try:
         kind, produced = iron.classify_compiled_images(operator.artifacts)
         for path in produced:
@@ -119,6 +122,12 @@ def check_runtime_images(operator: AIEOperatorBase, device: str) -> None:
             produced[0],
         )
         iron.require_txn_devgen(produced[1], device)
+    elif kind == "dispatch":
+        iron.check_sections(
+            iron.require_xclbinutil(iron.compiler_prefix_from_env()),
+            produced[0],
+        )
+        iron.require_host_library(produced[1])
 
 
 def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
@@ -137,7 +146,10 @@ def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
     shape = ", ".join(f"{k}={v}" for k, v in operator_spec.build_kwargs.items())
     print(f"\n== iron-ops: {operator_spec.name} ({shape}, {device}) ==")
 
-    operator_class = find_operator_class(operator_spec.name)
+    operator_class = find_operator_class(
+        operator_spec.module or operator_spec.name,
+        operator_spec.class_name,
+    )
     if operator_spec.full_elf:
         full_elf_dir = build_dir / "full-elf"
         operator = instantiate(

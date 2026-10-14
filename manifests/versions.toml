@@ -14,7 +14,7 @@ note = "projects/ are pinned by commit (below); canonical remote URLs are in .gi
 
 [llvm]                          # projects/llvm-project — ROCm amd-llvm, LLVM 24
 repo       = "github.com/ROCm/llvm-project"              # canonical ROCm remote (no fork in the chain)
-commit     = "56bcc1871734e6c375a254dec0ec74eb18d04a2e"  # mlir-aie utils/clone-llvm.sh LLVM_PROJECT_COMMIT
+commit     = "e4fcd12811396e394eab2570f7f9bd25c6369811"  # mlir-aie v1.4.4 utils/clone-llvm.sh LLVM_PROJECT_COMMIT
 branch     = "amd-staging"                               # the commit sits here; pin is the SHA, not the moving tip
 llvm_major = 24
 train_note = "Deliberate leave of the previous ROCm release train (release/therock-7.14, LLVM 23, 46fcb339 / tag therock-7.14). The pin is still a commit SHA — the LLVM_PROJECT_COMMIT mlir-aie names in utils/clone-llvm.sh — which currently lives on amd-staging as LLVM 24. Not an accidental submodule-tip bump."
@@ -24,12 +24,12 @@ win_note   = "Built with the STATIC MSVC runtime on Windows (dev.py passes CMAKE
 
 [iron_tools]                    # projects/iron-tools — built from source against [llvm]
 repo     = "github.com/Xilinx/mlir-aie"
-commit   = "95b3d1ccc0bfe5183bae1fa9014cfdc1fb4d96c8"    # mlir-aie v1.4.3
+commit   = "e5c705c7b04bb8470db7364287843ba96e487a6e"    # mlir-aie v1.4.4
 provides = ["aie-opt", "aie-translate", "aiecc", "IRON python", "bootgen", "aie_api", "aie-rt", "xclbinutil (vendored third_party/hrx-xclbinutil)"]
-note     = "Builds against the same ROCm LLVM pin as mlir-aie utils/clone-llvm.sh (56bcc187, LLVM 24). hrx-xclbinutil is vendored in-tree (mlir-aie #3473), no longer a nested git submodule. v1.4.3 IRON host-runtime allocates HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A), matching HRX HOST_ONLY."
+note     = "Builds against the same ROCm LLVM pin as mlir-aie v1.4.4 utils/clone-llvm.sh (e4fcd128, LLVM 24, wheel date 20260915). hrx-xclbinutil is vendored in-tree (mlir-aie #3473), no longer a nested git submodule. v1.4.4 IRON host-runtime allocates HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A), matching HRX HOST_ONLY."
 e2e_design = "programming_examples/basic/matrix_scalar_add"   # the design `dev.py test` builds
 e2e_device = "npu2"                                          # -d passed to that design
-patches  = ["patches/iron-tools/0001-eudsl-offline-find-links.patch", "patches/iron-tools/0002-windows-clang-cl.patch", "patches/iron-tools/0005-eudsl-download-no-build-isolation.patch", "patches/iron-tools/0006-mlir-core-type-stubs-from-build-tree.patch", "patches/iron-tools/0007-aiecc-capture-stdio-maybe-unused.patch"]
+patches  = ["patches/iron-tools/0001-eudsl-offline-find-links.patch", "patches/iron-tools/0002-windows-clang-cl.patch", "patches/iron-tools/0005-eudsl-download-no-build-isolation.patch", "patches/iron-tools/0006-mlir-core-type-stubs-from-build-tree.patch", "patches/iron-tools/0007-aiecc-capture-stdio-maybe-unused.patch", "patches/iron-tools/0008-clang-cl-dispatch-dumpmachine.patch"]
 hrx_note = "The former 0003 (HRX IRON host-runtime, aie.utils.hostruntime.hrxruntime — what IRON_RUNTIME=hrx selects) was dropped at this pin: mlir-aie now ships the HRX IRON path upstream, so the patch is redundant. The former 0005 (gate-xrt-scratchpad-binding) was dropped for the same reason — this iron-tools pin already gates the _parameter_scratchpad pybind11 module behind AIE_ENABLE_XRT_PYTHON_BINDINGS upstream. The former 0004 (HostRuntime.cleanup() on the ABC) is now upstream (mlir-aie #3567 and follow-ups), so it was dropped at this pin. The former 0008/0009 (LLVM 23 DenseMapInfo sentinels and arith-expand includeMinMaxF guard) were dropped by aligning this stack's LLVM pin with mlir-aie's clone-llvm.sh commit."
 win_note = "0002 is Windows-only in effect (guards keyed on CMake's MSVC var, empty under gcc/clang): gives /EHsc to everything that throws (bootgen, all four test/CppTests, test_utils) because MSVC-style drivers default exceptions off and clang-cl rejects throw outright, and drops -Werror=sign-compare, which aie-rt trips only because MS-ABI enums are signed. Verified a no-op on Linux: build.ninja is byte-identical with and without it."
 win_note2 = "0007 marks CaptureStdio's trivial members ([[maybe_unused]]) in tools/aiecc/Utils.h: they are read only inside the tool's #ifndef _WIN32 stdout/stderr-redirect path, so on Windows the constructor/destructor bodies compile out and clang-cl's -Wunused-private-field (promoted by -Werror=unused) fails the native aiecc build. gcc never emits that clang-only diagnostic, so this is a no-op on Linux."
@@ -44,19 +44,17 @@ patches  = ["patches/aiebu/0001-cmake-4-boost-header-fallback.patch"]
 
 [iron_ops]                      # projects/iron-ops — the IRON operator library (pure Python)
 repo     = "github.com/amd/IRON"
-commit   = "a279467af0bacde5d7fe3bc5ce67e762386f8aef"  # origin/devel 2026-08-31 (#165)
+commit   = "ea09aaa6431fdb1f46c1a07e84990aaaf6c84722"  # origin/devel 2026-10-12 (#243)
 branch   = "devel"                                              # IRON's default branch; main is an empty initial commit
-provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, ...)", "aie_kernels C++ sources"]
-note     = "Consumes the `aie` package + Peano. Upstream takes both from WHEELS (mlir_aie==1.4.2.dev); here it runs against the SOURCE-built iron-tools ([iron_tools] v1.4.3) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS (tests/iron-ops/suite.py re-exports it). This pin is required for the mlir-aie Runtime callback-body API (seq_fn) and native aiecc --get-* flags landed in iron-tools 4c8b56f and still present at v1.4.3."
-patches  = ["patches/iron-ops/0001-mha-bind-get-current-device.patch", "patches/iron-ops/0002-mem-copy-pass-bit-width.patch"]
-drop_note = "The former XRT-free host stack, lazy operator imports, and Windows aiecc copy fallback landed upstream as IRON #165/#163/#162. The former aiecc native CLI patch was already dropped at aab8083: #145/#150 compile through mlir-aie's compile_mlir_module()."
-mha_note = "0001 binds MHA compile to get_current_device() like every other operator. a279467 still calls DefaultNPURuntime.device(), which is None under IRON_RUNTIME=cpu. Remove when that one-liner is on IRON devel."
-mem_copy_note = "0002 passes -DBIT_WIDTH=16 when compiling mem_copy's passThrough.cc (bf16, same define MHA already sends). mlir-aie v1.4.3 Peano uses -Werror=undef; an unset BIT_WIDTH is a hard error. IRON still targets the 1.4.2.dev wheel. Remove when IRON mem_copy defines BIT_WIDTH."
+provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, flm ports, ...)"]
+note     = "Consumes the `aie` package + Peano. Upstream requirements.txt pins mlir_aie==v1.4.4 and llvm-aie==22.0.0.2026092101+0006955e; here it runs against the SOURCE-built iron-tools ([iron_tools] v1.4.4) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS (tests/iron-ops/suite.py re-exports it). Kernels come from mlir-aie's aie_kernels (IRON #203), not an in-tree copy."
+patches  = ["patches/iron-ops/0001-windows-dispatch-library-copy.patch", "patches/iron-ops/0002-numpy-weight-packing.patch", "patches/iron-ops/0003-absolute-dispatch-cpp-path.patch"]
+drop_note = "The former XRT-free host stack, lazy operator imports, and Windows aiecc copy fallback landed upstream as IRON #165/#163/#162. The former aiecc native CLI patch was already dropped at aab8083: #145/#150 compile through mlir-aie's compile_mlir_module(). 0001 (MHA get_current_device) and 0002 (mem_copy -DBIT_WIDTH) were dropped at ea09aaa: MHA calls get_current_device(), and mem_copy uses the mlir-aie passthrough kernel factory. The new 0001 copies the dispatch library when Windows refuses the symlink."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
-wheel = "llvm-aie==21.0.0.2026061501+acc2a72c"
+wheel = "llvm-aie==22.0.0.2026092101+0006955e"
 index = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
-note  = "LLVM 21 (lags ROCm's 24). Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
+note  = "LLVM 22 (lags ROCm's 24). The same wheel IRON devel ea09aaa names in requirements.txt. Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
 
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/ROCm/hrx-system"                # canonical ROCm remote (no fork in the chain)
@@ -83,9 +81,9 @@ note       = "FastFlowLM upstream main (8d6768da, merge of PR #768), 63 commits 
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
-version      = "0.1.0.20260801.905+68a0d7a"              # same pin as mlir-aie python/requirements.txt
+version      = "0.1.0.20260914.759+4853bb0"              # same pin as mlir-aie v1.4.4 python/requirements.txt
 find_links   = "https://llvm.github.io/eudsl"
-sha256       = "e8672fd1b71c4aba56a80fb724a756337d299a4e706a90ceff435138867213c2"  # sdist (verified on fetch)
+sha256       = "844828b921e29f68494d1df71d81e06dcd30648a0ddc6ea293cbff80b80e21d5"  # sdist (verified on fetch)
 find_links_via = "patches/iron-tools/0001-eudsl-offline-find-links.patch"
 note         = "Prefetch mlir-aie's own eudsl pin (LLVM is aligned with clone-llvm.sh, so the former 20260629 override is gone). 0001 only rewrites -f from https://llvm.github.io/eudsl to .cache/find-links; with dev.py's PIP_FIND_LINKS + PIP_NO_INDEX the vendoring is network-free (sha256-verified prefetched sdist)."
 

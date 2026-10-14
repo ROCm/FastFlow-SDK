@@ -343,7 +343,7 @@ def _binding_bootstrap() -> str:
 
 
 def _rewrite_configure_install_path(configure_py: Path) -> None:
-    """Point ``aie.utils.configure.install_path`` at the split-wheel prefix.
+    """Make ``aie.utils.configure`` safe to ship in the bindings wheel.
 
     Upstream walks three directories up from ``aie/utils``, which is the
     mlir-aie install prefix when ``aie`` lives at ``$PREFIX/python/aie``. The
@@ -352,23 +352,34 @@ def _rewrite_configure_install_path(configure_py: Path) -> None:
     compiles then fail looking for headers in ``<venv>/Lib/include``. Headers
     actually live in ``fastflow_sdk_compiler/include``, which
     ``FASTFLOW_SDK_COMPILER_PREFIX`` already names.
+
+    mlir-aie v1.4.4 also records ``LLVM_TOOLS_BINARY_DIR`` in this file. That
+    is the build machine's ``build/llvm/bin``. The installed compiler already
+    ships ``llvm-nm`` and ``llvm-objcopy`` in its own ``bin``, and a missing
+    directory is skipped, so the wheel stores an empty directory instead.
     """
     text = configure_py.read_text(encoding="utf-8").replace("\r\n", "\n")
-    if 'os.getenv("FASTFLOW_SDK_COMPILER_PREFIX")' in text:
-        return
-    needle = "def install_path():\n"
-    if needle not in text:
-        raise RuntimeError(
-            "cannot rewrite aie.utils.configure.install_path: "
-            f"function missing in {configure_py}"
+    if 'os.getenv("FASTFLOW_SDK_COMPILER_PREFIX")' not in text:
+        needle = "def install_path():\n"
+        if needle not in text:
+            raise RuntimeError(
+                "cannot rewrite aie.utils.configure.install_path: "
+                f"function missing in {configure_py}"
+            )
+        replacement = (
+            "def install_path():\n"
+            '    prefix = os.getenv("FASTFLOW_SDK_COMPILER_PREFIX")\n'
+            '    if prefix and os.path.isdir(os.path.join(prefix, "include")):\n'
+            "        return os.path.realpath(prefix)\n"
         )
-    replacement = (
-        "def install_path():\n"
-        '    prefix = os.getenv("FASTFLOW_SDK_COMPILER_PREFIX")\n'
-        '    if prefix and os.path.isdir(os.path.join(prefix, "include")):\n'
-        "        return os.path.realpath(prefix)\n"
+        text = text.replace(needle, replacement, 1)
+    text = re.sub(
+        r'(?m)^llvm_tools_binary_dir\s*=\s*r?"""[\s\S]*?"""\s*$',
+        'llvm_tools_binary_dir = ""',
+        text,
+        count=1,
     )
-    configure_py.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+    configure_py.write_text(text, encoding="utf-8")
 
 
 def _common_manifest(

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Shared IRON suite, target, toolchain, and design-build policy."""
 
+import importlib
 import importlib.util
 import os
 import shutil
@@ -320,11 +321,32 @@ def require_runtime_image(path, *, elf=False):
             raise RuntimeError(f"{path} is not an ELF image (magic={magic!r})")
 
 
+def require_host_library(path):
+    """A dispatch library must exist and be a host image: PE on Windows, ELF elsewhere."""
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"{path} was not produced by the build")
+    magic = path.read_bytes()[:4]
+    if os.name == "nt":
+        if magic[:2] != b"MZ":
+            raise RuntimeError(f"{path} is not a Windows library (magic={magic[:2]!r})")
+        return
+    if magic != b"\x7fELF":
+        raise RuntimeError(f"{path} is not an ELF library (magic={magic!r})")
+
+
 def classify_compiled_images(artifacts):
-    """Return ``('elf', [elf])`` or ``('xclbin', [xclbin, insts])``."""
+    """Return the produced runtime images.
+
+    ``('elf', [elf])`` is one full ELF. ``('xclbin', [xclbin, insts])`` is a
+    fixed instruction stream. ``('dispatch', [xclbin, library])`` is an xclbin
+    whose instruction stream is generated per call by a host library.
+    """
     from iron.common.compilation import (
+        DispatchLibArtifact,
         FullElfArtifact,
         InstsBinArtifact,
+        RemoteFileArtifact,
         XclbinArtifact,
     )
 
@@ -337,19 +359,30 @@ def classify_compiled_images(artifacts):
         Path(artifact.filename)
         for artifact in artifacts
         if isinstance(artifact, XclbinArtifact)
+        or (
+            isinstance(artifact, RemoteFileArtifact)
+            and str(artifact.filename).endswith(".xclbin")
+        )
     ]
     insts = [
         Path(artifact.filename)
         for artifact in artifacts
         if isinstance(artifact, InstsBinArtifact)
     ]
-    if len(elves) == 1 and not xclbins and not insts:
+    libraries = [
+        Path(artifact.filename)
+        for artifact in artifacts
+        if isinstance(artifact, DispatchLibArtifact)
+    ]
+    if len(elves) == 1 and not xclbins and not insts and not libraries:
         return "elf", elves
-    if len(xclbins) == 1 and len(insts) == 1 and not elves:
+    if len(xclbins) == 1 and len(insts) == 1 and not elves and not libraries:
         return "xclbin", xclbins + insts
+    if len(xclbins) == 1 and len(libraries) == 1 and not elves and not insts:
+        return "dispatch", xclbins + libraries
     raise RuntimeError(
-        "expected xclbin+insts or one full ELF, got "
-        f"elf={elves} xclbin={xclbins} insts={insts}"
+        "expected xclbin+insts, xclbin+dispatch library, or one full ELF, got "
+        f"elf={elves} xclbin={xclbins} insts={insts} dispatch={libraries}"
     )
 
 
@@ -376,6 +409,10 @@ class Operator(NamedTuple):
         full_elf: compile the operator through a one-stage fused
             ``OperatorSequence`` and also compile a context xclbin. This is the
             artifact pair needed to convert a dynamic IRON ELF to XADX.
+        module: import path under ``iron.operators`` when it differs from
+            ``name``. Nested ports use ``flm.gemm``; two classes in one file
+            share ``module`` and select with ``class_name``.
+        class_name: operator class to build when ``module`` defines more than one.
     """
 
     name: str
@@ -384,6 +421,8 @@ class Operator(NamedTuple):
     hrx_pytest_filter: str | None = None
     host_compile: bool = True
     full_elf: bool = False
+    module: str | None = None
+    class_name: str | None = None
 
 
 class Sequence(NamedTuple):
@@ -436,7 +475,8 @@ def _binary(name, *, extra=None, filter_extra=""):
 
 # One catalog, three independent consumers:
 #   host_compile=True  -> CPU CI (`test-iron-ops`, `verify-ops-wheels`)
-#   CASE_GENERATORS    -> NPU CI (`package-npu-test-package` / `test-npu-package`)
+#   CASE_GENERATORS    -> NumPy oracles in the prebuilt NPU package
+#   flm_npu_cases      -> the seven flm ports, appended to that same package
 #   hrx_pytest_filter  -> local `test-npu-iron-ops` only (not GitHub Actions)
 # swiglu_prefill_stream stays out: stream-dse imports torch and onnx at module scope.
 OPERATORS = (
@@ -595,10 +635,10 @@ OPERATORS = (
     ),
     Operator(
         name="mha",
-        # Only one non-extensive IRON pytest case. CPU CI compiles this shape
-        # (patch 0001: get_current_device). NPU CI has no MHA generator, so it
-        # does not dispatch this xclbin. Local test-npu-iron-ops would compile
-        # again inside run_test; CPU CI is the drift gate, not an artifact cache.
+        # Only one non-extensive IRON pytest case. CPU CI compiles this shape.
+        # NPU CI has no MHA generator, so it does not dispatch this xclbin.
+        # Local test-npu-iron-ops would compile again inside run_test; CPU CI
+        # is the drift gate, not an artifact cache.
         build_kwargs={
             "num_heads": 1,
             "seq_len": 16384,
@@ -626,6 +666,54 @@ OPERATORS = (
         },
         host_compile=False,
     ),
+    # FastFlowLM ports. Shapes are the smallest non-extensive cases in each
+    # operator's own test.py. They are host-compiled only: no packaged NPU
+    # numeric case yet, and their pytest modules need torch, so local
+    # test-npu-iron-ops does not collect them.
+    Operator(
+        name="flm.gemm",
+        # npu2's smallest full column sweep. K=512 selects tile_n=128.
+        build_kwargs={"M": 256, "K": 512, "N": 1024},
+    ),
+    Operator(
+        name="flm.dequant",
+        # K=512 is the shape flm.GEMM tiles at 128, which DequantBFP refuses.
+        build_kwargs={"K": 1024, "N": 128},
+    ),
+    Operator(
+        name="flm.layer",
+        # E2B is the non-extensive geometry. The string is resolved to
+        # aie.iron.kernels.FLM_GEMMA4_E2B_DECODE at compile time.
+        build_kwargs={"geometry": "FLM_GEMMA4_E2B_DECODE", "layer_type": "global"},
+    ),
+    Operator(
+        name="flm.lm_head",
+        # Gemma 4 E2B hidden size. vocab=4096 is one or two NPU2 rounds
+        # (cols * rows * 64) and is the projection test's vocabulary.
+        build_kwargs={"dim": 1536, "vocab": 4096, "softcap": 1000.0},
+    ),
+    Operator(
+        name="flm.prefill_attn",
+        class_name="PrefillAttention",
+        build_kwargs={"max_context": 1024, "num_heads": 8, "num_kv_heads": 1},
+    ),
+    Operator(
+        name="flm.prefill_sliding_attn",
+        module="flm.prefill_attn",
+        class_name="PrefillSlidingAttention",
+        build_kwargs={
+            "max_context": 2048,
+            "window": 512,
+            "num_heads": 8,
+            "num_kv_heads": 1,
+        },
+    ),
+    Operator(
+        name="flm.mm_prebuilt",
+        # Downloads FastFlowLM's shipped mm overlay. Compiled here so the
+        # prebuilt NPU package can dispatch it with the other flm ports.
+        build_kwargs={"M": 256, "K": 512, "N": 1024},
+    ),
 )
 
 DEFAULT = OPERATORS[0].name
@@ -642,6 +730,23 @@ def select(name: str | None) -> tuple[Operator, ...]:
             f"{name}: not in the iron-ops suite ({known}) -- add a row to OPERATORS"
         )
     return tuple(chosen)
+
+
+def resolve_build_kwargs(kwargs: dict[str, object]) -> dict[str, object]:
+    """Turn catalog values the constructor cannot take literally into objects.
+
+    ``flm.layer`` stores ``geometry`` as the ``aie.iron.kernels`` attribute
+    name so importing this module does not import the compiler.
+    """
+    resolved = dict(kwargs)
+    geometry = resolved.get("geometry")
+    if isinstance(geometry, str):
+        kernels = importlib.import_module("aie.iron.kernels")
+        try:
+            resolved["geometry"] = getattr(kernels, geometry)
+        except AttributeError as error:
+            raise RuntimeError(f"unknown flm geometry {geometry!r}") from error
+    return resolved
 
 
 def host_compile_suite(

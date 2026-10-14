@@ -36,6 +36,7 @@ class FakeRuntime:
         self.buffers = []
         self.dispatches = []
         self.constants = []
+        self.transactions = []
         self.synchronize_count = 0
         self.closed = False
         self.executable = None
@@ -55,6 +56,15 @@ class FakeRuntime:
         buffer = FakeBuffer(shape, dtype)
         self.buffers.append(buffer)
         return buffer
+
+    def load_xclbin_transaction(self, xclbin, transaction, entry_name="MLIR_AIE"):
+        self.transactions.append((xclbin, transaction, entry_name))
+        executable = FakeExecutable(
+            export_ordinal=9,
+            on_lookup=self.export_names.append,
+        )
+        self.executables.append(executable)
+        return executable
 
     def dispatch(self, executable, export_ordinal, buffers, constants=b""):
         self.dispatches.append((executable, export_ordinal, buffers))
@@ -286,8 +296,133 @@ def test_alternates_dispatch_constants_and_expected_outputs(tmp_path, capsys):
     ]
 
 
+def test_submits_one_generated_transaction_per_dispatch(tmp_path, capsys):
+    FakeRuntime.instances.clear()
+    xclbin = b"xclbin-bytes"
+    first = b"txn-context-5"
+    second = b"txn-context-700"
+    source = np.arange(4, dtype=np.int32)
+    (tmp_path / "kernel.xclbin").write_bytes(xclbin)
+    source.tofile(tmp_path / "input.bin")
+    (source + 1).tofile(tmp_path / "expected.bin")
+    (tmp_path / "txn-5.bin").write_bytes(first)
+    (tmp_path / "txn-700.bin").write_bytes(second)
+    (source + 1).tofile(tmp_path / "expected-5.bin")
+    (source + 1).tofile(tmp_path / "expected-700.bin")
+    manifest = {
+        "cases": [
+            {
+                "name": "flm.layer",
+                "xclbin": "kernel.xclbin",
+                "export": "MLIR_AIE",
+                "buffers": [
+                    {
+                        "name": "input",
+                        "direction": "input",
+                        "dtype": "int32",
+                        "shape": [4],
+                        "input": "input.bin",
+                    },
+                    {
+                        "name": "output",
+                        "direction": "output",
+                        "dtype": "int32",
+                        "shape": [4],
+                        "expected": "expected.bin",
+                        "rtol": 0.0,
+                        "atol": 0.0,
+                    },
+                ],
+                "dispatches": [
+                    {
+                        "name": "context_5",
+                        "transaction": "txn-5.bin",
+                        "expected": {"output": "expected-5.bin"},
+                    },
+                    {
+                        "name": "context_700",
+                        "transaction": "txn-700.bin",
+                        "expected": {"output": "expected-700.bin"},
+                    },
+                ],
+            }
+        ]
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    failures = runner.run_package(
+        tmp_path,
+        runtime_factory=FakeRuntime,
+        lifecycle_rounds=2,
+        resident_rounds=0,
+    )
+
+    assert failures == 0
+    assert capsys.readouterr().out.endswith("flm.layer: PASS\n")
+    submitted = [
+        transaction
+        for _xclbin, transaction, _name in FakeRuntime.instances[-1].transactions
+    ]
+    assert first in submitted
+    assert second in submitted
+
+
 def test_bfloat16_comparison_decodes_raw_storage():
     expected = np.array([0x3F80, 0x4000], dtype=np.uint16)
     actual = np.array([0x3F81, 0x4000], dtype=np.uint16)
     assert runner._compare(actual, expected, "bfloat16", rtol=0.01, atol=0.0) is None
     assert runner._compare(actual, expected, "bfloat16", rtol=0.0, atol=0.0) is not None
+
+
+def test_inout_slice_uses_relative_l2_and_keeps_the_rest(tmp_path):
+    class LeaveRuntime(FakeRuntime):
+        def dispatch(self, executable, export_ordinal, buffers, constants=b""):
+            self.dispatches.append((executable, export_ordinal, buffers))
+
+    FakeRuntime.instances.clear()
+    values = np.arange(4, dtype=np.int32)
+    values.tofile(tmp_path / "x.bin")
+    values.tofile(tmp_path / "x-expected.bin")
+    (tmp_path / "kernel.xclbin").write_bytes(b"xclbin")
+    (tmp_path / "txn.bin").write_bytes(b"txn")
+    changed = values.copy()
+    changed[:2] = (100, 100)
+    changed.tofile(tmp_path / "dispatch-x.bin")
+    manifest = {
+        "cases": [
+            {
+                "name": "flm.layer-5",
+                "xclbin": "kernel.xclbin",
+                "export": "MLIR_AIE",
+                "buffers": [
+                    {
+                        "name": "x",
+                        "direction": "inout",
+                        "dtype": "int32",
+                        "shape": [4],
+                        "input": "x.bin",
+                        "expected": "x-expected.bin",
+                    }
+                ],
+                "dispatches": [
+                    {
+                        "name": "context_5",
+                        "transaction": "txn.bin",
+                        "expected": {"x": "dispatch-x.bin"},
+                        "compare_slices": {"x": [[0, 2]]},
+                        "rel_l2": {"x": 0.01},
+                    }
+                ],
+            }
+        ]
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert (
+        runner.run_package(
+            tmp_path,
+            runtime_factory=LeaveRuntime,
+            lifecycle_rounds=1,
+            resident_rounds=0,
+        )
+        == 1
+    )
