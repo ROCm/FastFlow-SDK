@@ -58,6 +58,10 @@ class TestFastflowSdkWheelCommon:
             "licenses/THIRD_PARTY_NOTICES.md": "notices",
             "licenses/FastFlowLM-LICENSE_RUNTIME.txt": "fastflowlm",
             "licenses/FastFlowLM-TERMS.md": "terms",
+            "include/hrx/hrx_runtime.h": "runtime",
+            "include/hrx/hrx_amdxdna.h": "amdxdna",
+            "lib/cmake/hrx/hrx-config.cmake": "config",
+            "lib/hrx.lib": "implib",
         }
         for relative, contents in files.items():
             path = source / relative
@@ -73,6 +77,10 @@ class TestFastflowSdkWheelCommon:
         assert (trees.runtime_root / "licenses/fastflow-sdk-LICENSE").read_text(
             encoding="utf-8"
         ) == "staging"
+        for package in (trees.runtime_root, trees.fastflowlm_root):
+            assert not (package / "include" / "hrx").exists()
+            assert not (package / "lib" / "cmake" / "hrx").exists()
+            assert not (package / "lib" / "hrx.lib").exists()
 
         write_runtime_wheel_manifests(
             trees,

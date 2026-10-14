@@ -31,6 +31,7 @@ from build_tools.fastflowlm_artifact import (
 from build_tools.fastflowlm_deps import require_fastflowlm_linux_packaging_tools
 from build_tools.manylinux_audit import auditwheel_policy
 from build_tools.package_version import default_package_version
+from build_tools.verify_runtime_archive_hrx_cmake import verify_hrx_package_split
 
 ROOT = paths.ROOT
 PROJ = paths.PROJ
@@ -155,6 +156,7 @@ def verify_fastflowlm_wheels(wheel_directory: Path, venv_dir: Path) -> None:
     wheels = implementation.find_fastflow_sdk_wheels(wheel_directory)
     verify_wheel_checksums(wheels)
     implementation.verify_wheels_do_not_have_text_path_references(wheels, (ROOT,))
+    verify_hrx_package_split(wheel_directory, wheels)
 
     venv_dir = Path(venv_dir)
     validate_directory_target(venv_dir, BUILD)
