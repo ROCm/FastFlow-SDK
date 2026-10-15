@@ -22,6 +22,7 @@ from build_tools.artifact import (
     sha256_sidecar_path,
     verify_sha256_sidecar,
 )
+from build_tools.fastflow_sdk_archive import artifact_name as standalone_artifact_name
 from build_tools.fastflow_sdk_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
@@ -34,7 +35,6 @@ from build_tools.fastflow_sdk_wheel_common import (
     validate_version,
     verify_wheel_checksums,
 )
-from build_tools.fastflowlm_artifact import artifact_name as standalone_artifact_name
 
 ROOT = Path(__file__).resolve().parents[1]
 NUMERIC_RUNTIME = release_policy.numeric_package_versions()

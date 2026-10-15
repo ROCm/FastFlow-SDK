@@ -9,6 +9,7 @@ import platform
 import zipfile
 from pathlib import Path
 
+from build_tools.fastflow_sdk_archive import verify_bundle
 from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
@@ -21,7 +22,6 @@ from build_tools.fastflow_sdk_wheel_common import (
 from build_tools.fastflow_sdk_wheel_common import (
     build_wheel as _build_wheel,
 )
-from build_tools.fastflowlm_artifact import verify_bundle
 from build_tools.native_dependencies import is_pe, pe_imports
 from build_tools.package_version import validate_version
 from build_tools.runtime_wheel_staging import (

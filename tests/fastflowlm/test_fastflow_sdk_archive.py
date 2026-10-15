@@ -22,7 +22,7 @@ from build_tools.artifact import (
     git_source_state,
     sha256_file,
 )
-from build_tools.fastflowlm_artifact import (
+from build_tools.fastflow_sdk_archive import (
     _copy_windows_redistributable_closure,
     _is_linux_system_runtime,
     _linux_dependencies_and_licenses,
@@ -229,7 +229,7 @@ class TestFastFlowLMArtifact:
             encoding="utf-8",
         )
         with mock.patch(
-            "build_tools.fastflowlm_artifact.default_package_version",
+            "build_tools.fastflow_sdk_archive.default_package_version",
             return_value="1.2.3",
         ):
             assert (
@@ -363,8 +363,8 @@ class TestFastFlowLMArtifact:
             raise AssertionError(f"unexpected command: {command!r}")
 
         with (
-            mock.patch("build_tools.fastflowlm_artifact.shutil.which", fake_which),
-            mock.patch("build_tools.fastflowlm_artifact.subprocess.run", fake_run),
+            mock.patch("build_tools.fastflow_sdk_archive.shutil.which", fake_which),
+            mock.patch("build_tools.fastflow_sdk_archive.subprocess.run", fake_run),
         ):
             dependencies = _linux_dependencies_and_licenses(bundle, set())
 
@@ -381,7 +381,7 @@ class TestFastFlowLMArtifact:
         (bundle / "lib").mkdir()
         (bundle / "lib" / "libq4_npu_eXpress.so").write_bytes(b"")
         with mock.patch(
-            "build_tools.fastflowlm_artifact.shutil.which", lambda name: None
+            "build_tools.fastflow_sdk_archive.shutil.which", lambda name: None
         ):
             dependencies = _linux_dependencies_and_licenses(
                 bundle, set(), {"libq4_npu_eXpress.so"}
@@ -429,7 +429,7 @@ class TestFastFlowLMArtifact:
         with (
             mock.patch.dict(os.environ, {"VCToolsRedistDir": str(redist)}),
             mock.patch(
-                "build_tools.fastflowlm_artifact.pe_imports",
+                "build_tools.fastflow_sdk_archive.pe_imports",
                 side_effect=lambda path: (
                     ["vcomp140.dll"] if Path(path).name == "flm.exe" else []
                 ),

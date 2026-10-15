@@ -125,7 +125,7 @@ def test_non_dev_build_tools_modules_do_not_import_dev():
 
 def test_product_domains_do_not_import_sibling_orchestration_layers():
     forbidden = {
-        "fastflowlm_artifact.py": {"build_tools.fastflow_sdk_wheel_common"},
+        "fastflow_sdk_archive.py": {"build_tools.fastflow_sdk_wheel_common"},
         "compiler_product.py": {"build_tools.fastflow_sdk_compiler_wheels"},
         "compiler_wheels.py": {"build_tools.fastflow_sdk_linux_wheels"},
         "manylinux_audit.py": {"build_tools.fastflow_sdk_wheel_common"},
