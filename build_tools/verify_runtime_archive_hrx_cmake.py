@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Check the standalone runtime archive's HRX CMake package and wheel split."""
+"""Check the HRX CMake package in the runtime archive and runtime wheel."""
 
 from __future__ import annotations
 
@@ -20,15 +20,15 @@ from build_tools.fastflow_sdk_archive import extract_archive
 
 _PROBE_CMAKE = r"""
 cmake_minimum_required(VERSION 3.20)
-project(hrx_archive_probe NONE)
-if(NOT DEFINED ARCHIVE_ROOT)
-  message(FATAL_ERROR "ARCHIVE_ROOT is required")
+project(hrx_prefix_probe NONE)
+if(NOT DEFINED HRX_PREFIX)
+  message(FATAL_ERROR "HRX_PREFIX is required")
 endif()
 find_package(hrx CONFIG REQUIRED)
 if(NOT TARGET hrx::hrx)
   message(FATAL_ERROR "hrx::hrx was not defined")
 endif()
-get_filename_component(_root "${ARCHIVE_ROOT}" ABSOLUTE)
+get_filename_component(_root "${HRX_PREFIX}" ABSOLUTE)
 string(REPLACE "\\" "/" _root "${_root}")
 if(_root MATCHES "/$")
   string(REGEX REPLACE "/$" "" _root "${_root}")
@@ -55,7 +55,7 @@ foreach(_path ${_library_paths})
   string(REPLACE "\\" "/" _path "${_path}")
   string(FIND "${_path}" "${_root}/" _idx)
   if(NOT _idx EQUAL 0)
-    message(FATAL_ERROR "HRX library is outside the archive: ${_path}")
+    message(FATAL_ERROR "HRX library is outside the prefix: ${_path}")
   endif()
   if(NOT EXISTS "${_path}")
     message(FATAL_ERROR "HRX library does not exist: ${_path}")
@@ -72,7 +72,7 @@ foreach(_include ${_includes})
   string(REPLACE "\\" "/" _include "${_include}")
   string(FIND "${_include}" "${_root}/" _idx)
   if(NOT _idx EQUAL 0)
-    message(FATAL_ERROR "HRX include is outside the archive: ${_include}")
+    message(FATAL_ERROR "HRX include is outside the prefix: ${_include}")
   endif()
   if(_include STREQUAL "${_root}/include/hrx")
     set(_saw_hrx_include TRUE)
@@ -145,7 +145,7 @@ def verify_hrx_prefix(prefix: Path, *, cmake: str | None = None) -> None:
                 str(probe),
                 "-B",
                 str(build),
-                f"-DARCHIVE_ROOT={prefix.resolve().as_posix()}",
+                f"-DHRX_PREFIX={prefix.resolve().as_posix()}",
                 f"-DCMAKE_PREFIX_PATH={prefix.resolve().as_posix()}",
             ],
             capture_output=True,
@@ -157,17 +157,16 @@ def verify_hrx_prefix(prefix: Path, *, cmake: str | None = None) -> None:
             for line in (result.stdout + result.stderr).splitlines()
             if line.strip()
         )
-        raise RuntimeError(
-            "find_package(hrx) failed for the runtime archive:\n" + detail
-        )
+        raise RuntimeError("find_package(hrx) failed:\n" + detail)
 
 
-def verify_runtime_wheel(wheel: Path, *, require_runtime: bool) -> None:
-    """Rejects HRX development files inside a runtime or FastFlowLM wheel."""
-    wheel = Path(wheel)
+def _wheel_names(wheel: Path) -> list[str]:
     with zipfile.ZipFile(wheel) as package:
-        names = [name.replace("\\", "/") for name in package.namelist()]
-    development = [
+        return [name.replace("\\", "/") for name in package.namelist()]
+
+
+def _hrx_development_members(names: list[str]) -> list[str]:
+    return [
         name
         for name in names
         if "/include/hrx/" in f"/{name}"
@@ -175,13 +174,43 @@ def verify_runtime_wheel(wheel: Path, *, require_runtime: bool) -> None:
         or name.endswith("/lib/hrx.lib")
         or name.endswith("lib/hrx.lib")
     ]
-    if development:
-        raise RuntimeError(
-            f"{wheel.name} contains HRX development files:\n  "
-            + "\n  ".join(sorted(development))
-        )
+
+
+def _has_wheel_suffix(names: list[str], relative: str) -> bool:
+    suffix = relative.lstrip("/")
+    return any(name.endswith(f"/{suffix}") or name == suffix for name in names)
+
+
+def verify_runtime_wheel(wheel: Path, *, require_runtime: bool) -> None:
+    """Checks HRX development files in a runtime or FastFlowLM wheel.
+
+    The runtime wheel is a CMake prefix for ``hrx::hrx``. The FastFlowLM wheel
+    stays a payload and must not carry those files.
+    """
+    wheel = Path(wheel)
+    names = _wheel_names(wheel)
+    development = _hrx_development_members(names)
     if not require_runtime:
+        if development:
+            raise RuntimeError(
+                f"{wheel.name} contains HRX development files:\n  "
+                + "\n  ".join(sorted(development))
+            )
         return
+    required = [
+        "include/hrx/hrx_runtime.h",
+        "include/hrx/hrx_amdxdna.h",
+        "lib/cmake/hrx/hrx-config.cmake",
+    ]
+    if os.name == "nt":
+        required.append("lib/hrx.lib")
+    missing = [
+        relative for relative in required if not _has_wheel_suffix(names, relative)
+    ]
+    if missing:
+        raise RuntimeError(
+            f"{wheel.name} is missing HRX development files:\n  " + "\n  ".join(missing)
+        )
     has_fastflow = any(
         name.endswith("/bin/fastflow") or name.endswith("/bin/fastflow.exe")
         for name in names
@@ -194,6 +223,23 @@ def verify_runtime_wheel(wheel: Path, *, require_runtime: bool) -> None:
             f"{wheel.name} is missing the runtime fastflow executable or HRX "
             "shared library"
         )
+
+
+def verify_runtime_wheel_prefix(wheel: Path) -> None:
+    """Extracts a runtime wheel and configures ``find_package(hrx)`` inside it."""
+    from build_tools.fastflow_sdk_wheel_common import RUNTIME_PACKAGE
+
+    wheel = Path(wheel)
+    with tempfile.TemporaryDirectory(prefix="hrx-wheel-prefix-") as temporary:
+        root = Path(temporary)
+        with zipfile.ZipFile(wheel) as package:
+            package.extractall(root)
+        prefix = root / RUNTIME_PACKAGE
+        if not prefix.is_dir():
+            raise RuntimeError(
+                f"{wheel.name} does not contain the {RUNTIME_PACKAGE} package"
+            )
+        verify_hrx_prefix(prefix)
 
 
 def _runtime_archives(directory: Path) -> list[Path]:
@@ -228,8 +274,11 @@ def verify_hrx_package_split(directory: Path, wheels: dict[str, Path]) -> None:
         RUNTIME_DISTRIBUTION,
     )
 
-    verify_runtime_wheel(wheels[RUNTIME_DISTRIBUTION], require_runtime=True)
+    runtime_wheel = wheels[RUNTIME_DISTRIBUTION]
+    verify_runtime_wheel(runtime_wheel, require_runtime=True)
+    verify_runtime_wheel_prefix(runtime_wheel)
     verify_runtime_wheel(wheels[FASTFLOWLM_DISTRIBUTION], require_runtime=False)
+    print(f"runtime wheel HRX CMake package: ok ({runtime_wheel.name})")
     archives = _runtime_archives(directory)
     if len(archives) > 1:
         found = ", ".join(path.name for path in archives)
@@ -254,12 +303,13 @@ def verify_artifact_dir(directory: Path) -> None:
         )
         verify_hrx_prefix(extracted)
         verify_runtime_wheel(runtime_wheel, require_runtime=True)
+        verify_runtime_wheel_prefix(runtime_wheel)
         for wheel in fastflowlm_wheels:
             verify_runtime_wheel(wheel, require_runtime=False)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print(f"runtime archive HRX CMake package: ok ({archive.name})")
-    print(f"runtime wheel excludes HRX development files: ok ({runtime_wheel.name})")
+    print(f"runtime wheel HRX CMake package: ok ({runtime_wheel.name})")
 
 
 def main(argv: list[str] | None = None) -> int:
