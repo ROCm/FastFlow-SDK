@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +17,9 @@ from build_tools.fastflow_sdk_wheel_common import (
     RUNTIME_PACKAGE,
     fastflowlm_artifact_name,
     runtime_artifact_name,
+)
+from build_tools.wheel_payload import (
+    copy_file as _copy_file,
 )
 from build_tools.wheel_payload import (
     copy_license as _copy_license,
@@ -44,7 +49,11 @@ class RuntimeWheelTrees:
 def _write_runtime_module(package_root: Path) -> None:
     _write_file(
         package_root / "__init__.py",
-        '''"""Package-local HRX runtime helpers."""
+        '''"""Package-local HRX runtime helpers.
+
+The package root is the HRX CMake prefix. Point ``CMAKE_PREFIX_PATH`` at
+``package_root()`` and use ``find_package(hrx)``.
+"""
 
 from __future__ import annotations
 
@@ -226,6 +235,83 @@ if __name__ == "__main__":
     )
 
 
+_HRX_PUBLIC_HEADERS = ("hrx_runtime.h", "hrx_amdxdna.h")
+_HRX_LIBRARY_NAME = re.compile(r"libhrx\.so[0-9.]*")
+
+
+def _stage_runtime_hrx_development_files(
+    source_bundle: Path, runtime_root: Path
+) -> None:
+    """Copies the HRX CMake prefix into the runtime package.
+
+    ``include/hrx``, ``lib/cmake/hrx``, and on Windows ``lib/hrx.lib`` sit
+    beside the runtime ``bin/`` and ``lib/`` directories. The installed
+    package root is then a ``CMAKE_PREFIX_PATH`` for ``find_package(hrx)``.
+    The FastFlowLM package does not receive these files.
+    """
+    _copy_relative_tree(source_bundle, "include/hrx", runtime_root)
+    missing_headers = [
+        name
+        for name in _HRX_PUBLIC_HEADERS
+        if not (runtime_root / "include" / "hrx" / name).is_file()
+    ]
+    if missing_headers:
+        raise RuntimeError(
+            "runtime wheel HRX public headers missing: " + ", ".join(missing_headers)
+        )
+    _copy_relative_tree(source_bundle, "lib/cmake/hrx", runtime_root)
+    config = runtime_root / "lib" / "cmake" / "hrx" / "hrx-config.cmake"
+    if not config.is_file():
+        raise RuntimeError(f"runtime wheel HRX CMake package missing: {config}")
+    import_library = source_bundle / "lib" / "hrx.lib"
+    if os.name != "nt":
+        return
+    if not import_library.is_file():
+        raise RuntimeError(
+            f"runtime wheel HRX import library missing: {import_library}"
+        )
+    _copy_file(import_library, runtime_root / "lib" / "hrx.lib")
+
+
+def materialize_hrx_link_names(source_bundle: Path, runtime_root: Path) -> None:
+    """Copies every ``libhrx.so`` name the exported CMake target mentions.
+
+    The Linux wheel ships one ELF under the SONAME. ``install(EXPORT)`` may
+    name the versioned file instead, and that filename has to exist under
+    ``lib/`` or ``find_package(hrx)`` points at a missing library.
+    """
+    cmake_dir = runtime_root / "lib" / "cmake" / "hrx"
+    mentioned: set[str] = set()
+    for cmake in sorted(path for path in cmake_dir.rglob("*.cmake") if path.is_file()):
+        mentioned.update(_HRX_LIBRARY_NAME.findall(cmake.read_text(encoding="utf-8")))
+    existing = sorted(
+        path.name
+        for path in (runtime_root / "lib").glob("libhrx.so*")
+        if path.is_file()
+    )
+    extras = [name for name in existing if name not in mentioned]
+    if len(extras) == 1:
+        soname = extras[0]
+    elif len(existing) == 1:
+        soname = existing[0]
+    else:
+        soname = None
+    for name in sorted(mentioned):
+        destination = runtime_root / "lib" / name
+        if destination.is_file():
+            continue
+        source = source_bundle / "lib" / name
+        if source.is_file() or source.is_symlink():
+            _copy_file(source, destination)
+            continue
+        if soname is None:
+            found = ", ".join(existing) or "none"
+            raise RuntimeError(
+                f"HRX CMake package names {name}, but the runtime wheel has {found}"
+            )
+        _copy_file(runtime_root / "lib" / soname, destination)
+
+
 def prepare_runtime_wheel_trees(
     source_bundle: Path, destination: Path
 ) -> RuntimeWheelTrees:
@@ -269,6 +355,7 @@ def prepare_runtime_wheel_trees(
         trees.fastflowlm_root,
     )
     _copy_license(source_bundle, "licenses/FastFlowLM-TERMS.md", trees.fastflowlm_root)
+    _stage_runtime_hrx_development_files(source_bundle, trees.runtime_root)
     return trees
 
 

@@ -115,10 +115,13 @@ class TestFastflowSdkWheelNative:
         assert (runtime / "bin" / "hrx-amdxdna-resource-pressure.exe").is_file()
         assert (runtime / "bin" / "hrx.dll").is_file()
         assert (runtime / "bin" / "fastflow.exe").is_file()
-        for package in (runtime, fastflowlm):
-            assert not (package / "include" / "hrx").exists()
-            assert not (package / "lib" / "cmake" / "hrx").exists()
-            assert not (package / "lib" / "hrx.lib").exists()
+        assert (runtime / "include" / "hrx" / "hrx_runtime.h").is_file()
+        assert (runtime / "include" / "hrx" / "hrx_amdxdna.h").is_file()
+        assert (runtime / "lib" / "cmake" / "hrx" / "hrx-config.cmake").is_file()
+        assert (runtime / "lib" / "hrx.lib").read_bytes() == b"implib"
+        assert not (fastflowlm / "include" / "hrx").exists()
+        assert not (fastflowlm / "lib" / "cmake" / "hrx").exists()
+        assert not (fastflowlm / "lib" / "hrx.lib").exists()
         assert (
             runtime / "share" / "fastflow-sdk" / "self-test" / "case" / "kernel.xadx"
         ).is_file()

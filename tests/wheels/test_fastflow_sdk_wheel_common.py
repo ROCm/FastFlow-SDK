@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -23,7 +24,10 @@ import pytest
 
 from build_tools import fastflow_sdk_wheel_common, wheel_payload
 from build_tools.artifact import sha256_file
+from build_tools.fastflow_sdk_archive import _stage_hrx_development_files
 from build_tools.fastflow_sdk_wheel_common import (
+    FASTFLOWLM_DISTRIBUTION,
+    RUNTIME_DISTRIBUTION,
     build_wheel,
     find_distribution_wheels,
     find_wheel_path_references,
@@ -33,15 +37,142 @@ from build_tools.fastflow_sdk_wheel_common import (
 from build_tools.package_version import validate_version
 from build_tools.runtime_wheel_staging import (
     _write_runtime_module,
+    materialize_hrx_link_names,
     prepare_runtime_wheel_trees,
     write_runtime_wheel_manifests,
 )
+from build_tools.verify_runtime_archive_hrx_cmake import verify_hrx_package_split
 
 pytestmark = [
     pytest.mark.compiler_stack,
     pytest.mark.fastflowlm,
     pytest.mark.presubmit,
 ]
+
+
+def _zip_tree(tree: Path, wheel: Path) -> None:
+    with zipfile.ZipFile(wheel, "w") as package:
+        for path in sorted(item for item in tree.rglob("*") if item.is_file()):
+            package.write(path, path.relative_to(tree).as_posix())
+
+
+def test_wheel_verification_configures_hrx_from_the_runtime_wheel(tmp_path):
+    if shutil.which("cmake") is None:
+        pytest.skip("cmake is required")
+    install = tmp_path / "hrx-install"
+    absolute = install.resolve().as_posix()
+    include = install / "include" / "hrx"
+    include.mkdir(parents=True)
+    (include / "hrx_runtime.h").write_text("runtime\n", encoding="utf-8")
+    (include / "hrx_amdxdna.h").write_text("amdxdna\n", encoding="utf-8")
+    package = install / "lib" / "cmake" / "hrx"
+    package.mkdir(parents=True)
+    (package / "hrx-config.cmake").write_text(
+        'include("${CMAKE_CURRENT_LIST_DIR}/hrx-targets.cmake")\n',
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        library = (
+            "add_library(hrx::hrx SHARED IMPORTED)\n"
+            "set_property(TARGET hrx::hrx PROPERTY IMPORTED_CONFIGURATIONS RELEASE)\n"
+            "set_target_properties(hrx::hrx PROPERTIES\n"
+            f'  IMPORTED_IMPLIB_RELEASE "{absolute}/lib/hrx.lib"\n'
+            f'  IMPORTED_LOCATION_RELEASE "{absolute}/bin/hrx.dll"\n'
+            f'  INTERFACE_INCLUDE_DIRECTORIES "{absolute}/include/hrx"\n'
+            ")\n"
+        )
+        (install / "lib" / "hrx.lib").write_bytes(b"implib")
+    else:
+        library = (
+            "add_library(hrx::hrx SHARED IMPORTED)\n"
+            "set_property(TARGET hrx::hrx PROPERTY IMPORTED_CONFIGURATIONS RELEASE)\n"
+            "set_target_properties(hrx::hrx PROPERTIES\n"
+            f'  IMPORTED_LOCATION_RELEASE "{absolute}/lib/libhrx.so"\n'
+            f'  INTERFACE_INCLUDE_DIRECTORIES "{absolute}/include/hrx"\n'
+            ")\n"
+        )
+    (package / "hrx-targets.cmake").write_text(library, encoding="utf-8")
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    _stage_hrx_development_files(install, bundle)
+    for relative in (
+        "share/fastflow-sdk/self-test/case/manifest.json",
+        "share/flm/model_list.json",
+        "licenses/fastflow-sdk-LICENSE",
+        "licenses/hrx-LICENSE/LICENSE",
+        "licenses/nlohmann-json-LICENSE.MIT",
+        "licenses/THIRD_PARTY_NOTICES.md",
+        "licenses/FastFlowLM-LICENSE_RUNTIME.txt",
+        "licenses/FastFlowLM-TERMS.md",
+    ):
+        path = bundle / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+    trees = prepare_runtime_wheel_trees(bundle, tmp_path / "staging")
+    fastflow = "fastflow.exe" if os.name == "nt" else "fastflow"
+    (trees.runtime_root / "bin" / fastflow).parent.mkdir(parents=True, exist_ok=True)
+    (trees.runtime_root / "bin" / fastflow).write_bytes(b"cli")
+    if os.name == "nt":
+        (trees.runtime_root / "bin" / "hrx.dll").write_bytes(b"MZ")
+    else:
+        library_path = trees.runtime_root / "lib" / "libhrx.so"
+        library_path.parent.mkdir(parents=True, exist_ok=True)
+        library_path.write_bytes(b"elf")
+
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    runtime_wheel = wheel_dir / "fastflow_sdk_runtime-1.2.3-py3-none-any.whl"
+    fastflowlm_wheel = wheel_dir / "fastflow_sdk_fastflowlm-1.2.3-py3-none-any.whl"
+    _zip_tree(trees.runtime_tree, runtime_wheel)
+    _zip_tree(trees.fastflowlm_tree, fastflowlm_wheel)
+
+    verify_hrx_package_split(
+        wheel_dir,
+        {
+            RUNTIME_DISTRIBUTION: runtime_wheel,
+            FASTFLOWLM_DISTRIBUTION: fastflowlm_wheel,
+        },
+    )
+
+
+def test_materialize_hrx_link_names_copies_the_cmake_library(tmp_path):
+    bundle = tmp_path / "bundle" / "lib"
+    bundle.mkdir(parents=True)
+    (bundle / "libhrx.so.0.1.0").write_bytes(b"elf-versioned")
+    root = tmp_path / "fastflow_sdk_runtime"
+    (root / "lib").mkdir(parents=True)
+    (root / "lib" / "libhrx.so.0").write_bytes(b"elf-soname")
+    cmake = root / "lib" / "cmake" / "hrx"
+    cmake.mkdir(parents=True)
+    (cmake / "hrx-targets.cmake").write_text(
+        'IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/lib/libhrx.so.0.1.0"\n'
+        'IMPORTED_SONAME_RELEASE "libhrx.so.0"\n',
+        encoding="utf-8",
+    )
+
+    materialize_hrx_link_names(tmp_path / "bundle", root)
+
+    assert (root / "lib" / "libhrx.so.0").read_bytes() == b"elf-soname"
+    assert (root / "lib" / "libhrx.so.0.1.0").read_bytes() == b"elf-versioned"
+
+
+def test_materialize_hrx_link_names_falls_back_to_the_soname(tmp_path):
+    bundle = tmp_path / "bundle" / "lib"
+    bundle.mkdir(parents=True)
+    root = tmp_path / "fastflow_sdk_runtime"
+    (root / "lib").mkdir(parents=True)
+    (root / "lib" / "libhrx.so.0").write_bytes(b"elf-soname")
+    cmake = root / "lib" / "cmake" / "hrx"
+    cmake.mkdir(parents=True)
+    (cmake / "hrx-targets.cmake").write_text(
+        'IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/lib/libhrx.so.0.1.0"\n',
+        encoding="utf-8",
+    )
+
+    materialize_hrx_link_names(tmp_path / "bundle", root)
+
+    assert (root / "lib" / "libhrx.so.0.1.0").read_bytes() == b"elf-soname"
 
 
 class TestFastflowSdkWheelCommon:
@@ -77,10 +208,16 @@ class TestFastflowSdkWheelCommon:
         assert (trees.runtime_root / "licenses/fastflow-sdk-LICENSE").read_text(
             encoding="utf-8"
         ) == "staging"
-        for package in (trees.runtime_root, trees.fastflowlm_root):
-            assert not (package / "include" / "hrx").exists()
-            assert not (package / "lib" / "cmake" / "hrx").exists()
-            assert not (package / "lib" / "hrx.lib").exists()
+        assert (trees.runtime_root / "include/hrx/hrx_runtime.h").is_file()
+        assert (trees.runtime_root / "include/hrx/hrx_amdxdna.h").is_file()
+        assert (trees.runtime_root / "lib/cmake/hrx/hrx-config.cmake").is_file()
+        if os.name == "nt":
+            assert (trees.runtime_root / "lib/hrx.lib").is_file()
+        else:
+            assert not (trees.runtime_root / "lib/hrx.lib").exists()
+        assert not (trees.fastflowlm_root / "include" / "hrx").exists()
+        assert not (trees.fastflowlm_root / "lib" / "cmake" / "hrx").exists()
+        assert not (trees.fastflowlm_root / "lib" / "hrx.lib").exists()
 
         write_runtime_wheel_manifests(
             trees,

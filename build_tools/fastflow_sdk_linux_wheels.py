@@ -38,6 +38,7 @@ from build_tools.native_dependencies import (
 )
 from build_tools.package_version import validate_version
 from build_tools.runtime_wheel_staging import (
+    materialize_hrx_link_names,
     prepare_runtime_wheel_trees,
     write_runtime_wheel_manifests,
 )
@@ -302,6 +303,7 @@ def stage_wheel_products(
     fastflowlm_root = trees.fastflowlm_root
 
     _copy_hrx_soname(source_bundle, runtime_root)
+    materialize_hrx_link_names(source_bundle, runtime_root)
     _copy_relative_file(
         source_bundle, "bin/hrx-amdxdna-resource-pressure", runtime_root
     )
