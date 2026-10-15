@@ -34,7 +34,7 @@ from build_tools.compiler_native import (
     relocate_linux_compiler_rpaths,
     windows_system_runtime,
 )
-from build_tools.fastflowlm_artifact import verify_bundle
+from build_tools.fastflow_sdk_archive import verify_bundle
 from build_tools.native_dependencies import (
     elf_needed,
     is_loadable_elf,

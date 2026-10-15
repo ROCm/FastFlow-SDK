@@ -12,6 +12,10 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+from build_tools.fastflow_sdk_archive import (
+    _is_linux_system_runtime,
+    verify_bundle,
+)
 from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
@@ -23,10 +27,6 @@ from build_tools.fastflow_sdk_wheel_common import (
 )
 from build_tools.fastflow_sdk_wheel_common import (
     build_wheel as _build_wheel,
-)
-from build_tools.fastflowlm_artifact import (
-    _is_linux_system_runtime,
-    verify_bundle,
 )
 from build_tools.manylinux_audit import validate_manylinux_policy
 from build_tools.native_dependencies import (

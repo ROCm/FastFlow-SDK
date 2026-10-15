@@ -733,7 +733,7 @@ def test_linux_compiler_product_bundles_non_manylinux_dependencies(tmp_path):
 def test_linux_archive_is_tar_gz_without_zstd(tmp_path):
     root = tmp_path
     product = make_product(root / "stage")
-    with mock.patch("build_tools.fastflowlm_artifact.shutil.which", lambda name: None):
+    with mock.patch("build_tools.fastflow_sdk_archive.shutil.which", lambda name: None):
         archive = compiler_product._create_compiler_product_archive(
             product, root / "artifacts"
         )

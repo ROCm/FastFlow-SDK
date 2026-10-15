@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from build_tools.fastflowlm_artifact import _stage_hrx_development_files
+from build_tools.fastflow_sdk_archive import _stage_hrx_development_files
 from build_tools.verify_runtime_archive_hrx_cmake import (
     verify_hrx_prefix,
     verify_runtime_wheel,

@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""Build and verify relocatable FastFlowLM + HRX runtime artifacts."""
+"""Build and verify the standalone fastflow-sdk runtime archive."""
 
 from __future__ import annotations
 

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from build_tools.fastflowlm_artifact import extract_archive
+from build_tools.fastflow_sdk_archive import extract_archive
 
 _PROBE_CMAKE = r"""
 cmake_minimum_required(VERSION 3.20)
