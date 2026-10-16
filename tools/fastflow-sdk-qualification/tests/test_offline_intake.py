@@ -23,6 +23,7 @@ from fastflow_sdk_qualification.candidate import (
 from fastflow_sdk_qualification.contracts import (
     POWER_MODE_ROUNDTRIP,
     POWER_MODE_ROUNDTRIP_ARTIFACTS,
+    XADX_SUBBUFFER_BINDING_TEST,
 )
 from fastflow_sdk_qualification.evidence import EvidenceWriter
 from fastflow_sdk_qualification.offline import (
@@ -199,6 +200,23 @@ def test_failed_resident_preparation_remains_ingestible_evidence(tmp_path):
     _rewrite_evidence(source, mark_failed)
     summary = verify_evidence(source)
     assert summary["evidence_status"] == "fail"
+
+
+def test_passing_evidence_requires_subbuffer_binding(tmp_path):
+    source = _evidence(tmp_path / "subbuffer")
+    summary = verify_evidence(source)
+    assert summary["evidence_status"] == "pass"
+
+    def drop_subbuffer(evidence):
+        evidence["tests"] = [
+            test
+            for test in evidence["tests"]
+            if test.get("name") != XADX_SUBBUFFER_BINDING_TEST
+        ]
+
+    _rewrite_evidence(source, drop_subbuffer)
+    with pytest.raises(EvidenceError, match="subbuffer-binding"):
+        verify_evidence(source)
 
 
 def test_report_without_v1_runtime_fields_is_rejected(tmp_path):

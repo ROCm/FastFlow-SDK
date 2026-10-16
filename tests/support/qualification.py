@@ -26,6 +26,7 @@ from fastflow_sdk_qualification.contracts import (
     POWER_MODE_ROUNDTRIP_ARTIFACTS,
     POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
     SHARED_CODE_MEMORY_RECLAIM,
+    XADX_SUBBUFFER_BINDING_TEST,
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
 )
@@ -555,6 +556,20 @@ def make_evidence(
             },
             {
                 "model": "fastflowlm-production-kernels",
+                "name": XADX_SUBBUFFER_BINDING_TEST,
+                "kind": "xadx",
+                "status": "pass",
+                "duration_seconds": 0.5,
+                "log": "xadx-report.json",
+                "rounds": 1,
+                "metrics": {
+                    "architecture": "AMD_AIE2_NPU2",
+                    "returncode": 0,
+                },
+                "artifacts": ["xadx-report.json"],
+            },
+            {
+                "model": "fastflowlm-production-kernels",
                 "name": "xadx-case",
                 "kind": "xadx",
                 "status": "pass",
@@ -692,6 +707,11 @@ def make_evidence(
                 "status": "pass",
                 "images": XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
                 "duration_seconds": 1,
+            },
+            "subbuffer_binding": {
+                "status": "pass",
+                "duration_seconds": 0.5,
+                "returncode": 0,
             },
             "failures": [],
         },

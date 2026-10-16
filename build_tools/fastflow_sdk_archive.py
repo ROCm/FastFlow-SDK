@@ -35,6 +35,7 @@ from build_tools.fastflowlm_deps import dependency_paths
 from build_tools.native_dependencies import (
     elf_needed,
     elf_soname,
+    pe_import_sets,
     pe_imports,
     set_elf_rpath,
 )
@@ -943,6 +944,159 @@ def _stage_hrx_development_files(hrx_install: Path, bundle: Path) -> None:
         _make_hrx_cmake_relocatable(destination, hrx_install, bundle)
 
 
+_GEMMA4E_LINK_STEMS = ("q4_npu_eXpress", "mha")
+
+# FLM_ENGINE_LINK_LIBS minus q4_npu_eXpress and llama_npu. pe_import_sets
+# lowercases DLL names. q4 is the shared quant library. llama stays a normal
+# import while its import library exports CRT data.
+WINDOWS_MODEL_ENGINE_DELAY_IMPORTS = frozenset(
+    {
+        "gemma4_12b_npu.dll",
+        "gemma4e_flash.dll",
+        "gemma4e_npu.dll",
+        "gemma_embedding.dll",
+        "gemma_npu.dll",
+        "gemma_text_npu.dll",
+        "gpt_oss_npu.dll",
+        "hunyuan_npu.dll",
+        "lfm2_npu.dll",
+        "minicpm_v_4_7_npu.dll",
+        "nanbeige_npu.dll",
+        "phi4_npu.dll",
+        "qwen2_npu.dll",
+        "qwen2vl_npu.dll",
+        "qwen3_5_omni_npu.dll",
+        "qwen3_5vl_npu.dll",
+        "qwen3_6_moe_npu.dll",
+        "qwen3_8mtp_npu.dll",
+        "qwen3_npu.dll",
+        "qwen3vl_flash.dll",
+        "qwen3vl_npu.dll",
+        "whisper_npu.dll",
+    }
+)
+WINDOWS_ENGINE_NORMAL_IMPORTS = frozenset(
+    {"q4_npu_express.dll", "llama_npu.dll", "hrx.dll"}
+)
+
+
+def stage_gemma4e_engine_sources(flm_source: Path, bundle: Path, root: Path) -> None:
+    """Copies the Gemma 4 engine sources into the install prefix.
+
+    The product ``flm`` keeps the prebuilt engine. This tree is what an
+    installed user configures against the HRX already in the prefix. Import
+    libraries for the prebuilt ``q4nx`` and ``mha`` pieces land in ``lib/flm``.
+    """
+    detail = flm_source / "src" / "detail"
+    include = flm_source / "src" / "include"
+    if (
+        not (detail / "CMakeLists.txt").is_file()
+        or not (detail / "gemma4e_npu").is_dir()
+    ):
+        raise RuntimeError(f"FastFlowLM Gemma 4 engine sources missing: {detail}")
+    if not (include / "flm_override.hpp").is_file():
+        raise RuntimeError(f"FastFlowLM override header missing: {include}")
+    destination = bundle / "share" / "fastflow-sdk" / "gemma4e"
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(detail, destination / "src" / "detail")
+    shutil.copytree(include, destination / "src" / "include")
+    _copy_checked(
+        root / "cmake" / "gemma4e-override" / "CMakeLists.txt",
+        destination / "CMakeLists.txt",
+    )
+    lib_source = flm_source / "src" / "lib" / "hrx"
+    lib_dest = bundle / "lib" / "flm"
+    lib_dest.mkdir(parents=True, exist_ok=True)
+    # The product install already places these libraries in lib/flm. Those are
+    # the files flm linked. The git prebuilts can differ byte for byte, so a
+    # second copy must not replace them.
+    if os.name == "nt":
+        for stem in _GEMMA4E_LINK_STEMS:
+            library = lib_dest / f"{stem}.lib"
+            if not library.exists():
+                _copy_checked(lib_source / f"{stem}.lib", library)
+    else:
+        for stem in _GEMMA4E_LINK_STEMS:
+            if any(lib_dest.glob(f"lib{stem}.so*")):
+                continue
+            matches = sorted(lib_source.glob(f"lib{stem}.so*"))
+            if not matches:
+                raise RuntimeError(
+                    f"prebuilt {stem} library missing under {lib_source}"
+                )
+            for match in matches:
+                _copy_checked(match, lib_dest / match.name)
+
+
+def verify_installed_engine_sdk(bundle: Path) -> None:
+    """Requires Gemma 4 engine sources and a Windows PATH-selectable engine DLL.
+
+    HRX headers and CMake are staged separately and checked by the archive
+    HRX verifier. This checks the engine tree, the prebuilt ``q4nx`` and
+    ``mha`` libraries, and that Windows ``flm.exe`` delay-loads the model
+    engines while ``q4_npu_eXpress.dll`` and ``llama_npu.dll`` stay normal
+    imports.
+    """
+    engine = bundle / "share" / "fastflow-sdk" / "gemma4e"
+    cmake_lists = engine / "CMakeLists.txt"
+    if not cmake_lists.is_file():
+        raise RuntimeError(f"installed Gemma 4 engine sources missing: {engine}")
+    cmake_text = cmake_lists.read_text(encoding="utf-8")
+    if "find_package(hrx CONFIG REQUIRED)" not in cmake_text:
+        raise RuntimeError(
+            f"{cmake_lists} does not configure against the installed HRX"
+        )
+    if "FLM_IRON_INCLUDE_DIRS" not in cmake_text:
+        raise RuntimeError(
+            f"{cmake_lists} does not accept include directories for an override header"
+        )
+    detail = engine / "src" / "detail" / "gemma4e_npu"
+    header = engine / "src" / "include" / "flm_override.hpp"
+    if not detail.is_dir() or not header.is_file():
+        raise RuntimeError(f"installed Gemma 4 engine sources are incomplete: {engine}")
+    lib_dir = bundle / "lib" / "flm"
+    if os.name == "nt":
+        for stem in _GEMMA4E_LINK_STEMS:
+            library = lib_dir / f"{stem}.lib"
+            if not library.is_file():
+                raise RuntimeError(
+                    f"installed engine import library missing: {library}"
+                )
+        flm = bundle / "bin" / "flm.exe"
+        if not flm.is_file():
+            raise RuntimeError(f"installed flm missing: {flm}")
+        regular, delay = pe_import_sets(flm)
+        regular_set = set(regular)
+        delay_set = set(delay)
+        if delay_set != WINDOWS_MODEL_ENGINE_DELAY_IMPORTS:
+            raise RuntimeError(
+                f"{flm} must delay-load the model engines "
+                f"{sorted(WINDOWS_MODEL_ENGINE_DELAY_IMPORTS)} so PATH can "
+                "select a replacement ahead of the DLL beside flm.exe; "
+                f"delay imports are {sorted(delay_set)}"
+            )
+        if not WINDOWS_MODEL_ENGINE_DELAY_IMPORTS.isdisjoint(regular_set):
+            raise RuntimeError(
+                f"{flm} imports a model engine directly: "
+                f"{sorted(WINDOWS_MODEL_ENGINE_DELAY_IMPORTS & regular_set)}"
+            )
+        missing_normal = WINDOWS_ENGINE_NORMAL_IMPORTS - regular_set
+        delayed_normal = WINDOWS_ENGINE_NORMAL_IMPORTS & delay_set
+        if missing_normal or delayed_normal:
+            raise RuntimeError(
+                f"{flm} must import {sorted(WINDOWS_ENGINE_NORMAL_IMPORTS)} "
+                "normally. "
+                f"missing={sorted(missing_normal)} delay-loaded={sorted(delayed_normal)}"
+            )
+    else:
+        for stem in _GEMMA4E_LINK_STEMS:
+            if not any(lib_dir.glob(f"lib{stem}.so*")):
+                raise RuntimeError(
+                    f"installed engine library lib{stem}.so missing under {lib_dir}"
+                )
+
+
 def stage_runtime_bundle(
     root: Path, flm_install: Path, hrx_install: Path, destination: Path
 ) -> Path:
@@ -985,6 +1139,7 @@ def stage_runtime_bundle(
         )
 
     _stage_hrx_development_files(hrx_install, bundle)
+    stage_gemma4e_engine_sources(root / "projects" / "FastFlowLM", bundle, root)
     _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
     fixture_source = cli_install / "share" / "fastflow-sdk" / "self-test"
     if not fixture_source.is_dir():
@@ -1011,7 +1166,10 @@ def stage_runtime_bundle(
             root / "projects" / "FastFlowLM" / "LICENSE_RUNTIME.txt",
             "FastFlowLM-LICENSE_RUNTIME.txt",
         ),
-        (root / "projects" / "FastFlowLM" / "TERMS.md", "FastFlowLM-TERMS.md"),
+        (
+            root / "projects" / "FastFlowLM" / "LICENSE_BINARY.txt",
+            "FastFlowLM-LICENSE_BINARY.txt",
+        ),
         (
             root / "third_party" / "nlohmann_json" / "LICENSE.MIT",
             "nlohmann-json-LICENSE.MIT",
@@ -1124,6 +1282,7 @@ def stage_runtime_bundle(
         },
         "files": files,
     }
+    verify_installed_engine_sdk(bundle)
     validate_source_policy(manifest, root)
     (bundle / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"

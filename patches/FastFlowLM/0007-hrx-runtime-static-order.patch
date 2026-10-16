@@ -1,0 +1,42 @@
+From: FastFlow SDK <fastflow-sdk@amd.com>
+Subject: [PATCH] Destroy the HRX runtime after its static caches
+
+~Runtime() frees the executable cache and clears the coherence map. Those
+function-local statics are created later than Runtime, so a normal process
+exit destroys them first. Runtime::get() constructs them first.
+
+diff --git a/src/include/hrx_cpp/hrx_cpp.hpp b/src/include/hrx_cpp/hrx_cpp.hpp
+index 28615f4c..e585e240 100644
+--- a/src/include/hrx_cpp/hrx_cpp.hpp
++++ b/src/include/hrx_cpp/hrx_cpp.hpp
+@@ -56,10 +56,8 @@ namespace hrx {
+ // ---------------------------------------------------------------------------
+ class Runtime {
+ public:
+-    static Runtime& get() {
+-        static Runtime r;
+-        return r;
+-    }
++    // Defined after the cache statics. Those have to be constructed first.
++    static Runtime& get();
+     hrx_device_t dev = nullptr;
+     hrx_stream_t stream = nullptr;
+     bool ok = false;
+@@ -400,6 +398,17 @@ inline std::unordered_map<hrx_buffer_t, BufCoh>& buf_coh() {
+     return m;
+ }
+ 
++inline Runtime& Runtime::get() {
++    // Function-local statics are destroyed in reverse order of construction.
++    // ~Runtime() still uses these maps, so they have to exist first.
++    exe_cache_mu();
++    exe_cache();
++    buf_coh_mu();
++    buf_coh();
++    static Runtime r;
++    return r;
++}
++
+ inline Runtime::~Runtime() {
+     if (!dev && !stream) return;
+     purge_executable_cache();

@@ -298,3 +298,110 @@ def test_package_validation_report_records_runtime_open(monkeypatch, tmp_path):
     report = json.loads((writer.root / "xadx-report.json").read_text())
     assert report["report_kind"] == "package-validation"
     assert report["runtime_open"] == {"attempts": 4, "unavailable_retries": 3}
+
+
+def test_slice_probe_dispatches_a_guarded_python_binding(tmp_path, monkeypatch):
+    import hashlib
+
+    from fastflow_sdk_qualification import recipe_generators
+
+    xadx_path = tmp_path / "kernel.xadx"
+    xadx_path.write_bytes(b"xadx")
+    (tmp_path / "recipe.json").write_text("{}", encoding="utf-8")
+    implementations = {
+        "dequant-1": {
+            "xadx": "kernel.xadx",
+            "xadx_sha256": hashlib.sha256(b"xadx").hexdigest(),
+            "export": "MLIR_AIE",
+        }
+    }
+    cases = [
+        {
+            "name": "shared-subset",
+            "stages": [
+                {
+                    "name": "dequant",
+                    "implementation": "dequant-1",
+                    "buffers": [
+                        {
+                            "name": "weight",
+                            "direction": "input",
+                            "size": 4,
+                            "source": {
+                                "id": "bytes",
+                                "parameters": {"payload": b"in!!"},
+                            },
+                        },
+                        {
+                            "name": "output",
+                            "direction": "output",
+                            "size": 4,
+                            "expected": {
+                                "id": "bytes",
+                                "parameters": {"payload": b"out!"},
+                            },
+                            "comparison": {"kind": "exact"},
+                        },
+                        {
+                            "name": "scratch",
+                            "direction": "output",
+                            "size": 8,
+                        },
+                    ],
+                }
+            ],
+        }
+    ]
+    calls = {}
+
+    class FakeRuntime:
+        def load(self, data, export):
+            calls["load"] = (data, export)
+            return object(), 0
+
+        def allocate(self, data):
+            backing = bytearray(b"\xa5" * (len(data) + 8))
+            storage = memoryview(backing)[4 : 4 + len(data)]
+            storage[:] = data
+            return xadx._GuardedBuffer(object(), storage, backing, 4)
+
+        def run(self, _executable, _ordinal, buffers):
+            calls["offsets"] = [buffer.offset for buffer in buffers]
+            buffers[1].storage[:] = b"out!"
+
+        def inspect(self, buffer):
+            end = buffer.offset + len(buffer.storage)
+            return (
+                bytes(buffer.backing[: buffer.offset]),
+                bytes(buffer.storage),
+                bytes(buffer.backing[end:]),
+            )
+
+        def read(self, buffer):
+            return bytes(buffer.storage)
+
+    class FakeSession:
+        def __init__(self, _factory):
+            self.runtime = FakeRuntime()
+
+        def close(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        xadx, "_validate_recipe", lambda _recipe: (implementations, cases)
+    )
+    monkeypatch.setattr(xadx, "_Session", FakeSession)
+    monkeypatch.setattr(xadx, "_GUARD_BYTES", 4)
+    monkeypatch.setattr(
+        recipe_generators,
+        "materialize",
+        lambda _identifier, parameters: parameters["payload"],
+    )
+
+    record = xadx.flm_subbuffer_binding_record(tmp_path)
+
+    assert record["status"] == "pass"
+    assert record["name"] == "subbuffer-binding"
+    assert calls["offsets"] == [4, 4, 4]
+    assert calls["load"] == (b"xadx", "MLIR_AIE")
+    assert calls["closed"] is True

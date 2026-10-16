@@ -53,6 +53,11 @@ def _write_iron_ops_source(root: Path) -> Path:
         "iron/common/test_utils.py": "def run_test():\n    pass\n",
         "iron/tests/infrastructure/foo.py": "assert False\n",
         "iron/applications/llama.py": "assert False\n",
+        "iron/applications/gemma4_flm/build.py": "def main():\n    pass\n",
+        "iron/applications/gemma4_flm/overrides.hpp": "// override\n",
+        "iron/applications/gemma4_flm/pli_weights.py": "def pack():\n    pass\n",
+        "iron/applications/gemma4_flm/test.py": "def test_should_not_ship():\n    pass\n",
+        "iron/applications/gemma4_flm/Makefile": "clone:\n",
         "aie_kernels/generic/add.cc": "// add\n",
         "aie_kernels/README.md": "kernels\n",
     }
@@ -72,7 +77,13 @@ class TestFastflowSdkOpsWheels:
         assert (tree / "iron" / "common" / "test_utils.py").is_file()
         assert (tree / "aie_kernels" / "generic" / "add.cc").is_file()
         assert not (tree / "iron" / "tests").exists()
-        assert not (tree / "iron" / "applications").exists()
+        assert (tree / "iron" / "applications" / "gemma4_flm" / "build.py").is_file()
+        assert (
+            tree / "iron" / "applications" / "gemma4_flm" / "overrides.hpp"
+        ).is_file()
+        assert not (tree / "iron" / "applications" / "llama.py").exists()
+        assert not (tree / "iron" / "applications" / "gemma4_flm" / "test.py").exists()
+        assert not (tree / "iron" / "applications" / "gemma4_flm" / "Makefile").exists()
         assert not (
             tree / "iron" / "operators" / "elementwise_add" / "test.py"
         ).exists()
@@ -80,6 +91,7 @@ class TestFastflowSdkOpsWheels:
         assert (tree / OPS_PACKAGE / "licenses" / "fastflow-sdk-LICENSE").is_file()
         init = (tree / OPS_PACKAGE / "__init__.py").read_text(encoding="utf-8")
         assert "def kernels_root" in init
+        assert "def gemma4_flm_root" in init
         assert "def manifest" in init
 
         manifest = json.loads(

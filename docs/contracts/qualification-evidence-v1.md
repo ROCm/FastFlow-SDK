@@ -20,8 +20,10 @@ A qualification run writes a portable directory containing:
   mutating powermode roundtrip test when the host supports unprivileged
   power-mode changes
 - `xadx-report.json`: schema-v1 XADX identity, per-case metrics, structured
-  phase/round failures, and `unique_xclbin_context_soak` (the counted
-  `unique-xclbin-context-soak` test: 33 distinct images in one runtime)
+  phase/round failures, `unique_xclbin_context_soak` (the counted
+  `unique-xclbin-context-soak` test: 33 distinct images in one runtime), and
+  `subbuffer_binding` (the counted `subbuffer-binding` test: one shipped
+  kernel dispatched with each buffer bound at a byte offset)
 - `profile.json`: either the exact versioned `profile-v1` executed (curated
   `fast` / `default` / `extended` runs) or a `diagnostic-sweep` descriptor
   (`kind: "diagnostic-sweep"`) recording what a sweep actually ran (name, bench

@@ -25,7 +25,8 @@ add_executable(
 add_executable(
   fastflowlm-q4nx-vector-dump q4nx_vector_dump.cpp kernel_test_data.cpp)
 set(qualification_native_targets
-  fastflowlm-xadx-implementation-probe fastflowlm-q4nx-vector-dump)
+  fastflowlm-xadx-implementation-probe
+  fastflowlm-q4nx-vector-dump)
 
 if(BUILD_TESTING)
   add_executable(

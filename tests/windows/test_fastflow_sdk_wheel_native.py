@@ -47,7 +47,7 @@ class TestFastflowSdkWheelNative:
             "licenses/fastflow-sdk-LICENSE": "staging",
             "licenses/hrx-LICENSE/LICENSE": "hrx",
             "licenses/FastFlowLM-LICENSE_RUNTIME.txt": "fastflowlm",
-            "licenses/FastFlowLM-TERMS.md": "terms",
+            "licenses/FastFlowLM-LICENSE_BINARY.txt": "binary",
             "licenses/nlohmann-json-LICENSE.MIT": "nlohmann",
             "licenses/THIRD_PARTY_NOTICES.md": "notices",
             "licenses/vcpkg/runtime-package/copyright": "dependency",

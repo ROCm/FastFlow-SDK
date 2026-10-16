@@ -89,6 +89,10 @@ XADX_UNIQUE_XCLBIN_CONTEXT_SOAK = 33
 # Counted XADX test name. Not a recipe case: it is a same-runtime preamble
 # that must show up in tests.json / junit.
 XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST = "unique-xclbin-context-soak"
+# Required qualification test. One shipped kernel is dispatched with each
+# buffer bound at a byte offset inside a larger allocation. It is not a recipe
+# case; tests.json and the XADX report both have to carry it.
+XADX_SUBBUFFER_BINDING_TEST = "subbuffer-binding"
 
 
 def xadx_rounds(profile_name: str) -> dict[str, int]:
