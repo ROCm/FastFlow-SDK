@@ -55,6 +55,10 @@ OPS_WHEEL_ARTIFACTS = compiler_product.COMPILER_ARTIFACTS
 IRON_OPS_SOURCE = paths.PROJ / "iron-ops"
 _SKIP_DIR_NAMES = frozenset({"tests", "applications", "__pycache__"})
 _SKIP_FILE_NAMES = frozenset({"test.py", "conftest.py"})
+# The Gemma 4 override example stays in IRON and is the one application the
+# installed ops wheel ships. Its Makefile clones FastFlowLM; the SDK example
+# does not.
+_GEMMA4_FLM_FILES = frozenset({"build.py", "overrides.hpp", "pli_weights.py"})
 IS_WINDOWS = paths.is_windows()
 _VBIN = "Scripts" if IS_WINDOWS else "bin"
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -64,7 +68,16 @@ def ops_requires(version: str) -> tuple[str, ...]:
     return (f"{COMPILER_DISTRIBUTION} =={version}",)
 
 
+def _ship_gemma4_flm(relative: Path) -> bool:
+    return (
+        relative.parts[:2] == ("applications", "gemma4_flm")
+        and relative.name in _GEMMA4_FLM_FILES
+    )
+
+
 def _skip_relative(relative: Path) -> bool:
+    if _ship_gemma4_flm(relative):
+        return False
     return any(part in _SKIP_DIR_NAMES for part in relative.parts) or (
         relative.name in _SKIP_FILE_NAMES or relative.suffix == ".pyc"
     )
@@ -118,6 +131,11 @@ def kernels_root() -> Path:
     return install_root() / "aie_kernels"
 
 
+def gemma4_flm_root() -> Path:
+    """Installed ``overrides.hpp`` and ``build.py`` for the Gemma 4 engine override."""
+    return install_root() / "iron" / "applications" / "gemma4_flm"
+
+
 def manifest() -> dict:
     return json.loads(
         (package_root() / "manifest.json").read_text(encoding="utf-8")
@@ -146,6 +164,15 @@ def stage_ops_tree(
     reset_directory(destination, destination.parent)
     _copy_tree_filtered(iron_root, destination / "iron")
     _copy_tree_filtered(kernels_root, destination / "aie_kernels")
+    gemma4_flm = destination / "iron" / "applications" / "gemma4_flm"
+    missing_gemma4 = [
+        name for name in sorted(_GEMMA4_FLM_FILES) if not (gemma4_flm / name).is_file()
+    ]
+    if missing_gemma4:
+        raise RuntimeError(
+            "staged IRON ops wheel is missing gemma4_flm files: "
+            + ", ".join(missing_gemma4)
+        )
     if not (destination / "iron" / "operators" / "__init__.py").is_file():
         raise RuntimeError("staged IRON ops wheel is missing iron.operators")
     if not (

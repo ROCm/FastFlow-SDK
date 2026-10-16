@@ -13,6 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from build_tools import paths
 from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
@@ -133,6 +134,15 @@ def stage_qualification_tree(
             "qualification recipe coverage differs from its capability manifest"
         )
     shutil.copytree(xadx_assets, package_root / "xadx_assets")
+    binding_tool = (
+        paths.BUILD
+        / "fastflowlm-qualification-tools"
+        / paths.executable_name("fastflowlm-subbuffer-binding")
+    )
+    if binding_tool.is_file():
+        packaged_bin = package_root / "bin"
+        packaged_bin.mkdir()
+        shutil.copy2(binding_tool, packaged_bin / binding_tool.name)
     licenses = package_root / "licenses"
     licenses.mkdir()
     shutil.copy2(root / "LICENSE", licenses / "fastflow-sdk-LICENSE")
@@ -140,7 +150,7 @@ def stage_qualification_tree(
     fastflowlm_licenses = root / "projects" / "FastFlowLM"
     for source_name, packaged_name in (
         ("LICENSE_RUNTIME.txt", "FastFlowLM-LICENSE_RUNTIME.txt"),
-        ("TERMS.md", "FastFlowLM-TERMS.md"),
+        ("LICENSE_BINARY.txt", "FastFlowLM-LICENSE_BINARY.txt"),
     ):
         source = qualification_licenses / packaged_name
         upstream = fastflowlm_licenses / source_name

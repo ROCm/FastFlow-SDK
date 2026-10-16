@@ -207,7 +207,7 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assets = _fake_xadx_assets(tmp_path / "xadx")
     upstream_licenses = {
         ROOT / "projects/FastFlowLM/LICENSE_RUNTIME.txt",
-        ROOT / "projects/FastFlowLM/TERMS.md",
+        ROOT / "projects/FastFlowLM/LICENSE_BINARY.txt",
     }
     path_is_file = Path.is_file
     monkeypatch.setattr(
@@ -272,7 +272,7 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "fastflow_sdk_qualification/bench/bench_4k_smoke.json" in names
     assert "fastflow_sdk_qualification/bench/bench_8k_smoke.json" in names
     assert "fastflow_sdk_qualification/licenses/FastFlowLM-LICENSE_RUNTIME.txt" in names
-    assert "fastflow_sdk_qualification/licenses/FastFlowLM-TERMS.md" in names
+    assert "fastflow_sdk_qualification/licenses/FastFlowLM-LICENSE_BINARY.txt" in names
     # The reference transcript is vendored in git, so every wheel must carry it;
     # the paired audio clip is copied from the FastFlowLM checkout, so it must be
     # present whenever the submodule is (a pin bump that drops it fails the build
@@ -321,7 +321,7 @@ def test_installed_wheel_executes_offline_commands_and_packaged_resources(
     assets = _fake_xadx_assets(tmp_path / "xadx")
     upstream_licenses = {
         ROOT / "projects/FastFlowLM/LICENSE_RUNTIME.txt",
-        ROOT / "projects/FastFlowLM/TERMS.md",
+        ROOT / "projects/FastFlowLM/LICENSE_BINARY.txt",
     }
     path_is_file = Path.is_file
     monkeypatch.setattr(
@@ -509,8 +509,8 @@ def test_qualification_license_snapshots_match_fastflowlm():
     assert normalized(snapshots / "FastFlowLM-LICENSE_RUNTIME.txt") == normalized(
         upstream / "LICENSE_RUNTIME.txt"
     )
-    assert normalized(snapshots / "FastFlowLM-TERMS.md") == normalized(
-        upstream / "TERMS.md"
+    assert normalized(snapshots / "FastFlowLM-LICENSE_BINARY.txt") == normalized(
+        upstream / "LICENSE_BINARY.txt"
     )
 
 

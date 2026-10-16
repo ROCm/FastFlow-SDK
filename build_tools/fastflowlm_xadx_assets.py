@@ -335,6 +335,18 @@ def generate_xadx_assets(xclbin_root, destination=XADX_STAGE):
 
 def cmd_generate_xadx_assets(args):
     build_xadx_generator(args.fresh)
+    environment.sh(
+        [
+            environment.cmake_bin(),
+            "--build",
+            environment.cmake_path(QUALIFICATION_BUILD),
+            "--target",
+            "fastflowlm-subbuffer-binding",
+            "-j",
+            os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4"),
+        ],
+        env=environment.cmake_env(),
+    )
     run_native_qualification_tests(configure=False)
     verify_recipe_generator_parity(configure=False)
     return generate_xadx_assets(

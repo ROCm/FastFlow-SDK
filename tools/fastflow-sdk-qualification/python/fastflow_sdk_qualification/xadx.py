@@ -19,8 +19,11 @@ import importlib.metadata
 import json
 import os
 import re
+import subprocess
+import tempfile
 import time
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from .contracts import (
     XADX_REPORT_SCHEMA_VERSION,
@@ -1718,3 +1721,166 @@ def run_recipe(
             "failures": failures,
         }
     )
+
+
+def subbuffer_binding_tool() -> Path | None:
+    """The host program that binds shipped xclbins through ``hrx::bo`` slices."""
+    override = os.environ.get("FASTFLOW_SUBBUFFER_BINDING")
+    name = (
+        "fastflowlm-subbuffer-binding.exe"
+        if os.name == "nt"
+        else "fastflowlm-subbuffer-binding"
+    )
+    candidates = []
+    if override:
+        candidates.append(Path(override))
+    candidates.append(
+        Path(__file__).resolve().parents[4]
+        / "build"
+        / "fastflowlm-qualification-tools"
+        / name
+    )
+    try:
+        from importlib import resources
+
+        packaged = resources.files("fastflow_sdk_qualification").joinpath("bin", name)
+        if packaged.is_file():
+            candidates.append(Path(str(packaged)))
+    except (ImportError, OSError, TypeError):
+        pass
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def flm_subbuffer_binding_record(asset_root: Path) -> dict[str, Any] | None:
+    """Dispatch the first recipe stage with each buffer bound as a slice.
+
+    The xclbin is one FastFlowLM already ships (dequant or mm). The host program
+    places every buffer in the middle of a larger allocation and passes that
+    byte offset through ``hrx::bo`` and ``run::add_binding``.
+    """
+    tool = subbuffer_binding_tool()
+    if tool is None:
+        return None
+    started = time.monotonic()
+    try:
+        recipe = json.loads((asset_root / "recipe.json").read_text(encoding="utf-8"))
+        implementations, cases = _validate_recipe(recipe)
+        case = next(
+            (
+                item
+                for item in cases
+                if len(item["stages"]) == 1
+                and any(
+                    buffer["direction"] == "output"
+                    and isinstance(buffer.get("expected"), dict)
+                    and buffer["expected"].get("id") != "zero"
+                    for buffer in item["stages"][0]["buffers"]
+                )
+            ),
+            cases[0],
+        )
+        stage = case["stages"][0]
+        implementation = implementations[stage["implementation"]]
+        xclbin_path = Path(implementation["xclbin_path"])
+        xclbin_candidates = [
+            asset_root / xclbin_path,
+            Path(os.environ.get("FLM_XCLBIN_PATH", "")) / "xclbins" / xclbin_path,
+            Path(__file__).resolve().parents[4]
+            / "projects"
+            / "FastFlowLM"
+            / "src"
+            / "xclbins"
+            / xclbin_path,
+        ]
+        xclbin = next((path for path in xclbin_candidates if path.is_file()), None)
+        if xclbin is None:
+            raise XadxError(
+                f"cannot find shipped xclbin {implementation['xclbin_path']}"
+            )
+        from . import recipe_generators as generators
+
+        payloads: list[tuple[bytes, bytes | None]] = []
+        for record in stage["buffers"]:
+            source = record.get("source")
+            if record["direction"] == "output" or source is None:
+                payload = bytes(record["size"])
+            elif isinstance(source, dict) and "stage_output" in source:
+                raise XadxError(
+                    "the slice probe stage must not chain an earlier output"
+                )
+            else:
+                payload = generators.materialize(source["id"], source["parameters"])
+                if len(payload) != record["size"]:
+                    raise XadxError(
+                        f"{record['name']} generator produced "
+                        f"{len(payload)} bytes, expected {record['size']}"
+                    )
+            expected = None
+            if record["direction"] == "output" and isinstance(
+                record.get("expected"), dict
+            ):
+                expected_spec = record["expected"]
+                expected = generators.materialize(
+                    expected_spec["id"], expected_spec["parameters"]
+                )
+            payloads.append((payload, expected))
+        with tempfile.TemporaryDirectory(prefix="subbuffer-binding-") as temporary:
+            directory = Path(temporary)
+            arguments = [
+                str(tool),
+                str(xclbin),
+                str(asset_root / implementation["transaction"]),
+            ]
+            for index, (payload, _expected) in enumerate(payloads):
+                path = directory / f"payload-{index}.bin"
+                path.write_bytes(payload)
+                arguments.append(str(path))
+            result = subprocess.run(
+                arguments,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            mismatches = []
+            if result.returncode == 0:
+                for index, (_payload, expected) in enumerate(payloads):
+                    if expected is None:
+                        continue
+                    readback = (
+                        directory / f"payload-{index}.bin.readback"
+                    ).read_bytes()
+                    if readback != expected:
+                        mismatches.append(index)
+        passed = result.returncode == 0 and not mismatches and "PASS" in result.stdout
+        detail = (result.stderr or result.stdout).strip()
+        if mismatches:
+            detail = f"slice readback mismatch at buffers {mismatches}"
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        KeyError,
+        XadxError,
+        ValueError,
+    ) as error:
+        passed = False
+        detail = str(error)
+        result = None
+    return {
+        "model": "fastflowlm-production-kernels",
+        "name": "subbuffer-binding",
+        "kind": "xadx",
+        "status": "pass" if passed else "fail",
+        "duration_seconds": max(time.monotonic() - started, 0.0),
+        "log": "",
+        "rounds": 1,
+        "metrics": {
+            "tool": str(tool),
+            "returncode": None if result is None else result.returncode,
+        },
+        "artifacts": [],
+        **({} if passed else {"error": detail or "sub-buffer binding failed"}),
+    }

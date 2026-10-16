@@ -197,11 +197,43 @@ def xclbin_path() -> Path:
     return path
 
 
+def gemma4e_root() -> Path:
+    """Gemma 4 engine sources. Pass this to cmake ``-S``.
+
+    A different engine replaces this directory. ``find_package(hrx)`` uses
+    ``fastflow_sdk_runtime.cmake_prefix()`` or the unpacked archive.
+    """
+    path = package_root() / "share" / "fastflow-sdk" / "gemma4e"
+    if not (path / "CMakeLists.txt").is_file():
+        raise FileNotFoundError(f"Gemma 4 engine sources were not found: {path}")
+    return path
+
+
+def engine_lib_dir() -> Path:
+    """Import libraries the Gemma 4 engine links (``q4nx`` and ``mha``)."""
+    path = package_root() / "lib" / "flm"
+    if not path.is_dir():
+        raise FileNotFoundError(f"Gemma 4 engine import libraries were not found: {path}")
+    return path
+
+
 def model_info_path() -> Path:
     path = package_root() / "share" / "flm" / "model_info.json"
     if not path.is_file():
         raise FileNotFoundError(f"FastFlowLM model info was not found: {path}")
     return path
+
+
+def windows_path(caller_path: str, package_bin: str, runtime_bin: str) -> str:
+    """Keep the caller's PATH ahead of the packaged directories.
+
+    The delay-load hook loads the first engine DLL found on PATH. The packaged
+    bin stays on PATH so an engine the caller did not replace still resolves.
+    """
+    packaged = os.pathsep.join((package_bin, runtime_bin))
+    if caller_path:
+        return caller_path + os.pathsep + packaged
+    return packaged
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -214,8 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     env.setdefault("FLM_MODELINFO_PATH", str(model_info_path()))
     if os.name == "nt":
         from fastflow_sdk_runtime import binary_dir as runtime_binary_dir
-        env["PATH"] = os.pathsep.join(
-            (str(package_root() / "bin"), str(runtime_binary_dir()), env.get("PATH", ""))
+        env["PATH"] = windows_path(
+            env.get("PATH", ""),
+            str(package_root() / "bin"),
+            str(runtime_binary_dir()),
         )
         return subprocess.call([executable, *args], env=env)
     os.execvpe(executable, [executable, *args], env)
@@ -331,6 +365,13 @@ def prepare_runtime_wheel_trees(
         source_bundle, "share/fastflow-sdk/self-test", trees.runtime_root
     )
     _copy_relative_tree(source_bundle, "share/flm", trees.fastflowlm_root)
+    gemma4e = source_bundle / "share" / "fastflow-sdk" / "gemma4e"
+    if gemma4e.is_dir():
+        _copy_relative_tree(
+            source_bundle, "share/fastflow-sdk/gemma4e", trees.fastflowlm_root
+        )
+    if (source_bundle / "lib" / "flm").is_dir():
+        _copy_relative_tree(source_bundle, "lib/flm", trees.fastflowlm_root)
 
     _copy_license_as(
         source_bundle,
@@ -354,7 +395,9 @@ def prepare_runtime_wheel_trees(
         "licenses/FastFlowLM-LICENSE_RUNTIME.txt",
         trees.fastflowlm_root,
     )
-    _copy_license(source_bundle, "licenses/FastFlowLM-TERMS.md", trees.fastflowlm_root)
+    _copy_license(
+        source_bundle, "licenses/FastFlowLM-LICENSE_BINARY.txt", trees.fastflowlm_root
+    )
     _stage_runtime_hrx_development_files(source_bundle, trees.runtime_root)
     return trees
 
