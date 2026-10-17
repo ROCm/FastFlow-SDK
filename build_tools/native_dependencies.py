@@ -20,6 +20,12 @@ def is_pe(path: Path) -> bool:
 
 def pe_imports(path: Path) -> list[str]:
     """Returns normal and delay-load PE imports using an in-process parser."""
+    regular, delay = pe_import_sets(path)
+    return sorted(set(regular) | set(delay))
+
+
+def pe_import_sets(path: Path) -> tuple[list[str], list[str]]:
+    """Returns ``(regular, delay)`` import DLL names, sorted and lowercased."""
     path = Path(path)
     data = path.read_bytes()
 
@@ -91,7 +97,8 @@ def pe_imports(path: Path) -> list[str]:
         except UnicodeDecodeError as error:
             raise RuntimeError(f"non-ASCII PE import name: {path}") from error
 
-    imports = set()
+    regular: set[str] = set()
+    delay: set[str] = set()
     directories = ((1, 20, 12, False), (13, 32, 4, True))
     for directory_index, descriptor_size, name_field, is_delay in directories:
         if directory_index >= directory_count:
@@ -121,13 +128,13 @@ def pe_imports(path: Path) -> list[str]:
                 if name_rva < image_base:
                     raise RuntimeError(f"invalid PE delay-import VA: {path}")
                 name_rva -= image_base
-            imports.add(c_string(name_rva))
+            (delay if is_delay else regular).add(c_string(name_rva))
             offset += descriptor_size
         if not terminated:
             raise RuntimeError(
                 f"unterminated PE import directory {directory_index}: {path}"
             )
-    return sorted(imports)
+    return sorted(regular), sorted(delay)
 
 
 def is_elf(path: Path) -> bool:

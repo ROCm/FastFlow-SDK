@@ -77,6 +77,43 @@ pkg-config first would still pick the broken distro file.
 **Remove when:** FastFlowLM prefers caller-provided XRT dirs over pkg-config
 upstream.
 
+### 0004-windows-clang-cl-avx512.patch
+Builds Windows `flm` with `/arch:AVX2` and the Gemma 4 engine translation units
+that need AVX-512 with `/arch:AVX512`. clang-cl also needs a forwarded
+`ostream` export so it can link the prebuilt engine import library.
+
+**Remove when:** FastFlowLM's Windows engine build selects those flags itself.
+
+### 0005-hrx-subbuffer-offset.patch
+Adds a non-owning `hrx::bo` slice constructor and passes that byte offset
+through `run::add_binding`, so an IRON override can take a view of a parent
+buffer. Dirty state is a set of byte ranges, so flushing or invalidating one
+slice leaves a disjoint slice of the same allocation dirty. A failed flush or
+invalidate records that range again and still applies the ranges after it. A
+slice that extends past its parent is rejected.
+
+**Remove when:** FastFlowLM binds HRX sub-buffers at their offset upstream.
+
+### 0006-engine-dll-from-path.patch
+Windows searches the executable directory before `PATH`, so an engine DLL
+beside `flm.exe` always won. `flm` delay-loads the model engines and loads
+the first copy found on `PATH`. `q4_npu_eXpress` stays a normal import.
+`llama_npu.dll` exports CRT data, which delay-load cannot bind, so it stays a
+normal import until the HRX engines are built with the dynamic CRT. Linux
+already selects a replacement through `LD_LIBRARY_PATH`.
+
+**Remove when:** FastFlowLM resolves engine DLLs from `PATH` before the
+executable directory upstream, and the engine import libraries no longer export
+CRT symbols.
+
+### 0007-hrx-runtime-static-order.patch
+`~Runtime()` frees the executable cache and clears the coherence map. Those
+function-local statics were constructed later than `Runtime`, so a normal
+process exit destroyed them first and the destructor read freed memory.
+`Runtime::get()` now constructs the caches first.
+
+**Remove when:** FastFlowLM constructs those statics before `Runtime` upstream.
+
 ## patches/iron-ops/
 
 ### 0001-windows-dispatch-library-copy.patch

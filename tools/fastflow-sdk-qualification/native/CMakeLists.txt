@@ -24,8 +24,11 @@ add_executable(
   fastflowlm-xadx-implementation-probe xadx_implementation_probe.cpp)
 add_executable(
   fastflowlm-q4nx-vector-dump q4nx_vector_dump.cpp kernel_test_data.cpp)
+add_executable(fastflowlm-subbuffer-binding subbuffer_binding.cpp)
 set(qualification_native_targets
-  fastflowlm-xadx-implementation-probe fastflowlm-q4nx-vector-dump)
+  fastflowlm-xadx-implementation-probe
+  fastflowlm-q4nx-vector-dump
+  fastflowlm-subbuffer-binding)
 
 if(BUILD_TESTING)
   add_executable(
@@ -78,6 +81,7 @@ target_link_libraries(
   dequant gemm gemma_text_npu mha q4_npu_eXpress hrx::hrx)
 target_link_libraries(
   fastflowlm-q4nx-vector-dump PRIVATE q4_npu_eXpress hrx::hrx)
+target_link_libraries(fastflowlm-subbuffer-binding PRIVATE hrx::hrx)
 if(BUILD_TESTING)
   target_link_libraries(
     fastflowlm-kernel-native-tests PRIVATE q4_npu_eXpress hrx::hrx)
