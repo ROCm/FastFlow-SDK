@@ -484,7 +484,9 @@ class TestFastflowSdkCompilerWheels:
         assert any(Path(command[0]).name == "clang-cl.exe" for command in commands)
         assert any(Path(command[0]).name == "lld-link.exe" for command in commands)
 
-    def test_linux_forwards_multicall_aliases_and_removes_llvm_hardlink(self, tmp_path):
+    def test_linux_forwards_multicall_aliases_and_removes_versioned_llvm_copy(
+        self, tmp_path
+    ):
         package = tmp_path / "fastflow_sdk_compiler"
         binary = package / "peano" / "llvm-aie" / "bin"
         library = package / "peano" / "llvm-aie" / "lib"
@@ -495,7 +497,7 @@ class TestFastflowSdkCompilerWheels:
         for name in ("llvm-readobj", "llvm-readelf"):
             (binary / name).write_bytes(b"ELF-readobj")
         (library / "libLLVM.so").write_bytes(b"ELF-llvm")
-        (library / "libLLVM-21.so").write_bytes(b"ELF-llvm")
+        (library / "libLLVM-22.so").write_bytes(b"ELF-llvm")
 
         forwarded = _forward_linux_peano_aliases(package)
         removed = _remove_redundant_linux_llvm_library(package)
@@ -513,9 +515,9 @@ class TestFastflowSdkCompilerWheels:
         assert "-flavor gnu" in (binary / "ld.lld").read_text()
         assert "-flavor link" in (binary / "lld-link").read_text()
         assert "--elf-output-style=GNU" in (binary / "llvm-readelf").read_text()
-        assert removed == ("peano/llvm-aie/lib/libLLVM-21.so",)
+        assert removed == ("peano/llvm-aie/lib/libLLVM-22.so",)
         assert (library / "libLLVM.so").is_file()
-        assert not (library / "libLLVM-21.so").exists()
+        assert not (library / "libLLVM-22.so").exists()
 
     def test_linux_pruning_rejects_changed_upstream_files(self, tmp_path):
         package = tmp_path / "fastflow_sdk_compiler"
@@ -526,12 +528,38 @@ class TestFastflowSdkCompilerWheels:
         (binary / "lld").write_bytes(b"canonical")
         (binary / "ld.lld").write_bytes(b"changed")
         (library / "libLLVM.so").write_bytes(b"canonical")
-        (library / "libLLVM-21.so").write_bytes(b"changed")
+        (library / "libLLVM-22.so").write_bytes(b"changed")
 
         with pytest.raises(RuntimeError, match="ld.lld differs from canonical lld"):
             _forward_linux_peano_aliases(package)
-        with pytest.raises(RuntimeError, match="libLLVM-21.so differs"):
+        with pytest.raises(RuntimeError, match="libLLVM-22.so differs"):
             _remove_redundant_linux_llvm_library(package)
+
+    def test_linux_pruning_requires_canonical_llvm_library(self, tmp_path):
+        package = tmp_path / "fastflow_sdk_compiler"
+        library = package / "peano" / "llvm-aie" / "lib"
+        library.mkdir(parents=True)
+        (library / "libLLVM-22.so").write_bytes(b"versioned")
+
+        with pytest.raises(
+            RuntimeError, match="libLLVM-22.so has no canonical libLLVM.so"
+        ):
+            _remove_redundant_linux_llvm_library(package)
+
+    def test_linux_pruning_discovers_numeric_llvm_versions(self, tmp_path):
+        package = tmp_path / "fastflow_sdk_compiler"
+        library = package / "peano" / "llvm-aie" / "lib"
+        library.mkdir(parents=True)
+        for name in ("libLLVM.so", "libLLVM-21.so", "libLLVM-22.1.so"):
+            (library / name).write_bytes(b"canonical")
+        (library / "libLLVM-C.so").write_bytes(b"distinct library")
+
+        assert _remove_redundant_linux_llvm_library(package) == (
+            "peano/llvm-aie/lib/libLLVM-21.so",
+            "peano/llvm-aie/lib/libLLVM-22.1.so",
+        )
+        assert (library / "libLLVM.so").is_file()
+        assert (library / "libLLVM-C.so").is_file()
 
     def test_linux_strip_report_records_size_reduction(self, tmp_path):
         package = tmp_path / "fastflow_sdk_compiler"
