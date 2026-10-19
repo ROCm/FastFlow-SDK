@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import email.parser
+import filecmp
 import json
 import os
 import re
@@ -89,10 +90,10 @@ COMPILER_TOOLS = (
     "register_database",
     "xclbinutil",
 )
-# The compiler payload is dominated by large native binaries. Level 1 retains
-# deterministic DEFLATE wheels while avoiding most of zlib's single-threaded
-# search cost; artifact upload already skips a second compression pass.
-COMPILER_WHEEL_COMPRESSION_LEVEL = 1
+# The compiler payload is dominated by large native binaries. Maximum DEFLATE
+# materially reduces release and PyPI storage while retaining deterministic
+# wheels; artifact upload already skips a second compression pass.
+COMPILER_WHEEL_COMPRESSION_LEVEL = 9
 CORE_AIE_NATIVE_PREFIXES = (
     "AIEAggregateCAPI",
     "libAIEAggregateCAPI",
@@ -105,6 +106,26 @@ CORE_AIE_NATIVE_PREFIXES = (
     "libmlir_c_runner_utils",
     "libmlir_float16_utils",
     "libmlir_runner_utils",
+)
+WINDOWS_PEANO_ALIAS_FORWARDING = {
+    "clang.exe": "clang++.exe",
+    "clang-cl.exe": "clang++.exe",
+    "clang-cpp.exe": "clang++.exe",
+    "ld.lld.exe": "lld.exe",
+    "ld64.lld.exe": "lld.exe",
+    "lld-link.exe": "lld.exe",
+    "wasm-ld.exe": "lld.exe",
+    "llvm-readelf.exe": "llvm-readobj.exe",
+}
+LINUX_PEANO_ALIAS_FORWARDING = {
+    "ld.lld": ("lld", ("-flavor", "gnu")),
+    "ld64.lld": ("lld", ("-flavor", "darwin")),
+    "lld-link": ("lld", ("-flavor", "link")),
+    "wasm-ld": ("lld", ("-flavor", "wasm")),
+    "llvm-readelf": ("llvm-readobj", ("--elf-output-style=GNU",)),
+}
+WINDOWS_TOOL_ALIAS_LAUNCHER_SOURCE = (
+    Path(__file__).with_name("native") / "compiler_tool_alias_launcher.cpp"
 )
 
 
@@ -227,6 +248,138 @@ def _copy_product_licenses(source_product: Path, package_root: Path) -> None:
     if not licenses.is_dir() or not any(licenses.rglob("*")):
         raise RuntimeError(f"compiler product license material missing: {licenses}")
     _copy_tree(licenses, package_root / "licenses")
+
+
+def _compile_windows_tool_alias_launcher(output: Path) -> None:
+    compiler = os.environ.get("CXX") or shutil.which("clang-cl")
+    if not compiler:
+        raise RuntimeError(
+            "CXX or clang-cl is required to build Windows compiler tool aliases"
+        )
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    object_file = output.with_suffix(".obj")
+    result = subprocess.run(
+        [
+            compiler.strip('"'),
+            "/nologo",
+            "/std:c++17",
+            "/O1",
+            "/EHsc",
+            "/MT",
+            "/Brepro",
+            str(WINDOWS_TOOL_ALIAS_LAUNCHER_SOURCE),
+            f"/Fo{object_file}",
+            f"/Fe{output}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode or not output.is_file() or not is_pe(output):
+        details = (result.stdout + result.stderr).strip()
+        raise RuntimeError(f"failed to build Windows compiler tool alias:\n{details}")
+
+
+def _forward_windows_peano_aliases(package_root: Path) -> tuple[str, ...]:
+    """Replaces byte-identical LLVM aliases with flavor-preserving launchers."""
+    binary_directory = package_root / "peano" / "llvm-aie" / "bin"
+    replacements = []
+    for alias_name, canonical_name in WINDOWS_PEANO_ALIAS_FORWARDING.items():
+        alias = binary_directory / alias_name
+        if not alias.is_file():
+            continue
+        canonical = binary_directory / canonical_name
+        if not canonical.is_file():
+            raise RuntimeError(
+                f"Peano alias {alias_name} has no canonical {canonical_name}"
+            )
+        if not filecmp.cmp(alias, canonical, shallow=False):
+            raise RuntimeError(
+                f"Peano alias {alias_name} differs from canonical {canonical_name}"
+            )
+        replacements.append(alias)
+    if not replacements:
+        return ()
+    with tempfile.TemporaryDirectory(
+        prefix="fastflow-sdk-tool-alias-", dir=package_root.parent
+    ) as temporary:
+        launcher = Path(temporary) / "fastflow-sdk-tool-alias.exe"
+        _compile_windows_tool_alias_launcher(launcher)
+        for alias in replacements:
+            alias.unlink()
+            _copy_file(launcher, alias)
+    return tuple(alias.relative_to(package_root).as_posix() for alias in replacements)
+
+
+def _forward_linux_peano_aliases(package_root: Path) -> tuple[str, ...]:
+    """Replaces byte-identical LLVM aliases with flavor-preserving scripts."""
+    binary_directory = package_root / "peano" / "llvm-aie" / "bin"
+    forwarded = []
+    for alias_name, (canonical_name, arguments) in LINUX_PEANO_ALIAS_FORWARDING.items():
+        alias = binary_directory / alias_name
+        if not alias.is_file():
+            continue
+        canonical = binary_directory / canonical_name
+        if not canonical.is_file():
+            raise RuntimeError(
+                f"Peano alias {alias_name} has no canonical {canonical_name}"
+            )
+        if not filecmp.cmp(alias, canonical, shallow=False):
+            raise RuntimeError(
+                f"Peano alias {alias_name} differs from canonical {canonical_name}"
+            )
+        argument_text = " ".join(arguments)
+        alias.write_text(
+            "#!/bin/sh\n"
+            'launcher=$(readlink -f -- "$0") || exit 127\n'
+            'directory=$(CDPATH= cd -- "$(dirname -- "$launcher")" && pwd)\n'
+            f'exec "$directory/{canonical_name}" {argument_text} "$@"\n',
+            encoding="utf-8",
+        )
+        alias.chmod(0o755)
+        forwarded.append(alias.relative_to(package_root).as_posix())
+    return tuple(forwarded)
+
+
+def _remove_redundant_linux_llvm_library(package_root: Path) -> tuple[str, ...]:
+    library_directory = package_root / "peano" / "llvm-aie" / "lib"
+    canonical = library_directory / "libLLVM.so"
+    redundant = library_directory / "libLLVM-21.so"
+    if not redundant.is_file():
+        return ()
+    if not canonical.is_file():
+        raise RuntimeError("libLLVM-21.so has no canonical libLLVM.so")
+    if not filecmp.cmp(redundant, canonical, shallow=False):
+        raise RuntimeError("libLLVM-21.so differs from canonical libLLVM.so")
+    redundant.unlink()
+    return (redundant.relative_to(package_root).as_posix(),)
+
+
+def _strip_linux_compiler(package_root: Path) -> dict[str, int]:
+    targets = sorted(
+        path
+        for path in package_root.rglob("*")
+        if path.is_file() and is_loadable_elf(path)
+    )
+    if not targets:
+        return {"files": 0, "bytes_before": 0, "bytes_after": 0}
+    strip = shutil.which("strip")
+    if not strip:
+        raise RuntimeError("strip is required to prepare Linux compiler wheels")
+    bytes_before = sum(path.stat().st_size for path in targets)
+    result = subprocess.run(
+        [strip, "--strip-unneeded", *[str(path) for path in targets]],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        details = (result.stdout + result.stderr).strip()
+        raise RuntimeError(f"failed to strip Linux compiler payload:\n{details}")
+    return {
+        "files": len(targets),
+        "bytes_before": bytes_before,
+        "bytes_after": sum(path.stat().st_size for path in targets),
+    }
 
 
 def _core_module() -> str:
@@ -438,6 +591,18 @@ def stage_compiler_core(
         ):
             if _is_core_aie_native(path):
                 stage(path, package_root / "lib" / "aie" / path.name)
+    removed_redundant_files = ()
+    strip_report = {"files": 0, "bytes_before": 0, "bytes_after": 0}
+    if is_linux:
+        # AIE support libraries move from python/aie/_mlir_libs in the product
+        # to lib/aie in the core wheel. Recalculate RPATHs after that move so
+        # auditwheel and the dynamic loader resolve the wheel-internal closure.
+        relocate_linux_compiler_rpaths(package_root)
+        removed_redundant_files = _remove_redundant_linux_llvm_library(package_root)
+        forwarded_aliases = _forward_linux_peano_aliases(package_root)
+        strip_report = _strip_linux_compiler(package_root)
+    else:
+        forwarded_aliases = _forward_windows_peano_aliases(package_root)
     _write_file(package_root / "__init__.py", _core_module())
     tag = compiler_core_wheel_tag(platform_tag)
     _write_package_manifest(
@@ -449,13 +614,13 @@ def stage_compiler_core(
             wheel_tag=tag,
             version=version,
             requires=(),
-        ),
+        )
+        | {
+            "forwarded_peano_aliases": list(forwarded_aliases),
+            "removed_redundant_files": list(removed_redundant_files),
+            "strip": strip_report,
+        },
     )
-    if is_linux:
-        # AIE support libraries move from python/aie/_mlir_libs in the product
-        # to lib/aie in the core wheel. Recalculate RPATHs after that move so
-        # auditwheel and the dynamic loader resolve the wheel-internal closure.
-        relocate_linux_compiler_rpaths(package_root)
     return tree
 
 
@@ -763,6 +928,182 @@ def _extract_wheel(wheel: Path, destination: Path) -> Path:
     return destination
 
 
+def _verify_windows_tool_alias_launchers(core: Path) -> None:
+    package_root = core / COMPILER_PACKAGE
+    manifest_path = package_root / "manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    aliases = manifest.get("forwarded_peano_aliases", ())
+    if not isinstance(aliases, list):
+        raise RuntimeError("forwarded_peano_aliases must be a list")
+    binary_directory = package_root / "peano" / "llvm-aie" / "bin"
+
+    def run(tool: str, *arguments: str, cwd: Path | None = None) -> str:
+        path = binary_directory / tool
+        result = subprocess.run(
+            [path.resolve(), *arguments],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            details = (result.stdout + result.stderr).strip()
+            raise RuntimeError(f"forwarded Peano alias failed: {tool}\n{details}")
+        return result.stdout + result.stderr
+
+    alias_names = {
+        PurePosixPath(str(relative)).name
+        for relative in aliases
+        if str(relative).startswith("peano/llvm-aie/bin/")
+    }
+    expected_aliases = set(WINDOWS_PEANO_ALIAS_FORWARDING)
+    if alias_names != expected_aliases:
+        raise RuntimeError(
+            "Windows compiler wheel does not contain the expected forwarded aliases: "
+            f"expected {sorted(expected_aliases)}, found {sorted(alias_names)}"
+        )
+    for alias_name in sorted(alias_names):
+        if not (binary_directory / alias_name).is_file():
+            raise RuntimeError(f"forwarded Peano alias is missing: {alias_name}")
+        run(alias_name, "--version")
+    run("clang.exe", "-cc1", "-help")
+    run("clang.exe", "-cc1as", "-help")
+
+    with tempfile.TemporaryDirectory(prefix="fastflow-sdk-windows-alias-") as temporary:
+        working_directory = Path(temporary)
+        source = working_directory / "alias source.c"
+        source.write_text("int fastflow_alias_test(void) { return 0; }\n")
+        run(
+            "clang.exe",
+            "--target=x86_64-linux-gnu",
+            "-c",
+            source.name,
+            "-o",
+            "main.o",
+            cwd=working_directory,
+        )
+        run(
+            "ld.lld.exe",
+            "-e",
+            "fastflow_alias_test",
+            "main.o",
+            "-o",
+            "main",
+            cwd=working_directory,
+        )
+        readelf = run("llvm-readelf.exe", "-h", "main", cwd=working_directory)
+        if "ELF Header" not in readelf:
+            raise RuntimeError("forwarded llvm-readelf did not emit GNU ELF output")
+        preprocessed = run("clang-cpp.exe", source.name, cwd=working_directory)
+        if "fastflow_alias_test" not in preprocessed:
+            raise RuntimeError("forwarded clang-cpp did not preprocess C source")
+        run("clang-cl.exe", "/c", source.name, "/Fomain.obj", cwd=working_directory)
+        run(
+            "lld-link.exe",
+            "/entry:fastflow_alias_test",
+            "/subsystem:console",
+            "/nodefaultlib",
+            "/out:main.exe",
+            "main.obj",
+            cwd=working_directory,
+        )
+    if "-platform_version" not in run("ld64.lld.exe", "--help"):
+        raise RuntimeError("forwarded ld64.lld did not select the Darwin flavor")
+    if "--export-table" not in run("wasm-ld.exe", "--help"):
+        raise RuntimeError("forwarded wasm-ld did not select the WebAssembly flavor")
+
+
+def _verify_linux_tool_alias_launchers(core: Path) -> None:
+    package_root = core / COMPILER_PACKAGE
+    manifest_path = package_root / "manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    aliases = manifest.get("forwarded_peano_aliases", ())
+    if not isinstance(aliases, list):
+        raise RuntimeError("forwarded_peano_aliases must be a list")
+    binary_directory = package_root / "peano" / "llvm-aie" / "bin"
+
+    def run(tool: str, *arguments: str, cwd: Path | None = None) -> str:
+        path = binary_directory / tool
+        result = subprocess.run(
+            [path.resolve(), *arguments],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            details = (result.stdout + result.stderr).strip()
+            raise RuntimeError(f"forwarded Peano alias failed: {tool}\n{details}")
+        return result.stdout + result.stderr
+
+    alias_names = {
+        PurePosixPath(str(relative)).name
+        for relative in aliases
+        if str(relative).startswith("peano/llvm-aie/bin/")
+    }
+    expected_aliases = set(LINUX_PEANO_ALIAS_FORWARDING)
+    if alias_names != expected_aliases:
+        raise RuntimeError(
+            "Linux compiler wheel does not contain the expected forwarded aliases: "
+            f"expected {sorted(expected_aliases)}, found {sorted(alias_names)}"
+        )
+    for alias_name in sorted(alias_names):
+        if not (binary_directory / alias_name).is_file():
+            raise RuntimeError(f"forwarded Peano alias is missing: {alias_name}")
+        run(alias_name, "--version")
+
+    with tempfile.TemporaryDirectory(prefix="fastflow-sdk-linux-alias-") as temporary:
+        working_directory = Path(temporary)
+        external_directory = working_directory / "external"
+        external_directory.mkdir()
+        for alias_name in sorted(alias_names):
+            external_alias = external_directory / alias_name
+            external_alias.symlink_to(binary_directory / alias_name)
+            result = subprocess.run(
+                [external_alias, "--version"],
+                cwd=working_directory,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode:
+                details = (result.stdout + result.stderr).strip()
+                raise RuntimeError(
+                    "forwarded Peano alias failed through an external symlink: "
+                    f"{alias_name}\n{details}"
+                )
+        source = working_directory / "main.c"
+        source.write_text("int main(void) { return 0; }\n")
+        run(
+            "clang",
+            "--target=x86_64-linux-gnu",
+            "-c",
+            source.name,
+            "-o",
+            "main.o",
+            cwd=working_directory,
+        )
+        run("ld.lld", "-e", "main", "main.o", "-o", "main", cwd=working_directory)
+        readelf = run("llvm-readelf", "-h", "main", cwd=working_directory)
+        if "ELF Header" not in readelf:
+            raise RuntimeError("forwarded llvm-readelf did not emit GNU ELF output")
+        run("clang-cl", "/c", source.name, "/Fomain.obj", cwd=working_directory)
+        run(
+            "lld-link",
+            "/entry:main",
+            "/subsystem:console",
+            "/nodefaultlib",
+            "/out:main.exe",
+            "main.obj",
+            cwd=working_directory,
+        )
+    if "-platform_version" not in run("ld64.lld", "--help"):
+        raise RuntimeError("forwarded ld64.lld did not select the Darwin flavor")
+    if "--export-table" not in run("wasm-ld", "--help"):
+        raise RuntimeError("forwarded wasm-ld did not select the WebAssembly flavor")
+
+
 def verify_windows_compiler_wheels(
     wheels: list[Path],
 ) -> dict[str, list[str]]:
@@ -783,6 +1124,7 @@ def verify_windows_compiler_wheels(
                 "Windows compiler wheel validation requires one core wheel"
             )
         core = core_roots[0]
+        _verify_windows_tool_alias_launchers(core)
         core_names = {
             path.name.casefold()
             for path in core.rglob("*")
@@ -866,6 +1208,7 @@ def verify_linux_compiler_wheels(
             raise RuntimeError(
                 "Linux compiler wheel validation requires one core wheel"
             )
+        _verify_linux_tool_alias_launchers(core_roots[0])
         core_names = {
             path.name
             for path in core_roots[0].rglob("*")

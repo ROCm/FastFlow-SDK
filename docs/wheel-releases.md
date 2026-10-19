@@ -106,6 +106,21 @@ Both the meta-package and bindings require the matching core at exactly the
 same version. Moving the 127 MB `AIEAggregateCAPI` library into the core avoids
 duplicating it in every CPython bindings wheel. Importing `aie` activates the
 core wheel's native-library directory before loading its extension modules.
+On Windows, packaging replaces byte-identical Peano multicall aliases with
+small native launchers that preserve each Clang, LLD, or readelf driver flavor.
+It keeps one full `clang++.exe`, `lld.exe`, and `llvm-readobj.exe`; a changed
+upstream alias fails packaging instead of being silently replaced. Compiler
+wheels use maximum DEFLATE compression to reduce release and PyPI storage. The
+Windows wheel audit compiles, preprocesses, and links through the forwarded
+Clang, GNU LLD, COFF LLD, and readelf modes, and checks the Darwin and
+WebAssembly LLD flavor selection.
+Linux packaging similarly replaces the large LLD and readelf multicall copies
+with flavor-preserving shell launchers. It removes the byte-identical
+`libLLVM-21.so` copy only after comparing it with the retained `libLLVM.so`,
+and strips unneeded symbols from staged ELF executables and shared libraries.
+The installed-wheel audit exercises each forwarded alias in its intended
+driver flavor and validates the ELF dependency closure after these
+transformations; the manylinux policy audit then checks the finished wheels.
 When `fastflow-sdk-runtime` is also installed, the same import selects HRX for
 in-process IRON (`NPU_RUNTIME`, `IRON_RUNTIME`, and `HRX_LIBHRX` from
 `fastflow_sdk_runtime.libhrx_path()`) if those variables are unset. Compiler

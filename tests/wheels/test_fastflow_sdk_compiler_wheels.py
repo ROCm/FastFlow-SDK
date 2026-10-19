@@ -26,8 +26,12 @@ from build_tools.fastflow_sdk_compiler_wheels import (
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
     _binding_bootstrap,
+    _forward_linux_peano_aliases,
     _is_core_aie_native,
+    _remove_redundant_linux_llvm_library,
     _rewrite_configure_install_path,
+    _strip_linux_compiler,
+    _verify_windows_tool_alias_launchers,
     binding_wheel_tag,
     build_compiler_wheel_family,
     compiler_core_shared_library_names,
@@ -94,7 +98,7 @@ class TestFastflowSdkCompilerWheels:
             "bin/aiecc.exe": b"MZtool",
             "python/aie/_mlir_libs/AIEAggregateCAPI.dll": b"MZlibrary",
             "include/aie_api/aie.hpp": b"header",
-            "peano/llvm-aie/bin/clang.exe": b"MZclang",
+            "peano/llvm-aie/bin/clang++.exe": b"MZclang",
             "third_party/aie_api/LICENSE": b"Apache\n",
             "licenses/fastflow-sdk-LICENSE": b"MIT\n",
             "licenses/llvm-LICENSE.txt": b"Apache LLVM exception\n",
@@ -326,6 +330,237 @@ class TestFastflowSdkCompilerWheels:
         staged = package / "bin" / "aie-opt.exe"
         staged.write_bytes(b"changed")
         assert source.read_bytes() == b"MZtool"
+
+    def test_windows_core_forwards_only_identical_peano_aliases(self, tmp_path):
+        product = self.make_product(tmp_path)
+        binary_directory = product / "peano" / "llvm-aie" / "bin"
+        aliases = {
+            "clang.exe": b"MZclang",
+            "clang++.exe": b"MZclang",
+            "clang-cl.exe": b"MZclang",
+            "clang-cpp.exe": b"MZclang",
+            "ld.lld.exe": b"MZlld",
+            "ld64.lld.exe": b"MZlld",
+            "lld-link.exe": b"MZlld",
+            "lld.exe": b"MZlld",
+            "wasm-ld.exe": b"MZlld",
+            "llvm-readobj.exe": b"MZreader",
+            "llvm-readelf.exe": b"MZreader",
+        }
+        for name, contents in aliases.items():
+            (binary_directory / name).write_bytes(contents)
+
+        def make_launcher(output):
+            output.write_bytes(b"MZlauncher")
+
+        with mock.patch(
+            "build_tools.fastflow_sdk_compiler_wheels."
+            "_compile_windows_tool_alias_launcher",
+            side_effect=make_launcher,
+        ):
+            tree = stage_compiler_core(
+                product,
+                tmp_path / "stage",
+                version="0.1.0.dev1",
+                platform_tag="win_amd64",
+            )
+
+        staged_binary_directory = (
+            tree / "fastflow_sdk_compiler" / "peano" / "llvm-aie" / "bin"
+        )
+        assert {
+            path.name for path in staged_binary_directory.iterdir() if path.is_file()
+        } == set(aliases)
+        assert (staged_binary_directory / "clang++.exe").read_bytes() == b"MZclang"
+        assert (staged_binary_directory / "lld.exe").read_bytes() == b"MZlld"
+        assert (
+            staged_binary_directory / "llvm-readobj.exe"
+        ).read_bytes() == b"MZreader"
+        for alias in (
+            "clang.exe",
+            "clang-cl.exe",
+            "clang-cpp.exe",
+            "ld.lld.exe",
+            "ld64.lld.exe",
+            "lld-link.exe",
+            "wasm-ld.exe",
+            "llvm-readelf.exe",
+        ):
+            assert (staged_binary_directory / alias).read_bytes() == b"MZlauncher"
+        manifest = json.loads(
+            (tree / "fastflow_sdk_compiler" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["forwarded_peano_aliases"] == [
+            "peano/llvm-aie/bin/clang.exe",
+            "peano/llvm-aie/bin/clang-cl.exe",
+            "peano/llvm-aie/bin/clang-cpp.exe",
+            "peano/llvm-aie/bin/ld.lld.exe",
+            "peano/llvm-aie/bin/ld64.lld.exe",
+            "peano/llvm-aie/bin/lld-link.exe",
+            "peano/llvm-aie/bin/wasm-ld.exe",
+            "peano/llvm-aie/bin/llvm-readelf.exe",
+        ]
+        assert all((binary_directory / name).is_file() for name in aliases)
+
+    def test_windows_core_rejects_nonidentical_peano_alias(self, tmp_path):
+        product = self.make_product(tmp_path)
+        binary_directory = product / "peano" / "llvm-aie" / "bin"
+        (binary_directory / "clang-cpp.exe").write_bytes(b"distinct driver")
+
+        with pytest.raises(RuntimeError, match="clang-cpp.exe differs"):
+            stage_compiler_core(
+                product,
+                tmp_path / "stage",
+                version="0.1.0.dev1",
+                platform_tag="win_amd64",
+            )
+
+    def test_windows_alias_verification_executes_forwarded_tools(self, tmp_path):
+        package = tmp_path / "fastflow_sdk_compiler"
+        binary = package / "peano" / "llvm-aie" / "bin"
+        binary.mkdir(parents=True)
+        aliases = (
+            "clang.exe",
+            "clang-cl.exe",
+            "clang-cpp.exe",
+            "ld.lld.exe",
+            "ld64.lld.exe",
+            "lld-link.exe",
+            "wasm-ld.exe",
+            "llvm-readelf.exe",
+        )
+        for alias in aliases:
+            (binary / alias).write_bytes(b"MZlauncher")
+        (package / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "forwarded_peano_aliases": [
+                        f"peano/llvm-aie/bin/{alias}" for alias in aliases
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def run_alias(command, **kwargs):
+            tool = Path(command[0]).name
+            output = ""
+            if tool == "llvm-readelf.exe":
+                output = "ELF Header"
+            elif tool == "clang-cpp.exe" and "--version" not in command:
+                output = "int fastflow_alias_test(void) { return 0; }"
+            elif tool == "ld64.lld.exe" and "--help" in command:
+                output = "-platform_version"
+            elif tool == "wasm-ld.exe" and "--help" in command:
+                output = "--export-table"
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        with mock.patch(
+            "build_tools.fastflow_sdk_compiler_wheels.subprocess.run",
+            side_effect=run_alias,
+        ) as run:
+            _verify_windows_tool_alias_launchers(tmp_path)
+
+        commands = [call.args[0] for call in run.call_args_list]
+        assert {
+            Path(command[0]).name for command in commands if "--version" in command
+        } == set(aliases)
+        assert any(
+            Path(command[0]).name == "clang.exe"
+            and "--target=x86_64-linux-gnu" in command
+            for command in commands
+        )
+        assert any(
+            Path(command[0]).name == "clang.exe" and command[1:] == ["-cc1", "-help"]
+            for command in commands
+        )
+        assert any(
+            Path(command[0]).name == "clang.exe" and command[1:] == ["-cc1as", "-help"]
+            for command in commands
+        )
+        assert any(Path(command[0]).name == "clang-cpp.exe" for command in commands)
+        assert any(Path(command[0]).name == "clang-cl.exe" for command in commands)
+        assert any(Path(command[0]).name == "lld-link.exe" for command in commands)
+
+    def test_linux_forwards_multicall_aliases_and_removes_llvm_hardlink(self, tmp_path):
+        package = tmp_path / "fastflow_sdk_compiler"
+        binary = package / "peano" / "llvm-aie" / "bin"
+        library = package / "peano" / "llvm-aie" / "lib"
+        binary.mkdir(parents=True)
+        library.mkdir(parents=True)
+        for name in ("lld", "ld.lld", "ld64.lld", "lld-link", "wasm-ld"):
+            (binary / name).write_bytes(b"ELF-lld")
+        for name in ("llvm-readobj", "llvm-readelf"):
+            (binary / name).write_bytes(b"ELF-readobj")
+        (library / "libLLVM.so").write_bytes(b"ELF-llvm")
+        (library / "libLLVM-21.so").write_bytes(b"ELF-llvm")
+
+        forwarded = _forward_linux_peano_aliases(package)
+        removed = _remove_redundant_linux_llvm_library(package)
+
+        assert forwarded == (
+            "peano/llvm-aie/bin/ld.lld",
+            "peano/llvm-aie/bin/ld64.lld",
+            "peano/llvm-aie/bin/lld-link",
+            "peano/llvm-aie/bin/wasm-ld",
+            "peano/llvm-aie/bin/llvm-readelf",
+        )
+        assert (binary / "lld").read_bytes() == b"ELF-lld"
+        assert (binary / "llvm-readobj").read_bytes() == b"ELF-readobj"
+        assert 'readlink -f -- "$0"' in (binary / "ld.lld").read_text()
+        assert "-flavor gnu" in (binary / "ld.lld").read_text()
+        assert "-flavor link" in (binary / "lld-link").read_text()
+        assert "--elf-output-style=GNU" in (binary / "llvm-readelf").read_text()
+        assert removed == ("peano/llvm-aie/lib/libLLVM-21.so",)
+        assert (library / "libLLVM.so").is_file()
+        assert not (library / "libLLVM-21.so").exists()
+
+    def test_linux_pruning_rejects_changed_upstream_files(self, tmp_path):
+        package = tmp_path / "fastflow_sdk_compiler"
+        binary = package / "peano" / "llvm-aie" / "bin"
+        library = package / "peano" / "llvm-aie" / "lib"
+        binary.mkdir(parents=True)
+        library.mkdir(parents=True)
+        (binary / "lld").write_bytes(b"canonical")
+        (binary / "ld.lld").write_bytes(b"changed")
+        (library / "libLLVM.so").write_bytes(b"canonical")
+        (library / "libLLVM-21.so").write_bytes(b"changed")
+
+        with pytest.raises(RuntimeError, match="ld.lld differs from canonical lld"):
+            _forward_linux_peano_aliases(package)
+        with pytest.raises(RuntimeError, match="libLLVM-21.so differs"):
+            _remove_redundant_linux_llvm_library(package)
+
+    def test_linux_strip_report_records_size_reduction(self, tmp_path):
+        package = tmp_path / "fastflow_sdk_compiler"
+        payload = package / "bin" / "aiecc"
+        payload.parent.mkdir(parents=True)
+        payload.write_bytes(b"x" * 100)
+
+        def strip_payload(command, **kwargs):
+            assert command == ["/usr/bin/strip", "--strip-unneeded", str(payload)]
+            payload.write_bytes(b"x" * 40)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with (
+            mock.patch(
+                "build_tools.fastflow_sdk_compiler_wheels.is_loadable_elf",
+                return_value=True,
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_compiler_wheels.shutil.which",
+                return_value="/usr/bin/strip",
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_compiler_wheels.subprocess.run",
+                side_effect=strip_payload,
+            ),
+        ):
+            report = _strip_linux_compiler(package)
+
+        assert report == {"files": 1, "bytes_before": 100, "bytes_after": 40}
 
     def test_product_report_splits_python_payload(self, tmp_path):
         product = self.make_product(tmp_path)
@@ -656,6 +891,10 @@ class TestFastflowSdkCompilerWheels:
                 "build_tools.fastflow_sdk_compiler_wheels.windows_system_runtime",
                 side_effect=lambda name: name in ("kernel32.dll", "python3.dll"),
             ),
+            mock.patch(
+                "build_tools.fastflow_sdk_compiler_wheels."
+                "_verify_windows_tool_alias_launchers"
+            ),
         ):
             graph = verify_windows_compiler_wheels(selected)
         assert any(name.endswith("_mlir.pyd") for name in graph)
@@ -687,6 +926,10 @@ class TestFastflowSdkCompilerWheels:
             mock.patch(
                 "build_tools.fastflow_sdk_compiler_wheels.windows_system_runtime",
                 side_effect=lambda name: name == "kernel32.dll",
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_compiler_wheels."
+                "_verify_windows_tool_alias_launchers"
             ),
             pytest.raises(RuntimeError, match="versioned CPython DLL"),
         ):
