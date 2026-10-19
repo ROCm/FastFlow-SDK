@@ -8,6 +8,8 @@ import io
 import json
 import os
 import shutil
+import sys
+import types
 import zipfile
 from pathlib import Path
 
@@ -36,6 +38,7 @@ from build_tools.fastflow_sdk_wheel_common import (
 )
 from build_tools.package_version import validate_version
 from build_tools.runtime_wheel_staging import (
+    _write_fastflowlm_module,
     _write_runtime_module,
     materialize_hrx_link_names,
     prepare_runtime_wheel_trees,
@@ -104,7 +107,7 @@ def test_wheel_verification_configures_hrx_from_the_runtime_wheel(tmp_path):
         "licenses/nlohmann-json-LICENSE.MIT",
         "licenses/THIRD_PARTY_NOTICES.md",
         "licenses/FastFlowLM-LICENSE_RUNTIME.txt",
-        "licenses/FastFlowLM-TERMS.md",
+        "licenses/FastFlowLM-LICENSE_BINARY.txt",
     ):
         path = bundle / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,11 +191,13 @@ class TestFastflowSdkWheelCommon:
             "licenses/nlohmann-json-LICENSE.MIT": "json",
             "licenses/THIRD_PARTY_NOTICES.md": "notices",
             "licenses/FastFlowLM-LICENSE_RUNTIME.txt": "fastflowlm",
-            "licenses/FastFlowLM-TERMS.md": "terms",
+            "licenses/FastFlowLM-LICENSE_BINARY.txt": "binary",
             "include/hrx/hrx_runtime.h": "runtime",
             "include/hrx/hrx_amdxdna.h": "amdxdna",
             "lib/cmake/hrx/hrx-config.cmake": "config",
             "lib/hrx.lib": "implib",
+            "share/fastflow-sdk/gemma4e/CMakeLists.txt": "cmake",
+            "lib/flm/q4_npu_eXpress.lib": "q4",
         }
         for relative, contents in files.items():
             path = source / relative
@@ -205,6 +210,13 @@ class TestFastflowSdkWheelCommon:
             trees.runtime_root / "share/fastflow-sdk/self-test/case/manifest.json"
         ).is_file()
         assert (trees.fastflowlm_root / "share/flm/model_list.json").is_file()
+        assert (
+            trees.fastflowlm_root / "share/fastflow-sdk/gemma4e/CMakeLists.txt"
+        ).read_text(encoding="utf-8") == "cmake"
+        assert (trees.fastflowlm_root / "lib/flm/q4_npu_eXpress.lib").read_text(
+            encoding="utf-8"
+        ) == "q4"
+        assert not (trees.runtime_root / "share/fastflow-sdk/gemma4e").exists()
         assert (trees.runtime_root / "licenses/fastflow-sdk-LICENSE").read_text(
             encoding="utf-8"
         ) == "staging"
@@ -617,6 +629,56 @@ class TestFastflowSdkWheelCommon:
         assert os.environ["NPU_RUNTIME"] == "xrt"
         assert os.environ["IRON_RUNTIME"] == "xrt"
         assert os.environ["HRX_LIBHRX"] == "/explicit/libhrx"
+
+    def test_windows_flm_entry_keeps_caller_path_ahead_of_the_package(
+        self, tmp_path, monkeypatch
+    ):
+        package = tmp_path / "fastflow_sdk_fastflowlm"
+        package.mkdir()
+        (package / "bin").mkdir()
+        (package / "bin" / "flm.exe").write_bytes(b"MZ")
+        share = package / "share" / "flm"
+        (share / "xclbins").mkdir(parents=True)
+        (share / "model_list.json").write_text("{}", encoding="utf-8")
+        (share / "model_info.json").write_text("{}", encoding="utf-8")
+        gemma = package / "share" / "fastflow-sdk" / "gemma4e"
+        gemma.mkdir(parents=True)
+        (gemma / "CMakeLists.txt").write_text("", encoding="utf-8")
+        (package / "lib" / "flm").mkdir(parents=True)
+        _write_fastflowlm_module(package)
+
+        caller = tmp_path / "caller-bin"
+        runtime = tmp_path / "runtime-bin"
+        caller.mkdir()
+        runtime.mkdir()
+        module = self._load_generated_runtime(
+            package, "generated_fastflowlm_path_order"
+        )
+        module.os = types.SimpleNamespace(
+            name="nt",
+            pathsep=os.pathsep,
+            environ=os.environ,
+        )
+        captured: dict[str, object] = {}
+
+        def launch(command, env):
+            captured["command"] = command
+            captured["env"] = env
+            return 0
+
+        monkeypatch.setattr(module.subprocess, "call", launch)
+        monkeypatch.setitem(
+            sys.modules,
+            "fastflow_sdk_runtime",
+            types.SimpleNamespace(binary_dir=lambda: runtime),
+        )
+        monkeypatch.setenv("PATH", str(caller))
+
+        assert module.main([]) == 0
+        path = captured["env"]["PATH"].split(os.pathsep)
+        package_bin = str(package / "bin")
+        assert path[:3] == [str(caller), package_bin, str(runtime)]
+        assert captured["command"][0].endswith("flm.exe")
 
     def test_generated_runtime_activates_iron_host_without_native_library(
         self, tmp_path, monkeypatch

@@ -75,7 +75,14 @@ from .models import (
 from .profiles import load_profile, profile_names
 from .prompts import materialize_turn
 from .report import build_markdown_report
-from .xadx import XadxError, run_recipe, validate_xadx_report
+from .xadx import (
+    XadxError,
+    attach_subbuffer_binding,
+    flm_subbuffer_binding_record,
+    run_recipe,
+    unsupported_subbuffer_record,
+    validate_xadx_report,
+)
 
 # Canonical complete-sweep prompts (mirrors the HRX experiment harness). The
 # 2+2 turn must stay explicit: "What is 2+2?" is echoed as "2 + 2" by
@@ -1901,6 +1908,7 @@ def _test_xadx(
     writer: EvidenceWriter, *, target_family: str, profile_name: str
 ) -> list[dict[str, Any]]:
     started = time.monotonic()
+    subbuffer_record = None
     try:
         rounds = xadx_rounds(profile_name)
         override = os.environ.get("FASTFLOW_SDK_XADX_ASSETS")
@@ -1927,6 +1935,14 @@ def _test_xadx(
                 unique_xclbin_context_soak=XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
                 **rounds,
             )
+            if report.get("report_kind") != "execution":
+                subbuffer_record = None
+            elif report.get("status") == "unsupported":
+                subbuffer_record = unsupported_subbuffer_record()
+            else:
+                subbuffer_record = flm_subbuffer_binding_record(Path(asset_root))
+            if subbuffer_record is not None:
+                attach_subbuffer_binding(report, subbuffer_record)
     except (OSError, ValueError, XadxError) as error:
         failure = {
             "phase": "package-validation",
@@ -2017,6 +2033,8 @@ def _test_xadx(
                 ),
             }
         )
+    if subbuffer_record is not None:
+        records.append(subbuffer_record)
     return records
 
 

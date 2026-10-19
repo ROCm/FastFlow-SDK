@@ -2303,6 +2303,12 @@ def test_shipped_runner_loads_and_executes_the_packaged_recipe(monkeypatch, tmp_
     assert records[1]["rounds"] == 57
     assert records[1]["metrics"]["validated_bytes"] == 114
     assert records[1]["metrics"]["mismatch_count"] == 0
+    assert records[-1]["name"] == "subbuffer-binding"
+    assert records[-1]["log"] == "xadx-report.json"
+    report = json.loads(
+        (tmp_path / "evidence" / "xadx-report.json").read_text(encoding="utf-8")
+    )
+    assert report["subbuffer_binding"]["status"] == records[-1]["status"]
 
 
 def test_runner_writes_schema_valid_package_validation_report(monkeypatch, tmp_path):

@@ -21,10 +21,12 @@ import os
 import re
 import time
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from .contracts import (
     XADX_REPORT_SCHEMA_VERSION,
     XADX_ROUNDS,
+    XADX_SUBBUFFER_BINDING_TEST,
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
 )
 from .numeric_runtime import NUMERIC_DISTRIBUTIONS
@@ -1718,3 +1720,161 @@ def run_recipe(
             "failures": failures,
         }
     )
+
+
+def unsupported_subbuffer_record() -> dict[str, Any]:
+    """The slice probe does not run when the XADX report itself is unsupported."""
+    return {
+        "model": "fastflowlm-production-kernels",
+        "name": XADX_SUBBUFFER_BINDING_TEST,
+        "kind": "xadx",
+        "status": "unsupported",
+        "duration_seconds": 0.0,
+        "error": "sub-buffer binding was not run",
+        "metrics": {"returncode": None},
+    }
+
+
+def attach_subbuffer_binding(
+    report: dict[str, Any], record: dict[str, Any]
+) -> dict[str, Any]:
+    """Publish the slice probe on the XADX report and its test record."""
+    returncode = record.get("metrics", {}).get("returncode")
+    payload = {
+        "status": record["status"],
+        "duration_seconds": record["duration_seconds"],
+        "returncode": returncode,
+    }
+    if record.get("error"):
+        payload["error"] = record["error"]
+    report["subbuffer_binding"] = payload
+    record["log"] = "xadx-report.json"
+    record["artifacts"] = ["xadx-report.json"]
+    record["rounds"] = 0 if record["status"] == "unsupported" else 1
+    record["metrics"] = {
+        "architecture": report.get("architecture", "unknown"),
+        "returncode": returncode,
+    }
+    return record
+
+
+def _slice_probe_case(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    """One single-stage case whose output is not the zero baseline."""
+    return next(
+        (
+            item
+            for item in cases
+            if len(item["stages"]) == 1
+            and any(
+                buffer["direction"] == "output"
+                and isinstance(buffer.get("expected"), dict)
+                and buffer["expected"].get("id") != "zero"
+                for buffer in item["stages"][0]["buffers"]
+            )
+        ),
+        cases[0],
+    )
+
+
+def _run_python_slice_probe(asset_root: Path) -> str | None:
+    """Dispatch one shipped kernel with each buffer bound at a byte offset.
+
+    ``_Runtime.allocate`` places the payload in the middle of a larger
+    allocation, and ``run`` passes that offset to ``hrx_stream_dispatch``.
+    The bytes outside the payload must stay unchanged, and the output must
+    match the recipe.
+    """
+    recipe = json.loads((asset_root / "recipe.json").read_text(encoding="utf-8"))
+    implementations, cases = _validate_recipe(recipe)
+    case = _slice_probe_case(cases)
+    stage = case["stages"][0]
+    implementation = implementations[stage["implementation"]]
+    execution = stage.get("execution")
+    executable_entry = (
+        implementation
+        if execution is None
+        else next(
+            variant
+            for variant in implementation.get("execution_variants", ())
+            if variant["id"] == execution
+        )
+    )
+    xadx_bytes = (asset_root / executable_entry["xadx"]).read_bytes()
+    digest = hashlib.sha256(xadx_bytes).hexdigest()
+    if digest != executable_entry["xadx_sha256"]:
+        raise XadxError(f"slice probe XADX digest mismatch: {digest}")
+    from . import recipe_generators as generators
+
+    session = _Session(_Runtime)
+    try:
+        runtime = session.runtime
+        executable, ordinal = runtime.load(xadx_bytes, executable_entry["export"])
+        buffers = []
+        output = None
+        expected = None
+        contract = None
+        for record in stage["buffers"]:
+            source = record.get("source")
+            if isinstance(source, dict) and "stage_output" in source:
+                raise XadxError(
+                    "the slice probe stage must not chain an earlier output"
+                )
+            if record["direction"] == "output" or source is None:
+                allocation = runtime.allocate(bytes(record["size"]))
+                if record["direction"] == "output" and isinstance(
+                    record.get("expected"), dict
+                ):
+                    output = allocation
+                    expected_spec = record["expected"]
+                    expected = generators.materialize(
+                        expected_spec["id"], expected_spec["parameters"]
+                    )
+                    contract = record.get("comparison")
+            else:
+                payload = generators.materialize(source["id"], source["parameters"])
+                if len(payload) != record["size"]:
+                    raise XadxError(
+                        f"{record['name']} generator produced "
+                        f"{len(payload)} bytes, expected {record['size']}"
+                    )
+                allocation = runtime.allocate(payload)
+            buffers.append(allocation)
+        if output is None or expected is None or not isinstance(contract, dict):
+            raise XadxError("the slice probe case declares no output expectation")
+        runtime.run(executable, ordinal, buffers)
+        guard = bytes([_GUARD_VALUE]) * _GUARD_BYTES
+        for allocation in buffers:
+            prefix, _payload, suffix = runtime.inspect(allocation)
+            if prefix != guard or suffix != guard:
+                return "a slice binding wrote outside its byte range"
+        actual = runtime.read(output)
+        compared = _compare_details(
+            actual,
+            expected,
+            contract["kind"],
+            float(contract.get("atol", 0)),
+            float(contract.get("rtol", 0)),
+        )
+        return compared["failure"]
+    finally:
+        session.close()
+
+
+def flm_subbuffer_binding_record(asset_root: Path) -> dict[str, Any]:
+    """Dispatch one shipped kernel with each buffer bound at a byte offset."""
+    started = time.monotonic()
+    try:
+        detail = _run_python_slice_probe(asset_root)
+        passed = detail is None
+    except (OSError, KeyError, XadxError, ValueError, StopIteration) as error:
+        passed = False
+        detail = str(error)
+    return {
+        "model": "fastflowlm-production-kernels",
+        "name": XADX_SUBBUFFER_BINDING_TEST,
+        "kind": "xadx",
+        "status": "pass" if passed else "fail",
+        "duration_seconds": max(time.monotonic() - started, 0.0),
+        "metrics": {"returncode": 0 if passed else 1},
+        **({} if passed else {"error": detail or "sub-buffer binding failed"}),
+    }

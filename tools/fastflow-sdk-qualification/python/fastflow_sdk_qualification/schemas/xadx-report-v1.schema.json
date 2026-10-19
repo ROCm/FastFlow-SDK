@@ -47,6 +47,7 @@
     },
     "runtime_open": {"$ref": "#/$defs/runtime_open"},
     "unique_xclbin_context_soak": {"$ref": "#/$defs/unique_xclbin_context_soak"},
+    "subbuffer_binding": {"$ref": "#/$defs/subbuffer_binding"},
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/top_failure"}
@@ -96,6 +97,17 @@
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subbuffer_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "duration_seconds", "returncode"],
+      "properties": {
+        "status": {"enum": ["pass", "fail", "unsupported"]},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "returncode": {"type": ["integer", "null"]},
+        "error": {"type": "string", "minLength": 1}
+      }
+    },
     "unique_xclbin_context_soak": {
       "type": "object",
       "additionalProperties": false,

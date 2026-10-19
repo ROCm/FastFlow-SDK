@@ -1,0 +1,132 @@
+From: FastFlow SDK <fastflow-sdk@amd.com>
+Subject: [PATCH] Load engine DLLs from PATH before the exe directory
+
+Engine DLLs are installed beside flm.exe. Windows searches that directory
+before PATH, so a replacement earlier on PATH never loads. Delay-load the
+model engines and pick the first PATH entry that has the DLL. The copy
+beside flm remains the fallback. q4_npu_eXpress stays a normal import.
+llama_npu stays a normal import while its import library exports CRT data.
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -302,7 +302,11 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
+ file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
+ file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
+ list(FILTER SOURCES EXCLUDE REGEX ".*/common/rai/.*\\.cpp$")
+ 
++if(NOT WIN32)
++    list(FILTER SOURCES EXCLUDE REGEX "flm_library_path\\.cpp$")
++endif()
++
+ # Model sources live two levels deeper than the globs above reach. Only the rai
+ # half exists as loose sources; it is built separately, below.
+ 
+@@ -565,6 +569,24 @@ target_link_libraries(flm PUBLIC
+     $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--as-needed>
+ )
+ 
++if(WIN32)
++    # Model engine DLLs are installed beside flm.exe. The loader searches that
++    # directory before PATH, so delay-load each model engine and take the first
++    # PATH entry that contains a replacement. The copy beside flm remains the
++    # fallback. q4_npu_eXpress is not a model engine.
++    foreach(_flm_engine IN LISTS FLM_ENGINE_LINK_LIBS)
++        # q4_npu_eXpress is the shared quant library, not a model engine.
++        # llama_npu.dll exports std::codecvt::id, and flm imports that data.
++        # Delay-load cannot bind a data import, so llama stays a normal import
++        # until the HRX engines are built with the dynamic CRT.
++        if(_flm_engine STREQUAL "q4_npu_eXpress" OR _flm_engine STREQUAL "llama_npu")
++            continue()
++        endif()
++        target_link_options(flm PRIVATE "/DELAYLOAD:${_flm_engine}.dll")
++    endforeach()
++    target_link_libraries(flm PRIVATE delayimp)
++endif()
++
+ # Link the selected NPU runtime after the detail model libraries above so their
+ # runtime references (libhrx / libxrt_coreutil) resolve.
+ if(FLM_USE_HRX)
+diff --git a/src/runner/flm_library_path.cpp b/src/runner/flm_library_path.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/runner/flm_library_path.cpp
+@@ -0,0 +1,78 @@
++// Engine DLLs are installed beside flm.exe. Windows searches that directory
++// before PATH, so a normal import always binds those copies. Delay-load each
++// engine and load the first PATH entry that contains that DLL. When PATH has
++// none, the delay loader finds the copy beside flm.exe.
++
++#ifdef _WIN32
++
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++
++#include <delayimp.h>
++
++#include <stdio.h>
++#include <string>
++
++namespace {
++
++HMODULE load_from_library_path(const char* file_name) {
++    DWORD needed = GetEnvironmentVariableW(L"PATH", nullptr, 0);
++    if (needed <= 1 || file_name == nullptr || file_name[0] == '\0') {
++        return nullptr;
++    }
++    int wide_chars = MultiByteToWideChar(CP_ACP, 0, file_name, -1, nullptr, 0);
++    if (wide_chars <= 1) {
++        return nullptr;
++    }
++    std::wstring dll(static_cast<size_t>(wide_chars - 1), L'\0');
++    MultiByteToWideChar(CP_ACP, 0, file_name, -1, dll.data(), wide_chars);
++
++    std::wstring path(static_cast<size_t>(needed), L'\0');
++    DWORD written = GetEnvironmentVariableW(L"PATH", path.data(), needed);
++    if (written == 0 || written >= needed) {
++        return nullptr;
++    }
++    path.resize(written);
++    for (size_t start = 0; start < path.size();) {
++        size_t end = path.find(L';', start);
++        if (end == std::wstring::npos) {
++            end = path.size();
++        }
++        std::wstring dir = path.substr(start, end - start);
++        start = end + (end < path.size() ? 1 : 0);
++        if (dir.empty() || dir[0] == L'\0') {
++            continue;
++        }
++        wchar_t last = dir.back();
++        if (last != L'\\' && last != L'/') {
++            dir.push_back(L'\\');
++        }
++        std::wstring candidate = dir + dll;
++        DWORD attr = GetFileAttributesW(candidate.c_str());
++        if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) {
++            continue;
++        }
++        HMODULE loaded = LoadLibraryW(candidate.c_str());
++        if (loaded != nullptr) {
++            return loaded;
++        }
++        fwprintf(stderr, L"flm: failed to load %s (%lu)\n", candidate.c_str(), GetLastError());
++        ExitProcess(1);
++    }
++    return nullptr;
++}
++
++}  // namespace
++
++extern "C" FARPROC WINAPI flm_library_path_hook(unsigned notify, PDelayLoadInfo info) {
++    if (notify != dliNotePreLoadLibrary || info == nullptr || info->szDll == nullptr) {
++        return nullptr;
++    }
++    return reinterpret_cast<FARPROC>(load_from_library_path(info->szDll));
++}
++
++extern "C" const PfnDliHook __pfnDliNotifyHook2 = flm_library_path_hook;
++
++#endif

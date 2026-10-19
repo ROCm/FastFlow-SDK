@@ -34,6 +34,7 @@ from .contracts import (
     POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS,
     SHARED_CODE_MEMORY_RECLAIM,
     XADX_REPORT_SCHEMA_VERSION,
+    XADX_SUBBUFFER_BINDING_TEST,
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK,
     XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
 )
@@ -410,6 +411,13 @@ def _validate_complete_execution(
             XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
         )
     ] = {}
+    expected[
+        (
+            "xadx",
+            "fastflowlm-production-kernels",
+            XADX_SUBBUFFER_BINDING_TEST,
+        )
+    ] = {}
     for model in profile["models"]:
         if model["xclbins"]:
             expected[("xclbin", model["tag"], "production-xclbin-inventory")] = {
@@ -469,12 +477,22 @@ def _validate_complete_execution(
     budget = len(contract["xadx_cases"]) * resident + sum(
         observed[key].get("metrics", {}).get("readback_rounds", 0)
         for key in observed
-        if key[0] == "xadx" and key[2] != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+        if key[0] == "xadx"
+        and key[2]
+        not in {
+            XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+            XADX_SUBBUFFER_BINDING_TEST,
+        }
     )
     performed = sum(
         observed[key].get("rounds", 0)
         for key in observed
-        if key[0] == "xadx" and key[2] != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+        if key[0] == "xadx"
+        and key[2]
+        not in {
+            XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+            XADX_SUBBUFFER_BINDING_TEST,
+        }
     )
     if performed != budget:
         raise EvidenceError(
@@ -870,7 +888,11 @@ def _reconcile_xadx_report(
         else [
             test.get("name")
             for test in tests
-            if test.get("name") != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+            if test.get("name")
+            not in {
+                XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+                XADX_SUBBUFFER_BINDING_TEST,
+            }
         ]
     )
     soak_tests = [
@@ -881,7 +903,11 @@ def _reconcile_xadx_report(
     recipe_tests = [
         test
         for test in tests
-        if test.get("name") != XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST
+        if test.get("name")
+        not in {
+            XADX_UNIQUE_XCLBIN_CONTEXT_SOAK_TEST,
+            XADX_SUBBUFFER_BINDING_TEST,
+        }
     ]
     if report.get("case_names") != expected_names:
         raise EvidenceError("xadx-report.json case inventory does not match tests.json")
@@ -928,6 +954,31 @@ def _reconcile_xadx_report(
     ):
         raise EvidenceError(
             "xadx-report.json unique-xclbin-context-soak does not match tests.json"
+        )
+    binding_tests = [
+        test for test in tests if test.get("name") == XADX_SUBBUFFER_BINDING_TEST
+    ]
+    if len(binding_tests) != 1:
+        raise EvidenceError("tests.json is missing subbuffer-binding")
+    binding = report.get("subbuffer_binding")
+    binding_test = binding_tests[0]
+    if not isinstance(binding, dict):
+        raise EvidenceError("xadx-report.json subbuffer-binding is missing")
+    if (
+        binding_test.get("status") != binding.get("status")
+        or binding_test.get("duration_seconds") != binding.get("duration_seconds")
+        or binding_test.get("rounds")
+        != (0 if binding.get("status") == "unsupported" else 1)
+        or binding_test.get("metrics")
+        != {
+            "architecture": report.get("architecture", "unknown"),
+            "returncode": binding.get("returncode"),
+        }
+        or binding_test.get("log") != "xadx-report.json"
+        or binding_test.get("artifacts") != ["xadx-report.json"]
+    ):
+        raise EvidenceError(
+            "xadx-report.json subbuffer-binding does not match tests.json"
         )
     if status == "pass" and (
         soak.get("status") != "pass"

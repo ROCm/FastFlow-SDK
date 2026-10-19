@@ -140,7 +140,7 @@ def stage_qualification_tree(
     fastflowlm_licenses = root / "projects" / "FastFlowLM"
     for source_name, packaged_name in (
         ("LICENSE_RUNTIME.txt", "FastFlowLM-LICENSE_RUNTIME.txt"),
-        ("TERMS.md", "FastFlowLM-TERMS.md"),
+        ("LICENSE_BINARY.txt", "FastFlowLM-LICENSE_BINARY.txt"),
     ):
         source = qualification_licenses / packaged_name
         upstream = fastflowlm_licenses / source_name
