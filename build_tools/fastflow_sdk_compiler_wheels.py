@@ -344,15 +344,26 @@ def _forward_linux_peano_aliases(package_root: Path) -> tuple[str, ...]:
 def _remove_redundant_linux_llvm_library(package_root: Path) -> tuple[str, ...]:
     library_directory = package_root / "peano" / "llvm-aie" / "lib"
     canonical = library_directory / "libLLVM.so"
-    redundant = library_directory / "libLLVM-21.so"
-    if not redundant.is_file():
+    redundant_libraries = sorted(
+        path
+        for path in library_directory.glob("libLLVM-*.so")
+        if path.is_file()
+        and re.fullmatch(r"libLLVM-[0-9]+(?:\.[0-9]+)*\.so", path.name)
+    )
+    if not redundant_libraries:
         return ()
     if not canonical.is_file():
-        raise RuntimeError("libLLVM-21.so has no canonical libLLVM.so")
-    if not filecmp.cmp(redundant, canonical, shallow=False):
-        raise RuntimeError("libLLVM-21.so differs from canonical libLLVM.so")
-    redundant.unlink()
-    return (redundant.relative_to(package_root).as_posix(),)
+        names = ", ".join(path.name for path in redundant_libraries)
+        verb = "has" if len(redundant_libraries) == 1 else "have"
+        raise RuntimeError(f"{names} {verb} no canonical libLLVM.so")
+    for redundant in redundant_libraries:
+        if not filecmp.cmp(redundant, canonical, shallow=False):
+            raise RuntimeError(f"{redundant.name} differs from canonical libLLVM.so")
+    for redundant in redundant_libraries:
+        redundant.unlink()
+    return tuple(
+        path.relative_to(package_root).as_posix() for path in redundant_libraries
+    )
 
 
 def _strip_linux_compiler(package_root: Path) -> dict[str, int]:

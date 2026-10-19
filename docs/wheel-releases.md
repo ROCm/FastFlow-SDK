@@ -116,8 +116,9 @@ Clang, GNU LLD, COFF LLD, and readelf modes, and checks the Darwin and
 WebAssembly LLD flavor selection.
 Linux packaging similarly replaces the large LLD and readelf multicall copies
 with flavor-preserving shell launchers. It removes the byte-identical
-`libLLVM-21.so` copy only after comparing it with the retained `libLLVM.so`,
-and strips unneeded symbols from staged ELF executables and shared libraries.
+versioned `libLLVM-<major>.so` copy only after comparing it with the retained
+`libLLVM.so`, and strips unneeded symbols from staged ELF executables and
+shared libraries.
 The installed-wheel audit exercises each forwarded alias in its intended
 driver flavor and validates the ELF dependency closure after these
 transformations; the manylinux policy audit then checks the finished wheels.
