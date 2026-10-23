@@ -16,10 +16,6 @@
         "swscale"
       ]
     },
-    "fftw3",
-    {
-      "name": "readline",
-      "platform": "!windows"
-    }
+    "fftw3"
   ]
 }

@@ -77,24 +77,15 @@ pkg-config first would still pick the broken distro file.
 **Remove when:** FastFlowLM prefers caller-provided XRT dirs over pkg-config
 upstream.
 
-### 0004-windows-clang-cl-avx512.patch
-Builds Windows `flm` with `/arch:AVX2` and the Gemma 4 engine translation units
-that need AVX-512 with `/arch:AVX512`. clang-cl also needs a forwarded
-`ostream` export so it can link the prebuilt engine import library.
+### 0004-clang-cl-gemma4e-runtime.patch
+Builds the from-source Gemma 4 engine with the dynamic CRT under clang-cl, and
+forwards the prebuilt `ostream::operator<<(bool)` import to `MSVCP140`.
+`/arch:AVX2` and `/arch:AVX512` are already selected upstream.
 
-**Remove when:** FastFlowLM's Windows engine build selects those flags itself.
+**Remove when:** FastFlowLM links the clang-cl Gemma 4 engine to the dynamic
+CRT and no longer needs the forwarded export.
 
-### 0005-hrx-subbuffer-offset.patch
-Adds a non-owning `hrx::bo` slice constructor and passes that byte offset
-through `run::add_binding`, so an IRON override can take a view of a parent
-buffer. Dirty state is a set of byte ranges, so flushing or invalidating one
-slice leaves a disjoint slice of the same allocation dirty. A failed flush or
-invalidate records that range again and still applies the ranges after it. A
-slice that extends past its parent is rejected.
-
-**Remove when:** FastFlowLM binds HRX sub-buffers at their offset upstream.
-
-### 0006-engine-dll-from-path.patch
+### 0005-engine-dll-from-path.patch
 Windows searches the executable directory before `PATH`, so an engine DLL
 beside `flm.exe` always won. `flm` delay-loads the model engines and loads
 the first copy found on `PATH`. `q4_npu_eXpress` stays a normal import.
@@ -106,13 +97,19 @@ already selects a replacement through `LD_LIBRARY_PATH`.
 executable directory upstream, and the engine import libraries no longer export
 CRT symbols.
 
-### 0007-hrx-runtime-static-order.patch
-`~Runtime()` frees the executable cache and clears the coherence map. Those
-function-local statics were constructed later than `Runtime`, so a normal
-process exit destroyed them first and the destructor read freed memory.
-`Runtime::get()` now constructs the caches first.
+### 0006-posix-piped-prompt.patch
+libedit's `readline()` does not write `>>> ` when stdin is not a terminal.
+Qualification waits for that prompt before sending the next line, so `flm run`
+loads the model and then both sides wait. GNU readline printed the prompt.
+Piped input now uses the plain reader, which prints `>>> ` and flushes it.
+A terminal still uses libedit.
 
-**Remove when:** FastFlowLM constructs those statics before `Runtime` upstream.
+**Remove when:** FastFlowLM prints the piped-input prompt without libedit.
+
+The sub-buffer patch and the static-destruction-order patch were dropped at
+`ad6be553`. Upstream binds HRX sub-buffers at their byte offset (PR #801), and
+`~Runtime()` no longer reads the caches that process exit destroys first
+(PR #800).
 
 ## patches/iron-ops/
 

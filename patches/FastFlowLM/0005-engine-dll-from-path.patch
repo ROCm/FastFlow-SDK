@@ -1,28 +1,22 @@
 From: FastFlow SDK <fastflow-sdk@amd.com>
 Subject: [PATCH] Load engine DLLs from PATH before the exe directory
 
-Engine DLLs are installed beside flm.exe. Windows searches that directory
-before PATH, so a replacement earlier on PATH never loads. Delay-load the
-model engines and pick the first PATH entry that has the DLL. The copy
-beside flm remains the fallback. q4_npu_eXpress stays a normal import.
-llama_npu stays a normal import while its import library exports CRT data.
-
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 0f0873e2..9134d890 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -302,7 +302,11 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
- file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
+@@ -215,6 +215,10 @@ file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "se
  file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
- list(FILTER SOURCES EXCLUDE REGEX ".*/common/rai/.*\\.cpp$")
+ list(FILTER SOURCES EXCLUDE REGEX ".*/common/core/.*\\.cpp$")
  
 +if(NOT WIN32)
 +    list(FILTER SOURCES EXCLUDE REGEX "flm_library_path\\.cpp$")
 +endif()
 +
- # Model sources live two levels deeper than the globs above reach. Only the rai
+ # Model sources live two levels deeper than the globs above reach. Only the core
  # half exists as loose sources; it is built separately, below.
  
-@@ -565,6 +569,24 @@ target_link_libraries(flm PUBLIC
+@@ -533,6 +537,24 @@ target_link_libraries(flm PUBLIC
      $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--as-needed>
  )
  
@@ -49,6 +43,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
  if(FLM_USE_HRX)
 diff --git a/src/runner/flm_library_path.cpp b/src/runner/flm_library_path.cpp
 new file mode 100644
+index 00000000..df962979
 --- /dev/null
 +++ b/src/runner/flm_library_path.cpp
 @@ -0,0 +1,78 @@

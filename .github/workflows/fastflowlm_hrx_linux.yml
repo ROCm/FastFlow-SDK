@@ -81,8 +81,8 @@ jobs:
         shell: bash
         run: |
           dnf install -y bash ca-certificates curl gcc gcc-c++ git \
-            kernel-headers libdrm-devel make nasm patchelf perl perl-IPC-Cmd \
-            pkgconf-pkg-config tar unzip which zip zstd
+            kernel-headers libdrm-devel libedit-devel make nasm patchelf \
+            perl perl-IPC-Cmd pkgconf-pkg-config tar unzip which zip zstd
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable, pinned

@@ -1,0 +1,25 @@
+diff --git a/src/runner/cli_wide_posix.cpp b/src/runner/cli_wide_posix.cpp
+index c950eb21..a3dd6f06 100644
+--- a/src/runner/cli_wide_posix.cpp
++++ b/src/runner/cli_wide_posix.cpp
+@@ -156,6 +156,20 @@ private:
+ 
+ std::string CLIWide::get_interactive_input() {
+ #ifdef FASTFLOWLM_USE_READLINE
++    // libedit's readline() does not write its prompt when stdin is not a
++    // terminal. A piped caller that waits for ">>> " then never sends a line,
++    // and readline() waits for that line. GNU readline printed the prompt.
++    if (!isatty(STDIN_FILENO)) {
++        std::string fallback;
++        std::cout << ">>> " << std::flush;
++        if (!std::getline(std::cin, fallback)) {
++            return "/bye";
++        }
++        if (!fallback.empty()) {
++            add_to_history(fallback);
++        }
++        return fallback;
++    }
+     std::vector<std::string> lines;
+     bool paste_mode = false;
+ 
