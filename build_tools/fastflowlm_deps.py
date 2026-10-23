@@ -56,6 +56,11 @@ def check_fastflowlm_linux_host(verbose: bool) -> tuple[bool, list[str]]:
             environment.have_header("libdrm/drm.h"),
             "libdrm-dev",
         ),
+        (
+            "<histedit.h>",
+            environment.have_header("histedit.h"),
+            "libedit-dev",
+        ),
     ]
     if verbose:
         print(

@@ -23,6 +23,8 @@ from build_tools.artifact import (
     sha256_file,
 )
 from build_tools.fastflow_sdk_archive import (
+    _copy_host_libedit_closure,
+    _copy_vcpkg_linux_closure,
     _copy_windows_redistributable_closure,
     _is_linux_system_runtime,
     _linux_dependencies_and_licenses,
@@ -276,12 +278,105 @@ class TestFastFlowLMArtifact:
         for name in (
             "libc.so.6",
             "libm.so.6",
+            "libmvec.so.1",
             "libpthread.so.0",
+            "libgcc_s.so.1",
+            "libstdc++.so.6",
+            "libgomp.so.1",
             "ld-linux-x86-64.so.2",
             "linux-vdso.so.1",
         ):
             assert _is_linux_system_runtime(name), name
         assert not _is_linux_system_runtime("libcurl.so.4")
+        assert not _is_linux_system_runtime("libedit.so.0")
+        assert not _is_linux_system_runtime("libboost_container.so.1.91.0")
+
+    def test_vcpkg_closure_copies_needed_shared_libraries(self, tmp_path):
+        bundle = tmp_path / "bundle"
+        (bundle / "bin").mkdir(parents=True)
+        (bundle / "lib").mkdir()
+        (bundle / "bin" / "flm").write_bytes(b"flm")
+        boost = bundle / "lib" / "libboost_program_options.so.1.91.0"
+        boost.write_bytes(b"boost")
+        vcpkg_lib = tmp_path / "vcpkg" / "lib"
+        vcpkg_lib.mkdir(parents=True)
+        (vcpkg_lib / "libboost_container.so.1.91.0").write_bytes(b"container")
+        (vcpkg_lib / "libcurl.so.4").write_bytes(b"curl")
+
+        def needed(path, patchelf=None):
+            del patchelf
+            if path.name == "flm":
+                return [
+                    "libboost_program_options.so.1.91.0",
+                    "libcurl.so.4",
+                    "libstdc++.so.6",
+                    "libedit.so.0",
+                ]
+            if path.name.startswith("libboost_program_options"):
+                return ["libboost_container.so.1.91.0", "libstdc++.so.6"]
+            return []
+
+        with (
+            mock.patch(
+                "build_tools.fastflow_sdk_archive.shutil.which",
+                return_value="patchelf",
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_archive.elf_needed",
+                side_effect=needed,
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_archive.elf_soname",
+                return_value=None,
+            ),
+        ):
+            _copy_vcpkg_linux_closure(bundle, vcpkg_lib)
+        assert (bundle / "lib" / "libboost_container.so.1.91.0").read_bytes() == (
+            b"container"
+        )
+        assert (bundle / "lib" / "libcurl.so.4").read_bytes() == b"curl"
+        assert not (bundle / "lib" / "libstdc++.so.6").exists()
+        assert not (bundle / "lib" / "libedit.so.0").exists()
+
+    def test_host_closure_bundles_libedit_without_the_baseline(self, tmp_path):
+        bundle = tmp_path / "bundle"
+        (bundle / "bin").mkdir(parents=True)
+        (bundle / "lib").mkdir()
+        (bundle / "bin" / "flm").write_bytes(b"flm")
+        host = tmp_path / "host"
+        host.mkdir()
+        (host / "libedit.so.0").write_bytes(b"edit")
+        (host / "libtinfo.so.6").write_bytes(b"tinfo")
+        (host / "libcurl.so.4").write_bytes(b"system-curl")
+        (host / "libstdc++.so.6").write_bytes(b"libstdcxx")
+
+        def needed(path, patchelf=None):
+            del patchelf
+            if path.name == "flm":
+                return ["libedit.so.0", "libcurl.so.4", "libstdc++.so.6"]
+            if path.name == "libedit.so.0":
+                return ["libc.so.6", "libtinfo.so.6", "libstdc++.so.6"]
+            return []
+
+        with (
+            mock.patch(
+                "build_tools.fastflow_sdk_archive.shutil.which",
+                return_value="patchelf",
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_archive.elf_needed",
+                side_effect=needed,
+            ),
+            mock.patch(
+                "build_tools.fastflow_sdk_archive._ldconfig_library_index",
+                return_value={path.name: path for path in host.iterdir()},
+            ),
+        ):
+            _copy_host_libedit_closure(bundle)
+        assert (bundle / "lib" / "libedit.so.0").read_bytes() == b"edit"
+        assert (bundle / "lib" / "libtinfo.so.6").read_bytes() == b"tinfo"
+        assert not (bundle / "lib" / "libcurl.so.4").exists()
+        assert not (bundle / "lib" / "libstdc++.so.6").exists()
 
     def test_linux_system_license_destination_for_own_license_directory(self):
         bundle = Path("/bundle")

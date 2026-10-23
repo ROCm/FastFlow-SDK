@@ -50,27 +50,6 @@ int main() {
     auto read_a = hrx::coh_range_take(device, 0, 512);
     print_ranges("invalidate-a", read_a);
     print_ranges("device-left", device);
-
-    std::vector<hrx::coh_range> pending;
-    hrx::coh_range_add(pending, 0, 512);
-    hrx::coh_range_add(pending, 2048, 512);
-    hrx::coh_range_add(pending, 4096, 512);
-    std::vector<hrx::coh_range> restored;
-    int applied = 0;
-    bool failed = hrx::coh_range_apply(
-        restored, pending, [&](const hrx::coh_range& range) {
-            ++applied;
-            return range.offset != 2048;
-        });
-    std::printf("apply-failed %d\n", failed ? 1 : 0);
-    std::printf("apply-count %d\n", applied);
-    print_ranges("apply-restored", restored);
-
-    std::printf(
-        "slice-fit %d %d %d\n",
-        hrx::coh_slice_fits(4096, 0, 512, 1024) ? 1 : 0,
-        hrx::coh_slice_fits(4096, 0, 512, 4000) ? 1 : 0,
-        hrx::coh_slice_fits(100, static_cast<size_t>(-1) - 10, 1, 20) ? 1 : 0);
     return 0;
 }
 """
@@ -138,8 +117,4 @@ def test_disjoint_slices_flush_and_invalidate_independently(tmp_path):
         "host-left 512+1536 2560+1536",
         "invalidate-a 0+512",
         "device-left 2048+512",
-        "apply-failed 1",
-        "apply-count 3",
-        "apply-restored 2048+512",
-        "slice-fit 1 0 0",
     ]

@@ -556,9 +556,109 @@ def _linux_package_owner_candidates(path: Path) -> list[Path]:
 
 
 def _is_linux_system_runtime(name: str) -> bool:
+    """Returns whether the dynamic loader resolves this SONAME from the host.
+
+    The manylinux baseline provides glibc, including libmvec, and the GCC
+    runtime. libedit is BSD and is copied into the bundle. libcurl and the
+    rest of the vcpkg closure are copied from the vcpkg triplet.
+    """
     return bool(
-        re.match(r"^(ld-linux|linux-vdso|lib(c|dl|m|pthread|rt)\.so)([.-].*)?$", name)
+        re.match(
+            r"^(ld-linux|linux-vdso|lib("
+            r"c|dl|m|mvec|pthread|resolv|rt|gcc_s|stdc\+\+|gomp"
+            r")\.so)([.-].*)?$",
+            name,
+        )
     )
+
+
+def _ldconfig_library_index() -> dict[str, Path]:
+    ldconfig = shutil.which("ldconfig")
+    if not ldconfig:
+        return {}
+    output = subprocess.run(
+        [ldconfig, "-p"], check=True, capture_output=True, text=True
+    ).stdout
+    index = {}
+    for line in output.splitlines():
+        match = re.match(r"\s*(\S+)\s+.*=>\s+(\S+)$", line)
+        if match:
+            index.setdefault(match.group(1), Path(match.group(2)))
+    return index
+
+
+def _copy_host_libedit_closure(bundle: Path) -> None:
+    """Copies distro libedit and the non-baseline libraries it needs."""
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        raise RuntimeError("patchelf is required to package the Linux runtime closure")
+    index = _ldconfig_library_index()
+    queue = [
+        needed
+        for path in _linux_elf_files(bundle)
+        for needed in elf_needed(path, patchelf=patchelf)
+        if needed.startswith("libedit.so")
+    ]
+    seen: set[str] = set()
+    while queue:
+        needed = queue.pop(0)
+        if needed in seen or _is_linux_system_runtime(needed):
+            continue
+        seen.add(needed)
+        destination = bundle / "lib" / needed
+        if destination.exists():
+            source_bytes = destination
+        else:
+            source = index.get(needed)
+            if source is None or not source.is_file():
+                continue
+            _copy_checked(source.resolve(strict=True), destination)
+            source_bytes = destination
+        for child in elf_needed(source_bytes, patchelf=patchelf):
+            if child not in seen and not _is_linux_system_runtime(child):
+                queue.append(child)
+
+
+def _copy_vcpkg_linux_closure(bundle: Path, vcpkg_lib: Path) -> None:
+    """Copies vcpkg shared libraries required by the staged ELF files.
+
+    FastFlowLM's HRX install copies libhrx and libboost_program_options only.
+    libboost_program_options still needs libboost_container, and flm needs the
+    vcpkg libcurl. Those files live in the vcpkg triplet and have to be in the
+    bundle before the closure check.
+    """
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        raise RuntimeError("patchelf is required to package the Linux runtime closure")
+    index: dict[str, Path] = {}
+    if vcpkg_lib.is_dir():
+        for path in vcpkg_lib.iterdir():
+            if path.is_file() or path.is_symlink():
+                index.setdefault(path.name, path)
+        for path in list(index.values()):
+            if not path.is_file() or path.is_symlink():
+                continue
+            soname = elf_soname(path, patchelf=patchelf)
+            if soname:
+                index.setdefault(soname, path)
+    progressed = True
+    while progressed:
+        progressed = False
+        bundled = {path.name for path in _linux_elf_files(bundle)}
+        for path in _linux_elf_files(bundle):
+            for needed in elf_needed(path, patchelf=patchelf):
+                if (
+                    needed in bundled
+                    or _is_linux_system_runtime(needed)
+                    or (bundle / "lib" / needed).exists()
+                ):
+                    continue
+                source = index.get(needed)
+                if source is None:
+                    continue
+                _copy_checked(source.resolve(strict=True), bundle / "lib" / needed)
+                bundled.add(needed)
+                progressed = True
 
 
 def _normalize_and_verify_linux_elf(bundle: Path) -> dict[str, list[str]]:
@@ -1126,6 +1226,7 @@ def stage_runtime_bundle(
         cli_name = "fastflow.exe"
     else:
         cli_name = "fastflow"
+        vcpkg_lib = Path(dependency_paths(root)["triplet_root"]) / "lib"
         hrx_libraries = sorted((hrx_install / "lib").glob("libhrx.so*"))
         if not hrx_libraries:
             raise RuntimeError(
@@ -1157,6 +1258,8 @@ def stage_runtime_bundle(
         _copy_windows_redistributable_closure(bundle)
         binary_dependencies = _windows_pe_dependency_graph(bundle)
     else:
+        _copy_vcpkg_linux_closure(bundle, vcpkg_lib)
+        _copy_host_libedit_closure(bundle)
         binary_dependencies = _normalize_and_verify_linux_elf(bundle)
 
     license_sources = [

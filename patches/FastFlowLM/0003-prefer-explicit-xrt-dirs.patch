@@ -1,17 +1,11 @@
 From: FastFlow SDK <fastflow-sdk@amd.com>
 Subject: [PATCH] Prefer explicit XRT include/lib dirs over pkg-config
 
-When the caller already set XRT_INCLUDE_DIR and XRT_LIB_DIR (for example
-`dev.py build fastflowlm-xrt` passing the discovered host install), skip
-pkg_check_modules(XRT). Distro xrt.pc is often broken (prefix=/usr//usr)
-and would otherwise override the known host paths. pkg-config remains the
-discovery fallback when those cache variables are unset.
-
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f07b89d..43300af 100644
+index 960241cc..0f0873e2 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -64,8 +64,10 @@ set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
+@@ -120,8 +120,10 @@ set(FLM_OVERRIDE_FLAGS "" CACHE STRING "Extra compile flags for the from-source
  # ———————————————————————————————————————————————
  # NPU runtime discovery.
  #   HRX: consumed from its public CMake package via find_package(hrx).
@@ -24,7 +18,7 @@ index f07b89d..43300af 100644
  # ———————————————————————————————————————————————
  if(FLM_USE_HRX)
      find_package(hrx CONFIG REQUIRED)
-@@ -75,7 +77,13 @@ else()
+@@ -131,7 +133,13 @@ else()
          set(XRT_LIB_DIR     C:/dev/xrtNPUfromDLL                    CACHE PATH "Where XRT libs live")
      else()
          find_package(PkgConfig)

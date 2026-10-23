@@ -75,9 +75,9 @@ full_elf_note = "Adds self-contained FULL_ELF XADX records with standalone PDI p
 repo       = "github.com/ROCm/FastFlowLM"
 upstream   = "github.com/ROCm/FastFlowLM"
 branch     = "main"
-pr         = "ROCm/FastFlowLM#783"
-commit     = "77bc6bddd5d09aa10f420dd907a9cce9505d6333"
-note       = "FastFlowLM upstream main (77bc6bdd, merge of PR #783). CMakePresets stamps FLM_VERSION 1.0.9. This main contains the Gemma 4 engine source and FLM_OVERRIDE from PR #763, and it links minicpm_v_4_7_npu. FLM_BUILD_GEMMA4E stays OFF, so the product still links the prebuilt engine. python dev.py build fastflowlm stamps -DFLM_VERSION/-DNPU_VERSION from src/CMakePresets.json. Caller XRT_INCLUDE_DIR/XRT_LIB_DIR preference, install-prefix stripping, and Windows redirected stdin stay in patches/FastFlowLM/0001-0003. 0004 builds the Windows flm target and the from-source Gemma 4 engine for clang-cl, and 0005 binds HRX sub-buffers at their byte offset so the IRON override can slice a parent buffer. 0006 delay-loads the model engine DLLs, including minicpm_v_4_7_npu, and loads the first replacement found on PATH ahead of the DLL beside flm.exe. q4_npu_eXpress stays a normal import. llama_npu stays a normal import until the HRX engines are built with the dynamic CRT. `dev.py build fastflowlm` and `fastflowlm-xrt` apply the whole set."
+pr         = "ROCm/FastFlowLM#827"
+commit     = "e2d0144fb868018f9777ae661daa0d6163932974"
+note       = "FastFlowLM upstream main (e2d0144f). CMakePresets stamps FLM_VERSION 1.0.10. PR #827 rebuilds the Linux HRX engines in manylinux_2_28, so they need at most glibc 2.22 and libstdc++ 3.4.21. This main binds HRX sub-buffers at their byte offset, so the sub-buffer patch is dropped. PR #800 shuts the HRX runtime down without reading destroyed statics, so the static-order patch is dropped. PR #802 already names /arch:AVX2 and /arch:AVX512; 0004 keeps the clang-cl dynamic CRT and the ostream forward for the from-source Gemma 4 engine. 0005 delay-loads the model engine DLLs, including minicpm_v_4_7_npu, and loads the first replacement found on PATH ahead of the DLL beside flm.exe. q4_npu_eXpress stays a normal import. llama_npu stays a normal import until the HRX engines are built with the dynamic CRT. Redirected stdin, install-prefix stripping, and caller XRT directories stay in 0001-0003. `dev.py build fastflowlm` and `fastflowlm-xrt` apply the whole set."
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"

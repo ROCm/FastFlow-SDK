@@ -1,0 +1,40 @@
+From: FastFlow SDK <fastflow-sdk@amd.com>
+Subject: [PATCH] Link the clang-cl Gemma 4 engine to the dynamic CRT
+
+diff --git a/src/detail/CMakeLists.txt b/src/detail/CMakeLists.txt
+index d25d24a8..dece3656 100644
+--- a/src/detail/CMakeLists.txt
++++ b/src/detail/CMakeLists.txt
+@@ -16,8 +16,16 @@ list(APPEND GEMMA4E_SHARED_SOURCES "${GEMMA4E_ENGINE_DIR}/vision_common/norm.cpp
+ add_library(gemma4e_npu SHARED ${GEMMA4E_SOURCES} ${GEMMA4E_SHARED_SOURCES})
+ 
+ if(MSVC)
++    # cl.exe keeps the static CRT this target asks for. clang-cl also takes
++    # the MSVC branch, but it links the /MD HRX and vcpkg libraries, so the
++    # static runtime would mismatch those import libs.
++    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
++        set(_gemma4e_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>")
++    else()
++        set(_gemma4e_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
++    endif()
+     set_target_properties(gemma4e_npu PROPERTIES
+-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
++        MSVC_RUNTIME_LIBRARY "${_gemma4e_msvc_runtime}"
+         WINDOWS_EXPORT_ALL_SYMBOLS ON
+     )
+ endif()
+@@ -63,6 +71,14 @@ if(MSVC)
+     # cl and clang-cl do not take the GCC -m flags in the else branch. Both
+     # need the ISA named on this target.
+     target_compile_options(gemma4e_npu PRIVATE /arch:AVX512)
++    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
++        # The prebuilt import library exports a leaked std::ostream::operator<<(bool).
++        # flm.exe, linked against that library, imports the symbol from this DLL.
++        # Forward it to the CRT. lld-link keeps WINDOWS_EXPORT_ALL_SYMBOLS exports.
++        target_link_options(gemma4e_npu PRIVATE
++            "/EXPORT:??6?\$basic_ostream@DU?\$char_traits@D@std@@@std@@QEAAAEAV01@_N@Z=MSVCP140.??6?\$basic_ostream@DU?\$char_traits@D@std@@@std@@QEAAAEAV01@_N@Z"
++        )
++    endif()
+ else()
+     target_compile_options(gemma4e_npu PRIVATE
+         -O3 -Wall -fmax-errors=1

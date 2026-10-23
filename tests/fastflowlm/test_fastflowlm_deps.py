@@ -82,6 +82,7 @@ class TestFastFlowLMDependencies:
         for package in (
             "bash",
             "kernel-headers",
+            "libedit-devel",
             "nasm",
             "patchelf",
             "perl",
@@ -344,10 +345,8 @@ class TestFastFlowLMDependencies:
             "curl",
             "ffmpeg",
             "fftw3",
-            "readline",
         ):
             assert name in dependencies
-        assert dependencies["readline"]["platform"] == "!windows"
         assert vcpkg_commit(ROOT) == manifest["builtin-baseline"]
         assert (
             dependency_policy(ROOT, "Linux")["vcpkg_commit"]

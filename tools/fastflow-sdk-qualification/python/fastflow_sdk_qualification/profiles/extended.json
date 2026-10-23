@@ -26,7 +26,7 @@
       "source": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "ee6a909da71b9a9cdfaba4fee2a3b3cf4338e4ed524c559d3d44f96dd8fe0b04",
+      "registry_sha256": "aadb182e86a18620d4805816ff8072bc3d524b7fc7ceb7bdc8a24c850a09bce5",
       "files": [
         {"path": "config.json", "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"},
         {"path": "model.q4nx", "sha256": "0c03021f1cd21e43376234817b34ad32ccf07dca94785ede7640833d15169d8a"},
