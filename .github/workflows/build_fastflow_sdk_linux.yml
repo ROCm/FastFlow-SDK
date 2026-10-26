@@ -228,6 +228,9 @@ jobs:
             --reuse-venv \
             --jobs 0
 
+      - name: Package FastFlow SDK meta wheel
+        run: .venv/bin/python dev.py package-sdk-wheel
+
       - name: Attest Linux compiler wheels
         if: ${{ inputs.attest_wheels }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
@@ -235,10 +238,11 @@ jobs:
           subject-path: |
             build/artifacts/fastflow_sdk_compiler*.whl
             build/artifacts/fastflow_sdk_ops*.whl
+            build/artifacts/fastflow_sdk-*.whl
 
-      # Canonical py3-none-any ops wheel rides with this Linux compiler-family
-      # artifact so collect sees one copy. Windows still package+verify ops
-      # but does not upload it.
+      # Canonical py3-none-any ops and fastflow-sdk wheels ride with this Linux
+      # compiler-family artifact so collect sees one copy. Windows still
+      # package+verify ops but does not upload it.
       - name: Upload compiler wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -248,6 +252,8 @@ jobs:
             build/artifacts/fastflow_sdk_compiler*.whl.sha256
             build/artifacts/fastflow_sdk_ops*.whl
             build/artifacts/fastflow_sdk_ops*.whl.sha256
+            build/artifacts/fastflow_sdk-*.whl
+            build/artifacts/fastflow_sdk-*.whl.sha256
             build/artifacts/fastflow-sdk-compiler-wheel-report.json
           if-no-files-found: error
           compression-level: 0

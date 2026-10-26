@@ -29,6 +29,8 @@ from build_tools.fastflow_sdk_wheel_common import (
     QUALIFICATION_PACKAGE,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
+    SDK_DISTRIBUTION,
+    SDK_PACKAGE,
     build_wheel,
 )
 from build_tools.fastflow_sdk_wheel_release import (
@@ -342,6 +344,7 @@ class TestFastflowSdkWheelRelease:
             COMPILER_DISTRIBUTION: 1,
             QUALIFICATION_DISTRIBUTION: 1,
             OPS_DISTRIBUTION: 1,
+            SDK_DISTRIBUTION: 1,
             COMPILER_CORE_DISTRIBUTION: 2,
             COMPILER_BINDINGS_DISTRIBUTION: 2,
         }
@@ -374,6 +377,7 @@ class TestFastflowSdkWheelRelease:
             COMPILER_DISTRIBUTION,
             QUALIFICATION_DISTRIBUTION,
             OPS_DISTRIBUTION,
+            SDK_DISTRIBUTION,
             COMPILER_CORE_DISTRIBUTION,
             COMPILER_BINDINGS_DISTRIBUTION,
         ):
@@ -386,6 +390,7 @@ class TestFastflowSdkWheelRelease:
                 COMPILER_DISTRIBUTION,
                 QUALIFICATION_DISTRIBUTION,
                 OPS_DISTRIBUTION,
+                SDK_DISTRIBUTION,
             ):
                 assert "win_amd64" in index
         checksum_names = {
@@ -474,6 +479,40 @@ class TestFastflowSdkWheelRelease:
         with pytest.raises(
             RuntimeError,
             match=f"{COMPILER_BINDINGS_DISTRIBUTION} requirements mismatch",
+        ):
+            prepare_fastflow_sdk_release_payload(
+                root / "dist",
+                root / "release",
+                version=version,
+                release_name=f"fastflow {version}",
+                tag_name=f"fastflow-sdk-v{version}",
+                source_ref="main",
+                source_sha="abc123",
+            )
+
+    def test_prepare_release_payload_requires_sdk_to_pin_every_product(self, tmp_path):
+        root = tmp_path
+        version = "0.1.0.dev1"
+        self._build_release_wheels(
+            root,
+            version,
+            sdk_requirements=(
+                f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+                f"{COMPILER_DISTRIBUTION} =={version}",
+            ),
+            output_directory=root / "dist" / "windows",
+        )
+        self._build_release_wheels(
+            root,
+            version,
+            wheel_tag="py3-none-manylinux_2_28_x86_64",
+            fastflowlm_wheel_tag="py3-none-linux_x86_64",
+            output_directory=root / "dist" / "linux",
+            include_meta=False,
+        )
+
+        with pytest.raises(
+            RuntimeError, match=f"{SDK_DISTRIBUTION} requirements mismatch"
         ):
             prepare_fastflow_sdk_release_payload(
                 root / "dist",
@@ -596,6 +635,7 @@ class TestFastflowSdkWheelRelease:
         fastflowlm_wheel_tag: str | None = None,
         output_directory: Path | None = None,
         include_meta: bool = True,
+        sdk_requirements: tuple[str, ...] | None = None,
     ) -> None:
         output_directory = output_directory or root / "dist"
         build_wheel(
@@ -657,6 +697,21 @@ class TestFastflowSdkWheelRelease:
                 summary="ops",
                 tag="py3-none-any",
                 requires=(f"{COMPILER_DISTRIBUTION} =={version}",),
+                root_is_purelib=True,
+            )
+            build_wheel(
+                self._package_tree(root, SDK_PACKAGE),
+                SDK_DISTRIBUTION,
+                version,
+                output_directory,
+                summary="sdk",
+                tag="py3-none-any",
+                requires=sdk_requirements
+                or (
+                    f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+                    f"{COMPILER_DISTRIBUTION} =={version}",
+                    f"{OPS_DISTRIBUTION} =={version}",
+                ),
                 root_is_purelib=True,
             )
         build_wheel(

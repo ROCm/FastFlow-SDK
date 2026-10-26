@@ -191,6 +191,19 @@ jobs:
             done
           done
 
+      - name: Resolve FastFlow SDK meta wheel
+        env:
+          FASTFLOW_SDK_PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          set -euo pipefail
+          sdk_wheel="release/fastflow_sdk-${FASTFLOW_SDK_PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "${sdk_wheel}"
+          python -m build_tools.resolve_release_wheel \
+            --wheel "${sdk_wheel}" \
+            --find-links release \
+            --version "${FASTFLOW_SDK_PACKAGE_VERSION}" \
+            --product sdk
+
       - name: Upload validated CI release payload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

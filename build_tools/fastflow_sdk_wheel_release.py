@@ -32,6 +32,7 @@ from build_tools.fastflow_sdk_wheel_common import (
     OPS_DISTRIBUTION,
     QUALIFICATION_DISTRIBUTION,
     RUNTIME_DISTRIBUTION,
+    SDK_DISTRIBUTION,
     validate_version,
     verify_wheel_checksums,
 )
@@ -52,6 +53,7 @@ RELEASE_DISTRIBUTIONS = (
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_BINDINGS_DISTRIBUTION,
     OPS_DISTRIBUTION,
+    SDK_DISTRIBUTION,
 )
 
 
@@ -350,6 +352,7 @@ def _find_release_wheels(
         (COMPILER_DISTRIBUTION, "py3-none-any"),
         (QUALIFICATION_DISTRIBUTION, "py3-none-any"),
         (OPS_DISTRIBUTION, "py3-none-any"),
+        (SDK_DISTRIBUTION, "py3-none-any"),
         (COMPILER_CORE_DISTRIBUTION, manylinux),
         (COMPILER_CORE_DISTRIBUTION, windows),
     }
@@ -495,6 +498,11 @@ def prepare_fastflow_sdk_release_payload(
             },
             OPS_DISTRIBUTION: {
                 f"{COMPILER_DISTRIBUTION} =={version}",
+            },
+            SDK_DISTRIBUTION: {
+                f"{FASTFLOWLM_DISTRIBUTION} =={version}",
+                f"{COMPILER_DISTRIBUTION} =={version}",
+                f"{OPS_DISTRIBUTION} =={version}",
             },
             COMPILER_BINDINGS_DISTRIBUTION: {
                 f"{COMPILER_CORE_DISTRIBUTION} =={version}",
