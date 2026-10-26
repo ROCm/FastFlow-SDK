@@ -20,14 +20,22 @@ from build_tools.fastflow_sdk_wheel_common import (
     COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
+    FASTFLOWLM_DISTRIBUTION,
     OPS_DISTRIBUTION,
+    RUNTIME_DISTRIBUTION,
+    SDK_DISTRIBUTION,
 )
 
 PLATFORMS = {
     "linux": ("manylinux_2_28_x86_64",),
     "windows": ("win_amd64",),
 }
-PRODUCTS = ("compiler", "ops")
+# The FastFlowLM wheel is tagged linux_x86_64, so pip needs that platform too.
+SDK_PLATFORMS = {
+    "linux": ("linux_x86_64", "manylinux_2_28_x86_64"),
+    "windows": ("win_amd64",),
+}
+PRODUCTS = ("compiler", "ops", "sdk")
 
 
 def python_tag(python_minor: str) -> str:
@@ -58,6 +66,15 @@ def expected_distributions(product: str, version: str) -> dict[str, str]:
         return {**compiler_family, **bindings_runtime_pins()}
     if product == "ops":
         return {OPS_DISTRIBUTION: version, **compiler_family}
+    if product == "sdk":
+        return {
+            SDK_DISTRIBUTION: version,
+            FASTFLOWLM_DISTRIBUTION: version,
+            RUNTIME_DISTRIBUTION: version,
+            OPS_DISTRIBUTION: version,
+            **compiler_family,
+            **bindings_runtime_pins(),
+        }
     raise RuntimeError(f"unknown release resolve product: {product}")
 
 
@@ -134,12 +151,16 @@ def resolve_release_wheel(
     if not wheel.is_file():
         raise RuntimeError(f"release wheel missing: {wheel}")
     expected = expected_distributions(product, version)
-    minors = (
-        python_versions
-        if python_versions is not None
-        else release_policy.compiler_python_versions()
-    )
-    for platform_name, platforms in PLATFORMS.items():
+    minors = python_versions
+    if minors is None:
+        minors = release_policy.compiler_python_versions()
+        # The compiler and ops resolves already cover every minor; the sdk
+        # resolve only adds the cross-product platform pairing.
+        if product == "sdk":
+            minors = minors[:1]
+    for platform_name, platforms in (
+        SDK_PLATFORMS if product == "sdk" else PLATFORMS
+    ).items():
         for python_minor in minors:
             target = work_dir / (
                 f"{product}-release-install-{platform_name}-{python_tag(python_minor)}"

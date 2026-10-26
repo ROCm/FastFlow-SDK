@@ -33,12 +33,14 @@ COMPILER_DISTRIBUTION = "fastflow-sdk-compiler"
 COMPILER_CORE_DISTRIBUTION = "fastflow-sdk-compiler-core"
 COMPILER_BINDINGS_DISTRIBUTION = "fastflow-sdk-compiler-bindings"
 OPS_DISTRIBUTION = "fastflow-sdk-ops"
+SDK_DISTRIBUTION = "fastflow-sdk"
 RUNTIME_PACKAGE = "fastflow_sdk_runtime"
 FASTFLOWLM_PACKAGE = "fastflow_sdk_fastflowlm"
 QUALIFICATION_PACKAGE = "fastflow_sdk_qualification"
 COMPILER_PACKAGE = "fastflow_sdk_compiler"
 COMPILER_BINDINGS_PACKAGE = "fastflow_sdk_compiler_bindings"
 OPS_PACKAGE = "fastflow_sdk_ops"
+SDK_PACKAGE = "fastflow_sdk_meta"
 LICENSE_EXPRESSIONS = {
     RUNTIME_DISTRIBUTION: "MIT AND Apache-2.0",
     FASTFLOWLM_DISTRIBUTION: "MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms",
@@ -47,6 +49,7 @@ LICENSE_EXPRESSIONS = {
     COMPILER_CORE_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
     COMPILER_BINDINGS_DISTRIBUTION: "MIT AND (Apache-2.0 WITH LLVM-exception)",
     OPS_DISTRIBUTION: "MIT AND Apache-2.0",
+    SDK_DISTRIBUTION: "MIT",
 }
 
 COMPILER_BINDINGS_RUNTIME_REQUIREMENTS = (

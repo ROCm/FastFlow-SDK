@@ -9,7 +9,10 @@ from build_tools.fastflow_sdk_wheel_common import (
     COMPILER_BINDINGS_DISTRIBUTION,
     COMPILER_CORE_DISTRIBUTION,
     COMPILER_DISTRIBUTION,
+    FASTFLOWLM_DISTRIBUTION,
     OPS_DISTRIBUTION,
+    RUNTIME_DISTRIBUTION,
+    SDK_DISTRIBUTION,
 )
 from build_tools.resolve_release_wheel import (
     bindings_runtime_pins,
@@ -51,6 +54,22 @@ def test_expected_ops_omits_bindings_pins():
     }
     for name in bindings_runtime_pins():
         assert name not in expected
+
+
+def test_expected_sdk_closes_every_product():
+    expected = expected_distributions("sdk", "1.2.3")
+    for name in (
+        SDK_DISTRIBUTION,
+        FASTFLOWLM_DISTRIBUTION,
+        RUNTIME_DISTRIBUTION,
+        OPS_DISTRIBUTION,
+        COMPILER_DISTRIBUTION,
+        COMPILER_CORE_DISTRIBUTION,
+        COMPILER_BINDINGS_DISTRIBUTION,
+    ):
+        assert expected[name] == "1.2.3"
+    for name, version in bindings_runtime_pins().items():
+        assert expected[name] == version
 
 
 def test_unknown_product_is_rejected():
@@ -152,6 +171,47 @@ def test_resolve_release_wheel_covers_policy_matrix(tmp_path, monkeypatch):
     assert minors == {"3.12", "3.13", "3.14"}
     assert all(command[-1] == str(wheel) for command in calls)
     assert all("--no-index" not in command for command in calls)
+
+
+def test_resolve_sdk_wheel_pairs_platforms_at_the_lowest_python(tmp_path, monkeypatch):
+    wheel = tmp_path / "fastflow_sdk-1.2.3-py3-none-any.whl"
+    wheel.write_bytes(b"pk")
+    calls = []
+    monkeypatch.setattr(
+        "build_tools.resolve_release_wheel.sh",
+        lambda command, **kwargs: calls.append(command),
+    )
+    monkeypatch.setattr(
+        "build_tools.resolve_release_wheel.verify_installed",
+        lambda target, expected: None,
+    )
+    monkeypatch.setattr(
+        "build_tools.resolve_release_wheel.release_policy.compiler_python_versions",
+        lambda: ("3.12", "3.13", "3.14"),
+    )
+    resolve_release_wheel(
+        wheel=wheel,
+        find_links=tmp_path,
+        version="1.2.3",
+        product="sdk",
+        work_dir=tmp_path,
+    )
+    assert [command[command.index("--python-version") + 1] for command in calls] == [
+        "3.12",
+        "3.12",
+    ]
+    platforms = [
+        tuple(
+            command[index + 1]
+            for index, item in enumerate(command)
+            if item == "--platform"
+        )
+        for command in calls
+    ]
+    assert platforms == [
+        ("linux_x86_64", "manylinux_2_28_x86_64"),
+        ("win_amd64",),
+    ]
 
 
 def test_resolve_release_wheel_requires_the_wheel_file(tmp_path):

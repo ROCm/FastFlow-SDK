@@ -80,7 +80,7 @@ class TestFastflowSdkReleaseWheelWorkflow:
             "- name: Resolve compiler core and bindings", 1
         )[1].split("- name: Resolve ops wheel", 1)[0]
         ops_resolution = workflow.split("- name: Resolve ops wheel", 1)[1].split(
-            "- name: Upload release payload", 1
+            "- name: Resolve FastFlow SDK meta wheel", 1
         )[0]
         assert "python -m build_tools.resolve_release_wheel" in compiler_resolution
         assert "--product compiler" in compiler_resolution
@@ -94,6 +94,33 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert '"${ops_wheel}"' in ops_resolution
         assert "fastflow-sdk-ops==${FASTFLOW_SDK_PACKAGE_VERSION}" not in ops_resolution
         assert "--abi abi3" not in ops_resolution
+
+    @pytest.mark.parametrize(
+        ("name", "upload"),
+        [
+            ("release_fastflow_sdk_wheels.yml", "Upload release payload"),
+            (
+                "collect_fastflow_sdk_ci_release.yml",
+                "Upload validated CI release payload",
+            ),
+        ],
+    )
+    def test_collect_resolves_the_sdk_meta_wheel_before_upload(self, name, upload):
+        workflow = read_workflow(name)
+        step = "- name: Resolve FastFlow SDK meta wheel"
+        assert workflow.count(step) == 1
+        assert workflow.index("_cli.py prepare") < workflow.index(step)
+        resolution = workflow.split(step, 1)[1].split(f"- name: {upload}", 1)[0]
+        assert "- name:" not in resolution
+        assert "python -m build_tools.resolve_release_wheel" in resolution
+        assert "--product sdk" in resolution
+        assert '"${sdk_wheel}"' in resolution
+        assert (
+            'sdk_wheel="release/fastflow_sdk-${FASTFLOW_SDK_PACKAGE_VERSION}'
+            '-py3-none-any.whl"'
+        ) in resolution
+        assert "--find-links release" in resolution
+        assert "--no-index" not in resolution
 
     def test_release_platform_jobs_validate_their_own_qualification_wheels(self):
         ci = read_workflow("ci.yml")
@@ -373,6 +400,9 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert "actions/setup-python@" not in linux_workflow
         assert "--require-hashes -r requirements/packaging-linux.lock" in linux_workflow
         assert "build/artifacts/fastflow_sdk_ops*.whl" in linux_workflow
+        assert "dev.py package-sdk-wheel" in linux_workflow
+        assert linux_workflow.count("build/artifacts/fastflow_sdk-*.whl\n") == 2
+        assert "build/artifacts/fastflow_sdk-*.whl.sha256" in linux_workflow
         assert "subject-path:" in linux_workflow
         for tag in ("cp313-cp313", "cp314-cp314"):
             assert f"/opt/python/{tag}/bin/python" in linux_workflow
@@ -388,6 +418,7 @@ class TestFastflowSdkReleaseWheelWorkflow:
             in windows_workflow
         )
         assert "build/artifacts/fastflow_sdk_ops*.whl" not in windows_workflow
+        assert "package-sdk-wheel" not in windows_workflow
         assert "{core,bindings}" not in windows_workflow
 
     def _assert_platform_workflow_contract(self, platform: str):

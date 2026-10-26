@@ -11,6 +11,7 @@ import sys
 from build_tools import (
     compiler_product,
     compiler_wheels,
+    fastflow_sdk_meta_wheel,
     fastflow_sdk_ops_wheels,
     fastflow_sdk_qualification_wheel,
     fastflowlm_package,
@@ -256,6 +257,19 @@ def create_parser():
     powh.add_argument(
         "--dir",
         default=str(fastflow_sdk_ops_wheels.OPS_WHEEL_ARTIFACTS),
+        help="wheel output directory",
+    )
+    psw = _add_command(
+        sub,
+        "package-sdk-wheel",
+        fastflow_sdk_meta_wheel.cmd_package_sdk_wheel,
+    )
+    psw.add_argument(
+        "--version", help=f"PEP 440 package version (or ${PACKAGE_VERSION_ENV})"
+    )
+    psw.add_argument(
+        "--dir",
+        default=str(fastflow_sdk_meta_wheel.SDK_WHEEL_ARTIFACTS),
         help="wheel output directory",
     )
     vow = _add_command(
