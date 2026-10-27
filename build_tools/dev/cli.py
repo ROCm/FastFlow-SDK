@@ -204,6 +204,11 @@ def create_parser():
         default=0,
         help="parallel operator compiles (0 = min(8, CPUs))",
     )
+    tie = _add_command(sub, "test-iron-examples", host_testing.cmd_test_iron_examples)
+    tie.add_argument(
+        "--compiler-prefix",
+        help="relocated fastflow-sdk-compiler product prefix to test",
+    )
     _add_command(sub, "smoke", host_testing.cmd_smoke, exit_on_return=True)
     sm = _add_command(sub, "submodules", dev_sources.cmd_submodules)
     sm.add_argument("names", nargs="+")

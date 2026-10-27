@@ -189,6 +189,9 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert "name: fastflow-sdk-windows-x86_64" in collector
         assert "verify_qualification_wheel_parity.py" in collector
         assert "fastflow_sdk_wheel_release_cli.py prepare" in collector
+        assert "IRON example" not in collector
+        assert "gemma4_gemm_dequant" not in collector
+        assert "cmake --build" not in collector
         assert "Create release-wide qualification candidate" in collector
         assert "download_qualification_numeric_wheels.py" not in collector
         assert (
@@ -376,6 +379,7 @@ class TestFastflowSdkReleaseWheelWorkflow:
             assert "dev.py package-ops-wheels" in workflow
             assert "dev.py verify-ops-wheels" in workflow
             assert "dev.py test-iron-ops" in workflow
+            assert "dev.py test-iron-examples" in workflow
             assert "npu_examples:" in workflow
             assert workflow.count("dev.py install-compiler-wheels") == 1
             assert workflow.count("--jobs 0") == 2

@@ -75,6 +75,7 @@ class TestDevCli:
         expected_test_handlers = {
             "test": host_testing.cmd_test,
             "test-fastflowlm": host_testing.cmd_test_fastflowlm,
+            "test-iron-examples": host_testing.cmd_test_iron_examples,
             "test-iron-ops": host_testing.cmd_test_iron_ops,
             "smoke": host_testing.cmd_smoke,
             "test-npu-package": device_testing.cmd_test_npu_package,

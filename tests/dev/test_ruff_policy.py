@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIRST_PARTY_FILES = frozenset({"dev.py", "conftest.py"})
 FIRST_PARTY_PREFIXES = (
     "build_tools/",
+    "examples/",
     "tests/",
     "tools/",
     ".github/scripts/",
