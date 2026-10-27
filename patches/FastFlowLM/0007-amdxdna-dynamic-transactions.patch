@@ -1,0 +1,312 @@
+diff --git a/src/include/hrx_cpp/hrx_cpp.hpp b/src/include/hrx_cpp/hrx_cpp.hpp
+index add05e9e..2dcb9306 100644
+--- a/src/include/hrx_cpp/hrx_cpp.hpp
++++ b/src/include/hrx_cpp/hrx_cpp.hpp
+@@ -14,6 +14,7 @@
+ /// hrx_stream_dispatch() + hrx_stream_flush()/hrx_stream_wait().
+ #pragma once
+ 
++#include <atomic>
+ #include <cassert>
+ #include <cstdint>
+ #include <cstdio>
+@@ -130,9 +131,8 @@ inline bool hrx_report(hrx_status_t s, const char* where) {
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// Executable cache: build one HRX XADX executable per distinct executable
+-// identity (xclbin + control program + host patch table) and resolve its export
+-// ordinal once.
++// Executable cache: build one HRX executable per xclbin and register changing
++// control transactions as bounded variants of that executable.
+ //
+ // Ownership / lifetime (context-exhaustion fix)
+ // ---------------------------------------------------------------------------
+@@ -150,7 +150,7 @@ inline bool hrx_report(hrx_status_t s, const char* where) {
+ // failure seen at gemma4-e4b after many prior models.
+ //
+ // Executables are therefore reference counted. Each npu_app that dispatches a
+-// given (xclbin, ctrl_seq) holds exactly one reference for it; when the owning
++// given xclbin holds exactly one reference for it; when the owning
+ // model's engine objects are destroyed (model unload / model switch in serve)
+ // the npu_app releases its references and, once the last owner drops, the
+ // executable is destroyed and its hardware context returned to the driver.
+@@ -177,70 +177,75 @@ inline std::unordered_map<std::string, CachedExe>& exe_cache() {
+     static std::unordered_map<std::string, CachedExe> c;
+     return c;
+ }
+-inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes,
+-                                const uint32_t* cc, size_t n) {
++inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes) {
+     std::string key;
+-    key.reserve(xclbin_bytes.size() + n * sizeof(uint32_t) + 2 * sizeof(uint64_t));
++    key.reserve(xclbin_bytes.size() + sizeof(uint64_t));
+     append_key_bytes(key, xclbin_bytes.data(), xclbin_bytes.size());
+-    append_key_bytes(key, cc, n * sizeof(uint32_t));
+     return key;
+ }
+ 
+-// Build (or fetch the cached) executable for (xclbin, cc). Does NOT change the
++// Build (or fetch) the executable for xclbin and cache cc as a transaction
++// variant. Does NOT change the
+ // reference count; callers manage ownership with retain_executable /
+ // release_executable below. Returns nullptr on create failure (never cached, so
+ // a later call can retry instead of dispatching a silent no-op).
+ inline hrx_executable_t lookup_or_build_executable(
+     const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
+-    uint32_t* ord_out, std::string* key_out) {
+-    std::string key = make_exe_key(xclbin_bytes, cc, n);
++    uint32_t* ord_out, uint64_t* variant_out, std::string* key_out) {
++    std::string key = make_exe_key(xclbin_bytes);
+     std::lock_guard<std::mutex> lk(exe_cache_mu());
+     auto& cache = exe_cache();
+     auto it = cache.find(key);
+-    if (it != cache.end()) {
+-        if (ord_out) *ord_out = it->second.ord;
+-        if (key_out) *key_out = std::move(key);
+-        return it->second.exe;
+-    }
+-    hrx_const_byte_span_t xclbin = {xclbin_bytes.data(), xclbin_bytes.size()};
+-    hrx_amdxdna_executable_run_t run = {};
+-    run.record_length = sizeof(run);
+-    run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0;
+-    run.transaction = {reinterpret_cast<const uint8_t*>(cc),
+-                       n * sizeof(uint32_t)};
+-    hrx_amdxdna_executable_entry_point_t entry_point = {};
+-    entry_point.record_length = sizeof(entry_point);
+-    entry_point.abi_version = HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0;
+-    entry_point.name = {"MLIR_AIE", std::strlen("MLIR_AIE")};
+-    entry_point.context_mode = HRX_AMDXDNA_CONTEXT_MODE_CREATE;
+-    entry_point.runs = &run;
+-    entry_point.run_count = 1;
+-    hrx_amdxdna_executable_create_params_t params = {};
+-    params.record_length = sizeof(params);
+-    params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0;
+-    params.xclbins = &xclbin;
+-    params.xclbin_count = 1;
+-    params.entry_points = &entry_point;
+-    params.entry_point_count = 1;
+-    hrx_executable_t exe = nullptr;
+-    uint32_t ord = 0;
+-    hrx_status_t create_status = hrx_amdxdna_executable_create(
+-        rt().dev, &params, &exe);
+-    if (hrx_report(create_status, "hrx_amdxdna_executable_create")) {
+-        exe = nullptr;
+-    }
+-    if (exe && hrx_report(hrx_executable_lookup_export_by_name(
+-                              exe, "MLIR_AIE", &ord),
+-                          "hrx_executable_lookup_export_by_name")) {
+-        hrx_executable_release(exe);
+-        exe = nullptr;
++    if (it == cache.end()) {
++        hrx_const_byte_span_t xclbin = {xclbin_bytes.data(), xclbin_bytes.size()};
++        hrx_amdxdna_executable_run_t run = {};
++        run.record_length = sizeof(run);
++        run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0;
++        run.transaction = {reinterpret_cast<const uint8_t*>(cc),
++                           n * sizeof(uint32_t)};
++        hrx_amdxdna_executable_entry_point_t entry_point = {};
++        entry_point.record_length = sizeof(entry_point);
++        entry_point.abi_version =
++            HRX_AMDXDNA_EXECUTABLE_ENTRY_POINT_ABI_VERSION_0;
++        entry_point.name = {"MLIR_AIE", std::strlen("MLIR_AIE")};
++        entry_point.context_mode = HRX_AMDXDNA_CONTEXT_MODE_CREATE;
++        entry_point.runs = &run;
++        entry_point.run_count = 1;
++        hrx_amdxdna_executable_create_params_t params = {};
++        params.record_length = sizeof(params);
++        params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0;
++        params.xclbins = &xclbin;
++        params.xclbin_count = 1;
++        params.entry_points = &entry_point;
++        params.entry_point_count = 1;
++        hrx_executable_t exe = nullptr;
++        uint32_t ord = 0;
++        hrx_status_t create_status =
++            hrx_amdxdna_executable_create(rt().dev, &params, &exe);
++        if (hrx_report(create_status, "hrx_amdxdna_executable_create")) {
++            exe = nullptr;
++        }
++        if (exe && hrx_report(hrx_executable_lookup_export_by_name(
++                                  exe, "MLIR_AIE", &ord),
++                              "hrx_executable_lookup_export_by_name")) {
++            hrx_executable_release(exe);
++            exe = nullptr;
++        }
++        if (!exe) return nullptr;
++        it = cache.emplace(key, CachedExe{exe, ord, 0}).first;
+     }
+-    if (exe) {
+-        cache.emplace(key, CachedExe{exe, ord, 0});
++    uint64_t variant = 0;
++    hrx_const_byte_span_t transaction = {
++        reinterpret_cast<const uint8_t*>(cc), n * sizeof(uint32_t)};
++    if (hrx_report(hrx_amdxdna_executable_cache_transaction(
++                       it->second.exe, it->second.ord, transaction, &variant),
++                   "hrx_amdxdna_executable_cache_transaction")) {
++        return nullptr;
+     }
+-    if (ord_out) *ord_out = ord;
++    if (ord_out) *ord_out = it->second.ord;
++    if (variant_out) *variant_out = variant;
+     if (key_out) *key_out = std::move(key);
+-    return exe;
++    return it->second.exe;
+ }
+ 
+ // Add one owner reference to the cached executable identified by key.
+@@ -271,15 +276,6 @@ inline void release_executable(const std::string& key) {
+     }
+ }
+ 
+-// Backward-compatible entry point (no ownership tracking). Retained for any
+-// caller that does not manage executable lifetime; prefer the
+-// lookup_or_build/retain/release trio used by npu_app.
+-inline hrx_executable_t build_or_get_executable(
+-    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
+-    uint32_t* ord_out) {
+-    return lookup_or_build_executable(xclbin_bytes, cc, n, ord_out, nullptr);
+-}
+-
+ // ---------------------------------------------------------------------------
+ // uuid / xclbin / device / hw_context
+ // ---------------------------------------------------------------------------
+@@ -603,17 +599,25 @@ inline void hrx_mark_dispatched(const std::vector<hrx_buffer_ref_t>& binds) {
+     }
+ }
+ 
++struct DynamicTransaction {
++    std::vector<uint32_t> words;
++    std::atomic<uint64_t> variant{0};
++};
++
+ class run {
+ public:
+     hrx_executable_t exe_ = nullptr;
+     uint32_t ord_ = 0;
++    std::shared_ptr<DynamicTransaction> transaction_;
+     std::vector<hrx_buffer_ref_t> binds_;
+     bool submitted_ = false;
+     bool flushed_ = false;
+     bool submit_error_ = false;
+ 
+     run() = default;
+-    explicit run(hrx_executable_t exe, uint32_t ord) : exe_(exe), ord_(ord) {}
++    explicit run(hrx_executable_t exe, uint32_t ord,
++                 std::shared_ptr<DynamicTransaction> transaction = {})
++        : exe_(exe), ord_(ord), transaction_(std::move(transaction)) {}
+ 
+     void add_binding(hrx_buffer_t b, size_t size) {
+         binds_.push_back({b, 0, size});
+@@ -640,9 +644,35 @@ public:
+             return false;
+         }
+         hrx_dispatch_config_t cfg = {{1, 1, 1}, {1, 1, 1}, 0};
+-        hrx_status_t s = hrx_stream_dispatch(rt().stream, exe_, ord_, &cfg,
+-                                             nullptr, 0, binds_.data(),
+-                                             binds_.size(), HRX_DISPATCH_FLAG_NONE);
++        uint64_t variant =
++            transaction_ ? transaction_->variant.load(std::memory_order_acquire) : 0;
++        hrx_status_t s =
++            variant
++                ? hrx_amdxdna_stream_dispatch_variant(
++                      rt().stream, exe_, ord_, variant, &cfg, nullptr, 0,
++                      binds_.data(), binds_.size(), HRX_DISPATCH_FLAG_NONE)
++                : hrx_stream_dispatch(rt().stream, exe_, ord_, &cfg, nullptr, 0,
++                                      binds_.data(), binds_.size(),
++                                      HRX_DISPATCH_FLAG_NONE);
++        if (s && variant && hrx_status_code(s) == HRX_STATUS_NOT_FOUND) {
++            hrx_status_ignore(s);
++            hrx_const_byte_span_t bytes = {
++                reinterpret_cast<const uint8_t*>(transaction_->words.data()),
++                transaction_->words.size() * sizeof(uint32_t)};
++            uint64_t replacement = 0;
++            s = hrx_amdxdna_executable_cache_transaction(
++                exe_, ord_, bytes, &replacement);
++            if (hrx_report(
++                    s,
++                    "run::record hrx_amdxdna_executable_cache_transaction")) {
++                submit_error_ = true;
++                return false;
++            }
++            transaction_->variant.store(replacement, std::memory_order_release);
++            s = hrx_amdxdna_stream_dispatch_variant(
++                rt().stream, exe_, ord_, replacement, &cfg, nullptr, 0,
++                binds_.data(), binds_.size(), HRX_DISPATCH_FLAG_NONE);
++        }
+         if (hrx_report(s, "run::record hrx_stream_dispatch")) {
+             submit_error_ = true;
+             return false;
+diff --git a/src/include/npu_utils/npu_utils_hrx.hpp b/src/include/npu_utils/npu_utils_hrx.hpp
+index 090039b4..aee030b6 100644
+--- a/src/include/npu_utils/npu_utils_hrx.hpp
++++ b/src/include/npu_utils/npu_utils_hrx.hpp
+@@ -114,9 +114,10 @@ private:
+     uint8_t module_version;
+     hrx_executable_t exe;  // HRX direct executable built from ctrl_seq->dump()
+     uint32_t exe_ord;      // resolved "MLIR_AIE" export ordinal
++    std::shared_ptr<hrx::DynamicTransaction> exe_transaction;
+     std::unique_ptr<npu_sequence> ctrl_seq;
+     // Executable-cache keys this app owns a reference for. Each distinct
+-    // (xclbin, ctrl_seq) this app dispatches contributes one reference; they are
++    // xclbin this app dispatches contributes one reference; they are
+     // all released in the destructor so the backing NPU hardware contexts are
+     // returned when the owning model is unloaded (see hrx_cpp.hpp).
+     std::unordered_set<std::string> exe_keys_;
+@@ -133,6 +134,7 @@ private:
+         module_version = o.module_version;
+         exe = o.exe;
+         exe_ord = o.exe_ord;
++        exe_transaction = std::move(o.exe_transaction);
+         ctrl_seq = std::move(o.ctrl_seq);
+         exe_keys_ = std::move(o.exe_keys_);
+         o.exe = nullptr;
+@@ -148,14 +150,19 @@ private:
+         assert(data.first != nullptr);
+         assert(data.second > 0);
+         assert(this->context != nullptr);
++        auto transaction = std::make_shared<hrx::DynamicTransaction>();
++        transaction->words.assign(data.first, data.first + data.second);
++        uint64_t variant = 0;
+         std::string exe_key;
+         this->exe = hrx::lookup_or_build_executable(
+-            this->context->xclbin_bytes(), data.first, data.second,
+-            &this->exe_ord, &exe_key);
++            this->context->xclbin_bytes(), transaction->words.data(),
++            transaction->words.size(), &this->exe_ord, &variant, &exe_key);
+         if (this->exe == nullptr){
+             header_print_r("ERROR", "Failed to build HRX executable from ctrl_seq");
+             exit(1);
+         }
++        transaction->variant.store(variant, std::memory_order_release);
++        this->exe_transaction = std::move(transaction);
+         // Take one reference the first time this app uses this executable; the
+         // destructor drops all of them so the hardware context is freed on
+         // model unload instead of leaking for the process lifetime.
+@@ -274,7 +281,7 @@ public:
+         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
+             this->_setup_kernel();
+         }
+-        hrx::run run(this->exe, this->exe_ord);
++        hrx::run run(this->exe, this->exe_ord, this->exe_transaction);
+         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
+         for (size_t i = 0; i < sizeof...(args); i++){
+             run.add_binding(bo_args[i]->bo());
+@@ -299,7 +306,7 @@ public:
+         for (size_t i = 0; i < sizeof...(args); i++){
+             bo_args[i]->sync_to_device();
+         }
+-        hrx::run run(this->exe, this->exe_ord);
++        hrx::run run(this->exe, this->exe_ord, this->exe_transaction);
+         for (size_t i = 0; i < sizeof...(args); i++){
+             run.add_binding(bo_args[i]->bo());
+         }
+@@ -322,7 +329,7 @@ public:
+         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
+             this->_setup_kernel();
+         }
+-        hrx::run run(this->exe, this->exe_ord);
++        hrx::run run(this->exe, this->exe_ord, this->exe_transaction);
+         // HRX bindings are the buffer args only, in order (arg 3 = output). The
+         // (3,0,0) opcode scalars are encoded in the TXN stream, not as bindings.
+         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };

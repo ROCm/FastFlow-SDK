@@ -46,7 +46,14 @@ def find_archive(directory):
     return None
 
 
-def write_case(stage, generated, xadx, source, required_features=()):
+def write_case(
+    stage,
+    generated,
+    xadx,
+    source,
+    required_features=(),
+    dynamic_transaction=None,
+):
     """Writes one generated numeric case and returns its manifest record."""
     import numpy as np
 
@@ -84,6 +91,10 @@ def write_case(stage, generated, xadx, source, required_features=()):
     }
     if required_features:
         case["required_features"] = list(required_features)
+    if dynamic_transaction is not None:
+        transaction_path = case_dir / "dynamic-transaction.bin"
+        transaction_path.write_bytes(dynamic_transaction)
+        case["dynamic_transaction"] = transaction_path.relative_to(stage).as_posix()
     dispatches = []
     for index, dispatch in enumerate(generated.get("dispatches", ())):
         dispatch_name = dispatch["name"]
@@ -299,6 +310,10 @@ def verify_tree(package, expected_cases, source_revision, system):
             )
         uses_transactions = "transaction" in dispatch_modes
         if uses_transactions:
+            if case.get("dynamic_transaction"):
+                raise RuntimeError(
+                    f"{case['name']}: dynamic_transaction requires a XADX case"
+                )
             xclbin = case.get("xclbin")
             if not xclbin or not (package / xclbin).is_file():
                 raise RuntimeError(f"{case['name']}: missing dispatch xclbin")
@@ -306,6 +321,11 @@ def verify_tree(package, expected_cases, source_revision, system):
             data = (package / case["xadx"]).read_bytes()
             if len(data) < 8 or data[4:8] != b"XADX":
                 raise RuntimeError(f"{case['name']}: malformed XADX container")
+            dynamic_transaction = case.get("dynamic_transaction")
+            if dynamic_transaction:
+                dynamic_path = package / dynamic_transaction
+                if not dynamic_path.is_file() or dynamic_path.stat().st_size == 0:
+                    raise RuntimeError(f"{case['name']}: missing dynamic transaction")
         if case["name"] == "vector_scalar_add_chain4":
             source = case.get("source", {})
             if (
@@ -407,6 +427,67 @@ def _serialize_full_elf_xadx(elf, context_xclbin, params, serializer):
         elf.read_bytes(),
         context_xclbin.read_bytes(),
         params.read_text("utf-8"),
+    )
+
+
+def _equivalent_transaction_variant(transaction):
+    """Changes one MASKWRITE/MASKPOLL bit that its mask explicitly ignores."""
+    variant = bytearray(transaction)
+    if len(variant) < 16:
+        raise RuntimeError("transaction is shorter than its 16-byte header")
+    operation_count = int.from_bytes(variant[8:12], "little")
+    offset = 16
+    for _ in range(operation_count):
+        if offset >= len(variant):
+            break
+        opcode = variant[offset]
+        if opcode == 0:
+            size_offset = 20
+        elif opcode == 1:
+            size_offset = 12
+        elif opcode in (3, 4):
+            size_offset = 24
+        elif opcode in (8, 10):
+            size_offset = None
+            operation_size = 16
+        elif opcode == 11:
+            size_offset = None
+            operation_size = 8
+        elif opcode == 12:
+            size_offset = None
+            operation_size = 12
+        elif opcode == 13:
+            size_offset = None
+            operation_size = 4
+        elif opcode >= 128:
+            size_offset = 4
+        else:
+            size_offset = None
+            operation_size = 4
+        if size_offset is not None:
+            end = offset + size_offset + 4
+            if end > len(variant):
+                break
+            operation_size = int.from_bytes(
+                variant[offset + size_offset : end], "little"
+            )
+        if operation_size <= 0 or offset + operation_size > len(variant):
+            break
+        if opcode in (3, 4) and operation_size >= 28:
+            value_offset = offset + 16
+            mask = int.from_bytes(variant[offset + 20 : offset + 24], "little")
+            ignored_bits = (~mask) & 0xFFFFFFFF
+            if ignored_bits:
+                value = int.from_bytes(
+                    variant[value_offset : value_offset + 4], "little"
+                )
+                value ^= ignored_bits & -ignored_bits
+                variant[value_offset : value_offset + 4] = value.to_bytes(4, "little")
+                return bytes(variant)
+        offset += operation_size
+    raise RuntimeError(
+        "FULL_ELF transaction has no MASKWRITE/MASKPOLL value bit that can "
+        "form a semantically equivalent dynamic variant"
     )
 
 
@@ -513,6 +594,10 @@ def cmd_package_npu_test_package(args):
                 params,
                 serializer,
             )
+            dynamic_transaction = None
+            if operator.name == "strided_copy":
+                control_code = aiecc_elf_xadx.parse_elf32(elf.read_bytes())[0]
+                dynamic_transaction = _equivalent_transaction_variant(control_code)
             cases.append(
                 write_case(
                     NPU_TEST_PACKAGE_STAGE,
@@ -527,6 +612,24 @@ def cmd_package_npu_test_package(args):
                     required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
                 )
             )
+            if dynamic_transaction is not None:
+                generated = npu_test_cases.generate_case(operator.name)
+                generated["name"] = f"{operator.name}_dynamic_transaction"
+                cases.append(
+                    write_case(
+                        NPU_TEST_PACKAGE_STAGE,
+                        generated,
+                        xadx,
+                        {
+                            "kind": "iron-ops-dynamic-full-elf",
+                            "name": operator.name,
+                            "device": operator.device,
+                            "build_kwargs": operator.build_kwargs,
+                        },
+                        required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
+                        dynamic_transaction=dynamic_transaction,
+                    )
+                )
             continue
         xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
         insts = _single_artifact(build_dir, "*.bin", "operator transaction")
@@ -592,6 +695,7 @@ def npu_case_names():
             for operator in iron.OPERATORS
             if operator.name in npu_test_cases.CASE_GENERATORS
         ),
+        "strided_copy_dynamic_transaction",
         *CASE_NAMES,
     ]
 

@@ -166,6 +166,7 @@ class PreparedCase:
         self.case = case
         self.executable = None
         self.export_ordinal = None
+        self.variant = None
         self.buffers = []
         self.output_records = []
         self.dispatches = []
@@ -192,6 +193,12 @@ def _prepare_case(runtime, package_root, case):
                 (package_root / case["xadx"]).read_bytes()
             )
             prepared.export_ordinal = prepared.executable.lookup_export(case["export"])
+            if case.get("dynamic_transaction"):
+                prepared.variant = runtime.cache_transaction(
+                    prepared.executable,
+                    prepared.export_ordinal,
+                    (package_root / case["dynamic_transaction"]).read_bytes(),
+                )
 
         for descriptor in case["buffers"]:
             buffer_name = descriptor["name"]
@@ -286,12 +293,21 @@ def _dispatch_and_validate(runtime, prepared, dispatch_index=0):
         executable = owned_executable
         export_ordinal = executable.lookup_export(prepared.case["export"])
     try:
-        runtime.dispatch(
-            executable,
-            export_ordinal,
-            prepared.buffers,
-            constants=constants,
-        )
+        if prepared.variant is None:
+            runtime.dispatch(
+                executable,
+                export_ordinal,
+                prepared.buffers,
+                constants=constants,
+            )
+        else:
+            runtime.dispatch_variant(
+                executable,
+                export_ordinal,
+                prepared.variant,
+                prepared.buffers,
+                constants=constants,
+            )
     finally:
         if owned_executable is not None:
             owned_executable.close()

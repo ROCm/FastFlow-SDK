@@ -55,8 +55,10 @@ class FakeLibrary:
             "hrx_buffer_release",
             "hrx_executable_load_data",
             "hrx_executable_lookup_export_by_name",
+            "hrx_amdxdna_executable_cache_transaction",
             "hrx_executable_release",
             "hrx_stream_dispatch",
+            "hrx_amdxdna_stream_dispatch_variant",
         )
         for name in function_names:
             setattr(self, name, FakeFunction())
@@ -84,6 +86,9 @@ class FakeLibrary:
             )
         )
         self.hrx_executable_lookup_export_by_name.implementation = self._lookup
+        self.hrx_amdxdna_executable_cache_transaction.implementation = (
+            self._cache_transaction
+        )
 
     def _serialize(self, params, allocator, out_data, out_length):
         ctypes.cast(out_data, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)))[0] = (
@@ -112,6 +117,10 @@ class FakeLibrary:
     @staticmethod
     def _lookup(executable, name, output):
         ctypes.cast(output, ctypes.POINTER(ctypes.c_uint32))[0] = 7
+
+    @staticmethod
+    def _cache_transaction(executable, ordinal, transaction, output):
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_uint64))[0] = 0xCAFE
 
 
 def test_x64_public_record_layouts():
@@ -208,6 +217,8 @@ def test_runtime_loads_maps_dispatches_and_releases():
     buffer.flush()
     ordinal = executable.lookup_export("MLIR_AIE")
     runtime.dispatch(executable, ordinal, [buffer])
+    variant = runtime.cache_transaction(executable, ordinal, b"new transaction")
+    runtime.dispatch_variant(executable, ordinal, variant, [buffer])
     runtime.synchronize()
     buffer.invalidate()
     assert (
@@ -232,6 +243,17 @@ def test_runtime_loads_maps_dispatches_and_releases():
     dispatch_call = library.hrx_stream_dispatch.calls[0]
     assert dispatch_call[2] == 7
     assert dispatch_call[7] == 1
+    assert variant == 0xCAFE
+    cache_call = library.hrx_amdxdna_executable_cache_transaction.calls[0]
+    assert cache_call[1] == 7
+    assert (
+        ctypes.string_at(cache_call[2].data, cache_call[2].data_length)
+        == b"new transaction"
+    )
+    variant_dispatch = library.hrx_amdxdna_stream_dispatch_variant.calls[0]
+    assert variant_dispatch[2] == 7
+    assert variant_dispatch[3] == 0xCAFE
+    assert variant_dispatch[8] == 1
 
     runtime.close()
     assert len(library.hrx_buffer_unmap.calls) == 1

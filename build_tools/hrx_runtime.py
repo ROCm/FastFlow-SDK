@@ -663,6 +663,16 @@ class HrxApi:
             _Status,
             [_Handle, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32)],
         )
+        self.amdxdna_executable_cache_transaction = d(
+            "hrx_amdxdna_executable_cache_transaction",
+            _Status,
+            [
+                _Handle,
+                ctypes.c_uint32,
+                HrxConstByteSpan,
+                ctypes.POINTER(ctypes.c_uint64),
+            ],
+        )
         self.executable_release = d("hrx_executable_release", None, [_Handle])
         self.stream_dispatch = d(
             "hrx_stream_dispatch",
@@ -671,6 +681,22 @@ class HrxApi:
                 _Handle,
                 _Handle,
                 ctypes.c_uint32,
+                ctypes.POINTER(HrxDispatchConfig),
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+                ctypes.POINTER(HrxBufferRef),
+                ctypes.c_size_t,
+                ctypes.c_uint32,
+            ],
+        )
+        self.amdxdna_stream_dispatch_variant = d(
+            "hrx_amdxdna_stream_dispatch_variant",
+            _Status,
+            [
+                _Handle,
+                _Handle,
+                ctypes.c_uint32,
+                ctypes.c_uint64,
                 ctypes.POINTER(HrxDispatchConfig),
                 ctypes.c_void_p,
                 ctypes.c_size_t,
@@ -911,6 +937,34 @@ class HrxRuntime:
         return result
 
     def dispatch(self, executable, export_ordinal, buffers, constants=b""):
+        self._dispatch(executable, export_ordinal, buffers, constants, None)
+
+    def cache_transaction(self, executable, export_ordinal, transaction):
+        """Copies one transaction variant into an executable-owned cache."""
+        if not transaction:
+            raise ValueError("transaction must not be empty")
+        storage = _byte_storage(transaction)
+        variant = ctypes.c_uint64()
+        self.api.check(
+            self.api.amdxdna_executable_cache_transaction(
+                executable.handle,
+                export_ordinal,
+                _span(storage, len(transaction)),
+                ctypes.byref(variant),
+            ),
+            "hrx_amdxdna_executable_cache_transaction",
+        )
+        return variant.value
+
+    def dispatch_variant(
+        self, executable, export_ordinal, variant, buffers, constants=b""
+    ):
+        """Dispatches an atomically selected cached transaction variant."""
+        if not variant:
+            raise ValueError("variant token must be nonzero")
+        self._dispatch(executable, export_ordinal, buffers, constants, variant)
+
+    def _dispatch(self, executable, export_ordinal, buffers, constants, variant):
         bindings = (HrxBufferRef * len(buffers))(
             *(HrxBufferRef(buffer.handle, 0, buffer.nbytes) for buffer in buffers)
         )
@@ -925,18 +979,30 @@ class HrxRuntime:
             if constant_storage is not None
             else None
         )
-        self.api.check(
-            self.api.stream_dispatch(
-                self.stream,
-                executable.handle,
-                export_ordinal,
+        function = (
+            self.api.stream_dispatch
+            if variant is None
+            else self.api.amdxdna_stream_dispatch_variant
+        )
+        arguments = [
+            self.stream,
+            executable.handle,
+            export_ordinal,
+        ]
+        if variant is not None:
+            arguments.append(variant)
+        arguments.extend(
+            [
                 ctypes.byref(config),
                 constant_pointer,
                 len(constants),
                 bindings,
                 len(buffers),
                 HRX_DISPATCH_FLAG_NONE,
-            ),
+            ]
+        )
+        self.api.check(
+            function(*arguments),
             "hrx_stream_dispatch",
         )
 

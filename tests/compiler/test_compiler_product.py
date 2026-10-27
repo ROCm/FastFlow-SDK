@@ -442,6 +442,22 @@ def test_npu_prerequisites_exclude_separate_compiler_product(tmp_path):
     assert not (stage / "tools-bin").exists()
 
 
+def test_equivalent_transaction_variant_changes_only_a_masked_off_bit():
+    header = struct.pack("<BBBBBBHII", 0, 1, 4, 6, 8, 1, 0, 1, 44)
+    operation = struct.pack("<IIIIIII", 3, 0, 0x1234, 0, 0xA5A5A5A5, 0x0000FFFF, 28)
+    transaction = header + operation
+
+    variant = npu_test_package._equivalent_transaction_variant(transaction)
+
+    assert variant != transaction
+    value = int.from_bytes(transaction[32:36], "little")
+    variant_value = int.from_bytes(variant[32:36], "little")
+    mask = int.from_bytes(transaction[36:40], "little")
+    assert value & mask == variant_value & mask
+    assert transaction[:32] == variant[:32]
+    assert transaction[36:] == variant[36:]
+
+
 def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
     stage = tmp_path
     case_records = []
@@ -453,21 +469,36 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
         "relu",
         "gemv",
         "strided_copy",
+        "strided_copy_dynamic_transaction",
     )
     for name in names:
         source = {"kind": "test", "name": name}
         if name == "vector_scalar_add_chain4":
             source.update(name="vector_scalar_add", run_count=4)
+        generated = npu_test_cases.generate_case(
+            "strided_copy" if name == "strided_copy_dynamic_transaction" else name
+        )
+        generated["name"] = name
         case_records.append(
             npu_test_package.write_case(
                 stage,
-                npu_test_cases.generate_case(name),
+                generated,
                 b"\x00\x00\x00\x00XADX",
                 source,
                 required_features=(
                     (npu_test_package.FULL_ELF_LOAD_PDI_FEATURE,)
-                    if name in ("add_relu_fused", "strided_copy")
+                    if name
+                    in (
+                        "add_relu_fused",
+                        "strided_copy",
+                        "strided_copy_dynamic_transaction",
+                    )
                     else ()
+                ),
+                dynamic_transaction=(
+                    b"dynamic transaction"
+                    if name == "strided_copy_dynamic_transaction"
+                    else None
                 ),
             )
         )
@@ -488,7 +519,7 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
         system,
     )
 
-    assert len(manifest["cases"]) == 7
+    assert len(manifest["cases"]) == 8
     fused = next(case for case in manifest["cases"] if case["name"] == "add_relu_fused")
     assert fused["required_features"] == [npu_test_package.FULL_ELF_LOAD_PDI_FEATURE]
     assert [buffer["name"] for buffer in fused["buffers"]] == [
@@ -516,6 +547,14 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
         dispatch["expected"]["output"].tobytes() for dispatch in generated["dispatches"]
     ]
     assert dynamic["required_features"] == [npu_test_package.FULL_ELF_LOAD_PDI_FEATURE]
+    dynamic_full_elf = next(
+        case
+        for case in manifest["cases"]
+        if case["name"] == "strided_copy_dynamic_transaction"
+    )
+    assert (stage / dynamic_full_elf["dynamic_transaction"]).read_bytes() == (
+        b"dynamic transaction"
+    )
     packaged = {path.suffix for path in stage.rglob("*") if path.is_file()}
     assert ".xclbin" not in packaged
     assert ".mlir" not in packaged

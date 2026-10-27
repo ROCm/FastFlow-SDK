@@ -49,6 +49,14 @@ class FakeRuntime:
             raise AssertionError("output was not reset before dispatch")
         buffers[-1].array[:] = buffers[0].array + (2 if self.wrong_output else 1)
 
+    def cache_transaction(self, executable, ordinal, transaction):
+        self.events.append(("cache-transaction", executable.name, transaction))
+        return 23
+
+    def dispatch_variant(self, executable, ordinal, variant, buffers, constants=b""):
+        self.events.append(("dispatch-variant", executable.name, variant))
+        self.dispatch(executable, ordinal, buffers, constants)
+
     def synchronize(self):
         self.events.append(("synchronize",))
 
@@ -134,6 +142,35 @@ class TestRunNpuPackage:
             event[1] for event in FakeRuntime.last.events if event[0] == "dispatch"
         ]
         assert dispatches == ["beta", "beta"]
+
+    def test_dynamic_transaction_is_cached_and_dispatched_by_token(self):
+        transaction = self.root / "alpha-variant.bin"
+        transaction.write_bytes(b"dynamic transaction")
+        manifest_path = self.root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["cases"][0]["dynamic_transaction"] = transaction.name
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        failed = runner.run_package(
+            self.root,
+            ["alpha"],
+            runtime_factory=FakeRuntime,
+            stdout=io.StringIO(),
+            lifecycle_rounds=1,
+            resident_rounds=1,
+        )
+
+        assert failed == 0
+        assert [
+            event
+            for event in FakeRuntime.last.events
+            if event[0] in ("cache-transaction", "dispatch-variant")
+        ] == [
+            ("cache-transaction", "alpha", b"dynamic transaction"),
+            ("dispatch-variant", "alpha", 23),
+            ("cache-transaction", "alpha", b"dynamic transaction"),
+            ("dispatch-variant", "alpha", 23),
+        ]
 
     def test_cleanup_occurs_after_dispatch_failure(self):
         FakeRuntime.fail_dispatch = True
