@@ -2,8 +2,8 @@
 
 > [!NOTE]
 > This document is the **release-operator** policy for versioning, validating,
-> and publishing wheels. To *install* a published build, use
-> [GitHub Releases](https://github.com/ROCm/FastFlow-SDK/releases) and the
+> and publishing wheels. To *install* a published build, use the
+> [FastFlow SDK package index](#package-index) and the
 > [README install section](../README.md#install-a-release-and-run-models).
 
 FastFlow SDK compiler, ops, runtime, and FastFlowLM wheels use
@@ -160,6 +160,15 @@ with `python -m build_tools.resolve_release_wheel` for every
 `compiler_python_versions` interpreter on Linux and Windows (pip `--platform` /
 `--abi`, not an import).
 
+`fastflow-sdk` is the `py3-none-any` one-step install. It ships no code (its
+only package is the empty `fastflow_sdk_meta`) and requires
+`fastflow-sdk-fastflowlm`, `fastflow-sdk-compiler`, and `fastflow-sdk-ops` at
+exactly the same version, so it inherits the compiler's Python range. The Linux
+compiler job packages it with `dev.py package-sdk-wheel`, and both release
+collection workflows resolve it against the collected payload with
+`resolve_release_wheel --product sdk`. Releases before
+`0.1.0.dev202610230003` do not include it.
+
 The unified workflow builds and validates Linux and Windows wheels from one
 source commit. An operator may publish the validated payload manually under
 `fastflow-sdk-v<version>` after evidence intake succeeds.
@@ -176,7 +185,8 @@ archives (`fastflow-sdk-linux-x86_64.tar.zst` and `fastflow-sdk-windows-x86_64.z
 checksum sidecars, and detached bundle provenance manifests. Compiler CI also
 builds relocatable product archives (`fastflow-sdk-compiler-linux-x86_64.tar.gz` /
 `fastflow-sdk-compiler-windows-x86_64.tar.zst`) for packaging and verification, but
-only compiler and ops wheels are collected into this release payload. The ops
+only compiler, ops, and `fastflow-sdk` wheels are collected into this release
+payload. The ops
 wheel is the canonical Linux `py3-none-any` file from the Linux compiler-wheels
 artifact. Release assembly
 rejects runtime archives whose embedded version, source revision, platform, or
@@ -209,8 +219,9 @@ then run `fastflow qualify stage-release` to assemble a single flat upload
 directory from that payload plus the intake aggregate
 (`qualification-evidence-<version>.zip`), sidecar, and
 `qualification-index.json` into an empty output directory. Upload every
-top-level file from that directory (wheels including ops, native archives,
-metadata, checksums, candidate manifest, and the three evidence attachments).
+top-level file from that directory (wheels including ops and `fastflow-sdk`,
+native archives, metadata, checksums, candidate manifest, and the three
+evidence attachments).
 Do not upload nested `simple/` trees. Before publishing, recheck that every
 staged wheel still has the hash recorded in the candidate manifest. Any
 rebuilt or replaced wheel invalidates the evidence and requires a new candidate
@@ -222,8 +233,27 @@ manual evidence, or signs evidence.
 `SHA256SUMS` covers the prepared top-level product assets.
 `candidate-SHA256SUMS` separately covers `candidate-manifest.json` and its
 qualification wheels without replacing the release checksum. The nested PEP
-503 `simple/` index remains available in the complete Actions artifact, and its
-wheel links carry their own SHA-256 fragments.
+503 `simple/` index in the complete Actions artifact covers only that payload;
+the public index is published separately (see [Package index](#package-index)).
+
+## Package index
+
+`https://rocm.github.io/FastFlow-SDK/simple/` is a PEP 503 simple index built
+from the wheels attached to every published, non-draft `fastflow-sdk-v*`
+release. Its links point at the release download URLs and carry the asset's
+GitHub SHA-256 digest, falling back to the release `SHA256SUMS`. Wheels are
+never copied to Pages. Each project page lists every release that ships that
+project, so `fastflow-sdk` starts at `0.1.0.dev202610230003`.
+
+The index does not update itself. After publishing a release, run the
+`Publish FastFlow SDK simple index` workflow from `main` (Actions → Run
+workflow); it rebuilds the whole index from the releases API
+(`build_tools/publish_fastflow_sdk_simple_index.py`) and deploys it. The
+repository's Pages source must be set to GitHub Actions.
+
+All published versions are currently development builds. Install commands use
+`--pre` because PyPI hosts an unrelated `fastflow-sdk 0.0.1` final release that
+pip otherwise prefers; an exact `==<version>` pin works without it.
 
 Each wheel uses Core Metadata 2.4 with an SPDX license expression and copies
 all applicable license and notice files under `.dist-info/licenses/`. It also
@@ -234,44 +264,34 @@ against the official CycloneDX 1.6 schema and require its file hashes to match
 the package manifest and wheel `RECORD`. The FastFlowLM SBOM also records its
 exact runtime-wheel dependency.
 
-After publication, validate GitHub's expanded-assets page end to end
-from clean Linux and Windows environments:
+After publication and the index workflow, validate the package index end to
+end from clean Linux and Windows virtual environments. Installing
+`fastflow-sdk` pulls FastFlowLM, the runtime, the compiler, and ops:
 
 ```powershell
 py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" `
-  "fastflow-sdk-fastflowlm==<version>"
+  --extra-index-url https://rocm.github.io/FastFlow-SDK/simple `
+  "fastflow-sdk==<version>"
 py -m pip check
-py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" `
-  "fastflow-sdk-compiler==<version>"
-py -m pip check
-py -m pip install --no-cache-dir --only-binary=:all: `
-  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" `
-  "fastflow-sdk-ops==<version>"
-py -m pip check
-python -c "from iron.operators import ElementwiseAdd; print(ElementwiseAdd.__name__)"
+py -c "import fastflow_sdk_runtime, aie; from iron.operators import ElementwiseAdd; print(ElementwiseAdd.__name__)"
+flm version
 aie-opt --version
 aiecc --help
 ```
 
 ```bash
 python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" \
-  "fastflow-sdk-fastflowlm==<version>"
+  --extra-index-url https://rocm.github.io/FastFlow-SDK/simple \
+  "fastflow-sdk==<version>"
 python3 -m pip check
-python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" \
-  "fastflow-sdk-compiler==<version>"
-python3 -m pip check
-python3 -m pip install --no-cache-dir --only-binary=:all: \
-  --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" \
-  "fastflow-sdk-ops==<version>"
-python3 -m pip check
-python3 -c "from iron.operators import ElementwiseAdd; print(ElementwiseAdd.__name__)"
+python3 -c "import fastflow_sdk_runtime, aie; from iron.operators import ElementwiseAdd; print(ElementwiseAdd.__name__)"
+flm version
 aie-opt --version
 aiecc --help
 ```
+
+Also check that an unpinned `--pre` install of `fastflow-sdk` resolves to the
+new version.
 
 The release workflow creates GitHub build-provenance attestations for published
 wheels and standalone runtime archives in each native platform build job,

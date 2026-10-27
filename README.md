@@ -135,8 +135,10 @@ The archive cannot compile NPU programs; use the wheels in Option B for that.
 
 ### Option B: Python wheels
 
-Wheels ship on the same GitHub release, not on PyPI. Installing
-`fastflow-sdk-fastflowlm` pulls the matching `fastflow-sdk-runtime` wheel.
+Wheels ship on GitHub releases, not on PyPI, and install from the FastFlow SDK
+package index at `https://rocm.github.io/FastFlow-SDK/simple`. The
+`fastflow-sdk` package installs everything: FastFlowLM, the HRX runtime, the
+*iron-tools* compiler, and the IRON operator library.
 
 Install Python and create a virtual environment. Activate the environment
 before every command below:
@@ -155,14 +157,18 @@ python3.12 -m venv ~/fastflow
 source ~/fastflow/bin/activate
 ```
 
-Replace `<tag>` and `<version>` with the values from the release. For example,
-if the release tag is `fastflow-sdk-v0.1.0.dev202610050001`, then use
-`<tag> = fastflow-sdk-v0.1.0.dev202610050001` and
-`<version> = 0.1.0.dev202610050001`.
+Install the latest release:
 
 ```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-fastflowlm==<version>"
+python -m pip install --pre --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple fastflow-sdk
 ```
+
+Releases are currently development builds, so always pass `--pre`. Without it,
+`pip install fastflow-sdk` installs the `fastflow-sdk 0.0.1` placeholder from
+PyPI instead of the SDK. To install a specific release, pin its version, for
+example `"fastflow-sdk==0.1.0.dev202610230003"`; a pinned pre-release version
+does not need `--pre`. The version is the release tag without the
+`fastflow-sdk-v` prefix.
 
 To validate the runtime, use the following commands:
 
@@ -175,7 +181,7 @@ flm list
 flm run qwen3:0.6b
 ```
 
-To also compile your own NPU programs, see
+To compile your own NPU programs with the installed compiler, see
 [Develop your own models and applications](#develop-your-own-models-and-applications-using-iron-tools).
 
 See [native runtime CLI](docs/runtime-cli.md) for `fastflow` commands.
@@ -192,35 +198,10 @@ targets the AI Engine (AIE) array in the AMD NPU. *FastFlowLM* was built using
 > thing.
 
 `iron-tools` ships as a vendored part of FastFlow SDK in the `fastflow-sdk-compiler`
-package. It needs a Python 3.12, 3.13, or 3.14 virtual environment. Set up
-and activate the environment before running the commands below; instructions
-are the same as in the previous section.
-
-Install `fastflow-sdk-compiler` and `fastflow-sdk-runtime` from a
-[GitHub Release](https://github.com/ROCm/FastFlow-SDK/releases): the compiler builds
-the design, and the runtime dispatches it on the NPU. Replace `<tag>` and
-`<version>` with values from that release (tags look like
-`fastflow-sdk-v<version>`):
-
-```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-compiler==<version>" "fastflow-sdk-runtime==<version>"
-```
-
-For example:
-```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/fastflow-sdk-v0.1.0.dev202610050001" "fastflow-sdk-compiler==0.1.0.dev202610050001" "fastflow-sdk-runtime==0.1.0.dev202610050001"
-```
-
-### Install the IRON operator library
-
-`fastflow-sdk-ops` is the IRON operator library
+package and needs Python 3.12, 3.13, or 3.14. The `fastflow-sdk` install in
+[Option B](#option-b-python-wheels) already includes it, together with the
+runtime that dispatches designs on the NPU and the IRON operator library
 (`from iron.operators import ElementwiseAdd`).
-It depends on `fastflow-sdk-compiler` at the same version, so a compiler install
-above is enough, or this command will pull the compiler if it is missing:
-
-```bash
-python -m pip install --only-binary=:all: --find-links "https://github.com/ROCm/FastFlow-SDK/releases/expanded_assets/<tag>" "fastflow-sdk-ops==<version>"
-```
 
 If you need bleeding-edge `iron-tools` features, you may also choose to install
 directly from the [upstream repository](https://github.com/Xilinx/mlir-aie)
@@ -232,8 +213,7 @@ instead of the vendored `fastflow-sdk-compiler` package; see instructions there.
 program that we can compile for the NPU using `iron-tools`. It copies a buffer
 DDR -> MemTile -> DDR: pure DMA, no compute kernel.
 
-After installing `fastflow-sdk-compiler` and `fastflow-sdk-runtime`, clone or download
-this repository and run:
+After installing `fastflow-sdk`, clone or download this repository and run:
 
 ```bash
 python tests/npu/jit_smoke.py

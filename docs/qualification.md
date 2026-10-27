@@ -1,9 +1,10 @@
 # FastFlow SDK model qualification
 
-Install the optional qualification product from the same release assets:
+Install the optional qualification product from the
+[FastFlow SDK package index](wheel-releases.md#package-index):
 
 ```bash
-python -m pip install --find-links <release-assets> \
+python -m pip install --extra-index-url https://rocm.github.io/FastFlow-SDK/simple \
   "fastflow-sdk-qualification==<version>"
 ```
 
