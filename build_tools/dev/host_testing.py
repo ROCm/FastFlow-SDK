@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Host-side developer test and smoke commands."""
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -77,6 +79,29 @@ def cmd_test_iron_ops(args):
     if getattr(args, "device", None):
         command += ["--device", args.device]
     command += ["--jobs", str(getattr(args, "jobs", 0) or 0)]
+    sys.exit(
+        environment.sh(
+            command,
+            env=iron.iron_ops_env(getattr(args, "compiler_prefix", None)),
+            check=False,
+        ).returncode
+    )
+
+
+def cmd_test_iron_examples(args):
+    if not environment.venv_py().exists():
+        sys.exit(f"no venv at {paths.VENV} (run: python dev.py setup)")
+    build_root = Path(os.environ.get("RUNNER_TEMP", paths.BUILD)) / "g4gd-ci"
+    if build_root.exists():
+        shutil.rmtree(build_root)
+    command = [
+        environment.venv_py(),
+        paths.ROOT / "examples" / "iron" / "gemma4_gemm_dequant" / "build.py",
+        ".",
+        build_root,
+        "--compile-only",
+        "--smoke",
+    ]
     sys.exit(
         environment.sh(
             command,

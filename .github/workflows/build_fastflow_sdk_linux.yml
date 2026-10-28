@@ -167,6 +167,9 @@ jobs:
       - name: iron-ops (build operators off-device)
         run: .venv/bin/python dev.py test-iron-ops --compiler-prefix build/fastflow-sdk-compiler-relocated/fastflow-sdk-compiler-linux-x86_64 --jobs 0
 
+      - name: IRON SDK examples (compile off-device)
+        run: .venv/bin/python dev.py test-iron-examples --compiler-prefix build/fastflow-sdk-compiler-relocated/fastflow-sdk-compiler-linux-x86_64
+
       # The pinned manylinux image already provides wheel-building interpreters under
       # /opt/python. actions/setup-python does not publish builds for this container OS
       # and fails before it can use the runner tool cache.

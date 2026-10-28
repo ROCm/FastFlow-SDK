@@ -15,6 +15,7 @@ from build_tools.dev import format_tools
 CXX_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp"}
 FIRST_PARTY_PREFIXES = (
     "build_tools/native/",
+    "examples/iron/",
     "tools/fastflow/",
     "tools/fastflow-sdk-qualification/native/",
     "tests/hal-contract/",

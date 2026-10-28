@@ -5,10 +5,21 @@ FastFlowLM Gemma engine with those overrides, and serves the result through the
 FastFlowLM API. The compiler, operator sources, runtime, and FastFlowLM sources
 all come from one FastFlow SDK wheel release.
 
+For a smaller example that replaces only projection GEMMs and runtime
+dequantization, see
+[Replace Gemma 4 GEMM and dequant with IRON](iron-gemma4-gemm-dequant.md).
+
 The example targets Linux or Windows, Python 3.12, and an XDNA2 (NPU2) device.
-Compilation does not use the NPU, but serving and inference do. Install CMake,
-Ninja, and a host C++ compiler before starting. On Windows, use an x64 Developer
-PowerShell for Visual Studio 2022 so CMake can find MSVC.
+Compilation does not use the NPU, but serving and inference do. On Ubuntu,
+install the host build dependencies:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y cmake g++ libdrm-dev ninja-build
+```
+
+On Windows, install CMake, Ninja, and Visual Studio 2022, then use an x64
+Developer PowerShell so CMake can find MSVC.
 
 ## Install the SDK
 

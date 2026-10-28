@@ -82,6 +82,7 @@ archives do not require Python.
 ## Getting started
 
 - [I want to **install a release** and run models.](#install-a-release-and-run-models)
+- [I want to **replace Gemma 4 GEMM and dequant with IRON**.](docs/examples/iron-gemma4-gemm-dequant.md)
 - [I want to **compile and serve the IRON Gemma 4 example**.](docs/examples/iron-gemma4.md)
 - [I want to **develop my own models** and applications.](#develop-your-own-models-and-applications-using-iron-tools)
 - [I want to **build FastFlow SDK from source**.](docs/build-from-source.md)
@@ -252,6 +253,8 @@ FastFlowLM, compiler stack, platform prerequisites, packaging, and tests.
 
 - [Native runtime CLI](docs/runtime-cli.md): `fastflow version`, `probe`,
   `doctor`, `self-test`, and `powermode`
+- [IRON Gemma 4 GEMM/dequant](docs/examples/iron-gemma4-gemm-dequant.md): replace
+  FastFlowLM projection GEMMs and runtime dequantization with IRON
 - [IRON Gemma 4 E2E](docs/examples/iron-gemma4.md): compile packaged or local IRON
   operators and serve the replacement FastFlowLM engine
 - [tests/npu/jit_smoke.py](tests/npu/jit_smoke.py): compiler/JIT smoke test
