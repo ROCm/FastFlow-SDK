@@ -8,7 +8,7 @@
       "source": "https://huggingface.co/FastFlowLM/Qwen3-0.6B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "aadb182e86a18620d4805816ff8072bc3d524b7fc7ceb7bdc8a24c850a09bce5",
+      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
       "files": [
         {"path": "config.json", "sha256": "8a5ec72f5c96766168a4024f88d70841ae341900a0c84fd4fd23f8eeae16c6a7"},
         {"path": "model.q4nx", "sha256": "db8dec4dff653817218ff920c5d25d28d1805512906485e654f03980053fa667"},
@@ -63,7 +63,7 @@
       "source": "https://huggingface.co/FastFlowLM/Qwen3.5-0.8B-NPU2",
       "revision": "flm_q4k_high_precision",
       "identity_policy": "revision-sha256",
-      "registry_sha256": "aadb182e86a18620d4805816ff8072bc3d524b7fc7ceb7bdc8a24c850a09bce5",
+      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
       "files": [
         {"path": "config.json", "sha256": "a571afa7fca18a6ecb4c0c2dbc7758204b442804056280e85d4e2d6c582c70c3"},
         {"path": "model.q4nx", "sha256": "787428ffe87be5e3e5a8fcaf241844b69896ca0c74a41f2432c436739f7ba4e4"},
@@ -115,7 +115,7 @@
       "source": "https://huggingface.co/FastFlowLM/LFM2-1.2B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "aadb182e86a18620d4805816ff8072bc3d524b7fc7ceb7bdc8a24c850a09bce5",
+      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
       "files": [
         {"path": "config.json", "sha256": "21c02d2daa253c01a5b1cc08e8b275efc9cbe197abdc1c0bcc71ccfbb37d5ada"},
         {"path": "model.q4nx", "sha256": "2755ab40cd927e3cc2c7068a5108d7ab4b85600e6dd320f97003b7223fde0e2f"},

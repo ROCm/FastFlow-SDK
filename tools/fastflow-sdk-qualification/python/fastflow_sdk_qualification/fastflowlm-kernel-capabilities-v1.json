@@ -114,6 +114,14 @@
       "mm-f09ce18ed0176ccd": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
       "mm-6f1e5507b84d4545": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
       "dequant-c64cce52830381a3": "FastFlowLM exposes only a whole-layer builder that needs a constructed model rather than a synthetic buffer set.",
+      "dequant-5c09a768705b2a52": "FastFlowLM 1.0.12 adds this Nemotron 3.5 Bolt implementation. Its transaction accepts the generic builders, but its Q4NX semantics and output layout have not yet been measured on device; inferring those facts from a similar xclbin would make the qualification oracle circular.",
+      "dequant-92fe942189bfe29d": "FastFlowLM 1.0.12 adds this LFM3 1.7B implementation. The extended profile exercises it through the real model, but its synthetic Q4NX semantics and output layout have not yet been measured independently on device.",
+      "mm-045dfe3bcb950417": "FastFlowLM 1.0.12 adds this D3 Nano implementation. The decision engine's whole-layer semantics are not represented by the generic synthetic MM oracle.",
+      "mm-1cb2714c29e7f48f": "FastFlowLM 1.0.12 adds this Nemotron 3.5 Bolt implementation. Its synthetic activation layout and numeric bounds have not yet been measured independently on device.",
+      "mm-524a99a2938489a9": "FastFlowLM 1.0.12 adds this D3 Turbo implementation. The decision engine's whole-layer semantics are not represented by the generic synthetic MM oracle.",
+      "mm-837d57fb0e501f69": "FastFlowLM 1.0.12 adds this D3 Mini implementation. The decision engine's whole-layer semantics are not represented by the generic synthetic MM oracle.",
+      "mm-a6539bd3db99073a": "FastFlowLM 1.0.12 adds this LFM3 1.7B implementation. The extended profile exercises it through the real model, but its synthetic activation layout and numeric bounds have not yet been measured independently on device.",
+      "mm-ef48a546c2dd64a2": "FastFlowLM 1.0.12 adds this D3 Ultra implementation. The decision engine's whole-layer semantics are not represented by the generic synthetic MM oracle.",
       "mm-6c7ef8716b6c744d": "FastFlowLM exports GPT_OSS_Gemm symbols but ships no class declaration. Re-declaring the class locally is an ODR violation and can corrupt memory; this implementation remains a coverage limit until FastFlowLM ships a supported builder API."
     },
     "undeclared_builders": []
