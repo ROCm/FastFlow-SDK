@@ -1046,9 +1046,9 @@ def _stage_hrx_development_files(hrx_install: Path, bundle: Path) -> None:
 
 _GEMMA4E_LINK_STEMS = ("q4_npu_eXpress", "mha")
 
-# FLM_ENGINE_LINK_LIBS minus q4_npu_eXpress and llama_npu. pe_import_sets
-# lowercases DLL names. q4 is the shared quant library. llama stays a normal
-# import while its import library exports CRT data.
+# FLM_ENGINE_LINK_LIBS minus q4_npu_eXpress, llama_npu, and d3_npu.
+# pe_import_sets lowercases DLL names. q4 is the shared quant library. llama and
+# d3 stay normal imports while their import libraries export CRT data.
 WINDOWS_MODEL_ENGINE_DELAY_IMPORTS = frozenset(
     {
         "gemma4_12b_npu.dll",
@@ -1060,6 +1060,7 @@ WINDOWS_MODEL_ENGINE_DELAY_IMPORTS = frozenset(
         "gpt_oss_npu.dll",
         "hunyuan_npu.dll",
         "lfm2_npu.dll",
+        "lfm3_npu.dll",
         "minicpm_v_4_7_npu.dll",
         "nanbeige_npu.dll",
         "phi4_npu.dll",
@@ -1078,6 +1079,7 @@ WINDOWS_MODEL_ENGINE_DELAY_IMPORTS = frozenset(
 WINDOWS_ENGINE_NORMAL_IMPORTS = frozenset(
     {"q4_npu_express.dll", "llama_npu.dll", "hrx.dll"}
 )
+WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS = frozenset({"d3_npu.dll"})
 
 
 def stage_gemma4e_engine_sources(flm_source: Path, bundle: Path, root: Path) -> None:
@@ -1181,11 +1183,16 @@ def verify_installed_engine_sdk(bundle: Path) -> None:
                 f"{flm} imports a model engine directly: "
                 f"{sorted(WINDOWS_MODEL_ENGINE_DELAY_IMPORTS & regular_set)}"
             )
-        missing_normal = WINDOWS_ENGINE_NORMAL_IMPORTS - regular_set
-        delayed_normal = WINDOWS_ENGINE_NORMAL_IMPORTS & delay_set
+        expected_normal = WINDOWS_ENGINE_NORMAL_IMPORTS | {
+            name
+            for name in WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS
+            if (bundle / "bin" / name).is_file()
+        }
+        missing_normal = expected_normal - regular_set
+        delayed_normal = expected_normal & delay_set
         if missing_normal or delayed_normal:
             raise RuntimeError(
-                f"{flm} must import {sorted(WINDOWS_ENGINE_NORMAL_IMPORTS)} "
+                f"{flm} must import {sorted(expected_normal)} "
                 "normally. "
                 f"missing={sorted(missing_normal)} delay-loaded={sorted(delayed_normal)}"
             )

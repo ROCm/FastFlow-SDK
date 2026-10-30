@@ -21,6 +21,7 @@ import pytest
 
 from build_tools.fastflow_sdk_archive import (
     WINDOWS_ENGINE_NORMAL_IMPORTS,
+    WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS,
     WINDOWS_MODEL_ENGINE_DELAY_IMPORTS,
 )
 from build_tools.native_dependencies import pe_import_sets
@@ -111,6 +112,10 @@ def test_flm_delay_loads_model_engines_only():
     assert WINDOWS_MODEL_ENGINE_DELAY_IMPORTS.isdisjoint(regular_set)
     assert "q4_npu_express.dll" not in delay_set
     assert "llama_npu.dll" not in delay_set
+    for name in WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS:
+        assert name not in delay_set
+        if (flm.parent / name).is_file():
+            assert name in regular_set
 
 
 def test_installed_dlls_load():

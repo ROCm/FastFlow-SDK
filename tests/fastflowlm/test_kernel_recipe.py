@@ -108,6 +108,46 @@ def _catalogue():
             "kernel": "dequant",
             "families": ["Gemma3-4B-NPU2", "Qwen3-VL-4B-Instruct-NPU2"],
         },
+        {
+            "id": "dequant-5c09a768705b2a52",
+            "kernel": "dequant",
+            "families": ["Nemotron-3.5-Bolt-E4B-NPU2"],
+        },
+        {
+            "id": "dequant-92fe942189bfe29d",
+            "kernel": "dequant",
+            "families": ["LFM3-1.7B-NPU2"],
+        },
+        {
+            "id": "mm-045dfe3bcb950417",
+            "kernel": "mm",
+            "families": ["D3-Nano-NPU2"],
+        },
+        {
+            "id": "mm-1cb2714c29e7f48f",
+            "kernel": "mm",
+            "families": ["Nemotron-3.5-Bolt-E4B-NPU2"],
+        },
+        {
+            "id": "mm-524a99a2938489a9",
+            "kernel": "mm",
+            "families": ["D3-Turbo-NPU2"],
+        },
+        {
+            "id": "mm-837d57fb0e501f69",
+            "kernel": "mm",
+            "families": ["D3-Mini-NPU2"],
+        },
+        {
+            "id": "mm-a6539bd3db99073a",
+            "kernel": "mm",
+            "families": ["LFM3-1.7B-NPU2"],
+        },
+        {
+            "id": "mm-ef48a546c2dd64a2",
+            "kernel": "mm",
+            "families": ["D3-Ultra-NPU2"],
+        },
         {"id": "mm-6c7ef8716b6c744d", "kernel": "mm", "families": gpt_oss},
         {"id": "mm-eb616bbe2a08405e", "kernel": "mm", "families": gemma},
     ]
@@ -195,12 +235,23 @@ def test_unreachable_implementations_are_declared_rather_than_dropped():
         "mm-f09ce18ed0176ccd",
         "mm-6f1e5507b84d4545",
         "dequant-c64cce52830381a3",
+        "dequant-5c09a768705b2a52",
+        "dequant-92fe942189bfe29d",
+        "mm-045dfe3bcb950417",
+        "mm-1cb2714c29e7f48f",
+        "mm-524a99a2938489a9",
+        "mm-837d57fb0e501f69",
+        "mm-a6539bd3db99073a",
+        "mm-ef48a546c2dd64a2",
         "mm-6c7ef8716b6c744d",
     }
     assert limited.isdisjoint(dispatched)
     limits = {limit["representative"] for limit in recipe["coverage_limits"]}
     assert "Qwen3.5-0.8B-NPU2" in limits
     assert "Embedding-Gemma-300M-NPU2" in limits
+    assert "Nemotron-3.5-Bolt-E4B-NPU2" in limits
+    assert "LFM3-1.7B-NPU2" in limits
+    assert "D3-Nano-NPU2" in limits
     numeric = {
         stage["implementation"]
         for case in recipe["cases"]

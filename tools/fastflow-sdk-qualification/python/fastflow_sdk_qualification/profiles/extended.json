@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "extended",
-  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak plus revision-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
+  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak, a content-pinned LFM3 changing-prefill regression soak, plus content-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
   "extends": "default",
   "test_extensions": [
     {
@@ -22,11 +22,40 @@
   ],
   "models": [
     {
+      "tag": "lfm3:1.7b",
+      "source": "https://huggingface.co/FastFlowLM/LFM3-1.7B-NPU2",
+      "revision": null,
+      "identity_policy": "content-sha256",
+      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
+      "files": [
+        {"path": "chat_template.jinja", "sha256": "f45005c50cd2a97329722bf3a2dee9f16c04cdf825a589b280fb7e99e6827818"},
+        {"path": "config.json", "sha256": "ed76b4e8045ba916c619773c1b04a14dc4e91063b88df2807cf42e51652b5a51"},
+        {"path": "model.q4nx", "sha256": "b97206b484ebc3f01859d9b8bf251d2438e8d48847172671e3ce6ed89a32f141"},
+        {"path": "tokenizer.json", "sha256": "7e226e34bface23ccf6e495d157bf77186c1c30a7659880e1a8994db528c3701"},
+        {"path": "tokenizer_config.json", "sha256": "4b9315391077c1291abba3184c4c115508962e16efdc24f63059d88c78073573"}
+      ],
+      "xclbins": [],
+      "tests": [
+        {
+          "name": "changing-prefill-shape-soak",
+          "kind": "run",
+          "turns": [
+            {"prompt": "Tell me a joke.", "expected_regex": "."},
+            {"prompt": "Explain why it is funny.", "expected_regex": "."}
+          ],
+          "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 128"],
+          "process_iterations": 3,
+          "timeout_seconds": 900,
+          "ctx_len": 32768
+        }
+      ]
+    },
+    {
       "tag": "llama3.1:8b",
       "source": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "aadb182e86a18620d4805816ff8072bc3d524b7fc7ceb7bdc8a24c850a09bce5",
+      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
       "files": [
         {"path": "config.json", "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"},
         {"path": "model.q4nx", "sha256": "0c03021f1cd21e43376234817b34ad32ccf07dca94785ede7640833d15169d8a"},

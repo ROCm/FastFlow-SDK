@@ -656,6 +656,10 @@ def test_profile_schema_rejection_and_packaged_profiles():
         "lfm2:1.2b",
     ]
     extended = load_profile("extended")
+    assert [model["tag"] for model in extended["models"][-2:]] == [
+        "lfm3:1.7b",
+        "llama3.1:8b",
+    ]
     assert extended["models"][-1]["tag"] == "llama3.1:8b"
     lfm_tests = {
         test["name"]: test
@@ -664,6 +668,23 @@ def test_profile_schema_rejection_and_packaged_profiles():
         for test in model["tests"]
     }
     assert lfm_tests["long-lived-context-1k"]["iterations"] == 100
+    lfm3 = next(model for model in extended["models"] if model["tag"] == "lfm3:1.7b")
+    assert lfm3["revision"] is None
+    assert lfm3["identity_policy"] == "content-sha256"
+    assert lfm3["tests"] == [
+        {
+            "name": "changing-prefill-shape-soak",
+            "kind": "run",
+            "turns": [
+                {"prompt": "Tell me a joke.", "expected_regex": "."},
+                {"prompt": "Explain why it is funny.", "expected_regex": "."},
+            ],
+            "setup_commands": ["/set topk 1", "/set temp 0", "/set gen-lim 128"],
+            "process_iterations": 3,
+            "timeout_seconds": 900,
+            "ctx_len": 32768,
+        }
+    ]
 
     # Candidate contract generation must apply the same inheritance rules as
     # load_profile, including test_extensions; otherwise extended evidence
