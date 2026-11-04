@@ -20,7 +20,12 @@ from typing import Any
 
 from . import host_xrt
 from .benchmark import benchmark_csv_checkpoint as _benchmark_csv_checkpoint
-from .commands import run_command, run_interactive_command, serve_probe
+from .commands import (
+    memory_soak_probe,
+    run_command,
+    run_interactive_command,
+    serve_probe,
+)
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
@@ -1524,6 +1529,21 @@ def _run_xrt_serve_comparison(
     return metrics
 
 
+def memory_soak_repetitions(test: dict[str, Any]) -> list[int]:
+    """Return descending repeated or continuously novel shape windows."""
+    if test.get("shape_sequence", "repeated") == "continuous":
+        shape_count = test["cycle_size"] * test["cycle_count"]
+        return [
+            test["prompt_repetitions_start"] + index * test["prompt_repetitions_step"]
+            for index in range(shape_count - 1, -1, -1)
+        ]
+    one_cycle = [
+        test["prompt_repetitions_start"] + index * test["prompt_repetitions_step"]
+        for index in range(test["cycle_size"] - 1, -1, -1)
+    ]
+    return one_cycle * test["cycle_count"]
+
+
 def _test_model(
     model: dict[str, Any],
     *,
@@ -1572,6 +1592,76 @@ def _test_model(
             return records
 
     for test in model["tests"]:
+        if test["kind"] == "memory-soak":
+            safe_tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", model["tag"])
+            log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
+            samples_artifact = (
+                f"artifacts/fastflowlm/{safe_tag}-{test['name']}-samples.json"
+            )
+            repetitions = memory_soak_repetitions(test)
+            mib = 1024 * 1024
+            result, soak = memory_soak_probe(
+                [
+                    flm,
+                    "serve",
+                    model["tag"],
+                    "--ctx-len",
+                    str(test["ctx_len"]),
+                    "--prefix-slots",
+                    "0",
+                ],
+                log_path=log,
+                env=environment,
+                model=model["tag"],
+                prompt_repetitions=repetitions,
+                boot_timeout=min(test["timeout_seconds"], 300),
+                total_timeout=test["timeout_seconds"],
+                request_timeout=test["request_timeout_seconds"],
+                cycle_size=test["cycle_size"],
+                expected_prompt_tokens_min=test["expected_prompt_tokens_min"],
+                expected_prompt_tokens_max=test["expected_prompt_tokens_max"],
+                max_steady_cycle_mean_growth_bytes=int(
+                    test["max_steady_cycle_mean_growth_mib"] * mib
+                ),
+                max_steady_cycle_end_growth_bytes=int(
+                    test["max_steady_cycle_end_growth_mib"] * mib
+                ),
+                echo=True,
+            )
+            writer.write_json(
+                samples_artifact,
+                {
+                    "schema_version": 1,
+                    "model": model["tag"],
+                    "test": test["name"],
+                    "samples": soak["samples"],
+                },
+            )
+            metrics = {
+                key: value
+                for key, value in soak.items()
+                if key not in {"ok", "detail", "samples"}
+            }
+            metrics["requests_completed"] = len(soak["samples"])
+            metrics["requests_scheduled"] = len(repetitions)
+            records.append(
+                {
+                    "model": model["tag"],
+                    "name": test["name"],
+                    "kind": "memory-soak",
+                    "status": "pass" if soak["ok"] else "fail",
+                    "returncode": result.returncode,
+                    "timed_out": result.timed_out,
+                    "duration_seconds": result.duration_seconds,
+                    "log": writer.relative(log),
+                    "metrics": metrics,
+                    "artifacts": [samples_artifact],
+                    **({} if soak["ok"] else {"error": soak["detail"]}),
+                }
+            )
+            write_progress()
+            continue
+
         if test["kind"] == "serve":
             safe_tag = "".join(
                 character if character.isalnum() else "-" for character in model["tag"]

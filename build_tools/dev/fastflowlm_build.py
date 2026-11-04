@@ -235,6 +235,11 @@ def _build_fastflowlm(args, *, backend):
             )
         backend_flags = [
             "-DFLM_USE_HRX=ON",
+            # The issue-903 ownership fix lives in the FastFlowLM headers used
+            # by model producers. Build the available source engine so the
+            # candidate actually exercises that ownership instead of silently
+            # reinstalling the stale prebuilt Gemma DLL.
+            "-DFLM_BUILD_GEMMA4E=ON",
             f"-DCMAKE_PREFIX_PATH={environment.cmake_path(paths.HRX_INSTALL)}",
         ]
     else:

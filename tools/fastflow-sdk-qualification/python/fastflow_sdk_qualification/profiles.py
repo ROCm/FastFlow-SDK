@@ -144,7 +144,10 @@ def validate_profile(profile: Any) -> dict[str, Any]:
             _require(name not in seen_tests, f"{tag}: duplicate test: {name}")
             seen_tests.add(name)
             kind = test.get("kind")
-            _require(kind in {"run", "bench"}, f"{tag}/{name}: kind is invalid")
+            _require(
+                kind in {"run", "bench", "memory-soak"},
+                f"{tag}/{name}: kind is invalid",
+            )
             if kind == "run":
                 _require(
                     set(test)
@@ -221,7 +224,7 @@ def validate_profile(profile: Any) -> dict[str, Any]:
                     and 1 <= test["ctx_len"] <= 131072,
                     f"{tag}/{name}: context length is invalid",
                 )
-            else:
+            elif kind == "bench":
                 allowed_properties = {
                     "name",
                     "kind",
@@ -262,6 +265,72 @@ def validate_profile(profile: Any) -> dict[str, Any]:
                     and 1 <= test.get("iterations", 1) <= 100,
                     f"{tag}/{name}: benchmark iterations are invalid",
                 )
+            else:
+                required_properties = {
+                    "name",
+                    "kind",
+                    "ctx_len",
+                    "cycle_size",
+                    "cycle_count",
+                    "shape_sequence",
+                    "prompt_repetitions_start",
+                    "prompt_repetitions_step",
+                    "expected_prompt_tokens_min",
+                    "expected_prompt_tokens_max",
+                    "timeout_seconds",
+                    "request_timeout_seconds",
+                    "max_steady_cycle_mean_growth_mib",
+                    "max_steady_cycle_end_growth_mib",
+                }
+                _require(
+                    set(test) == required_properties,
+                    f"{tag}/{name}: memory-soak properties are invalid",
+                )
+                _require(
+                    type(test.get("ctx_len")) is int and 1 <= test["ctx_len"] <= 131072,
+                    f"{tag}/{name}: context length is invalid",
+                )
+                _require(
+                    type(test.get("cycle_size")) is int
+                    and 2 <= test["cycle_size"] <= 100,
+                    f"{tag}/{name}: cycle size is invalid",
+                )
+                _require(
+                    type(test.get("cycle_count")) is int
+                    and 3 <= test["cycle_count"] <= 10
+                    and test["cycle_size"] * test["cycle_count"] <= 300,
+                    f"{tag}/{name}: cycle count is invalid",
+                )
+                _require(
+                    test.get("shape_sequence", "repeated")
+                    in {"repeated", "continuous"},
+                    f"{tag}/{name}: shape sequence is invalid",
+                )
+                for field in (
+                    "prompt_repetitions_start",
+                    "prompt_repetitions_step",
+                    "request_timeout_seconds",
+                    "expected_prompt_tokens_min",
+                    "expected_prompt_tokens_max",
+                ):
+                    _require(
+                        type(test.get(field)) is int and test[field] >= 1,
+                        f"{tag}/{name}: {field} is invalid",
+                    )
+                _require(
+                    test["expected_prompt_tokens_min"]
+                    <= test["expected_prompt_tokens_max"]
+                    <= test["ctx_len"],
+                    f"{tag}/{name}: expected prompt-token bucket is invalid",
+                )
+                for field in (
+                    "max_steady_cycle_mean_growth_mib",
+                    "max_steady_cycle_end_growth_mib",
+                ):
+                    _require(
+                        type(test[field]) in {int, float} and test[field] >= 0,
+                        f"{tag}/{name}: {field} is invalid",
+                    )
             _require(
                 isinstance(test.get("timeout_seconds"), int)
                 and 1 <= test["timeout_seconds"] <= 7200,

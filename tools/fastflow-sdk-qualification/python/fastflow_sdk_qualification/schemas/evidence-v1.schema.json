@@ -201,6 +201,7 @@
             "model-resolution",
             "run",
             "bench",
+            "memory-soak",
             "serve",
             "xclbin",
             "xadx",
@@ -241,6 +242,10 @@
         },
         {
           "if": {"properties": {"kind": {"const": "bench"}}},
+          "then": {"required": ["metrics", "artifacts"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "memory-soak"}}},
           "then": {"required": ["metrics", "artifacts"]}
         },
         {

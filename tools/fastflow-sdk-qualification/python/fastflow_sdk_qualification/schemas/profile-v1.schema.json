@@ -117,6 +117,41 @@
         "iterations": {"type": "integer", "minimum": 1, "maximum": 100}
       }
     },
+    "memorySoakTest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "ctx_len",
+        "cycle_size",
+        "cycle_count",
+        "prompt_repetitions_start",
+        "prompt_repetitions_step",
+        "expected_prompt_tokens_min",
+        "expected_prompt_tokens_max",
+        "timeout_seconds",
+        "request_timeout_seconds",
+        "max_steady_cycle_mean_growth_mib",
+        "max_steady_cycle_end_growth_mib"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"const": "memory-soak"},
+        "ctx_len": {"type": "integer", "minimum": 1},
+        "cycle_size": {"type": "integer", "minimum": 2, "maximum": 100},
+        "cycle_count": {"type": "integer", "minimum": 3, "maximum": 10},
+        "shape_sequence": {"enum": ["repeated", "continuous"]},
+        "prompt_repetitions_start": {"type": "integer", "minimum": 1},
+        "prompt_repetitions_step": {"type": "integer", "minimum": 1},
+        "expected_prompt_tokens_min": {"type": "integer", "minimum": 1},
+        "expected_prompt_tokens_max": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "request_timeout_seconds": {"type": "integer", "minimum": 1},
+        "max_steady_cycle_mean_growth_mib": {"type": "number", "minimum": 0},
+        "max_steady_cycle_end_growth_mib": {"type": "number", "minimum": 0}
+      }
+    },
     "model": {
       "type": "object",
       "additionalProperties": false,
@@ -156,7 +191,8 @@
           "items": {
             "oneOf": [
               {"$ref": "#/$defs/runTest"},
-              {"$ref": "#/$defs/benchTest"}
+              {"$ref": "#/$defs/benchTest"},
+              {"$ref": "#/$defs/memorySoakTest"}
             ]
           }
         }

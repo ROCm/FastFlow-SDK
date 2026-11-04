@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import signal
+import statistics
 import subprocess
 import sys
 import threading
@@ -509,6 +510,350 @@ def serve_probe(
         "detail": detail,
         "ok": ok,
         "metrics": probe_metrics,
+    }
+
+
+def _process_private_bytes(pid: int) -> int | None:
+    """Return process-private committed bytes without an optional dependency."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessMemoryCountersEx(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+                ("PrivateUsage", ctypes.c_size_t),
+            ]
+
+        process_query_limited_information = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(
+            process_query_limited_information, False, wintypes.DWORD(pid)
+        )
+        if not handle:
+            return None
+        try:
+            counters = ProcessMemoryCountersEx()
+            counters.cb = ctypes.sizeof(counters)
+            if not psapi.GetProcessMemoryInfo(
+                handle, ctypes.byref(counters), counters.cb
+            ):
+                return None
+            return int(counters.PrivateUsage)
+        finally:
+            kernel32.CloseHandle(handle)
+
+    rollup = Path(f"/proc/{pid}/smaps_rollup")
+    try:
+        values: dict[str, int] = {}
+        for line in rollup.read_text(encoding="utf-8").splitlines():
+            name, separator, value = line.partition(":")
+            if separator and name in {"Private_Clean", "Private_Dirty"}:
+                values[name] = int(value.strip().split()[0]) * 1024
+        if values:
+            return values.get("Private_Clean", 0) + values.get("Private_Dirty", 0)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def memory_slope_bytes_per_request(samples: Sequence[int]) -> float:
+    """Least-squares slope for equally spaced process-memory samples."""
+    if len(samples) < 2:
+        return 0.0
+    midpoint = (len(samples) - 1) / 2.0
+    denominator = sum((index - midpoint) ** 2 for index in range(len(samples)))
+    return (
+        sum(
+            (index - midpoint) * (float(value) - statistics.fmean(samples))
+            for index, value in enumerate(samples)
+        )
+        / denominator
+    )
+
+
+def memory_cycle_growth_bytes(
+    samples: Sequence[int], cycle_size: int
+) -> tuple[float, int]:
+    """Return last-cycle mean and endpoint growth versus the prior cycle."""
+    if cycle_size < 1 or len(samples) < cycle_size * 2:
+        raise ValueError("at least two complete memory cycles are required")
+    previous = samples[-2 * cycle_size : -cycle_size]
+    current = samples[-cycle_size:]
+    return (
+        statistics.fmean(current) - statistics.fmean(previous),
+        int(current[-1]) - int(previous[-1]),
+    )
+
+
+def prompt_tokens_in_expected_bucket(
+    prompt_tokens: object, minimum: int, maximum: int
+) -> bool:
+    """Return whether a response confirms the intended allocation bucket."""
+    return type(prompt_tokens) is int and minimum <= prompt_tokens <= maximum
+
+
+def memory_soak_probe(
+    argv: Sequence[str | os.PathLike[str]],
+    *,
+    log_path: Path,
+    env: Mapping[str, str],
+    model: str,
+    prompt_repetitions: Sequence[int],
+    boot_timeout: float,
+    total_timeout: float,
+    request_timeout: float,
+    cycle_size: int,
+    expected_prompt_tokens_min: int,
+    expected_prompt_tokens_max: int,
+    max_steady_cycle_mean_growth_bytes: int,
+    max_steady_cycle_end_growth_bytes: int,
+    echo: bool = False,
+) -> tuple[CommandResult, dict[str, Any]]:
+    """Run shape windows in one process and verify late-window memory plateaus."""
+    normalized = tuple(os.fspath(item) for item in argv)
+    started = time.monotonic()
+    process = subprocess.Popen(
+        normalized,
+        stdin=None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=dict(env),
+        **_managed_process_kwargs(),
+    )
+    assert process.stdout is not None
+    chunks: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for chunk in iter(lambda: process.stdout.read(1), ""):
+                chunks.put(chunk)
+        finally:
+            chunks.put(None)
+
+    reader = threading.Thread(
+        target=read_output, name="qualification-memory-soak-output", daemon=True
+    )
+    reader.start()
+    output: list[str] = []
+    port: int | None = None
+    samples: list[dict[str, Any]] = []
+    detail = ""
+    timed_out = False
+    deadline = started + boot_timeout
+    try:
+        while time.monotonic() < deadline and port is None:
+            try:
+                chunk = chunks.get(timeout=0.1)
+            except queue.Empty:
+                if process.poll() is not None:
+                    break
+                continue
+            if chunk is None:
+                break
+            output.append(chunk)
+            match = _SERVE_PORT_PATTERN.search("".join(output))
+            if match:
+                port = int(match.group(1))
+        if port is None:
+            timed_out = process.poll() is None
+            detail = "server did not report a listening port"
+        else:
+            base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+            for request_index, repetitions in enumerate(prompt_repetitions, start=1):
+                remaining = started + total_timeout - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    detail = f"memory soak timed out before request {request_index}"
+                    break
+                if process.poll() is not None:
+                    detail = f"server exited before request {request_index}"
+                    break
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "alpha beta gamma delta " * repetitions,
+                        }
+                    ],
+                    "max_tokens": 1,
+                    "stream": False,
+                }
+                request = urllib.request.Request(
+                    base_url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                request_started = time.perf_counter()
+                try:
+                    with urllib.request.urlopen(
+                        request, timeout=min(request_timeout, remaining)
+                    ) as response:
+                        response_payload = json.loads(
+                            response.read().decode("utf-8", errors="replace")
+                        )
+                except (urllib.error.URLError, OSError, ValueError) as error:
+                    detail = f"request {request_index} failed: {error}"
+                    break
+                latency = time.perf_counter() - request_started
+                private_bytes = _process_private_bytes(process.pid)
+                usage = (
+                    response_payload.get("usage")
+                    if isinstance(response_payload, dict)
+                    else None
+                )
+                prompt_tokens = (
+                    usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                )
+                choices = (
+                    response_payload.get("choices")
+                    if isinstance(response_payload, dict)
+                    else None
+                )
+                if not isinstance(choices, list) or not choices:
+                    detail = f"request {request_index} returned no completion"
+                    break
+                if private_bytes is None:
+                    detail = "process private-memory sampling is unavailable"
+                    break
+                if not prompt_tokens_in_expected_bucket(
+                    prompt_tokens,
+                    expected_prompt_tokens_min,
+                    expected_prompt_tokens_max,
+                ):
+                    detail = (
+                        f"request {request_index} reported prompt_tokens="
+                        f"{prompt_tokens!r}, outside expected allocation bucket "
+                        f"[{expected_prompt_tokens_min}, "
+                        f"{expected_prompt_tokens_max}]"
+                    )
+                    break
+                samples.append(
+                    {
+                        "request": request_index,
+                        "prompt_repetitions": repetitions,
+                        "prompt_tokens": prompt_tokens,
+                        "latency_seconds": latency,
+                        "private_bytes": private_bytes,
+                    }
+                )
+    finally:
+        if process.poll() is None:
+            _terminate_process_tree(process)
+        process.wait()
+        reader.join(timeout=1)
+        while True:
+            try:
+                chunk = chunks.get_nowait()
+            except queue.Empty:
+                break
+            if chunk is not None:
+                output.append(chunk)
+        process.stdout.close()
+
+    private_samples = [int(sample["private_bytes"]) for sample in samples]
+    all_requests_completed = len(samples) == len(prompt_repetitions)
+    complete_cycles = len(private_samples) // cycle_size
+    steady_mean_growth = 0.0
+    steady_end_growth = 0
+    if complete_cycles >= 2:
+        steady_mean_growth, steady_end_growth = memory_cycle_growth_bytes(
+            private_samples[: complete_cycles * cycle_size], cycle_size
+        )
+    mean_ok = (
+        complete_cycles >= 2
+        and steady_mean_growth <= max_steady_cycle_mean_growth_bytes
+    )
+    end_ok = (
+        complete_cycles >= 2 and steady_end_growth <= max_steady_cycle_end_growth_bytes
+    )
+    ok = all_requests_completed and not detail and mean_ok and end_ok
+    if all_requests_completed and not detail and not mean_ok:
+        detail = (
+            f"steady-cycle private-memory mean growth "
+            f"{steady_mean_growth:.0f} bytes exceeds "
+            f"{max_steady_cycle_mean_growth_bytes}"
+        )
+    elif all_requests_completed and not detail and not end_ok:
+        detail = (
+            f"steady-cycle private-memory endpoint growth "
+            f"{steady_end_growth} bytes exceeds "
+            f"{max_steady_cycle_end_growth_bytes}"
+        )
+    elif ok:
+        detail = (
+            f"completed {len(samples)} requests in {complete_cycles} cycles; "
+            f"steady mean growth {steady_mean_growth:.0f} bytes; "
+            f"steady endpoint growth {steady_end_growth} bytes"
+        )
+
+    duration = time.monotonic() - started
+    stdout = redact("".join(output))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    rendered_log = (
+        f"$ {redact(' '.join(normalized))}\n"
+        f"[memory soak ok={ok} port={port} duration={duration:.6f}s]\n"
+        f"--- merged stdout/stderr ---\n{stdout}"
+        f"\n--- memory samples ---\n{json.dumps(samples, indent=2)}"
+        f"\n--- probe detail ---\n{detail}\n"
+    )
+    log_path.write_text(rendered_log, encoding="utf-8")
+    if echo:
+        print(
+            f"qualification log: {log_path.as_posix()}\n{rendered_log}",
+            file=sys.stderr,
+            flush=True,
+        )
+    result = CommandResult(
+        argv=normalized,
+        returncode=0 if ok else 1,
+        stdout=stdout,
+        stderr="",
+        duration_seconds=duration,
+        timed_out=timed_out,
+        log=log_path.as_posix(),
+    )
+    return result, {
+        "ok": ok,
+        "port": port,
+        "detail": detail,
+        "samples": samples,
+        "cycle_size": cycle_size,
+        "cycles_completed": complete_cycles,
+        "steady_cycle_mean_growth_bytes": steady_mean_growth,
+        "steady_cycle_end_growth_bytes": steady_end_growth,
+        "private_bytes_start": private_samples[0] if private_samples else None,
+        "private_bytes_end": private_samples[-1] if private_samples else None,
     }
 
 

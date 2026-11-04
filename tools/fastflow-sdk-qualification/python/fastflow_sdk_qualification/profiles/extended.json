@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "extended",
-  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak, a content-pinned LFM3 changing-prefill regression soak, plus content-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
+  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak, 105 continuously novel descending source-Gemma shapes within one internal allocation bucket (including two complete windows after the 64-entry HRX command-cache ceiling), a content-pinned LFM3 changing-prefill regression soak, plus content-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
   "extends": "default",
   "test_extensions": [
     {
@@ -21,6 +21,41 @@
     }
   ],
   "models": [
+    {
+      "tag": "gemma4-it:e2b",
+      "source": "https://huggingface.co/FastFlowLM/Gemma4-E2B-IT-NPU2",
+      "revision": null,
+      "identity_policy": "content-sha256",
+      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
+      "files": [
+        {"path": "audio_weight.q4nx", "sha256": "48d4632ee75ba1fdf40b8369d5961b1edfc86152e51d585aa6bd37b31f6f4895"},
+        {"path": "chat_template.jinja", "sha256": "2f1b4d75d067bae3fe44e676721c7f077d243bc007156cb9c2f8b5836613d082"},
+        {"path": "config.json", "sha256": "f544cd77796f3fc76a49dd9dd7ee99bdaca00a24ed6a55900b4c08624d76d9db"},
+        {"path": "model.q4nx", "sha256": "aaca4bf5592804f0752c9f5fb7b4cce2f517fd869ef1d8181b209c8b6dbf2a87"},
+        {"path": "tokenizer.json", "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"},
+        {"path": "tokenizer_config.json", "sha256": "e592c513cc86edf9962b9a4072f034c20f3c1facfbb2f1c60de8391774c4786e"},
+        {"path": "vision_weight.q4nx", "sha256": "40afff1f6328316add06a1b890f7835f8df246efdebbea84d84ebf513e1c3de6"}
+      ],
+      "xclbins": [],
+      "tests": [
+        {
+          "name": "varying-context-memory-plateau",
+          "kind": "memory-soak",
+          "ctx_len": 8192,
+          "cycle_size": 21,
+          "cycle_count": 5,
+          "shape_sequence": "continuous",
+          "prompt_repetitions_start": 656,
+          "prompt_repetitions_step": 1,
+          "expected_prompt_tokens_min": 2633,
+          "expected_prompt_tokens_max": 3049,
+          "timeout_seconds": 1800,
+          "request_timeout_seconds": 10,
+          "max_steady_cycle_mean_growth_mib": 32.0,
+          "max_steady_cycle_end_growth_mib": 32.0
+        }
+      ]
+    },
     {
       "tag": "lfm3:1.7b",
       "source": "https://huggingface.co/FastFlowLM/LFM3-1.7B-NPU2",

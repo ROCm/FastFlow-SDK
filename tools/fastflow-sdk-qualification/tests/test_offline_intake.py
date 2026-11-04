@@ -30,6 +30,7 @@ from fastflow_sdk_qualification.offline import (
     CandidateMismatchError,
     EvidenceError,
     _reconcile_xadx_report,
+    _validate_complete_execution,
     intake_evidence,
     pack_evidence,
     verify_archive,
@@ -118,6 +119,28 @@ def test_deterministic_pack_and_offline_verify(tmp_path):
     summary = verify_evidence(first)
     assert summary["status"] == "pass"
     assert summary["evidence_status"] == "pass"
+
+
+def test_complete_execution_accepts_memory_soak_record(tmp_path):
+    source = _evidence(tmp_path / "memory-soak")
+    evidence = json.loads((source / "evidence.json").read_text())
+    profile = json.loads((source / "profile.json").read_text())
+    contract = _candidate()["qualification_contract"]
+    profile["models"][0]["tests"].append({"name": "memory", "kind": "memory-soak"})
+    evidence["tests"].append(
+        {
+            "model": "qwen3:0.6b",
+            "name": "memory",
+            "kind": "memory-soak",
+            "status": "pass",
+            "duration_seconds": 1,
+            "log": "logs/tests/memory.log",
+            "metrics": {},
+            "artifacts": ["artifacts/memory.json"],
+        }
+    )
+
+    _validate_complete_execution(evidence, profile, contract)
 
 
 @pytest.mark.parametrize(
