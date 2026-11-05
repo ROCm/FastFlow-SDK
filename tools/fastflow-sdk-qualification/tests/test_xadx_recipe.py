@@ -364,6 +364,34 @@ def run(
     return report, runtimes
 
 
+def test_lifecycle_recreates_executable_on_same_runtime(tmp_path):
+    cases = [
+        {
+            "name": "recreated",
+            "stages": [stage("only", "first", expected=generator())],
+        }
+    ]
+    report, runtimes = run(
+        tmp_path,
+        cases,
+        lifecycle_rounds=3,
+        resident_rounds=0,
+        readback_rounds=0,
+    )
+    assert report["status"] == "pass", report["failures"]
+    assert len(runtimes) == 1
+    assert (
+        runtimes[0].events[:9]
+        == [
+            "load:first",
+            "run:executable-first",
+            "inspect",
+        ]
+        * 3
+    )
+    assert len(runtimes[0].dispatches) == 3
+
+
 @pytest.mark.parametrize("runtime_type", [StagingRuntime, NoncoherentRuntime])
 def test_a_later_stage_reads_what_the_earlier_stage_wrote(tmp_path, runtime_type):
     """The whole point of a chain: no host round trip between the stages."""

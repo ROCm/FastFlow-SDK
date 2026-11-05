@@ -58,10 +58,10 @@ POWER_MODE_ROUNDTRIP_ARTIFACTS = (
 # buy repetition, not coverage: every profile runs every case, and the case set
 # alone already dispatches each implementation against each value population.
 # What more rounds add is the chance to observe state surviving where it should
-# not -- resources leaking across a runtime lifecycle, a resident buffer
-# accumulating between dispatches, a rewritten input the device kept a stale view
-# of. Two lifecycle rounds is the least that can observe cross-lifecycle leakage
-# at all, so even the bounded profile pays for two.
+# not -- resources leaking across executable lifecycles on one runtime, a
+# resident buffer accumulating between dispatches, a rewritten input the device
+# kept a stale view of. Two lifecycle rounds is the least that can observe
+# cross-lifecycle leakage at all, so even the bounded profile pays for two.
 #
 # Every coherence case receives the full readback depth. The runner validates
 # this depth against each case's actual variant count, so recipe evolution cannot
