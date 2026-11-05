@@ -16,7 +16,7 @@ index 0f0873e2..9134d890 100644
  # Model sources live two levels deeper than the globs above reach. Only the core
  # half exists as loose sources; it is built separately, below.
  
-@@ -533,6 +537,26 @@ target_link_libraries(flm PUBLIC
+@@ -533,6 +537,28 @@ target_link_libraries(flm PUBLIC
      $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--as-needed>
  )
  
@@ -28,11 +28,13 @@ index 0f0873e2..9134d890 100644
 +    foreach(_flm_engine IN LISTS FLM_ENGINE_LINK_LIBS)
 +        # q4_npu_eXpress is the shared quant library, not a model engine.
 +        # llama_npu.dll and d3_npu.dll export std::codecvt::id, and flm imports
-+        # that data. Delay-load cannot bind a data import, so both stay normal
-+        # imports until the HRX engines are built with the dynamic CRT.
++        # that data. The MSVC source-built gemma4e_npu does too because it uses
++        # the static CRT. Delay-load cannot bind a data import, so these stay
++        # normal imports.
 +        if(_flm_engine STREQUAL "q4_npu_eXpress"
 +           OR _flm_engine STREQUAL "llama_npu"
-+           OR _flm_engine STREQUAL "d3_npu")
++           OR _flm_engine STREQUAL "d3_npu"
++           OR (FLM_BUILD_GEMMA4E AND _flm_engine STREQUAL "gemma4e_npu"))
 +            continue()
 +        endif()
 +        target_link_options(flm PRIVATE "/DELAYLOAD:${_flm_engine}.dll")

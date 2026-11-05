@@ -35,10 +35,6 @@ upstream. Then verify against the pin with `git apply --check` and
 `git apply --reverse --check` — `dev.py` uses the reverse check to decide a patch
 is already applied, so a patch that does not reverse cleanly breaks `setup`.
 
-## patches/hrx/
-
-The native Linux KMQ command-chain capability gate is already pin-resident.
-
 ## patches/FastFlowLM/
 
 ### 0001-support-redirected-windows-cli-input.patch
@@ -105,6 +101,36 @@ Piped input now uses the plain reader, which prints `>>> ` and flushes it.
 A terminal still uses libedit.
 
 **Remove when:** FastFlowLM prints the piped-input prompt without libedit.
+
+### 0007-bound-hrx-executable-cache.patch
+Makes each HRX `npu_app` own only its current immutable executable generation.
+When the control-sequence revision changes, the app builds the replacement and
+releases its previous owner reference; each in-flight `hrx::run` independently
+retains the generation it dispatches. Sequence revisions are widened to 64 bits
+for both HRX and XRT.
+
+**Why:** the former process-global map copied complete xclbin and control streams
+into keys and retained every revision until its global eviction ceiling. That
+made every novel shape grow host and native working sets before eviction.
+Current-generation ownership removes binary cache keys and makes executable
+lifetime follow the producer app while preserving in-flight safety, without
+changing the HRX API or its platform DDI.
+
+**Remove when:** FastFlowLM upstream has equivalent current-generation ownership
+with in-flight dispatch retention.
+
+### 0008-export-source-gemma4e-abi.patch
+Exports only the source-built Gemma4e constructor and state API on Windows,
+instead of asking CMake to export every symbol found in the engine objects.
+This keeps CRT implementation symbols out of the generated import library and
+allows `flm.exe` to delay-load the engine like the prebuilt model DLLs.
+
+**Why:** `WINDOWS_EXPORT_ALL_SYMBOLS` put CRT symbols in the import library that
+were not present in the final DLL, causing `STATUS_ENTRYPOINT_NOT_FOUND` before
+`flm --version` could run.
+
+**Remove when:** the source Gemma4e target upstream declares its Windows DLL ABI
+explicitly and does not use `WINDOWS_EXPORT_ALL_SYMBOLS`.
 
 The sub-buffer patch and the static-destruction-order patch were dropped at
 `ad6be553`. Upstream binds HRX sub-buffers at their byte offset (PR #801), and

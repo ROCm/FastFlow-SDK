@@ -433,6 +433,9 @@ def _validate_complete_execution(
                     "process_iteration": 1,
                 }
                 continue
+            if test["kind"] == "memory-soak":
+                expected[("memory-soak", model["tag"], test["name"])] = {}
+                continue
             for iteration in range(1, test["process_iterations"] + 1):
                 name = (
                     test["name"]

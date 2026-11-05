@@ -95,6 +95,24 @@ def test_qualification_contract_schema_pins_native_checks():
             validate_schema(invalid, native_schema)
 
 
+def test_evidence_schema_accepts_memory_soak_records():
+    test_schema = _json("schemas/evidence-v1.schema.json")["$defs"]["test"]
+    record = {
+        "model": "qwen3:0.6b",
+        "name": "varying-context-memory-sanity",
+        "kind": "memory-soak",
+        "status": "pass",
+        "duration_seconds": 1.0,
+        "log": "logs/memory.log",
+        "metrics": {},
+        "artifacts": ["artifacts/memory.json"],
+    }
+    validate_schema(record, test_schema)
+    del record["metrics"]
+    with pytest.raises(SchemaValidationError):
+        validate_schema(record, test_schema)
+
+
 def test_packaged_profiles_and_policies_use_owned_versions():
     for path in (PACKAGE_ROOT / "profiles").glob("*.json"):
         assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == (

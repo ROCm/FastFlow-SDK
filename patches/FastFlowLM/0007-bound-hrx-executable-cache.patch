@@ -1,0 +1,536 @@
+diff --git a/src/include/hrx_cpp/hrx_cpp.hpp b/src/include/hrx_cpp/hrx_cpp.hpp
+index add05e9e..3a8bb4f8 100644
+--- a/src/include/hrx_cpp/hrx_cpp.hpp
++++ b/src/include/hrx_cpp/hrx_cpp.hpp
+@@ -19,7 +19,6 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+-#include <functional>
+ #include <memory>
+ #include <mutex>
+ #include <stdexcept>
+@@ -130,78 +129,14 @@ inline bool hrx_report(hrx_status_t s, const char* where) {
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// Executable cache: build one HRX XADX executable per distinct executable
+-// identity (xclbin + control program + host patch table) and resolve its export
+-// ordinal once.
+-//
+-// Ownership / lifetime (context-exhaustion fix)
+-// ---------------------------------------------------------------------------
+-// Every executable is created with HRX_AMDXDNA_CONTEXT_MODE_CREATE, i.e. it is
+-// backed by its own NPU hardware context. That pool is small: on the Windows
+-// MCDM path the 314 driver runs out after enough distinct executables and
+-// hrx_stream_wait then fails with
+-//   D3DKMTCreateContextVirtual failed with 0xc01e0009
+-// (the Linux amdxdna path fails the analogous BO allocation with errno 11 /
+-// EAGAIN). A single long generation stays bounded because decode revisits the
+-// same control sequences, but a `flm serve` sweep that loads many models used
+-// to leak every model's executables forever: the cache was a process-wide map
+-// that was never pruned on model unload, so contexts accumulated across the
+-// sweep until the driver was exhausted -- exactly the "running out of contexts"
+-// failure seen at gemma4-e4b after many prior models.
+-//
+-// Executables are therefore reference counted. Each npu_app that dispatches a
+-// given (xclbin, ctrl_seq) holds exactly one reference for it; when the owning
+-// model's engine objects are destroyed (model unload / model switch in serve)
+-// the npu_app releases its references and, once the last owner drops, the
+-// executable is destroyed and its hardware context returned to the driver.
+-// ---------------------------------------------------------------------------
+-struct CachedExe {
+-    hrx_executable_t exe = nullptr;
+-    uint32_t ord = 0;
+-    size_t refs = 0;  // number of npu_app owners; released when it reaches 0
+-};
+-
+-inline void append_key_bytes(std::string& key, const void* data, size_t byte_count) {
+-    const uint64_t length = static_cast<uint64_t>(byte_count);
+-    key.append(reinterpret_cast<const char*>(&length), sizeof(length));
+-    if (data && byte_count) {
+-        key.append(reinterpret_cast<const char*>(data), byte_count);
+-    }
+-}
+-
+-inline std::mutex& exe_cache_mu() {
+-    static std::mutex m;
+-    return m;
+-}
+-inline std::unordered_map<std::string, CachedExe>& exe_cache() {
+-    static std::unordered_map<std::string, CachedExe> c;
+-    return c;
+-}
+-inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes,
+-                                const uint32_t* cc, size_t n) {
+-    std::string key;
+-    key.reserve(xclbin_bytes.size() + n * sizeof(uint32_t) + 2 * sizeof(uint64_t));
+-    append_key_bytes(key, xclbin_bytes.data(), xclbin_bytes.size());
+-    append_key_bytes(key, cc, n * sizeof(uint32_t));
+-    return key;
+-}
+-
+-// Build (or fetch the cached) executable for (xclbin, cc). Does NOT change the
+-// reference count; callers manage ownership with retain_executable /
+-// release_executable below. Returns nullptr on create failure (never cached, so
+-// a later call can retry instead of dispatching a silent no-op).
+-inline hrx_executable_t lookup_or_build_executable(
++// Build one executable for an immutable control revision. npu_app owns the
++// returned handle directly and releases it when that revision is replaced.
++// Native contexts and prepared commands are retained independently by HRX's
++// bounded device caches, so executable replacement does not recreate the
++// driver context on every shape change.
++inline hrx_executable_t build_executable(
+     const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
+-    uint32_t* ord_out, std::string* key_out) {
+-    std::string key = make_exe_key(xclbin_bytes, cc, n);
+-    std::lock_guard<std::mutex> lk(exe_cache_mu());
+-    auto& cache = exe_cache();
+-    auto it = cache.find(key);
+-    if (it != cache.end()) {
+-        if (ord_out) *ord_out = it->second.ord;
+-        if (key_out) *key_out = std::move(key);
+-        return it->second.exe;
+-    }
++    uint32_t* ord_out) {
+     hrx_const_byte_span_t xclbin = {xclbin_bytes.data(), xclbin_bytes.size()};
+     hrx_amdxdna_executable_run_t run = {};
+     run.record_length = sizeof(run);
+@@ -235,51 +170,10 @@ inline hrx_executable_t lookup_or_build_executable(
+         hrx_executable_release(exe);
+         exe = nullptr;
+     }
+-    if (exe) {
+-        cache.emplace(key, CachedExe{exe, ord, 0});
+-    }
+     if (ord_out) *ord_out = ord;
+-    if (key_out) *key_out = std::move(key);
+     return exe;
+ }
+ 
+-// Add one owner reference to the cached executable identified by key.
+-inline void retain_executable(const std::string& key) {
+-    std::lock_guard<std::mutex> lk(exe_cache_mu());
+-    auto& cache = exe_cache();
+-    auto it = cache.find(key);
+-    if (it != cache.end()) ++it->second.refs;
+-}
+-
+-// Drop one owner reference; when the last owner drops the executable is
+-// destroyed and its hardware context is returned to the driver.
+-inline void release_executable(const std::string& key) {
+-    hrx_executable_t to_free = nullptr;
+-    {
+-        std::lock_guard<std::mutex> lk(exe_cache_mu());
+-        auto& cache = exe_cache();
+-        auto it = cache.find(key);
+-        if (it == cache.end()) return;
+-        if (it->second.refs > 0) --it->second.refs;
+-        if (it->second.refs == 0) {
+-            to_free = it->second.exe;
+-            cache.erase(it);
+-        }
+-    }
+-    if (to_free) {
+-        hrx_executable_release(to_free);
+-    }
+-}
+-
+-// Backward-compatible entry point (no ownership tracking). Retained for any
+-// caller that does not manage executable lifetime; prefer the
+-// lookup_or_build/retain/release trio used by npu_app.
+-inline hrx_executable_t build_or_get_executable(
+-    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
+-    uint32_t* ord_out) {
+-    return lookup_or_build_executable(xclbin_bytes, cc, n, ord_out, nullptr);
+-}
+-
+ // ---------------------------------------------------------------------------
+ // uuid / xclbin / device / hw_context
+ // ---------------------------------------------------------------------------
+@@ -614,6 +508,49 @@ public:
+ 
+     run() = default;
+     explicit run(hrx_executable_t exe, uint32_t ord) : exe_(exe), ord_(ord) {}
++    ~run() {
++        if (exe_) hrx_executable_release(exe_);
++    }
++
++    run(const run& other)
++        : exe_(other.exe_), ord_(other.ord_), binds_(other.binds_),
++          submitted_(other.submitted_), flushed_(other.flushed_),
++          submit_error_(other.submit_error_) {
++        if (exe_) hrx_executable_retain(exe_);
++    }
++
++    run& operator=(const run& other) {
++        if (this == &other) return *this;
++        if (other.exe_) hrx_executable_retain(other.exe_);
++        if (exe_) hrx_executable_release(exe_);
++        exe_ = other.exe_;
++        ord_ = other.ord_;
++        binds_ = other.binds_;
++        submitted_ = other.submitted_;
++        flushed_ = other.flushed_;
++        submit_error_ = other.submit_error_;
++        return *this;
++    }
++
++    run(run&& other) noexcept
++        : exe_(other.exe_), ord_(other.ord_), binds_(std::move(other.binds_)),
++          submitted_(other.submitted_), flushed_(other.flushed_),
++          submit_error_(other.submit_error_) {
++        other.exe_ = nullptr;
++    }
++
++    run& operator=(run&& other) noexcept {
++        if (this == &other) return *this;
++        if (exe_) hrx_executable_release(exe_);
++        exe_ = other.exe_;
++        ord_ = other.ord_;
++        binds_ = std::move(other.binds_);
++        submitted_ = other.submitted_;
++        flushed_ = other.flushed_;
++        submit_error_ = other.submit_error_;
++        other.exe_ = nullptr;
++        return *this;
++    }
+ 
+     void add_binding(hrx_buffer_t b, size_t size) {
+         binds_.push_back({b, 0, size});
+diff --git a/src/include/npu_utils/npu_instr_utils.hpp b/src/include/npu_utils/npu_instr_utils.hpp
+index f0f805cd..aa279a6c 100644
+--- a/src/include/npu_utils/npu_instr_utils.hpp
++++ b/src/include/npu_utils/npu_instr_utils.hpp
+@@ -713,7 +713,7 @@ class npu_sequence{
+         }
+ 
+         inline bool sequence_valid(){return this->is_valid;}
+-        inline uint8_t sequence_version(){return this->instr_version;}
++        inline uint64_t sequence_version(){return this->instr_version;}
+         npu_device device_gen;
+     private:
+         constexpr static uint32_t dev_n_row_shift = 24;
+@@ -741,7 +741,7 @@ class npu_sequence{
+         std::vector<std::unique_ptr<npu_cmd>> cmds;
+         std::vector<uint32_t> npu_seq;
+         bool is_valid;
+-        uint8_t instr_version;
++        uint64_t instr_version;
+ };
+ 
+ #endif
+diff --git a/src/include/npu_utils/npu_utils_hrx.hpp b/src/include/npu_utils/npu_utils_hrx.hpp
+index 090039b4..71029171 100644
+--- a/src/include/npu_utils/npu_utils_hrx.hpp
++++ b/src/include/npu_utils/npu_utils_hrx.hpp
+@@ -36,7 +36,6 @@
+ #include <iostream>
+ #include <sstream>
+ #include <map>
+-#include <unordered_set>
+ #include <stdio.h>
+ #ifndef __WINDOWS__
+ #include <fcntl.h>
+@@ -111,18 +110,42 @@ private:
+ 
+     // self-managed
+     bool module_valid;
+-    uint8_t module_version;
+-    hrx_executable_t exe;  // HRX direct executable built from ctrl_seq->dump()
+-    uint32_t exe_ord;      // resolved "MLIR_AIE" export ordinal
++    uint64_t module_version;
++    hrx_executable_t current_executable = nullptr;
++    uint64_t current_executable_revision = UINT64_MAX;
++    uint32_t current_executable_ordinal = 0;
+     std::unique_ptr<npu_sequence> ctrl_seq;
+-    // Executable-cache keys this app owns a reference for. Each distinct
+-    // (xclbin, ctrl_seq) this app dispatches contributes one reference; they are
+-    // all released in the destructor so the backing NPU hardware contexts are
+-    // returned when the owning model is unloaded (see hrx_cpp.hpp).
+-    std::unordered_set<std::string> exe_keys_;
+-
+-    ///@brief Transfer all state from `o` and leave it empty (owning no
+-    ///       executable references) so its destructor releases nothing.
++
++    void release_current_executable() noexcept {
++        if (current_executable) {
++            hrx_executable_release(current_executable);
++            current_executable = nullptr;
++        }
++        current_executable_revision = UINT64_MAX;
++        current_executable_ordinal = 0;
++    }
++
++    hrx_executable_t acquire_current_executable(
++        uint64_t revision, const uint32_t* control_words,
++        size_t control_word_count, uint32_t* ordinal) {
++        if (!current_executable ||
++            current_executable_revision != revision) {
++            uint32_t new_ordinal = 0;
++            hrx_executable_t replacement = hrx::build_executable(
++                this->context->xclbin_bytes(), control_words,
++                control_word_count, &new_ordinal);
++            if (!replacement) return nullptr;
++            release_current_executable();
++            current_executable = replacement;
++            current_executable_revision = revision;
++            current_executable_ordinal = new_ordinal;
++        }
++        hrx_executable_retain(current_executable);
++        if (ordinal) *ordinal = current_executable_ordinal;
++        return current_executable;
++    }
++
++    ///@brief Transfer all state from `o`.
+     void move_from(npu_app&& o) noexcept {
+         device_gen = o.device_gen;
+         device = o.device;
+@@ -131,13 +154,14 @@ private:
+         enable_preemption = o.enable_preemption;
+         module_valid = o.module_valid;
+         module_version = o.module_version;
+-        exe = o.exe;
+-        exe_ord = o.exe_ord;
++        current_executable = o.current_executable;
++        current_executable_revision = o.current_executable_revision;
++        current_executable_ordinal = o.current_executable_ordinal;
+         ctrl_seq = std::move(o.ctrl_seq);
+-        exe_keys_ = std::move(o.exe_keys_);
+-        o.exe = nullptr;
+         o.module_valid = false;
+-        o.exe_keys_.clear();
++        o.current_executable = nullptr;
++        o.current_executable_revision = UINT64_MAX;
++        o.current_executable_ordinal = 0;
+     }
+ 
+     ///@brief Setup the kernel
+@@ -148,22 +172,31 @@ private:
+         assert(data.first != nullptr);
+         assert(data.second > 0);
+         assert(this->context != nullptr);
+-        std::string exe_key;
+-        this->exe = hrx::lookup_or_build_executable(
+-            this->context->xclbin_bytes(), data.first, data.second,
+-            &this->exe_ord, &exe_key);
+-        if (this->exe == nullptr){
++        uint32_t ord = 0;
++        const uint64_t revision = this->ctrl_seq->sequence_version();
++        hrx_executable_t exe = this->acquire_current_executable(
++            revision, data.first, data.second, &ord);
++        if (exe == nullptr){
+             header_print_r("ERROR", "Failed to build HRX executable from ctrl_seq");
+             exit(1);
+         }
+-        // Take one reference the first time this app uses this executable; the
+-        // destructor drops all of them so the hardware context is freed on
+-        // model unload instead of leaking for the process lifetime.
+-        if (this->exe_keys_.insert(exe_key).second) {
+-            hrx::retain_executable(exe_key);
+-        }
++        // npu_app owns one reference; this temporary reference only verifies
++        // that the immutable generation is ready for subsequent dispatches.
++        hrx_executable_release(exe);
+         this->module_valid = true;
+-        this->module_version = this->ctrl_seq->sequence_version();
++        this->module_version = revision;
++    }
++
++    hrx::run _create_hrx_run() {
++        std::pair<uint32_t*, size_t> data = this->ctrl_seq->dump();
++        uint32_t ord = 0;
++        hrx_executable_t exe = this->acquire_current_executable(
++            this->module_version, data.first, data.second, &ord);
++        if (exe == nullptr) {
++            header_print_r("ERROR", "Failed to acquire HRX executable");
++            exit(1);
++        }
++        return hrx::run(exe, ord);
+     }
+ 
+ public:
+@@ -203,9 +236,7 @@ public:
+         this->device = nullptr;
+         this->context = nullptr;
+         this->module_valid = false;
+-        this->exe = nullptr;
+-        this->exe_ord = 0;
+-        this->module_version = 0xFF;
++        this->module_version = UINT64_MAX;
+     }
+ 
+     ///@brief Constructor, this shall not invoke by user, it shall only be invoked by npu_app_manager
+@@ -217,23 +248,14 @@ public:
+     npu_app(npu_device device_gen, hrx::device* device, hrx::hw_context* context, std::string kernel_name, bool enable_preemption = false):
+         device_gen(device_gen), device(device), context(context), kernel_name(kernel_name), enable_preemption(enable_preemption){
+         this->module_valid = false;
+-        this->exe = nullptr;
+-        this->exe_ord = 0;
+         this->ctrl_seq = std::make_unique<npu_sequence>(device_gen, enable_preemption);
+-        this->module_version = 0xFF;
++        this->module_version = UINT64_MAX;
+     }
+ 
+-    ///@brief Destructor: release this app's executable references so their NPU
+-    ///       hardware contexts are freed when the owning model is unloaded.
+-    ~npu_app(){
+-        for (const auto& k : this->exe_keys_) hrx::release_executable(k);
+-    }
++    ~npu_app() { this->release_current_executable(); }
+ 
+-    // npu_app owns HRX executable references, so it is move-only (copies are
+-    // already deleted by the unique_ptr member). Declaring the destructor above
+-    // suppresses the implicit move operations, so define them explicitly and
+-    // transfer ownership of the executable keys, leaving the moved-from object
+-    // with none (so it releases nothing).
++    // The unique_ptr makes npu_app move-only. Each app owns only its current
++    // executable generation; individual in-flight hrx::run values retain it.
+     npu_app(const npu_app&) = delete;
+     npu_app& operator=(const npu_app&) = delete;
+ 
+@@ -241,8 +263,7 @@ public:
+ 
+     npu_app& operator=(npu_app&& other) noexcept {
+         if (this != &other) {
+-            for (const auto& k : this->exe_keys_) hrx::release_executable(k);
+-            this->exe_keys_.clear();
++            this->release_current_executable();
+             this->move_from(std::move(other));
+         }
+         return *this;
+@@ -274,7 +295,7 @@ public:
+         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
+             this->_setup_kernel();
+         }
+-        hrx::run run(this->exe, this->exe_ord);
++        hrx::run run = this->_create_hrx_run();
+         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
+         for (size_t i = 0; i < sizeof...(args); i++){
+             run.add_binding(bo_args[i]->bo());
+@@ -299,7 +320,7 @@ public:
+         for (size_t i = 0; i < sizeof...(args); i++){
+             bo_args[i]->sync_to_device();
+         }
+-        hrx::run run(this->exe, this->exe_ord);
++        hrx::run run = this->_create_hrx_run();
+         for (size_t i = 0; i < sizeof...(args); i++){
+             run.add_binding(bo_args[i]->bo());
+         }
+@@ -322,7 +343,7 @@ public:
+         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
+             this->_setup_kernel();
+         }
+-        hrx::run run(this->exe, this->exe_ord);
++        hrx::run run = this->_create_hrx_run();
+         // HRX bindings are the buffer args only, in order (arg 3 = output). The
+         // (3,0,0) opcode scalars are encoded in the TXN stream, not as bindings.
+         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
+diff --git a/src/include/npu_utils/npu_utils_xrt.hpp b/src/include/npu_utils/npu_utils_xrt.hpp
+index 8e77fdb7..b34ab69e 100644
+--- a/src/include/npu_utils/npu_utils_xrt.hpp
++++ b/src/include/npu_utils/npu_utils_xrt.hpp
+@@ -118,7 +118,7 @@ private:
+ 
+     // self-managed
+     bool module_valid;
+-    uint8_t module_version;
++    uint64_t module_version;
+     std::unique_ptr<xrt::module> module;
+     std::unique_ptr<xrt::elf> elf;
+     std::unique_ptr<xrt::ext::kernel> kernel;
+@@ -203,7 +203,7 @@ public:
+         this->module = nullptr;
+         this->elf = nullptr;
+         this->kernel = nullptr;
+-        this->module_version = 0xFF;
++        this->module_version = UINT64_MAX;
+     }
+ 
+     ///@brief Constructor, this shall not invoke by user, it shall only be invoked by npu_app_manager
+@@ -219,10 +219,10 @@ public:
+         this->elf = nullptr;
+         this->kernel = nullptr;
+         this->ctrl_seq = std::make_unique<npu_sequence>(device_gen, enable_preemption);
+-        this->module_version = 0xFF;
++        this->module_version = UINT64_MAX;
+     }
+ 
+-  
++
+     void update_ctrl_seq(){
+         assert(this->ctrl_seq != nullptr);
+         this->_setup_kernel();
+@@ -270,7 +270,7 @@ public:
+         return state;
+     }
+ 
+-    
++
+     ///@brief Operator() for running the kernel
+     ///@param args arguments, shall be the buffers with real bo
+     ///@see xrt::run
+@@ -292,7 +292,7 @@ public:
+         LOG_VERBOSE(2, "ending state: " << this->cmd_state_map[state]);
+         return state;
+     }
+-    
++
+     ///@brief Create a run object
+     ///@param args arguments, shall be the buffers with real bo
+     ///@return a run object for waiting
+@@ -449,7 +449,7 @@ public:
+         std::string Node = "MLIR_AIE";
+         auto xkernels = this_xclbin.get_kernels();
+         auto xkernel = *std::find_if(
+-            xkernels.begin(), 
++            xkernels.begin(),
+             xkernels.end(),
+             [Node](xrt::xclbin::kernel &k) {
+                 auto name = k.get_name();
+@@ -516,7 +516,7 @@ private:
+     npu_device npu_gen;
+ public:
+     constexpr static int max_xclbins = 16; // This is hard constraint from the XRT driver
+-    
++
+     ///@brief Constructor, this shall not invoke by user, it shall only be invoked by main
+     ///@param device the npu device
+     ///@param device_id the device id
+@@ -543,17 +543,17 @@ public:
+         assert(xclbin_name != "");
+         int xclbin_id = -1;
+         for (size_t i = 0; i < this->xclbin_count; i++){
+-    
++
+             if (this->npu_xclbins[i]->get_xclbin_name() == xclbin_name){
+                 xclbin_id = i;
+                 break;
+             }
+         }
+-        LOG_VERBOSE_IF_ELSE(2, xclbin_id > -1, 
++        LOG_VERBOSE_IF_ELSE(2, xclbin_id > -1,
+             "Found xclbin: " << xclbin_name << "registered as id " << xclbin_id << "!",
+             "Xclbin: " << xclbin_name << " not registered yet!"
+         );
+-    
++
+         if (xclbin_id == -1){ // the xclbin is not registered yet
+             if (this->xclbin_count >= max_xclbins){
+                 throw std::runtime_error("Max number of xclbins reached");
+@@ -588,7 +588,7 @@ public:
+         fout.close();
+         LOG_VERBOSE(1, "Trace written successfully!");
+     }
+-    
++
+     ///@brief Create a buffer with real bo
+     ///@param size size of the buffer
+     ///@see buffer
+@@ -700,4 +700,4 @@ public:
+         return (float)query_sensor.input * pow(10, query_sensor.unitm);
+     }
+     #endif
+-};
+\ No newline at end of file
++};

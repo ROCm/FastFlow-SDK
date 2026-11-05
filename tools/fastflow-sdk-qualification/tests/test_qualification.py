@@ -37,6 +37,9 @@ from fastflow_sdk_qualification.commands import (
     _transcript_contains_phrase,
     _wav_duration_seconds,
     _word_error_rate,
+    memory_cycle_growth_bytes,
+    memory_slope_bytes_per_request,
+    prompt_tokens_in_expected_bucket,
     redact,
     run_command,
     serve_probe,
@@ -74,6 +77,51 @@ _POWER_MODE_VALUES = {
     "performance": 3,
     "turbo": 4,
 }
+
+
+def test_memory_slope_bytes_per_request_uses_linear_regression():
+    assert memory_slope_bytes_per_request([100, 102, 104, 106]) == pytest.approx(2)
+    assert memory_slope_bytes_per_request([100, 104, 101, 106]) == pytest.approx(1.5)
+    assert memory_slope_bytes_per_request([100]) == 0
+
+
+def test_memory_cycle_growth_compares_last_two_complete_cycles():
+    assert memory_cycle_growth_bytes(
+        [100, 110, 120, 130, 125, 135, 145, 155, 127, 137, 147, 157], 4
+    ) == pytest.approx((2, 2))
+    with pytest.raises(ValueError, match="two complete memory cycles"):
+        memory_cycle_growth_bytes([100, 110, 120], 2)
+
+
+def test_memory_soak_requires_prompt_tokens_in_declared_bucket():
+    assert prompt_tokens_in_expected_bucket(1025, 1025, 1280)
+    assert prompt_tokens_in_expected_bucket(1280, 1025, 1280)
+    assert not prompt_tokens_in_expected_bucket(1024, 1025, 1280)
+    assert not prompt_tokens_in_expected_bucket(1281, 1025, 1280)
+    assert not prompt_tokens_in_expected_bucket(None, 1025, 1280)
+
+
+def test_memory_soak_repeats_one_descending_shape_window():
+    assert runner.memory_soak_repetitions(
+        {
+            "cycle_size": 3,
+            "cycle_count": 3,
+            "prompt_repetitions_start": 20,
+            "prompt_repetitions_step": 4,
+        }
+    ) == [28, 24, 20, 28, 24, 20, 28, 24, 20]
+
+
+def test_memory_soak_generates_continuously_novel_shape_windows():
+    assert runner.memory_soak_repetitions(
+        {
+            "cycle_size": 3,
+            "cycle_count": 3,
+            "shape_sequence": "continuous",
+            "prompt_repetitions_start": 20,
+            "prompt_repetitions_step": 4,
+        }
+    ) == [52, 48, 44, 40, 36, 32, 28, 24, 20]
 
 
 def test_inhibit_system_sleep_is_noop_off_windows(monkeypatch):
@@ -1253,10 +1301,10 @@ def test_keep_going_after_doctor_and_model_failure(monkeypatch, tmp_path, capsys
     )
     assert exit_code == 1
     assert summary["failures"][-1] == {
-        "model": "qwen3:0.6b",
+        "model": "gemma4-it:e2b",
         "name": "model-resolution",
         "error": "bad model",
-        "log": "logs/pull/qwen3-0-6b.log",
+        "log": "logs/pull/gemma4-it-e2b.log",
     }
     stderr = capsys.readouterr().err
     assert "qualify: resolving model qwen3:0.6b" in stderr
