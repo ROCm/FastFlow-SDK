@@ -736,11 +736,11 @@ def _soak_unique_xclbin_contexts(
     """Load more distinct xclbin images than the Windows HAL cache in one runtime.
 
     Recipe coverage only has a handful of unique production xclbins, and
-    lifecycle rounds reset the device. Windows sizes the context cache at
-    architecture-budget-1 (31 on Strix Halo). This clone-and-uniquify pass
-    loads 33 distinct images so LRU must evict before CreateContext rather
-    than recovering from a 0xc01e0009 remap. The soak is a counted XADX test
-    (`unique-xclbin-context-soak`), not a recipe case.
+    lifecycle rounds recreate those same images. Windows sizes the context
+    cache at architecture-budget-1 (31 on Strix Halo). This
+    clone-and-uniquify pass loads 33 distinct images so LRU must evict before
+    CreateContext rather than recovering from a 0xc01e0009 remap. The soak is
+    a counted XADX test (`unique-xclbin-context-soak`), not a recipe case.
     """
     started = time.monotonic()
     if unique_xclbin_context_soak <= 0:
@@ -802,8 +802,9 @@ def _run_rounds(
     """Drive the lifecycle, resident, and readback rounds over a set of cases.
 
     This is the qualification contract rather than a detail of any one case
-    format, so it is shared: a kernel is torn down and rebuilt, then held
-    resident, then has an input rewritten underneath it between dispatches.
+    format, so it is shared: a kernel is torn down and rebuilt on the same
+    long-lived device, then held resident, then has an input rewritten
+    underneath it between dispatches.
 
     `readback` returns None for a case with nothing to read back, or a callable
     taking the prepared case and the round index.
@@ -834,7 +835,16 @@ def _run_rounds(
                 record(case, "lifecycle", round_index + 1, error)
             finally:
                 if len(session.runtime.resources) != mark:
-                    session.reset()
+                    try:
+                        _rollback_runtime(session.runtime, mark)
+                    except Exception as error:
+                        record(
+                            case,
+                            "lifecycle-cleanup",
+                            round_index + 1,
+                            error,
+                        )
+                        session.reset()
 
     # Keep the full case inventory loaded together. Besides testing repeated
     # dispatch through one executable, preserving executable and device-buffer
