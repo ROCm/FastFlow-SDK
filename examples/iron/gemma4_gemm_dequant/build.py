@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Build IRON GEMM and dequant operators and stage them for FastFlowLM.
+"""Build IRON GEMM/dequant operators for a Gemma 4 model-extension bundle.
 
 Derived from amd/IRON's Gemma 4 GEMM/dequant example:
 https://github.com/amd/IRON/tree/devel/iron/applications/gemma4_flm
@@ -10,8 +10,11 @@ https://github.com/amd/IRON/tree/devel/iron/applications/gemma4_flm
 
 Writes:
 
-    <out>/xclbins/Gemma4-E2B-IT-NPU2/  engine xclbins, with GEMM and dequant replaced
+    <out>/xclbins/Gemma4-E2B-IT-NPU2/  extension-local engine xclbins
     <out>/xclbins/.../iron/            GEMM and dequant instruction sequences
+
+The output is consumed through the bundle's extension.json. It does not replace
+the Gemma engine or XCLBINs installed beside flm.
 """
 
 import argparse
@@ -155,7 +158,7 @@ def parse_args():
     parser.add_argument(
         "--compile-only",
         action="store_true",
-        help="compile operators without staging FastFlowLM assets",
+        help="compile operators without staging model-extension assets",
     )
     parser.add_argument(
         "--smoke",

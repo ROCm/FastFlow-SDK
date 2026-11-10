@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from build_tools.fastflow_sdk_archive import (
     extract_archive,
-    verify_installed_engine_sdk,
+    verify_installed_gemma4e_sdk,
 )
 
 _PROBE_CMAKE = r"""
@@ -266,7 +266,7 @@ def verify_extracted_archive(archive: Path, workspace: Path) -> None:
             archive, workspace / "extracted", allowed_root=workspace.resolve()
         )
         verify_hrx_prefix(extracted)
-        verify_installed_engine_sdk(extracted)
+        verify_installed_gemma4e_sdk(extracted)
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
@@ -306,7 +306,7 @@ def verify_artifact_dir(directory: Path) -> None:
             archive, work / "extracted", allowed_root=work.resolve()
         )
         verify_hrx_prefix(extracted)
-        verify_installed_engine_sdk(extracted)
+        verify_installed_gemma4e_sdk(extracted)
         verify_runtime_wheel(runtime_wheel, require_runtime=True)
         verify_runtime_wheel_prefix(runtime_wheel)
         for wheel in fastflowlm_wheels:

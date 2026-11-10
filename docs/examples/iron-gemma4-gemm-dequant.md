@@ -77,7 +77,12 @@ python "$IronGemmDequantApp\build.py" `
   (Join-Path $FlmAssets "xclbins") $GemmDequantBuild
 ```
 
-## Build the override engine
+## Build the model extension
+
+Configure the Gemma extension shipped by the FastFlowLM wheel. CMake copies
+the staged `Gemma4-E2B-IT-NPU2` tree, including `iron/`, into the bundle.
+This build also requires Rust and Cargo, as described in
+[Build the model extension](iron-gemma4.md#build-the-model-extension).
 
 Linux:
 
@@ -87,10 +92,10 @@ cmake -S "$FLM_GEMMA4_SOURCE" -B "$GEMM_DEQUANT_BUILD/engine" -G Ninja \
   "-DFASTFLOW_SDK_ROOT=$FASTFLOW_SDK_ROOT" \
   "-DFLM_ENGINE_LIB_DIR=$FLM_ENGINE_LIB_DIR" \
   "-DFLM_IRON_INCLUDE_DIRS=$IRON_GEMM_DEQUANT_APP;$IRON_INCLUDE_DIR" \
-  -DFLM_OVERRIDES_HEADER=overrides.hpp
+  -DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp \
+  "-DFLM_GEMMA4_XCLBIN_DIR=$GEMM_DEQUANT_BUILD/xclbins/Gemma4-E2B-IT-NPU2"
 
-cmake --build "$GEMM_DEQUANT_BUILD/engine" \
-  --target gemma4e_npu --parallel 2
+cmake --build "$GEMM_DEQUANT_BUILD/engine" --parallel 2
 ```
 
 Windows:
@@ -101,10 +106,10 @@ cmake -S $FlmGemma4Source -B "$GemmDequantBuild\engine" -G Ninja `
   "-DFASTFLOW_SDK_ROOT=$FastFlowSdkRoot" `
   "-DFLM_ENGINE_LIB_DIR=$FlmEngineLibDir" `
   "-DFLM_IRON_INCLUDE_DIRS=$IronGemmDequantApp;$IronIncludeDir" `
-  -DFLM_OVERRIDES_HEADER=overrides.hpp
+  -DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp `
+  "-DFLM_GEMMA4_XCLBIN_DIR=$GemmDequantBuild\xclbins\Gemma4-E2B-IT-NPU2"
 
-cmake --build "$GemmDequantBuild\engine" `
-  --target gemma4e_npu --parallel 2
+cmake --build "$GemmDequantBuild\engine" --parallel 2
 ```
 
 ## Serve and verify
@@ -112,28 +117,19 @@ cmake --build "$GemmDequantBuild\engine" `
 Linux:
 
 ```bash
-(
-  export LD_LIBRARY_PATH=$GEMM_DEQUANT_BUILD/engine/engines${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-  export FLM_XCLBIN_PATH=$GEMM_DEQUANT_BUILD
-
-  flm serve gemma4-it:e2b --prefill-chunk-len 512 --port 11434
-)
+flm --model-extension "$GEMM_DEQUANT_BUILD/engine/bundle/extension.json" \
+  pull gemma4-open-it:e2b
+flm --model-extension "$GEMM_DEQUANT_BUILD/engine/bundle/extension.json" \
+  serve gemma4-open-it:e2b --prefill-chunk-len 512 --port 11434
 ```
 
 Windows:
 
 ```powershell
-$OldPath = $env:PATH
-$OldXclbinPath = $env:FLM_XCLBIN_PATH
-try {
-  $env:PATH = "$GemmDequantBuild\engine\engines;$env:PATH"
-  $env:FLM_XCLBIN_PATH = $GemmDequantBuild
-
-  flm serve gemma4-it:e2b --prefill-chunk-len 512 --port 11434
-} finally {
-  $env:PATH = $OldPath
-  $env:FLM_XCLBIN_PATH = $OldXclbinPath
-}
+$Extension = Join-Path $GemmDequantBuild "engine\bundle\extension.json"
+flm --model-extension $Extension pull gemma4-open-it:e2b
+flm --model-extension $Extension serve gemma4-open-it:e2b `
+  --prefill-chunk-len 512 --port 11434
 ```
 
 The server should report:

@@ -73,27 +73,7 @@ pkg-config first would still pick the broken distro file.
 **Remove when:** FastFlowLM prefers caller-provided XRT dirs over pkg-config
 upstream.
 
-### 0004-clang-cl-gemma4e-runtime.patch
-Builds the from-source Gemma 4 engine with the dynamic CRT under clang-cl, and
-forwards the prebuilt `ostream::operator<<(bool)` import to `MSVCP140`.
-`/arch:AVX2` and `/arch:AVX512` are already selected upstream.
-
-**Remove when:** FastFlowLM links the clang-cl Gemma 4 engine to the dynamic
-CRT and no longer needs the forwarded export.
-
-### 0005-engine-dll-from-path.patch
-Windows searches the executable directory before `PATH`, so an engine DLL
-beside `flm.exe` always won. `flm` delay-loads the model engines and loads
-the first copy found on `PATH`. `q4_npu_eXpress` stays a normal import.
-`llama_npu.dll` exports CRT data, which delay-load cannot bind, so it stays a
-normal import until the HRX engines are built with the dynamic CRT. Linux
-already selects a replacement through `LD_LIBRARY_PATH`.
-
-**Remove when:** FastFlowLM resolves engine DLLs from `PATH` before the
-executable directory upstream, and the engine import libraries no longer export
-CRT symbols.
-
-### 0006-posix-piped-prompt.patch
+### 0004-posix-piped-prompt.patch
 libedit's `readline()` does not write `>>> ` when stdin is not a terminal.
 Qualification waits for that prompt before sending the next line, so `flm run`
 loads the model and then both sides wait. GNU readline printed the prompt.
@@ -102,35 +82,24 @@ A terminal still uses libedit.
 
 **Remove when:** FastFlowLM prints the piped-input prompt without libedit.
 
-### 0007-bound-hrx-executable-cache.patch
+### 0005-bound-hrx-executable-cache.patch
 Makes each HRX `npu_app` own only its current immutable executable generation.
 When the control-sequence revision changes, the app builds the replacement and
 releases its previous owner reference; each in-flight `hrx::run` independently
 retains the generation it dispatches. Sequence revisions are widened to 64 bits
 for both HRX and XRT.
 
-**Why:** the former process-global map copied complete xclbin and control streams
-into keys and retained every revision until its global eviction ceiling. That
-made every novel shape grow host and native working sets before eviction.
-Current-generation ownership removes binary cache keys and makes executable
-lifetime follow the producer app while preserving in-flight safety, without
-changing the HRX API or its platform DDI.
+**Why:** the former process-global map keyed a compute-once xclbin digest plus
+each control stream, and every `npu_app` retained all revisions it had used
+until model destruction. That made every novel shape grow host and native
+working sets. Current-generation ownership removes the producer-side map and
+makes executable lifetime follow the app while preserving in-flight safety.
+The compute-once xclbin digest is attached to HRX's versioned executable-create
+parameters, so equivalent native executables still reuse HRX's bounded
+device-owned cache without rescanning the xclbin.
 
 **Remove when:** FastFlowLM upstream has equivalent current-generation ownership
 with in-flight dispatch retention.
-
-### 0008-export-source-gemma4e-abi.patch
-Exports only the source-built Gemma4e constructor and state API on Windows,
-instead of asking CMake to export every symbol found in the engine objects.
-This keeps CRT implementation symbols out of the generated import library and
-allows `flm.exe` to delay-load the engine like the prebuilt model DLLs.
-
-**Why:** `WINDOWS_EXPORT_ALL_SYMBOLS` put CRT symbols in the import library that
-were not present in the final DLL, causing `STATUS_ENTRYPOINT_NOT_FOUND` before
-`flm --version` could run.
-
-**Remove when:** the source Gemma4e target upstream declares its Windows DLL ABI
-explicitly and does not use `WINDOWS_EXPORT_ALL_SYMBOLS`.
 
 The sub-buffer patch and the static-destruction-order patch were dropped at
 `ad6be553`. Upstream binds HRX sub-buffers at their byte offset (PR #801), and

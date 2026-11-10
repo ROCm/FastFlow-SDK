@@ -63,32 +63,32 @@ def _catalogue():
     gpt_oss = ["GPT-OSS-20B-NPU2"]
     gemma = ["Gemma3-1B-NPU2"]
     return [
-        {"id": "dequant-122f128af9bdad35", "kernel": "dequant", "families": lfm},
-        {"id": "dequant-4e4da9a7be6b28db", "kernel": "dequant", "families": gpt_oss},
-        {"id": "dequant-ef0bd861e763be8c", "kernel": "dequant", "families": gemma},
-        {"id": "dequant-575d45e47993315f", "kernel": "dequant", "families": qwen},
+        {"id": "dequant-f026590bcf8694b5", "kernel": "dequant", "families": lfm},
+        {"id": "dequant-e3dda597bab4918c", "kernel": "dequant", "families": gpt_oss},
+        {"id": "dequant-1fae7d796ad2d91b", "kernel": "dequant", "families": gemma},
+        {"id": "dequant-a95b04372f722ae3", "kernel": "dequant", "families": qwen},
         {
-            "id": "dequant-a613e23410d827e5",
+            "id": "dequant-cc585404562243d3",
             "kernel": "dequant",
             "families": ["Qwen3-4B-NPU2"],
         },
         {
-            "id": "mm-4afc2a6f2459c0dd",
+            "id": "mm-0640ee959bfdb7bb",
             "kernel": "mm",
             "families": lfm + qwen + ["Qwen3-4B-NPU2"],
         },
         {
-            "id": "mm-8d5bc2adebe8c362",
+            "id": "mm-05fd4cb8d5c19a7d",
             "kernel": "mm",
             "families": ["Embedding-Gemma-300M-NPU2"],
         },
         {
-            "id": "mm-2bbc1cbf355661de",
+            "id": "mm-2220687b4183b1c1",
             "kernel": "mm",
-            "families": ["Qwen3.5-OMNI-NPU2"],
+            "families": ["MiniCPM-OCR-1.0-NPU2"],
         },
         {
-            "id": "mm-f09ce18ed0176ccd",
+            "id": "mm-88e2eaf12f653269",
             "kernel": "mm",
             "families": [
                 "Qwen3.5-0.8B-NPU2",
@@ -99,57 +99,11 @@ def _catalogue():
             ],
         },
         {
-            "id": "mm-6f1e5507b84d4545",
+            "id": "mm-c43866e708564c76",
             "kernel": "mm",
-            "families": ["Gemma3-4B-NPU2", "Qwen3-VL-4B-Instruct-NPU2"],
+            "families": gpt_oss,
         },
-        {
-            "id": "dequant-c64cce52830381a3",
-            "kernel": "dequant",
-            "families": ["Gemma3-4B-NPU2", "Qwen3-VL-4B-Instruct-NPU2"],
-        },
-        {
-            "id": "dequant-5c09a768705b2a52",
-            "kernel": "dequant",
-            "families": ["Nemotron-3.5-Bolt-E4B-NPU2"],
-        },
-        {
-            "id": "dequant-92fe942189bfe29d",
-            "kernel": "dequant",
-            "families": ["LFM3-1.7B-NPU2"],
-        },
-        {
-            "id": "mm-045dfe3bcb950417",
-            "kernel": "mm",
-            "families": ["D3-Nano-NPU2"],
-        },
-        {
-            "id": "mm-1cb2714c29e7f48f",
-            "kernel": "mm",
-            "families": ["Nemotron-3.5-Bolt-E4B-NPU2"],
-        },
-        {
-            "id": "mm-524a99a2938489a9",
-            "kernel": "mm",
-            "families": ["D3-Turbo-NPU2"],
-        },
-        {
-            "id": "mm-837d57fb0e501f69",
-            "kernel": "mm",
-            "families": ["D3-Mini-NPU2"],
-        },
-        {
-            "id": "mm-a6539bd3db99073a",
-            "kernel": "mm",
-            "families": ["LFM3-1.7B-NPU2"],
-        },
-        {
-            "id": "mm-ef48a546c2dd64a2",
-            "kernel": "mm",
-            "families": ["D3-Ultra-NPU2"],
-        },
-        {"id": "mm-6c7ef8716b6c744d", "kernel": "mm", "families": gpt_oss},
-        {"id": "mm-eb616bbe2a08405e", "kernel": "mm", "families": gemma},
+        {"id": "mm-49a889a56be431c5", "kernel": "mm", "families": gemma},
     ]
 
 
@@ -178,8 +132,8 @@ def _digests(ids=None):
         }
         for index, id in enumerate(ids)
     }
-    if "mm-4afc2a6f2459c0dd" in digests:
-        digests["mm-4afc2a6f2459c0dd"]["execution_variants"] = {
+    if "mm-0640ee959bfdb7bb" in digests:
+        digests["mm-0640ee959bfdb7bb"]["execution_variants"] = {
             "production": {
                 "transaction": "transactions/mm-production.bin",
                 "transaction_sha256": f"{901:064x}",
@@ -230,28 +184,17 @@ def test_unreachable_implementations_are_declared_rather_than_dropped():
     recipe = _recipe()
     dispatched = {entry["id"] for entry in recipe["implementations"]}
     limited = {
-        "mm-8d5bc2adebe8c362",
-        "mm-2bbc1cbf355661de",
-        "mm-f09ce18ed0176ccd",
-        "mm-6f1e5507b84d4545",
-        "dequant-c64cce52830381a3",
-        "dequant-5c09a768705b2a52",
-        "dequant-92fe942189bfe29d",
-        "mm-045dfe3bcb950417",
-        "mm-1cb2714c29e7f48f",
-        "mm-524a99a2938489a9",
-        "mm-837d57fb0e501f69",
-        "mm-a6539bd3db99073a",
-        "mm-ef48a546c2dd64a2",
-        "mm-6c7ef8716b6c744d",
+        "mm-05fd4cb8d5c19a7d",
+        "mm-2220687b4183b1c1",
+        "mm-88e2eaf12f653269",
+        "mm-c43866e708564c76",
     }
     assert limited.isdisjoint(dispatched)
     limits = {limit["representative"] for limit in recipe["coverage_limits"]}
     assert "Qwen3.5-0.8B-NPU2" in limits
     assert "Embedding-Gemma-300M-NPU2" in limits
-    assert "Nemotron-3.5-Bolt-E4B-NPU2" in limits
-    assert "LFM3-1.7B-NPU2" in limits
-    assert "D3-Nano-NPU2" in limits
+    assert "MiniCPM-OCR-1.0-NPU2" in limits
+    assert "GPT-OSS-20B-NPU2" in limits
     numeric = {
         stage["implementation"]
         for case in recipe["cases"]
@@ -290,9 +233,9 @@ def test_readback_variants_rewrite_the_activation_of_a_resident_case():
     cases = {case["name"]: case for case in _recipe()["cases"]}
     coherence = [name for name, case in cases.items() if "readback_variants" in case]
     assert sorted(coherence) == [
-        "mm-4afc2a6f2459c0dd/production/shared-subset",
-        "mm-4afc2a6f2459c0dd/shared-subset",
-        "mm-eb616bbe2a08405e/shared-subset",
+        "mm-0640ee959bfdb7bb/production/shared-subset",
+        "mm-0640ee959bfdb7bb/shared-subset",
+        "mm-49a889a56be431c5/shared-subset",
     ]
     for name in coherence:
         variants = cases[name]["readback_variants"]
@@ -312,7 +255,7 @@ def test_readback_variants_rewrite_the_activation_of_a_resident_case():
 
 def test_recipe_strictly_covers_legacy_populations_at_n128():
     cases = {case["name"]: case for case in _recipe()["cases"]}
-    generic = "mm-4afc2a6f2459c0dd"
+    generic = "mm-0640ee959bfdb7bb"
     for profile in ("zero", "shared-subset", "full-nibble", "full-affine"):
         stage = cases[f"{generic}/production/{profile}"]["stages"][0]
         assert stage["execution"] == "production"
@@ -322,9 +265,9 @@ def test_recipe_strictly_covers_legacy_populations_at_n128():
             assert stage["buffers"][2]["source"]["parameters"]["salt"] == 29
 
     for dequant in (
-        "dequant-122f128af9bdad35",
-        "dequant-575d45e47993315f",
-        "dequant-a613e23410d827e5",
+        "dequant-f026590bcf8694b5",
+        "dequant-a95b04372f722ae3",
+        "dequant-cc585404562243d3",
     ):
         for profile in ("shared-subset", "full-nibble", "full-affine"):
             name = f"{dequant}+{generic}/production/{profile}"
@@ -335,8 +278,8 @@ def test_recipe_strictly_covers_legacy_populations_at_n128():
             )
 
     for dequant in (
-        "dequant-122f128af9bdad35",
-        "dequant-575d45e47993315f",
+        "dequant-f026590bcf8694b5",
+        "dequant-a95b04372f722ae3",
     ):
         assert f"{dequant}/shared-subset" in cases
 
@@ -405,7 +348,7 @@ def test_chaining_is_allowed_more_error_than_the_plain_product():
 def test_recipe_refuses_an_implementation_without_build_digests():
     with pytest.raises(RecipeError, match="no build digests"):
         build_recipe(
-            _capabilities(), _records(), _digests(["dequant-122f128af9bdad35"])
+            _capabilities(), _records(), _digests(["dequant-f026590bcf8694b5"])
         )
 
 
@@ -415,7 +358,7 @@ def test_recipe_refuses_a_dequant_with_an_ambiguous_consumer():
     # the recipe, not something to resolve by picking one.
     records = _records()
     for record in records:
-        if record["id"] == "mm-eb616bbe2a08405e":
+        if record["id"] == "mm-49a889a56be431c5":
             record["families"] = record["families"] + ["Qwen3-0.6B-NPU2"]
     with pytest.raises(RecipeError, match="shares families with 2"):
         build_recipe(_capabilities(), records, _digests())
