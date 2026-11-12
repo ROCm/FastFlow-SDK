@@ -1047,9 +1047,8 @@ def _stage_hrx_development_files(hrx_install: Path, bundle: Path) -> None:
 _GEMMA4E_LINK_STEMS = ("q4_npu_eXpress", "mha")
 
 # FLM_ENGINE_LINK_LIBS minus q4_npu_eXpress, llama_npu, and d3_npu.
-# pe_import_sets lowercases DLL names. q4 is the shared quant library. llama and
-# d3 stay normal imports while their import libraries export CRT data.
-WINDOWS_MODEL_ENGINE_DELAY_IMPORTS = frozenset(
+# pe_import_sets lowercases DLL names.
+WINDOWS_MODEL_ENGINE_IMPORTS = frozenset(
     {
         "gemma4_12b_npu.dll",
         "gemma4e_flash.dll",
@@ -1082,12 +1081,65 @@ WINDOWS_ENGINE_NORMAL_IMPORTS = frozenset(
 WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS = frozenset({"d3_npu.dll"})
 
 
-def stage_gemma4e_engine_sources(flm_source: Path, bundle: Path, root: Path) -> None:
-    """Copies the Gemma 4 engine sources into the install prefix.
+_GEMMA4E_FRONTEND_SOURCES = (
+    "chat/chat_continue.cpp",
+    "image/image_reader.cpp",
+    "image_process_utils/imageproc.cpp",
+    "image_process_utils/imageprocAVX512.cpp",
+    "audio/audio_reader.cpp",
+    "audio/audio_decoder.cpp",
+    "audio/audio_resampler.cpp",
+    "audio_process_utils/audioproc.cpp",
+    "audio_process_utils/audioprocAVX512.cpp",
+)
 
-    The product ``flm`` keeps the prebuilt engine. This tree is what an
-    installed user configures against the HRX already in the prefix. Import
-    libraries for the prebuilt ``q4nx`` and ``mha`` pieces land in ``lib/flm``.
+
+def _stage_gemma4e_frontend(flm_source: Path, destination: Path) -> None:
+    """Copies the open frontend, media sources, codecs, and tokenizers.
+
+    A fixture that only has the engine tree skips this. A real FastFlowLM
+    checkout must ship a tree cmake can configure without that checkout.
+    """
+    frontend = (
+        flm_source
+        / "src"
+        / "test"
+        / "model_extension_gemma4e"
+        / "gemma4_open_frontend.cpp"
+    )
+    if not frontend.is_file():
+        return
+    _copy_checked(
+        frontend, destination / "src" / "frontend" / "gemma4_open_frontend.cpp"
+    )
+    common = flm_source / "src" / "common"
+    for relative in _GEMMA4E_FRONTEND_SOURCES:
+        source = common / relative
+        if not source.is_file():
+            raise RuntimeError(f"Gemma 4 open frontend source missing: {source}")
+        _copy_checked(source, destination / "src" / "common" / relative)
+    cmake = flm_source / "src" / "cmake"
+    for name in ("FlmImageCodecs.cmake", "FlmAudioCodecs.cmake"):
+        source = cmake / name
+        if not source.is_file():
+            raise RuntimeError(f"Gemma 4 codec recipe missing: {source}")
+        _copy_checked(source, destination / "src" / "cmake" / name)
+    tokenizers = flm_source / "third_party" / "tokenizers-cpp"
+    if not (tokenizers / "CMakeLists.txt").is_file():
+        raise RuntimeError(f"tokenizers-cpp is missing: {tokenizers}")
+    shutil.copytree(
+        tokenizers,
+        destination / "third_party" / "tokenizers-cpp",
+        ignore=shutil.ignore_patterns(".git", "target", "build", "fuzz"),
+    )
+
+
+def stage_gemma4e_extension_sources(flm_source: Path, bundle: Path, root: Path) -> None:
+    """Copies the Gemma 4 extension sources into the install prefix.
+
+    The extension owns its engine, frontend, codecs, and tokenizers. The
+    product ``flm`` keeps its prebuilt engine. Import libraries for the
+    prebuilt ``q4nx`` and ``mha`` pieces land in ``lib/flm``.
     """
     detail = flm_source / "src" / "detail"
     include = flm_source / "src" / "include"
@@ -1103,10 +1155,12 @@ def stage_gemma4e_engine_sources(flm_source: Path, bundle: Path, root: Path) -> 
         shutil.rmtree(destination)
     shutil.copytree(detail, destination / "src" / "detail")
     shutil.copytree(include, destination / "src" / "include")
-    _copy_checked(
-        root / "cmake" / "gemma4e-override" / "CMakeLists.txt",
-        destination / "CMakeLists.txt",
-    )
+    support = root / "cmake" / "gemma4e-extension"
+    for name in ("CMakeLists.txt", "model_extension.cpp", "model-list.json"):
+        _copy_checked(support / name, destination / name)
+    # Present only in a real FastFlowLM tree. The unit-test fixture stops at
+    # the engine sources, so these copies stay conditional.
+    _stage_gemma4e_frontend(flm_source, destination)
     lib_source = flm_source / "src" / "lib" / "hrx"
     lib_dest = bundle / "lib" / "flm"
     lib_dest.mkdir(parents=True, exist_ok=True)
@@ -1131,32 +1185,65 @@ def stage_gemma4e_engine_sources(flm_source: Path, bundle: Path, root: Path) -> 
                 _copy_checked(match, lib_dest / match.name)
 
 
-def verify_installed_engine_sdk(bundle: Path) -> None:
-    """Requires Gemma 4 engine sources and a Windows PATH-selectable engine DLL.
+def verify_installed_gemma4e_sdk(bundle: Path) -> None:
+    """Requires the Gemma 4 model-extension sources and link libraries.
 
     HRX headers and CMake are staged separately and checked by the archive
-    HRX verifier. This checks the engine tree, the prebuilt ``q4nx`` and
-    ``mha`` libraries, and that Windows ``flm.exe`` delay-loads the model
-    engines while ``q4_npu_eXpress.dll`` and ``llama_npu.dll`` stay normal
-    imports.
+    HRX verifier. This checks the extension project, engine sources, prebuilt
+    ``q4nx`` and ``mha`` libraries, and the product executable's existing
+    engine-link contract.
     """
+    extension_header = bundle / "include" / "AutoModel" / "model_extension.h"
+    extension_config = (
+        bundle
+        / "lib"
+        / "cmake"
+        / "FastFlowLMModelExtension"
+        / "FastFlowLMModelExtensionConfig.cmake"
+    )
+    if not extension_header.is_file() or not extension_config.is_file():
+        raise RuntimeError(
+            "installed FastFlowLM model-extension SDK is incomplete: "
+            f"{extension_header}, {extension_config}"
+        )
+
     engine = bundle / "share" / "fastflow-sdk" / "gemma4e"
     cmake_lists = engine / "CMakeLists.txt"
     if not cmake_lists.is_file():
-        raise RuntimeError(f"installed Gemma 4 engine sources missing: {engine}")
+        raise RuntimeError(f"installed Gemma 4 extension sources missing: {engine}")
     cmake_text = cmake_lists.read_text(encoding="utf-8")
     if "find_package(hrx CONFIG REQUIRED)" not in cmake_text:
         raise RuntimeError(
             f"{cmake_lists} does not configure against the installed HRX"
         )
-    if "FLM_IRON_INCLUDE_DIRS" not in cmake_text:
+    if "find_package(FastFlowLMModelExtension CONFIG REQUIRED)" not in cmake_text:
         raise RuntimeError(
-            f"{cmake_lists} does not accept include directories for an override header"
+            f"{cmake_lists} does not use the installed model-extension SDK"
         )
+    if "gemma4e_open_extension" not in cmake_text:
+        raise RuntimeError(f"{cmake_lists} does not build a model extension")
+    if "FLM_IRON_INCLUDE_DIRS" not in cmake_text:
+        raise RuntimeError(f"{cmake_lists} does not accept IRON include directories")
     detail = engine / "src" / "detail" / "gemma4e_npu"
     header = engine / "src" / "include" / "flm_override.hpp"
-    if not detail.is_dir() or not header.is_file():
-        raise RuntimeError(f"installed Gemma 4 engine sources are incomplete: {engine}")
+    provider = engine / "model_extension.cpp"
+    catalog = engine / "model-list.json"
+    frontend = engine / "src" / "frontend" / "gemma4_open_frontend.cpp"
+    codecs = engine / "src" / "cmake" / "FlmImageCodecs.cmake"
+    tokenizers = engine / "third_party" / "tokenizers-cpp" / "CMakeLists.txt"
+    if (
+        not detail.is_dir()
+        or not header.is_file()
+        or not provider.is_file()
+        or not catalog.is_file()
+        or not frontend.is_file()
+        or not codecs.is_file()
+        or not tokenizers.is_file()
+    ):
+        raise RuntimeError(
+            "installed Gemma 4 extension sources are incomplete: "
+            f"{engine} (engine, frontend, codecs, tokenizers)"
+        )
     lib_dir = bundle / "lib" / "flm"
     if os.name == "nt":
         for stem in _GEMMA4E_LINK_STEMS:
@@ -1171,29 +1258,20 @@ def verify_installed_engine_sdk(bundle: Path) -> None:
         regular, delay = pe_import_sets(flm)
         regular_set = set(regular)
         delay_set = set(delay)
-        if delay_set != WINDOWS_MODEL_ENGINE_DELAY_IMPORTS:
-            raise RuntimeError(
-                f"{flm} must delay-load the model engines "
-                f"{sorted(WINDOWS_MODEL_ENGINE_DELAY_IMPORTS)} so PATH can "
-                "select a replacement ahead of the DLL beside flm.exe; "
-                f"delay imports are {sorted(delay_set)}"
-            )
-        if not WINDOWS_MODEL_ENGINE_DELAY_IMPORTS.isdisjoint(regular_set):
-            raise RuntimeError(
-                f"{flm} imports a model engine directly: "
-                f"{sorted(WINDOWS_MODEL_ENGINE_DELAY_IMPORTS & regular_set)}"
-            )
-        expected_normal = WINDOWS_ENGINE_NORMAL_IMPORTS | {
-            name
-            for name in WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS
-            if (bundle / "bin" / name).is_file()
-        }
+        expected_normal = (
+            WINDOWS_MODEL_ENGINE_IMPORTS
+            | WINDOWS_ENGINE_NORMAL_IMPORTS
+            | {
+                name
+                for name in WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS
+                if (bundle / "bin" / name).is_file()
+            }
+        )
         missing_normal = expected_normal - regular_set
         delayed_normal = expected_normal & delay_set
         if missing_normal or delayed_normal:
             raise RuntimeError(
-                f"{flm} must import {sorted(expected_normal)} "
-                "normally. "
+                f"{flm} must import its packaged engines normally. "
                 f"missing={sorted(missing_normal)} delay-loaded={sorted(delayed_normal)}"
             )
     else:
@@ -1247,7 +1325,7 @@ def stage_runtime_bundle(
         )
 
     _stage_hrx_development_files(hrx_install, bundle)
-    stage_gemma4e_engine_sources(root / "projects" / "FastFlowLM", bundle, root)
+    stage_gemma4e_extension_sources(root / "projects" / "FastFlowLM", bundle, root)
     _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
     fixture_source = cli_install / "share" / "fastflow-sdk" / "self-test"
     if not fixture_source.is_dir():
@@ -1392,7 +1470,7 @@ def stage_runtime_bundle(
         },
         "files": files,
     }
-    verify_installed_engine_sdk(bundle)
+    verify_installed_gemma4e_sdk(bundle)
     validate_source_policy(manifest, root)
     (bundle / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"

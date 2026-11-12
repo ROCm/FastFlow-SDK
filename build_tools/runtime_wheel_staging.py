@@ -198,10 +198,12 @@ def xclbin_path() -> Path:
 
 
 def gemma4e_root() -> Path:
-    """Gemma 4 engine sources. Pass this to cmake ``-S``.
+    """Gemma 4 model-extension sources. Pass this to cmake ``-S``.
 
-    A different engine replaces this directory. ``find_package(hrx)`` uses
-    ``fastflow_sdk_runtime.cmake_prefix()`` or the unpacked archive.
+    The tree includes the engine, the open frontend, codec recipes, and
+    tokenizers-cpp. A FastFlowLM checkout is not required. The resulting
+    bundle is passed to ``flm --model-extension``; it does not replace the
+    engine installed beside flm.
     """
     path = package_root() / "share" / "fastflow-sdk" / "gemma4e"
     if not (path / "CMakeLists.txt").is_file():
@@ -210,7 +212,7 @@ def gemma4e_root() -> Path:
 
 
 def engine_lib_dir() -> Path:
-    """Import libraries the Gemma 4 engine links (``q4nx`` and ``mha``)."""
+    """Import libraries the Gemma 4 extension engine links."""
     path = package_root() / "lib" / "flm"
     if not path.is_dir():
         raise FileNotFoundError(f"Gemma 4 engine import libraries were not found: {path}")
@@ -225,11 +227,7 @@ def model_info_path() -> Path:
 
 
 def windows_path(caller_path: str, package_bin: str, runtime_bin: str) -> str:
-    """Keep the caller's PATH ahead of the packaged directories.
-
-    The delay-load hook loads the first engine DLL found on PATH. The packaged
-    bin stays on PATH so an engine the caller did not replace still resolves.
-    """
+    """Keep caller tools visible and add the packaged FLM and HRX directories."""
     packaged = os.pathsep.join((package_bin, runtime_bin))
     if caller_path:
         return caller_path + os.pathsep + packaged
@@ -369,6 +367,15 @@ def prepare_runtime_wheel_trees(
     if gemma4e.is_dir():
         _copy_relative_tree(
             source_bundle, "share/fastflow-sdk/gemma4e", trees.fastflowlm_root
+        )
+    if (source_bundle / "include" / "AutoModel").is_dir():
+        _copy_relative_tree(source_bundle, "include/AutoModel", trees.fastflowlm_root)
+    model_extension_cmake = source_bundle / "lib" / "cmake" / "FastFlowLMModelExtension"
+    if model_extension_cmake.is_dir():
+        _copy_relative_tree(
+            source_bundle,
+            "lib/cmake/FastFlowLMModelExtension",
+            trees.fastflowlm_root,
         )
     if (source_bundle / "lib" / "flm").is_dir():
         _copy_relative_tree(source_bundle, "lib/flm", trees.fastflowlm_root)

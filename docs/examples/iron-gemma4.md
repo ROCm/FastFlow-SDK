@@ -1,9 +1,10 @@
 # Compile and serve the IRON Gemma 4 example
 
-This guide compiles the IRON operator overrides for Gemma 4 E2B, rebuilds the
-FastFlowLM Gemma engine with those overrides, and serves the result through the
-FastFlowLM API. The compiler, operator sources, runtime, and FastFlowLM sources
-all come from one FastFlow SDK wheel release.
+This guide compiles the IRON operator overrides for Gemma 4 E2B, builds them
+into the `gemma4-open` model extension shipped by the SDK, and serves that
+plugin through FastFlowLM. The compiler, operator sources, runtime, and
+extension sources all come from one FastFlow SDK wheel release. Product `flm`
+keeps its prebuilt Gemma 4 engine.
 
 For a smaller example that replaces only projection GEMMs and runtime
 dequantization, see
@@ -59,15 +60,16 @@ fastflow doctor
 ## Download Gemma 4 E2B
 
 `FLM_MODEL_PATH` is the directory above the `models` directory that FastFlowLM
-creates. Pulling the model requires network access to its model host. If the
-model is already cached elsewhere, point `FLM_MODEL_PATH` at that cache instead.
+creates. The open catalog entry is pulled after the extension exists, because
+`gemma4-open-it:e2b` is not in the built-in model list. Pulling it requires
+network access to its model host. If the model is already cached elsewhere,
+point `FLM_MODEL_PATH` at that cache instead.
 
 Linux:
 
 ```bash
 export FLM_MODEL_PATH=$HOME/.cache/fastflowlm
 mkdir -p "$FLM_MODEL_PATH"
-flm pull gemma4-it:e2b
 ```
 
 Windows:
@@ -75,7 +77,6 @@ Windows:
 ```powershell
 $env:FLM_MODEL_PATH = Join-Path $HOME ".cache\fastflowlm"
 New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
-flm pull gemma4-it:e2b
 ```
 
 ## Select the IRON application source
@@ -198,11 +199,18 @@ A successful build ends with a message like:
 staged .../xclbins/Gemma4-E2B-IT-NPU2
 ```
 
-## Build the override engine
+## Build the model extension
 
-Configure the Gemma engine source shipped by the FastFlowLM wheel against the
-installed runtime, the application override header, and the generated sequence
-headers.
+Configure the Gemma extension shipped by the FastFlowLM wheel against the
+installed runtime, the application override header, the generated sequence
+headers, and the xclbin tree `build.py` just staged. CMake copies that tree,
+including `iron/`, into the bundle. `flm` loads it from there.
+
+This step also requires Rust and Cargo on both platforms. Install them with
+[rustup](https://rustup.rs/), using the `x86_64-pc-windows-msvc` toolchain on
+Windows. Ensure `rustc` and `cargo` are on `PATH` in the shell running CMake
+(the x64 Developer PowerShell on Windows). Cargo needs network access to
+download dependencies that are not already cached.
 
 Linux:
 
@@ -212,10 +220,10 @@ cmake -S "$FLM_GEMMA4_SOURCE" -B "$GEMMA4_BUILD/engine" -G Ninja \
   "-DFASTFLOW_SDK_ROOT=$FASTFLOW_SDK_ROOT" \
   "-DFLM_ENGINE_LIB_DIR=$FLM_ENGINE_LIB_DIR" \
   "-DFLM_IRON_INCLUDE_DIRS=$IRON_GEMMA4_APP;$GEMMA4_BUILD/gen;$IRON_INCLUDE_DIR" \
-  -DFLM_OVERRIDES_HEADER=overrides.hpp
+  -DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp \
+  "-DFLM_GEMMA4_XCLBIN_DIR=$GEMMA4_BUILD/xclbins/Gemma4-E2B-IT-NPU2"
 
-cmake --build "$GEMMA4_BUILD/engine" \
-  --target gemma4e_npu --parallel 2
+cmake --build "$GEMMA4_BUILD/engine" --parallel 2
 ```
 
 Windows:
@@ -226,47 +234,39 @@ cmake -S $FlmGemma4Source -B "$Gemma4Build\engine" -G Ninja `
   "-DFASTFLOW_SDK_ROOT=$FastFlowSdkRoot" `
   "-DFLM_ENGINE_LIB_DIR=$FlmEngineLibDir" `
   "-DFLM_IRON_INCLUDE_DIRS=$IronGemma4App;$Gemma4Build\gen;$IronIncludeDir" `
-  -DFLM_OVERRIDES_HEADER=overrides.hpp
+  -DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp `
+  "-DFLM_GEMMA4_XCLBIN_DIR=$Gemma4Build\xclbins\Gemma4-E2B-IT-NPU2"
 
-cmake --build "$Gemma4Build\engine" `
-  --target gemma4e_npu --parallel 2
+cmake --build "$Gemma4Build\engine" --parallel 2
 ```
 
-The replacement engine is:
+The extension bundle is:
 
-- Linux: `$GEMMA4_BUILD/engine/engines/libgemma4e_npu.so`
-- Windows: `$Gemma4Build\engine\engines\gemma4e_npu.dll`
+- Linux: `$GEMMA4_BUILD/engine/bundle/extension.json`
+- Windows: `$Gemma4Build\engine\bundle\extension.json`
 
 ## Serve and verify the result
 
-Put the replacement engine first in the dynamic loader search path and point
-FastFlowLM at the staged xclbins.
+Pull and serve `gemma4-open-it:e2b` through that bundle. The plugin carries its
+own engine and the staged xclbins, so the loader path and `FLM_XCLBIN_PATH`
+stay unchanged.
 
 Linux:
 
 ```bash
-(
-  export LD_LIBRARY_PATH=$GEMMA4_BUILD/engine/engines${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-  export FLM_XCLBIN_PATH=$GEMMA4_BUILD
-
-  flm serve gemma4-it:e2b --prefill-chunk-len 512 --port 11434
-)
+flm --model-extension "$GEMMA4_BUILD/engine/bundle/extension.json" \
+  pull gemma4-open-it:e2b
+flm --model-extension "$GEMMA4_BUILD/engine/bundle/extension.json" \
+  serve gemma4-open-it:e2b --prefill-chunk-len 512 --port 11434
 ```
 
 Windows:
 
 ```powershell
-$OldPath = $env:PATH
-$OldXclbinPath = $env:FLM_XCLBIN_PATH
-try {
-  $env:PATH = "$Gemma4Build\engine\engines;$env:PATH"
-  $env:FLM_XCLBIN_PATH = $Gemma4Build
-
-  flm serve gemma4-it:e2b --prefill-chunk-len 512 --port 11434
-} finally {
-  $env:PATH = $OldPath
-  $env:FLM_XCLBIN_PATH = $OldXclbinPath
-}
+$Extension = Join-Path $Gemma4Build "engine\bundle\extension.json"
+flm --model-extension $Extension pull gemma4-open-it:e2b
+flm --model-extension $Extension serve gemma4-open-it:e2b `
+  --prefill-chunk-len 512 --port 11434
 ```
 
 The server log should identify the staged IRON instruction sequences:
@@ -283,7 +283,7 @@ Linux:
 curl -fsS http://127.0.0.1:11434/api/chat \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gemma4-it:e2b",
+    "model": "gemma4-open-it:e2b",
     "stream": false,
     "temperature": 0,
     "top_k": 1,
@@ -298,7 +298,7 @@ Windows:
 
 ```powershell
 $Body = @{
-  model = "gemma4-it:e2b"
+  model = "gemma4-open-it:e2b"
   stream = $false
   temperature = 0
   top_k = 1
@@ -313,5 +313,4 @@ Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/chat" `
 ```
 
 The response should contain an assistant message with `hello`. Stop the server
-with `Ctrl-C`; the Linux subshell or Windows `finally` block then restores the
-loader and xclbin environment used by the calling shell.
+with `Ctrl-C`.

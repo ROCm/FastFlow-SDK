@@ -235,21 +235,23 @@ def _build_fastflowlm(args, *, backend):
             )
         backend_flags = [
             "-DFLM_USE_HRX=ON",
-            # The issue-903 ownership fix lives in the FastFlowLM headers used
-            # by model producers. Build the available source engine so the
-            # candidate actually exercises that ownership instead of silently
-            # reinstalling the stale prebuilt Gemma DLL.
-            "-DFLM_BUILD_GEMMA4E=ON",
+            # The product flm keeps the prebuilt Gemma 4 engine. Users build
+            # the source engine as a model extension from the installed
+            # share/fastflow-sdk/gemma4e tree and load it with --model-extension.
+            # Pass OFF explicitly: CMake keeps a previous ON value in an
+            # existing build directory when --fresh is not requested.
+            "-DFLM_BUILD_GEMMA4E=OFF",
             f"-DCMAKE_PREFIX_PATH={environment.cmake_path(paths.HRX_INSTALL)}",
         ]
     else:
-        # XRT diagnostic build: no HRX prerequisite. Link the host XRT runtime
-        # and the matching development headers. Do not enable FLM_PORTABLE_BUILD:
-        # that bundles libxrt into the prefix and is the wrong product for a
-        # host-XRT comparison. Explicit -DXRT_* dirs satisfy CMake; a stub
-        # xrt.pc is not written.
+        # Optional comparison build. Not the default, and never packaged.
+        # Link the host XRT runtime and the matching development headers.
+        # Do not enable FLM_PORTABLE_BUILD: that bundles libxrt into the
+        # prefix. Explicit -DXRT_* dirs satisfy CMake; a stub xrt.pc is
+        # not written.
         backend_flags = [
             "-DFLM_USE_HRX=OFF",
+            "-DFLM_BUILD_GEMMA4E=OFF",
             f"-DXRT_INCLUDE_DIR={environment.cmake_path(xrt_include)}",
             f"-DXRT_LIB_DIR={environment.cmake_path(_host_xrt_lib_dir(host_xrt))}",
         ]

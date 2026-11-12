@@ -1,5 +1,5 @@
 diff --git a/src/include/hrx_cpp/hrx_cpp.hpp b/src/include/hrx_cpp/hrx_cpp.hpp
-index add05e9e..3a8bb4f8 100644
+index 43475278..b71a0c9f 100644
 --- a/src/include/hrx_cpp/hrx_cpp.hpp
 +++ b/src/include/hrx_cpp/hrx_cpp.hpp
 @@ -19,7 +19,6 @@
@@ -10,10 +10,11 @@ index add05e9e..3a8bb4f8 100644
  #include <memory>
  #include <mutex>
  #include <stdexcept>
-@@ -130,78 +129,14 @@ inline bool hrx_report(hrx_status_t s, const char* where) {
+@@ -130,130 +129,38 @@ inline bool hrx_report(hrx_status_t s, const char* where) {
+     return true;
  }
  
- // ---------------------------------------------------------------------------
+-// ---------------------------------------------------------------------------
 -// Executable cache: build one HRX XADX executable per distinct executable
 -// identity (xclbin + control program + host patch table) and resolve its export
 -// ordinal once.
@@ -61,11 +62,72 @@ index add05e9e..3a8bb4f8 100644
 -    static std::unordered_map<std::string, CachedExe> c;
 -    return c;
 -}
--inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes,
+-// --- xclbin content digest -------------------------------------------------
+-// The executable-cache key must distinguish xclbin images, but copying and
+-// hashing the whole (~0.5 MB) image into the key on every create_run dominated
+-// the HRX prefill path (thousands of create_run calls per prefill on MoE
+-// models). Instead each image is digested EXACTLY ONCE, when its hw_context is
+-// constructed, and the digest travels WITH the context (see
+-// hw_context::digest()); make_exe_key then just appends the small precomputed
+-// digest. No global registry, no address keying, no per-create_run mutex.
+-//
+-// Collision safety: the digest is TWO independent 64-bit content hashes
+-// (FNV-1a and Jenkins one-at-a-time, different constructions), and the key also
+-// pins the exact image size. A false cache hit would require a simultaneous
+-// collision in both 64-bit hashes AND an identical size -- a ~2^-128 event,
+-// far below the rate of an uncorrected memory error, so it is sound without a
+-// per-hit full-image byte-compare (which would reintroduce O(image) work on the
+-// hot per-expert loop we are optimizing). Both hashes are explicit and
+-// deterministic across standard libraries, so keys are reproducible.
+ struct xclbin_digest {
+-    uint64_t h1 = 0;  // FNV-1a-64
+-    uint64_t h2 = 0;  // Jenkins one-at-a-time (64-bit)
+-    bool operator==(const xclbin_digest& o) const {
+-        return h1 == o.h1 && h2 == o.h2;
+-    }
++    uint64_t h1 = 0;
++    uint64_t h2 = 0;
+ };
+-inline xclbin_digest compute_xclbin_digest(const std::vector<uint8_t>& b) {
+-    uint64_t h1 = 1469598103934665603ULL;        // FNV offset basis
+-    uint64_t h2 = 0xcbf29ce484222325ULL ^ b.size();
+-    for (uint8_t c : b) {
+-        h1 ^= c;
+-        h1 *= 1099511628211ULL;                  // FNV prime
+-        h2 += c;
++
++inline xclbin_digest compute_xclbin_digest(const std::vector<uint8_t>& bytes) {
++    uint64_t h1 = 1469598103934665603ULL;
++    uint64_t h2 = 0xcbf29ce484222325ULL ^ bytes.size();
++    for (uint8_t value : bytes) {
++        h1 ^= value;
++        h1 *= 1099511628211ULL;
++        h2 += value;
+         h2 += h2 << 10;
+         h2 ^= h2 >> 6;
+     }
+     h2 += h2 << 3;
+     h2 ^= h2 >> 11;
+     h2 += h2 << 15;
+-    return xclbin_digest{h1, h2};
++    return {h1, h2};
+ }
+ 
+-inline std::string make_exe_key(size_t xclbin_size, const xclbin_digest& dg,
 -                                const uint32_t* cc, size_t n) {
+-    // Identify the xclbin by its exact size + the two-hash content digest
+-    // computed once when its hw_context was constructed, then append the
+-    // control-code words. Distinct images differ in digest (and almost always
+-    // size) so they never share a key; the same image reuses its stored digest,
+-    // so repeated lookups never re-hash the (hundreds-of-KB) blob. Cache
+-    // hit/miss semantics are identical to hashing the full image.
+-    const uint64_t xsize = static_cast<uint64_t>(xclbin_size);
 -    std::string key;
--    key.reserve(xclbin_bytes.size() + n * sizeof(uint32_t) + 2 * sizeof(uint64_t));
--    append_key_bytes(key, xclbin_bytes.data(), xclbin_bytes.size());
+-    key.reserve(sizeof(xsize) + sizeof(dg.h1) + sizeof(dg.h2) +
+-                n * sizeof(uint32_t) + sizeof(uint64_t));
+-    key.append(reinterpret_cast<const char*>(&xsize), sizeof(xsize));
+-    key.append(reinterpret_cast<const char*>(&dg.h1), sizeof(dg.h1));
+-    key.append(reinterpret_cast<const char*>(&dg.h2), sizeof(dg.h2));
 -    append_key_bytes(key, cc, n * sizeof(uint32_t));
 -    return key;
 -}
@@ -81,9 +143,9 @@ index add05e9e..3a8bb4f8 100644
 +// bounded device caches, so executable replacement does not recreate the
 +// driver context on every shape change.
 +inline hrx_executable_t build_executable(
-     const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
--    uint32_t* ord_out, std::string* key_out) {
--    std::string key = make_exe_key(xclbin_bytes, cc, n);
+     const std::vector<uint8_t>& xclbin_bytes, const xclbin_digest& digest,
+-    const uint32_t* cc, size_t n, uint32_t* ord_out, std::string* key_out) {
+-    std::string key = make_exe_key(xclbin_bytes.size(), digest, cc, n);
 -    std::lock_guard<std::mutex> lk(exe_cache_mu());
 -    auto& cache = exe_cache();
 -    auto it = cache.find(key);
@@ -92,11 +154,29 @@ index add05e9e..3a8bb4f8 100644
 -        if (key_out) *key_out = std::move(key);
 -        return it->second.exe;
 -    }
-+    uint32_t* ord_out) {
++    const uint32_t* cc, size_t n, uint32_t* ord_out) {
      hrx_const_byte_span_t xclbin = {xclbin_bytes.data(), xclbin_bytes.size()};
++    hrx_amdxdna_xclbin_identity_t xclbin_identity = {
++        digest.h1, digest.h2, static_cast<uint64_t>(xclbin_bytes.size())};
      hrx_amdxdna_executable_run_t run = {};
      run.record_length = sizeof(run);
-@@ -235,51 +170,10 @@ inline hrx_executable_t lookup_or_build_executable(
+     run.abi_version = HRX_AMDXDNA_EXECUTABLE_RUN_ABI_VERSION_0;
+@@ -268,11 +175,13 @@ inline hrx_executable_t lookup_or_build_executable(
+     entry_point.run_count = 1;
+     hrx_amdxdna_executable_create_params_t params = {};
+     params.record_length = sizeof(params);
+-    params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_0;
++    params.abi_version = HRX_AMDXDNA_EXECUTABLE_CREATE_PARAMS_ABI_VERSION_2;
+     params.xclbins = &xclbin;
+     params.xclbin_count = 1;
+     params.entry_points = &entry_point;
+     params.entry_point_count = 1;
++    params.xclbin_identities = &xclbin_identity;
++    params.xclbin_identity_count = 1;
+     hrx_executable_t exe = nullptr;
+     uint32_t ord = 0;
+     hrx_status_t create_status = hrx_amdxdna_executable_create(
+@@ -286,54 +195,10 @@ inline hrx_executable_t lookup_or_build_executable(
          hrx_executable_release(exe);
          exe = nullptr;
      }
@@ -142,13 +222,36 @@ index add05e9e..3a8bb4f8 100644
 -inline hrx_executable_t build_or_get_executable(
 -    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
 -    uint32_t* ord_out) {
--    return lookup_or_build_executable(xclbin_bytes, cc, n, ord_out, nullptr);
+-    // Backward-compat entry: not on the hot path, so digest the image inline.
+-    return lookup_or_build_executable(xclbin_bytes,
+-                                      compute_xclbin_digest(xclbin_bytes), cc, n,
+-                                      ord_out, nullptr);
 -}
 -
  // ---------------------------------------------------------------------------
  // uuid / xclbin / device / hw_context
  // ---------------------------------------------------------------------------
-@@ -614,6 +508,49 @@ public:
+@@ -406,16 +271,14 @@ public:
+ class hw_context {
+ public:
+     std::shared_ptr<std::vector<uint8_t>> xclbin_bytes_;
+-    // Content digest of xclbin_bytes_, computed ONCE at construction and carried
+-    // with the context (the default copy ctor copies it alongside the bytes, so
+-    // copies made in npu_app stay consistent). make_exe_key uses this instead of
+-    // re-hashing the blob on every create_run.
+     xclbin_digest xclbin_digest_;
+ 
+     hw_context() = default;
+     hw_context(const device& /*dev*/, const xclbin& xc)
+         : xclbin_bytes_(xc.bytes_shared()) {
+-        if (xclbin_bytes_) xclbin_digest_ = compute_xclbin_digest(*xclbin_bytes_);
++        if (xclbin_bytes_) {
++            xclbin_digest_ = compute_xclbin_digest(*xclbin_bytes_);
++        }
+     }
+     // The (device, uuid) form is accepted for source compatibility; it carries
+     // no xclbin bytes, so prefer the (device, xclbin) form.
+@@ -676,6 +539,49 @@ public:
  
      run() = default;
      explicit run(hrx_executable_t exe, uint32_t ord) : exe_(exe), ord_(ord) {}
@@ -221,7 +324,7 @@ index f0f805cd..aa279a6c 100644
  
  #endif
 diff --git a/src/include/npu_utils/npu_utils_hrx.hpp b/src/include/npu_utils/npu_utils_hrx.hpp
-index 090039b4..71029171 100644
+index 98085b7a..f0464299 100644
 --- a/src/include/npu_utils/npu_utils_hrx.hpp
 +++ b/src/include/npu_utils/npu_utils_hrx.hpp
 @@ -36,7 +36,6 @@
@@ -269,7 +372,7 @@ index 090039b4..71029171 100644
 +            current_executable_revision != revision) {
 +            uint32_t new_ordinal = 0;
 +            hrx_executable_t replacement = hrx::build_executable(
-+                this->context->xclbin_bytes(), control_words,
++                this->context->xclbin_bytes(), this->context->digest(), control_words,
 +                control_word_count, &new_ordinal);
 +            if (!replacement) return nullptr;
 +            release_current_executable();
@@ -312,8 +415,8 @@ index 090039b4..71029171 100644
          assert(this->context != nullptr);
 -        std::string exe_key;
 -        this->exe = hrx::lookup_or_build_executable(
--            this->context->xclbin_bytes(), data.first, data.second,
--            &this->exe_ord, &exe_key);
+-            this->context->xclbin_bytes(), this->context->digest(), data.first,
+-            data.second, &this->exe_ord, &exe_key);
 -        if (this->exe == nullptr){
 +        uint32_t ord = 0;
 +        const uint64_t revision = this->ctrl_seq->sequence_version();

@@ -26,7 +26,7 @@
       "source": "https://huggingface.co/FastFlowLM/Gemma4-E2B-IT-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
+      "registry_sha256": "6b192b0bce81e9eff5561dba4a574dd18bb2524d84b8d72a633d43dadb088177",
       "files": [
         {"path": "audio_weight.q4nx", "sha256": "48d4632ee75ba1fdf40b8369d5961b1edfc86152e51d585aa6bd37b31f6f4895"},
         {"path": "chat_template.jinja", "sha256": "2f1b4d75d067bae3fe44e676721c7f077d243bc007156cb9c2f8b5836613d082"},
@@ -61,7 +61,7 @@
       "source": "https://huggingface.co/FastFlowLM/LFM3-1.7B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
+      "registry_sha256": "6b192b0bce81e9eff5561dba4a574dd18bb2524d84b8d72a633d43dadb088177",
       "files": [
         {"path": "chat_template.jinja", "sha256": "f45005c50cd2a97329722bf3a2dee9f16c04cdf825a589b280fb7e99e6827818"},
         {"path": "config.json", "sha256": "ed76b4e8045ba916c619773c1b04a14dc4e91063b88df2807cf42e51652b5a51"},
@@ -90,7 +90,7 @@
       "source": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "f96c26da340626c7ef30449bcb60db0833605cd78f0a43dd5c950406a9dd8b84",
+      "registry_sha256": "6b192b0bce81e9eff5561dba4a574dd18bb2524d84b8d72a633d43dadb088177",
       "files": [
         {"path": "config.json", "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"},
         {"path": "model.q4nx", "sha256": "0c03021f1cd21e43376234817b34ad32ccf07dca94785ede7640833d15169d8a"},

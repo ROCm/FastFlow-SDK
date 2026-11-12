@@ -197,6 +197,8 @@ class TestFastflowSdkWheelCommon:
             "lib/cmake/hrx/hrx-config.cmake": "config",
             "lib/hrx.lib": "implib",
             "share/fastflow-sdk/gemma4e/CMakeLists.txt": "cmake",
+            "include/AutoModel/model_extension.h": "abi",
+            "lib/cmake/FastFlowLMModelExtension/FastFlowLMModelExtensionConfig.cmake": "extension-config",
             "lib/flm/q4_npu_eXpress.lib": "q4",
         }
         for relative, contents in files.items():
@@ -213,10 +215,19 @@ class TestFastflowSdkWheelCommon:
         assert (
             trees.fastflowlm_root / "share/fastflow-sdk/gemma4e/CMakeLists.txt"
         ).read_text(encoding="utf-8") == "cmake"
+        assert (
+            trees.fastflowlm_root / "include/AutoModel/model_extension.h"
+        ).read_text(encoding="utf-8") == "abi"
+        assert (
+            trees.fastflowlm_root
+            / "lib/cmake/FastFlowLMModelExtension/FastFlowLMModelExtensionConfig.cmake"
+        ).read_text(encoding="utf-8") == "extension-config"
         assert (trees.fastflowlm_root / "lib/flm/q4_npu_eXpress.lib").read_text(
             encoding="utf-8"
         ) == "q4"
         assert not (trees.runtime_root / "share/fastflow-sdk/gemma4e").exists()
+        assert not (trees.runtime_root / "include/AutoModel").exists()
+        assert not (trees.runtime_root / "lib/cmake/FastFlowLMModelExtension").exists()
         assert (trees.runtime_root / "licenses/fastflow-sdk-LICENSE").read_text(
             encoding="utf-8"
         ) == "staging"
