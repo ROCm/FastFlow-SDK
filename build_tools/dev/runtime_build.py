@@ -135,7 +135,7 @@ def cmd_build_hrx(args):
         )
         environment.sh(
             [
-                "ctest",
+                environment.ctest_bin(),
                 "--test-dir",
                 environment.cmake_path(paths.HRX_CMAKE_BUILD),
                 "-R",

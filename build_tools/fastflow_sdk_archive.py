@@ -32,6 +32,10 @@ from build_tools.artifact import (
     git_revision as _git_revision,
 )
 from build_tools.fastflowlm_deps import dependency_paths
+from build_tools.gemma4_open_extension import (
+    build_gemma4_open_extension,
+    extension_library_dir,
+)
 from build_tools.native_dependencies import (
     elf_needed,
     elf_soname,
@@ -199,7 +203,11 @@ def _parse_control_file(path: Path) -> list[dict[str, str]]:
 
 def _windows_pe_dependency_graph(bundle: Path) -> dict[str, list[str]]:
     binaries = sorted(
-        [*(bundle / "bin").glob("*.exe"), *(bundle / "bin").glob("*.dll")]
+        [
+            *(bundle / "bin").glob("*.exe"),
+            *(bundle / "bin").glob("*.dll"),
+            *extension_library_dir(bundle).glob("*.dll"),
+        ]
     )
     bundled = {path.name.lower() for path in binaries}
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
@@ -253,7 +261,13 @@ def _copy_windows_redistributable_closure(bundle: Path) -> None:
     redist_root_value = os.environ.get("VCToolsRedistDir")
     redist_root = Path(redist_root_value) if redist_root_value else None
     candidates: dict[str, Path] | None = None
-    queue = sorted([*(bundle / "bin").glob("*.exe"), *(bundle / "bin").glob("*.dll")])
+    queue = sorted(
+        [
+            *(bundle / "bin").glob("*.exe"),
+            *(bundle / "bin").glob("*.dll"),
+            *extension_library_dir(bundle).glob("*.dll"),
+        ]
+    )
     bundled = {path.name.casefold() for path in queue}
     while queue:
         binary = queue.pop(0)
@@ -431,6 +445,7 @@ def _linux_elf_files(bundle: Path) -> list[Path]:
         bundle / "bin" / "flm",
         *bundle.glob("lib/*.so*"),
         *bundle.glob("lib/flm/*.so*"),
+        *extension_library_dir(bundle).glob("*.so*"),
     ]
     return sorted(path for path in candidates if path.is_file())
 
@@ -673,6 +688,10 @@ def _normalize_and_verify_linux_elf(bundle: Path) -> dict[str, list[str]]:
         relative = path.relative_to(bundle)
         if relative.parts[0] == "bin":
             rpath = "$ORIGIN/../lib/flm:$ORIGIN/../lib"
+        elif relative.parts[0] == "share":
+            # Model-extension plugins are dlopened by flm, which already
+            # loaded HRX; their private libraries sit beside them.
+            rpath = "$ORIGIN"
         elif relative.parent.as_posix() == "lib/flm":
             rpath = "$ORIGIN:$ORIGIN/.."
         else:
@@ -1326,6 +1345,7 @@ def stage_runtime_bundle(
 
     _stage_hrx_development_files(hrx_install, bundle)
     stage_gemma4e_extension_sources(root / "projects" / "FastFlowLM", bundle, root)
+    build_gemma4_open_extension(root, bundle)
     _copy_checked(cli_install / "bin" / cli_name, bundle / "bin" / cli_name)
     fixture_source = cli_install / "share" / "fastflow-sdk" / "self-test"
     if not fixture_source.is_dir():

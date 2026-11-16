@@ -95,12 +95,13 @@ def test_qualification_contract_schema_pins_native_checks():
             validate_schema(invalid, native_schema)
 
 
-def test_evidence_schema_accepts_memory_soak_records():
+@pytest.mark.parametrize("kind", ["memory-soak", "vision"])
+def test_evidence_schema_requires_serve_test_metrics(kind):
     test_schema = _json("schemas/evidence-v1.schema.json")["$defs"]["test"]
     record = {
         "model": "qwen3:0.6b",
-        "name": "varying-context-memory-sanity",
-        "kind": "memory-soak",
+        "name": "serve-test",
+        "kind": kind,
         "status": "pass",
         "duration_seconds": 1.0,
         "log": "logs/memory.log",

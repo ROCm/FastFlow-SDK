@@ -12,6 +12,7 @@ from importlib import resources
 from pathlib import PurePosixPath
 from typing import Any
 
+from .commands import VISION_COLORS
 from .contracts import PROFILE_SCHEMA_VERSION
 
 
@@ -72,6 +73,61 @@ def _validate_digest_records(tag: str, label: str, value: Any) -> None:
         )
 
 
+def _validate_vision_test(tag: str, name: str, test: dict[str, Any]) -> None:
+    _require(
+        set(test)
+        == {
+            "name",
+            "kind",
+            "ctx_len",
+            "prompt",
+            "requests",
+            "timeout_seconds",
+            "request_timeout_seconds",
+        },
+        f"{tag}/{name}: vision properties are invalid",
+    )
+    _require(
+        type(test.get("ctx_len")) is int and 1 <= test["ctx_len"] <= 131072,
+        f"{tag}/{name}: context length is invalid",
+    )
+    _require(
+        isinstance(test.get("prompt"), str) and bool(test["prompt"]),
+        f"{tag}/{name}: prompt is invalid",
+    )
+    _require(
+        type(test.get("request_timeout_seconds")) is int
+        and test["request_timeout_seconds"] >= 1,
+        f"{tag}/{name}: request_timeout_seconds is invalid",
+    )
+    requests = test.get("requests")
+    _require(
+        isinstance(requests, list) and 1 <= len(requests) <= 64,
+        f"{tag}/{name}: requests are required",
+    )
+    for request in requests:
+        _require(
+            isinstance(request, dict)
+            and set(request)
+            == {"width", "height", "copies", "color", "min_prompt_tokens"},
+            f"{tag}/{name}: vision request is invalid",
+        )
+        for field, maximum in (("width", 16384), ("height", 16384), ("copies", 4)):
+            _require(
+                type(request[field]) is int and 1 <= request[field] <= maximum,
+                f"{tag}/{name}: vision request {field} is invalid",
+            )
+        _require(
+            isinstance(request["color"], str) and request["color"] in VISION_COLORS,
+            f"{tag}/{name}: vision request color is invalid",
+        )
+        _require(
+            type(request["min_prompt_tokens"]) is int
+            and 1 <= request["min_prompt_tokens"] <= test["ctx_len"],
+            f"{tag}/{name}: vision request min_prompt_tokens is invalid",
+        )
+
+
 def validate_profile(profile: Any) -> dict[str, Any]:
     _require(isinstance(profile, dict), "profile must be an object")
     _require(
@@ -94,7 +150,7 @@ def validate_profile(profile: Any) -> dict[str, Any]:
     for model in models:
         _require(isinstance(model, dict), "model entry must be an object")
         _require(
-            set(model)
+            set(model) - {"model_extension"}
             == {
                 "tag",
                 "source",
@@ -108,6 +164,13 @@ def validate_profile(profile: Any) -> dict[str, Any]:
             "model properties are invalid",
         )
         tag = model.get("tag")
+        if "model_extension" in model:
+            _require(
+                isinstance(model["model_extension"], str)
+                and re.fullmatch(r"[a-z0-9][a-z0-9-]*", model["model_extension"])
+                is not None,
+                f"{tag}: model extension name is invalid",
+            )
         _require(isinstance(tag, str) and tag, "model tag is required")
         _require(tag not in seen_models, f"duplicate model tag: {tag}")
         seen_models.add(tag)
@@ -145,10 +208,12 @@ def validate_profile(profile: Any) -> dict[str, Any]:
             seen_tests.add(name)
             kind = test.get("kind")
             _require(
-                kind in {"run", "bench", "memory-soak"},
+                kind in {"run", "bench", "memory-soak", "vision"},
                 f"{tag}/{name}: kind is invalid",
             )
-            if kind == "run":
+            if kind == "vision":
+                _validate_vision_test(tag, name, test)
+            elif kind == "run":
                 _require(
                     set(test)
                     == {

@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
 import re
 import signal
 import statistics
+import struct
 import subprocess
 import sys
 import threading
@@ -19,6 +21,7 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -277,6 +280,80 @@ def _post_audio_transcription(
     raise ValueError("transcription response did not contain a 'text' field")
 
 
+@dataclass
+class _ServeProcess:
+    process: subprocess.Popen[str]
+    chunks: queue.Queue[str | None]
+    reader: threading.Thread
+    output: list[str]
+
+
+def _start_serve(
+    argv: Sequence[str], env: Mapping[str, str], thread_name: str
+) -> _ServeProcess:
+    """Start ``flm serve`` with merged output streamed to a reader thread."""
+    process = subprocess.Popen(
+        argv,
+        stdin=None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=dict(env),
+        **_managed_process_kwargs(),
+    )
+    assert process.stdout is not None
+    chunks: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for chunk in iter(lambda: process.stdout.read(1), ""):
+                chunks.put(chunk)
+        finally:
+            chunks.put(None)
+
+    reader = threading.Thread(target=read_output, name=thread_name, daemon=True)
+    reader.start()
+    return _ServeProcess(process, chunks, reader, [])
+
+
+def _wait_for_serve_port(serve: _ServeProcess, deadline: float) -> int | None:
+    """Return the port ``flm serve`` reports, or ``None`` if it never does."""
+    while time.monotonic() < deadline:
+        try:
+            chunk = serve.chunks.get(timeout=0.1)
+        except queue.Empty:
+            if serve.process.poll() is not None:
+                return None
+            continue
+        if chunk is None:
+            return None
+        serve.output.append(chunk)
+        match = _SERVE_PORT_PATTERN.search("".join(serve.output))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _stop_serve(serve: _ServeProcess) -> None:
+    """Terminate the server tree and collect every output chunk it emitted."""
+    if serve.process.poll() is None:
+        _terminate_process_tree(serve.process)
+    serve.process.wait()
+    serve.reader.join(timeout=1)
+    while True:
+        try:
+            chunk = serve.chunks.get_nowait()
+        except queue.Empty:
+            break
+        if chunk is not None:
+            serve.output.append(chunk)
+    assert serve.process.stdout is not None
+    serve.process.stdout.close()
+
+
 def serve_probe(
     argv: Sequence[str | os.PathLike[str]],
     *,
@@ -306,55 +383,16 @@ def serve_probe(
     """
     normalized = tuple(os.fspath(item) for item in argv)
     started = time.monotonic()
-    process = subprocess.Popen(
-        normalized,
-        stdin=None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        env=dict(env),
-        **_managed_process_kwargs(),
-    )
-    assert process.stdout is not None
-    chunks: queue.Queue[str | None] = queue.Queue()
-
-    def read_output() -> None:
-        try:
-            for chunk in iter(lambda: process.stdout.read(1), ""):
-                chunks.put(chunk)
-        finally:
-            chunks.put(None)
-
-    reader = threading.Thread(
-        target=read_output, name="qualification-serve-output", daemon=True
-    )
-    reader.start()
-    output: list[str] = []
+    serve = _start_serve(normalized, env, "qualification-serve-output")
     port: int | None = None
     detail = ""
     ok = False
     probe_metrics: dict[str, Any] = {}
     timed_out = False
-    deadline = started + boot_timeout
     try:
-        while time.monotonic() < deadline and port is None:
-            try:
-                chunk = chunks.get(timeout=0.1)
-            except queue.Empty:
-                if process.poll() is not None:
-                    break
-                continue
-            if chunk is None:
-                break
-            output.append(chunk)
-            match = _SERVE_PORT_PATTERN.search("".join(output))
-            if match:
-                port = int(match.group(1))
+        port = _wait_for_serve_port(serve, started + boot_timeout)
         if port is None:
-            timed_out = process.poll() is None
+            timed_out = serve.process.poll() is None
             detail = "server did not report a listening port"
         else:
             base = f"http://127.0.0.1:{port}"
@@ -474,13 +512,9 @@ def serve_probe(
             except (urllib.error.URLError, OSError, ValueError) as error:
                 detail = f"probe error: {error}"
     finally:
-        if process.poll() is None:
-            _terminate_process_tree(process)
-        process.wait()
-        reader.join(timeout=1)
-        process.stdout.close()
+        _stop_serve(serve)
     duration = time.monotonic() - started
-    stdout = redact("".join(output))
+    stdout = redact("".join(serve.output))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     rendered_log = (
         f"$ {redact(' '.join(normalized))}\n"
@@ -637,52 +671,14 @@ def memory_soak_probe(
     """Run shape windows in one process and verify late-window memory plateaus."""
     normalized = tuple(os.fspath(item) for item in argv)
     started = time.monotonic()
-    process = subprocess.Popen(
-        normalized,
-        stdin=None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        env=dict(env),
-        **_managed_process_kwargs(),
-    )
-    assert process.stdout is not None
-    chunks: queue.Queue[str | None] = queue.Queue()
-
-    def read_output() -> None:
-        try:
-            for chunk in iter(lambda: process.stdout.read(1), ""):
-                chunks.put(chunk)
-        finally:
-            chunks.put(None)
-
-    reader = threading.Thread(
-        target=read_output, name="qualification-memory-soak-output", daemon=True
-    )
-    reader.start()
-    output: list[str] = []
+    serve = _start_serve(normalized, env, "qualification-memory-soak-output")
+    process = serve.process
     port: int | None = None
     samples: list[dict[str, Any]] = []
     detail = ""
     timed_out = False
-    deadline = started + boot_timeout
     try:
-        while time.monotonic() < deadline and port is None:
-            try:
-                chunk = chunks.get(timeout=0.1)
-            except queue.Empty:
-                if process.poll() is not None:
-                    break
-                continue
-            if chunk is None:
-                break
-            output.append(chunk)
-            match = _SERVE_PORT_PATTERN.search("".join(output))
-            if match:
-                port = int(match.group(1))
+        port = _wait_for_serve_port(serve, started + boot_timeout)
         if port is None:
             timed_out = process.poll() is None
             detail = "server did not report a listening port"
@@ -768,18 +764,7 @@ def memory_soak_probe(
                     }
                 )
     finally:
-        if process.poll() is None:
-            _terminate_process_tree(process)
-        process.wait()
-        reader.join(timeout=1)
-        while True:
-            try:
-                chunk = chunks.get_nowait()
-            except queue.Empty:
-                break
-            if chunk is not None:
-                output.append(chunk)
-        process.stdout.close()
+        _stop_serve(serve)
 
     private_samples = [int(sample["private_bytes"]) for sample in samples]
     all_requests_completed = len(samples) == len(prompt_repetitions)
@@ -818,7 +803,7 @@ def memory_soak_probe(
         )
 
     duration = time.monotonic() - started
-    stdout = redact("".join(output))
+    stdout = redact("".join(serve.output))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     rendered_log = (
         f"$ {redact(' '.join(normalized))}\n"
@@ -855,6 +840,207 @@ def memory_soak_probe(
         "private_bytes_start": private_samples[0] if private_samples else None,
         "private_bytes_end": private_samples[-1] if private_samples else None,
     }
+
+
+VISION_COLORS: dict[str, tuple[int, int, int]] = {
+    "red": (220, 20, 20),
+    "green": (20, 170, 40),
+    "blue": (20, 40, 220),
+    "yellow": (230, 210, 20),
+}
+
+
+def solid_color_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """Encode a solid RGB image as a PNG without an imaging dependency."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    row = b"\x00" + bytes(rgb) * width
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(row * height, 6))
+        + chunk(b"IEND", b"")
+    )
+
+
+def vision_probe(
+    argv: Sequence[str | os.PathLike[str]],
+    *,
+    log_path: Path,
+    env: Mapping[str, str],
+    model: str,
+    prompt: str,
+    requests: Sequence[Mapping[str, Any]],
+    boot_timeout: float,
+    total_timeout: float,
+    request_timeout: float,
+    echo: bool = False,
+) -> tuple[CommandResult, dict[str, Any]]:
+    """Send solid-colour image requests to one ``flm serve`` process.
+
+    Image size and copy count set how many vision patches, and so how much
+    control code, one request needs. Each answer must be the image colour
+    alone, ignoring case and terminal punctuation, and the response must report at least the request's ``min_prompt_tokens``
+    so a preprocessing change cannot silently shrink the request.
+    """
+    normalized = tuple(os.fspath(item) for item in argv)
+    started = time.monotonic()
+    serve = _start_serve(normalized, env, "qualification-vision-output")
+    port: int | None = None
+    samples: list[dict[str, Any]] = []
+    detail = ""
+    timed_out = False
+    try:
+        port = _wait_for_serve_port(serve, started + boot_timeout)
+        if port is None:
+            timed_out = serve.process.poll() is None
+            detail = "server did not report a listening port"
+        else:
+            url = f"http://127.0.0.1:{port}/v1/chat/completions"
+            for index, spec in enumerate(requests, start=1):
+                remaining = started + total_timeout - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    detail = f"vision probe timed out before request {index}"
+                    break
+                if serve.process.poll() is not None:
+                    detail = f"server exited before request {index}"
+                    break
+                image = base64.b64encode(
+                    solid_color_png(
+                        spec["width"], spec["height"], VISION_COLORS[spec["color"]]
+                    )
+                ).decode("ascii")
+                content: list[dict[str, Any]] = [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image}"},
+                    }
+                ] * spec["copies"]
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [*content, {"type": "text", "text": prompt}],
+                        }
+                    ],
+                    "temperature": 0.0,
+                    "top_k": 1,
+                    "max_tokens": 32,
+                    "stream": False,
+                }
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                request_started = time.perf_counter()
+                try:
+                    with urllib.request.urlopen(
+                        request, timeout=min(request_timeout, remaining)
+                    ) as response:
+                        response_payload = json.loads(
+                            response.read().decode("utf-8", errors="replace")
+                        )
+                except (urllib.error.URLError, OSError, ValueError) as error:
+                    detail = f"request {index} failed: {error}"
+                    break
+                latency = time.perf_counter() - request_started
+                choices = (
+                    response_payload.get("choices")
+                    if isinstance(response_payload, dict)
+                    else None
+                )
+                message = (
+                    choices[0].get("message")
+                    if isinstance(choices, list)
+                    and choices
+                    and isinstance(choices[0], dict)
+                    else None
+                )
+                answer = message.get("content") if isinstance(message, dict) else None
+                usage = (
+                    response_payload.get("usage")
+                    if isinstance(response_payload, dict)
+                    else None
+                )
+                prompt_tokens = (
+                    usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                )
+                samples.append(
+                    {
+                        "request": index,
+                        "width": spec["width"],
+                        "height": spec["height"],
+                        "copies": spec["copies"],
+                        "color": spec["color"],
+                        "answer": answer,
+                        "prompt_tokens": prompt_tokens,
+                        "latency_seconds": latency,
+                    }
+                )
+                if not isinstance(answer, str):
+                    detail = f"request {index} returned no completion"
+                    break
+                if type(prompt_tokens) is not int or (
+                    prompt_tokens < spec["min_prompt_tokens"]
+                ):
+                    detail = (
+                        f"request {index} reported prompt_tokens={prompt_tokens!r}, "
+                        f"below {spec['min_prompt_tokens']}"
+                    )
+                    break
+                if not re.fullmatch(
+                    rf"\s*{spec['color']}[.!]?\s*", answer, re.IGNORECASE
+                ):
+                    detail = (
+                        f"request {index} answered {answer.strip()!r} for a "
+                        f"{spec['color']} image"
+                    )
+                    break
+    finally:
+        _stop_serve(serve)
+
+    ok = not detail and len(samples) == len(requests)
+    if ok:
+        detail = f"answered {len(samples)} image requests"
+    duration = time.monotonic() - started
+    stdout = redact("".join(serve.output))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    rendered_log = (
+        f"$ {redact(' '.join(normalized))}\n"
+        f"[vision probe ok={ok} port={port} duration={duration:.6f}s]\n"
+        f"--- merged stdout/stderr ---\n{stdout}"
+        f"\n--- vision samples ---\n{json.dumps(samples, indent=2)}"
+        f"\n--- probe detail ---\n{detail}\n"
+    )
+    log_path.write_text(rendered_log, encoding="utf-8")
+    if echo:
+        print(
+            f"qualification log: {log_path.as_posix()}\n{rendered_log}",
+            file=sys.stderr,
+            flush=True,
+        )
+    result = CommandResult(
+        argv=normalized,
+        returncode=0 if ok else 1,
+        stdout=stdout,
+        stderr="",
+        duration_seconds=duration,
+        timed_out=timed_out,
+        log=log_path.as_posix(),
+    )
+    return result, {"ok": ok, "port": port, "detail": detail, "samples": samples}
 
 
 def run_interactive_command(

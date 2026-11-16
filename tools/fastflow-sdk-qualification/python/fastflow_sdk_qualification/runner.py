@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Sequence
 from contextlib import ExitStack
 from datetime import UTC, datetime
 from importlib import resources
@@ -25,6 +26,7 @@ from .commands import (
     run_command,
     run_interactive_command,
     serve_probe,
+    vision_probe,
 )
 from .contracts import (
     COMMAND_REPORT_SCHEMA_VERSION,
@@ -74,8 +76,13 @@ from .models import (
     enumerate_registry_models,
     fastflow_environment,
     filter_models_missing_optional_engines,
+    model_extension_args,
     resolve_model,
     resolve_model_dynamic,
+)
+from .native_reports import (
+    shared_code_memory_metrics,
+    shared_code_memory_report_passed,
 )
 from .profiles import load_profile, profile_names
 from .prompts import materialize_turn
@@ -528,64 +535,13 @@ def _run_shared_code_memory_reclaim(
             echo=True,
         )
         report = json.loads(result.stdout)
-        bounded = (
-            report.get("bounded_shared_code_memory")
-            if isinstance(report, dict)
-            else None
-        )
-        allocated = report.get("allocated_bytes") if isinstance(report, dict) else None
-        budget = report.get("budget_bytes", 0) if isinstance(report, dict) else None
-        exhaustion = (
-            report.get("exhaustion_observed") if isinstance(report, dict) else None
-        )
-        reclaimed = report.get("reclaimed_bytes") if isinstance(report, dict) else None
-        post_reclaim = (
-            report.get("post_reclaim_allocation_bytes")
-            if isinstance(report, dict)
-            else None
-        )
-        valid = (
-            isinstance(report, dict)
-            and report.get("schema_version") == 1
-            and report.get("status") in {"pass", "fail"}
-            and isinstance(bounded, bool)
-            and type(allocated) is int
-            and allocated >= 0
-            and type(budget) is int
-            and budget >= 0
-            and isinstance(exhaustion, bool)
-            and type(reclaimed) is int
-            and reclaimed >= 0
-            and type(post_reclaim) is int
-            and post_reclaim >= 0
-            and (
-                (
-                    bounded
-                    and budget > 0
-                    and allocated >= (budget // 4) * 3
-                    and exhaustion
-                    and reclaimed >= post_reclaim > 0
-                )
-                or (
-                    not bounded
-                    and budget == 0
-                    and allocated > 0
-                    and not exhaustion
-                    and reclaimed == 0
-                    and post_reclaim == 0
-                )
-            )
-        )
-        passed = result.returncode == 0 and valid and report["status"] == "pass"
-        error = (
-            None
-            if passed
-            else (
-                "resource-pressure tool emitted an invalid report"
-                if not valid
-                else f"resource-pressure tool failed in {report.get('phase', 'unknown')}"
-            )
-        )
+        passed = result.returncode == 0 and shared_code_memory_report_passed(report)
+        if passed:
+            error = None
+        elif isinstance(report, dict) and report.get("status") == "fail":
+            error = f"resource-pressure tool failed in {report.get('phase', 'unknown')}"
+        else:
+            error = "resource-pressure tool emitted an invalid report"
     except (OSError, json.JSONDecodeError, QualificationError) as caught:
         report = {}
         passed = False
@@ -594,7 +550,6 @@ def _run_shared_code_memory_reclaim(
             writer.path(log).write_text(f"{error}\n", encoding="utf-8")
     artifact = "artifacts/native/shared-code-memory-reclaim.json"
     writer.write_json(artifact, report)
-    report_data = report if isinstance(report, dict) else {}
     return {
         "model": "native-core",
         "name": SHARED_CODE_MEMORY_RECLAIM,
@@ -603,38 +558,7 @@ def _run_shared_code_memory_reclaim(
         "returncode": 0 if passed else 1,
         "duration_seconds": max(time.monotonic() - started, 0.0),
         "log": log,
-        "metrics": {
-            "bounded_shared_code_memory": (
-                report_data.get("bounded_shared_code_memory")
-                if isinstance(report_data.get("bounded_shared_code_memory"), bool)
-                else False
-            ),
-            "allocated_bytes": (
-                report_data.get("allocated_bytes")
-                if type(report_data.get("allocated_bytes")) is int
-                else 0
-            ),
-            "budget_bytes": (
-                report_data.get("budget_bytes")
-                if type(report_data.get("budget_bytes")) is int
-                else 0
-            ),
-            "exhaustion_observed": (
-                report_data.get("exhaustion_observed")
-                if isinstance(report_data.get("exhaustion_observed"), bool)
-                else False
-            ),
-            "reclaimed_bytes": (
-                report_data.get("reclaimed_bytes")
-                if type(report_data.get("reclaimed_bytes")) is int
-                else 0
-            ),
-            "post_reclaim_allocation_bytes": (
-                report_data.get("post_reclaim_allocation_bytes")
-                if type(report_data.get("post_reclaim_allocation_bytes")) is int
-                else 0
-            ),
-        },
+        "metrics": shared_code_memory_metrics(report),
         "artifacts": [artifact],
         **({} if passed else {"error": error or "resource-pressure test failed"}),
     }
@@ -1193,6 +1117,7 @@ def _run_flm_bench(
     log: Path,
     benchmark_iterations: int,
     runtime_label: str = "HRX",
+    extra_args: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Run a single ``flm bench`` and parse it into a backend-agnostic result.
 
@@ -1231,7 +1156,7 @@ def _run_flm_bench(
             encoding="utf-8",
         )
         result = run_command(
-            [flm, "bench", model_tag, "-i", config.resolve()],
+            [flm, "bench", model_tag, *extra_args, "-i", config.resolve()],
             log_path=log,
             env=environment,
             timeout=test["timeout_seconds"],
@@ -1340,9 +1265,10 @@ def _invoke_flm_run(
     environment: dict[str, str],
     log: Path,
     input_lines: list[str],
+    extra_args: Sequence[str] = (),
 ):
     """Run ``flm run`` with the same stdin shape the HRX sweep uses."""
-    argv = [flm, "run", model_tag, "--ctx-len", str(test["ctx_len"])]
+    argv = [flm, "run", model_tag, *extra_args, "--ctx-len", str(test["ctx_len"])]
     if os.name == "nt":
         return run_command(
             argv,
@@ -1560,6 +1486,12 @@ def _test_model(
     environment = fastflow_environment(
         model_cache, offline=offline, base_environment=environment
     )
+    extension_args = model_extension_args(model)
+    if extension_args and (xrt_flm is not None or xrt_unavailable is not None):
+        xrt_flm = None
+        xrt_unavailable = _xrt_unavailable_metrics(
+            "model extensions are served only by the HRX build"
+        )
     xrt_bench_environment = (
         fastflow_environment(
             model_cache, offline=offline, base_environment=xrt_environment
@@ -1592,6 +1524,82 @@ def _test_model(
             return records
 
     for test in model["tests"]:
+        if test["kind"] == "vision":
+            safe_tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", model["tag"])
+            log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
+            samples_artifact = (
+                f"artifacts/fastflowlm/{safe_tag}-{test['name']}-samples.json"
+            )
+            requests = test["requests"]
+            result, vision = vision_probe(
+                [
+                    flm,
+                    "serve",
+                    model["tag"],
+                    *extension_args,
+                    "--ctx-len",
+                    str(test["ctx_len"]),
+                    "--prefix-slots",
+                    "0",
+                    # The default pre-resize caps image height at 720 pixels,
+                    # which keeps vision control code small.
+                    "--img-pre-resize",
+                    "0",
+                ],
+                log_path=log,
+                env=environment,
+                model=model["tag"],
+                prompt=test["prompt"],
+                requests=requests,
+                boot_timeout=min(test["timeout_seconds"], 300),
+                total_timeout=test["timeout_seconds"],
+                request_timeout=test["request_timeout_seconds"],
+                echo=True,
+            )
+            writer.write_json(
+                samples_artifact,
+                {
+                    "schema_version": 1,
+                    "model": model["tag"],
+                    "test": test["name"],
+                    "samples": vision["samples"],
+                },
+            )
+            error = ""
+            if has_runtime_error(result.stdout):
+                error = "FastFlowLM emitted an HRX runtime error"
+            elif not vision["ok"]:
+                error = vision["detail"] or "FastFlowLM vision probe failed"
+            records.append(
+                {
+                    "model": model["tag"],
+                    "name": test["name"],
+                    "kind": "vision",
+                    "status": "fail" if error else "pass",
+                    "returncode": result.returncode,
+                    "timed_out": result.timed_out,
+                    "duration_seconds": result.duration_seconds,
+                    "log": writer.relative(log),
+                    "metrics": {
+                        "port": vision["port"],
+                        "requests_scheduled": len(requests),
+                        "requests_completed": len(vision["samples"]),
+                        "max_prompt_tokens": max(
+                            (
+                                sample["prompt_tokens"]
+                                for sample in vision["samples"]
+                                if type(sample["prompt_tokens"]) is int
+                            ),
+                            default=0,
+                        ),
+                    },
+                    "artifacts": [samples_artifact],
+                    **({"error": error} if error else {}),
+                }
+            )
+            write_progress()
+            continue
+
         if test["kind"] == "memory-soak":
             safe_tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", model["tag"])
             log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
@@ -1605,6 +1613,7 @@ def _test_model(
                     flm,
                     "serve",
                     model["tag"],
+                    *extension_args,
                     "--ctx-len",
                     str(test["ctx_len"]),
                     "--prefix-slots",
@@ -1668,7 +1677,12 @@ def _test_model(
             )
             log = writer.path(f"logs/tests/{safe_tag}-{test['name']}.log")
             probe_kind = test.get("probe_kind", "embed")
-            serve_argv: list[str | os.PathLike[str]] = [flm, "serve", model["tag"]]
+            serve_argv: list[str | os.PathLike[str]] = [
+                flm,
+                "serve",
+                model["tag"],
+                *extension_args,
+            ]
             with ExitStack() as sample_stack:
                 audio_sample: Path | None = None
                 reference_text: str | None = None
@@ -1760,6 +1774,7 @@ def _test_model(
                 work=writer.path(f"bench/{safe_tag}/{test['name']}"),
                 log=writer.path(f"logs/tests/{safe_tag}-{test['name']}.log"),
                 benchmark_iterations=benchmark_iterations,
+                extra_args=extension_args,
             )
             metrics: dict[str, Any] = {
                 "checkpoint_tokens": hrx["checkpoint"],
@@ -1842,6 +1857,7 @@ def _test_model(
                 environment=environment,
                 log=log,
                 input_lines=input_lines,
+                extra_args=extension_args,
             )
             transcript = result.stdout + "\n" + result.stderr
             raw_outputs = extract_raw_outputs(transcript)

@@ -38,7 +38,12 @@ Qwen3 processes with two deterministic turns each, the production XCLBIN
   baseline restore, and the embedded FastFlowLM XADX stress set. `--profile
   extended` is an opt-in default-suite
 superset adding revision-pinned Llama 3.1 8B multi-turn, soak, and 1k/4k
-coverage. CI selects only `--fast`; default and extended are explicit
+coverage, and a Qwen3.5 0.8B `vision`-kind test that sends a sequence of
+generated solid-colour images, up to 8k prompt tokens, through `flm serve` at
+original size, failing on HRX runtime errors, short prompts, or a wrong colour
+answer. Its Gemma 4 E2B soak serves `gemma4-open-it:e2b` through the
+`gemma4-open` model extension that the FastFlowLM wheel ships, so it covers the
+source-built engine rather than the prebuilt one. CI selects only `--fast`; default and extended are explicit
 qualification profiles for broader local or release validation.
 
 `--all-models` runs a complete sweep over *every* model in the installed

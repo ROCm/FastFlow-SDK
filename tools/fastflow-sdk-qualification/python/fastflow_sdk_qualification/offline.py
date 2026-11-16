@@ -40,6 +40,10 @@ from .contracts import (
 )
 from .evidence import junit_bytes
 from .hashing import sha256_file, write_sha256sums
+from .native_reports import (
+    shared_code_memory_metrics,
+    shared_code_memory_report_passed,
+)
 from .numeric_runtime import NUMERIC_RUNTIME
 from .policy import PolicyValidationError, normalize_policy
 from .schema import (
@@ -433,8 +437,8 @@ def _validate_complete_execution(
                     "process_iteration": 1,
                 }
                 continue
-            if test["kind"] == "memory-soak":
-                expected[("memory-soak", model["tag"], test["name"])] = {}
+            if test["kind"] in {"memory-soak", "vision"}:
+                expected[(test["kind"], model["tag"], test["name"])] = {}
                 continue
             for iteration in range(1, test["process_iterations"] + 1):
                 name = (
@@ -749,62 +753,13 @@ def _reconcile_native_reports(
             report = _json_object(
                 members.get(artifact, b""), "shared-code-memory-reclaim report"
             )
-            bounded = report.get("bounded_shared_code_memory")
-            allocated = report.get("allocated_bytes")
-            budget = report.get("budget_bytes", 0)
-            exhaustion = report.get("exhaustion_observed")
-            reclaimed = report.get("reclaimed_bytes")
-            post_reclaim = report.get("post_reclaim_allocation_bytes")
-            valid = (
-                report.get("schema_version") == 1
-                and report.get("status") == "pass"
-                and isinstance(bounded, bool)
-                and type(allocated) is int
-                and allocated >= 0
-                and type(budget) is int
-                and budget >= 0
-                and isinstance(exhaustion, bool)
-                and type(reclaimed) is int
-                and reclaimed >= 0
-                and type(post_reclaim) is int
-                and post_reclaim >= 0
-                and (
-                    (
-                        bounded
-                        and budget > 0
-                        and allocated >= (budget // 4) * 3
-                        and exhaustion
-                        and reclaimed >= post_reclaim > 0
-                    )
-                    or (
-                        not bounded
-                        and budget == 0
-                        and allocated > 0
-                        and not exhaustion
-                        and reclaimed == 0
-                        and post_reclaim == 0
-                    )
-                )
-            )
             test = tests[command]
-            expected_metrics = {
-                "bounded_shared_code_memory": report.get(
-                    "bounded_shared_code_memory", False
-                ),
-                "allocated_bytes": report.get("allocated_bytes", 0),
-                "budget_bytes": report.get("budget_bytes", 0),
-                "exhaustion_observed": report.get("exhaustion_observed", False),
-                "reclaimed_bytes": report.get("reclaimed_bytes", 0),
-                "post_reclaim_allocation_bytes": report.get(
-                    "post_reclaim_allocation_bytes", 0
-                ),
-            }
             if (
-                not valid
+                not shared_code_memory_report_passed(report)
                 or test.get("status") != "pass"
                 or test.get("returncode") != 0
                 or test.get("artifacts") != [artifact]
-                or test.get("metrics") != expected_metrics
+                or test.get("metrics") != shared_code_memory_metrics(report)
                 or test.get("log") != "logs/tests/shared-code-memory-reclaim.log"
             ):
                 raise EvidenceError(

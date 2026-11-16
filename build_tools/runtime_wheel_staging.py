@@ -211,6 +211,18 @@ def gemma4e_root() -> Path:
     return path
 
 
+def model_extension(name: str) -> Path:
+    """Manifest of a model extension built into this package.
+
+    Pass it to ``flm --model-extension``. ``gemma4-open`` serves the
+    ``gemma4-open-it`` models with the engine built from ``gemma4e_root()``.
+    """
+    path = package_root() / "share" / "fastflow-sdk" / "extensions" / name / "extension.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"FastFlowLM model extension was not found: {path}")
+    return path
+
+
 def engine_lib_dir() -> Path:
     """Import libraries the Gemma 4 extension engine links."""
     path = package_root() / "lib" / "flm"
@@ -367,6 +379,10 @@ def prepare_runtime_wheel_trees(
     if gemma4e.is_dir():
         _copy_relative_tree(
             source_bundle, "share/fastflow-sdk/gemma4e", trees.fastflowlm_root
+        )
+    if (source_bundle / "share" / "fastflow-sdk" / "extensions").is_dir():
+        _copy_relative_tree(
+            source_bundle, "share/fastflow-sdk/extensions", trees.fastflowlm_root
         )
     if (source_bundle / "include" / "AutoModel").is_dir():
         _copy_relative_tree(source_bundle, "include/AutoModel", trees.fastflowlm_root)

@@ -121,22 +121,23 @@ def test_deterministic_pack_and_offline_verify(tmp_path):
     assert summary["evidence_status"] == "pass"
 
 
-def test_complete_execution_accepts_memory_soak_record(tmp_path):
-    source = _evidence(tmp_path / "memory-soak")
+@pytest.mark.parametrize("kind", ["memory-soak", "vision"])
+def test_complete_execution_accepts_single_record_serve_tests(tmp_path, kind):
+    source = _evidence(tmp_path / kind)
     evidence = json.loads((source / "evidence.json").read_text())
     profile = json.loads((source / "profile.json").read_text())
     contract = _candidate()["qualification_contract"]
-    profile["models"][0]["tests"].append({"name": "memory", "kind": "memory-soak"})
+    profile["models"][0]["tests"].append({"name": "serve-test", "kind": kind})
     evidence["tests"].append(
         {
             "model": "qwen3:0.6b",
-            "name": "memory",
-            "kind": "memory-soak",
+            "name": "serve-test",
+            "kind": kind,
             "status": "pass",
             "duration_seconds": 1,
-            "log": "logs/tests/memory.log",
+            "log": "logs/tests/serve-test.log",
             "metrics": {},
-            "artifacts": ["artifacts/memory.json"],
+            "artifacts": ["artifacts/serve-test.json"],
         }
     )
 
@@ -149,6 +150,10 @@ def test_complete_execution_accepts_memory_soak_record(tmp_path):
         lambda report: report.pop("exhaustion_observed"),
         lambda report: report.update(reclaimed_bytes=1),
         lambda report: report.update(post_reclaim_allocation_bytes=0),
+        lambda report: report.update(schema_version=1),
+        lambda report: report.pop("fragmented_large_allocation_bytes"),
+        lambda report: report.update(retained_command_code_bytes=0),
+        lambda report: report.update(fragmented_large_allocation_bytes=1 << 20),
     ],
 )
 def test_offline_verify_rejects_incomplete_reclaim_evidence(tmp_path, mutate):

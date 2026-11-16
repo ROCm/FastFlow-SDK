@@ -21,6 +21,16 @@ class TestEnvironment:
             environment.paths.ROOT / "build_tools" / "dev" / "environment.py"
         ).exists()
 
+    def test_ctest_comes_from_the_cmake_installation(self, tmp_path):
+        cmake = tmp_path / "cmake"
+        cmake.write_text("", encoding="utf-8")
+        with mock.patch.object(environment, "cmake_bin", return_value=str(cmake)):
+            assert environment.ctest_bin() == str(
+                tmp_path / environment.paths.executable_name("ctest")
+            )
+        with mock.patch.object(environment, "cmake_bin", return_value="cmake"):
+            assert environment.ctest_bin() == environment.paths.executable_name("ctest")
+
     def test_shell_commands_have_a_generous_default_timeout(self):
         with mock.patch.object(environment, "run") as run:
             environment.sh(["tool", "argument"])

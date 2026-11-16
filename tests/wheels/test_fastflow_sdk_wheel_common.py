@@ -108,11 +108,19 @@ def test_wheel_verification_configures_hrx_from_the_runtime_wheel(tmp_path):
         "licenses/THIRD_PARTY_NOTICES.md",
         "licenses/FastFlowLM-LICENSE_RUNTIME.txt",
         "licenses/FastFlowLM-LICENSE_BINARY.txt",
+        "share/fastflow-sdk/extensions/gemma4-open/extension.json",
     ):
         path = bundle / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{}", encoding="utf-8")
     trees = prepare_runtime_wheel_trees(bundle, tmp_path / "staging")
+    assert (
+        trees.fastflowlm_root
+        / "share/fastflow-sdk/extensions/gemma4-open/extension.json"
+    ).is_file()
+    assert "def model_extension(name: str) -> Path:" in (
+        trees.fastflowlm_root / "__init__.py"
+    ).read_text(encoding="utf-8")
     fastflow = "fastflow.exe" if os.name == "nt" else "fastflow"
     (trees.runtime_root / "bin" / fastflow).parent.mkdir(parents=True, exist_ok=True)
     (trees.runtime_root / "bin" / fastflow).write_bytes(b"cli")

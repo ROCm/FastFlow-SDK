@@ -120,7 +120,7 @@ def cmd_smoke(args):
         print("== hrx-xclbinutil smoke (ctest) ==")
         rc |= subprocess.run(
             [
-                "ctest",
+                environment.ctest_bin(),
                 "--test-dir",
                 str(xclbinutil_build),
                 "--output-on-failure",
