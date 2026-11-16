@@ -3,10 +3,10 @@
 // HAL artifact-contract smoke: prove the HRX amdxdna HAL consumes the
 // hrx-xclbinutil artifact. Reads a real .xclbin (PDI embedded in AIE_PARTITION
 // by hrx-xclbinutil) and calls the HAL's own loader entrypoint
-// iree_hal_amdxdna_xclbin_extract_pdi, then (optionally) diffs the extracted
-// PDI against the bootgen-produced main.pdi.
+// iree_hal_amdxdna_xclbin_find_pdi, then (optionally) diffs the located PDI
+// against the bootgen-produced main.pdi.
 //
-// No NPU needed: this validates the artifact contract (parse/extract), not
+// No NPU needed: this validates the artifact contract (parse/locate), not
 // device submission. Usage: hal_pdi_loader <file.xclbin> [expected_main.pdi]
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,43 +14,6 @@
 
 #include "iree/base/api.h"
 #include "iree/hal/drivers/amdxdna/xclbin_util.h"
-
-// Minimal malloc-backed iree_allocator_t (the build doesn't define
-// IREE_ALLOCATOR_SYSTEM_CTL, so ws_d_allocator() is unavailable here).
-static iree_status_t ws_d_malloc_ctl(void* self,
-                                     iree_allocator_command_t command,
-                                     const void* params, void** inout_ptr) {
-  switch (command) {
-    case IREE_ALLOCATOR_COMMAND_MALLOC:
-    case IREE_ALLOCATOR_COMMAND_CALLOC: {
-      const iree_allocator_alloc_params_t* p =
-          (const iree_allocator_alloc_params_t*)params;
-      void* m = (command == IREE_ALLOCATOR_COMMAND_CALLOC)
-                    ? calloc(1, p->byte_length)
-                    : malloc(p->byte_length);
-      if (!m) return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED);
-      *inout_ptr = m;
-      return iree_ok_status();
-    }
-    case IREE_ALLOCATOR_COMMAND_REALLOC: {
-      const iree_allocator_alloc_params_t* p =
-          (const iree_allocator_alloc_params_t*)params;
-      void* m = realloc(*inout_ptr, p->byte_length);
-      if (!m) return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED);
-      *inout_ptr = m;
-      return iree_ok_status();
-    }
-    case IREE_ALLOCATOR_COMMAND_FREE:
-      free(*inout_ptr);
-      return iree_ok_status();
-    default:
-      return iree_make_status(IREE_STATUS_UNIMPLEMENTED);
-  }
-}
-static iree_allocator_t ws_d_allocator(void) {
-  iree_allocator_t a = {NULL, ws_d_malloc_ctl};
-  return a;
-}
 
 static int read_file(const char* path, uint8_t** out, size_t* out_size) {
   FILE* f = fopen(path, "rb");
@@ -85,18 +48,19 @@ int main(int argc, char** argv) {
   printf("xclbin: %s (%zu bytes)\n", argv[1], xclbin_size);
 
   iree_const_byte_span_t span = iree_make_const_byte_span(xclbin, xclbin_size);
-  iree_byte_span_t pdi = iree_byte_span_empty();
-  iree_status_t status = iree_hal_amdxdna_xclbin_extract_pdi(
-      span, /*pdi_index=*/0, ws_d_allocator(), &pdi);
+  iree_const_byte_span_t pdi = iree_const_byte_span_empty();
+  iree_status_t status =
+      iree_hal_amdxdna_xclbin_find_pdi(span, /*pdi_index=*/0, &pdi);
   if (!iree_status_is_ok(status)) {
     char buf[512];
     iree_host_size_t len = 0;
     iree_status_format(status, sizeof(buf), buf, &len);
-    fprintf(stderr, "extract_pdi FAILED: %.*s\n", (int)len, buf);
+    fprintf(stderr, "find_pdi FAILED: %.*s\n", (int)len, buf);
     iree_status_ignore(status);
+    free(xclbin);
     return 1;
   }
-  printf("extract_pdi OK: PDI #0 = %zu bytes; first bytes:",
+  printf("find_pdi OK: PDI #0 = %zu bytes; first bytes:",
          (size_t)pdi.data_length);
   for (int i = 0; i < 8 && i < (int)pdi.data_length; ++i)
     printf(" %02x", pdi.data[i]);
@@ -111,7 +75,7 @@ int main(int argc, char** argv) {
         printf("PDI matches bootgen %s BYTE-FOR-BYTE (%zu bytes)\n", argv[2],
                exp_size);
       } else {
-        printf("PDI DIFFERS from %s (extracted=%zu expected=%zu)\n", argv[2],
+        printf("PDI DIFFERS from %s (located=%zu expected=%zu)\n", argv[2],
                (size_t)pdi.data_length, exp_size);
         rc = 1;
       }
@@ -119,7 +83,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  iree_allocator_free(ws_d_allocator(), pdi.data);
   free(xclbin);
   return rc;
 }

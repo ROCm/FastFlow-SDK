@@ -10,7 +10,9 @@ import hashlib
 import json
 import os
 import signal
+import struct
 import sys
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +35,7 @@ from fastflow_sdk_qualification import (
     runner,
 )
 from fastflow_sdk_qualification.commands import (
+    VISION_COLORS,
     CommandResult,
     _transcript_contains_phrase,
     _wav_duration_seconds,
@@ -43,6 +46,8 @@ from fastflow_sdk_qualification.commands import (
     redact,
     run_command,
     serve_probe,
+    solid_color_png,
+    vision_probe,
 )
 from fastflow_sdk_qualification.contracts import (
     POWER_MODE_ROUNDTRIP,
@@ -273,6 +278,19 @@ def _powermode_roundtrip_fixture(core, **kwargs):
     }
 
 
+_SHARED_CODE_MEMORY_METRICS = {
+    "bounded_shared_code_memory": True,
+    "allocated_bytes": 64 << 20,
+    "budget_bytes": 64 << 20,
+    "exhaustion_observed": True,
+    "reclaimed_bytes": 1 << 20,
+    "post_reclaim_allocation_bytes": 33 << 10,
+    "retained_command_code_bytes": 4 << 20,
+    "churned_command_code_bytes": 16 << 20,
+    "fragmented_large_allocation_bytes": 48 << 20,
+}
+
+
 def _shared_code_memory_reclaim_fixture(runtime, **kwargs):
     writer = kwargs["writer"]
     log = "logs/tests/shared-code-memory-reclaim.log"
@@ -280,16 +298,7 @@ def _shared_code_memory_reclaim_fixture(runtime, **kwargs):
     writer.path(log).write_text("resource pressure passed\n", encoding="utf-8")
     writer.write_json(
         artifact,
-        {
-            "schema_version": 1,
-            "status": "pass",
-            "bounded_shared_code_memory": True,
-            "budget_bytes": 64 << 20,
-            "allocated_bytes": 64 << 20,
-            "exhaustion_observed": True,
-            "reclaimed_bytes": 1 << 20,
-            "post_reclaim_allocation_bytes": 33 << 10,
-        },
+        {"schema_version": 2, "status": "pass", **_SHARED_CODE_MEMORY_METRICS},
     )
     return {
         "model": "native-core",
@@ -299,19 +308,12 @@ def _shared_code_memory_reclaim_fixture(runtime, **kwargs):
         "returncode": 0,
         "duration_seconds": 0,
         "log": log,
-        "metrics": {
-            "bounded_shared_code_memory": True,
-            "allocated_bytes": 64 << 20,
-            "budget_bytes": 64 << 20,
-            "exhaustion_observed": True,
-            "reclaimed_bytes": 1 << 20,
-            "post_reclaim_allocation_bytes": 33 << 10,
-        },
+        "metrics": dict(_SHARED_CODE_MEMORY_METRICS),
         "artifacts": [artifact],
     }
 
 
-def test_shared_code_memory_reclaim_runs_packaged_tool(monkeypatch, tmp_path):
+def _run_resource_pressure(monkeypatch, tmp_path, report, returncode=0):
     if os.name == "nt":
         runtime = tmp_path / "bin" / "hrx.dll"
         executable = tmp_path / "bin" / "hrx-amdxdna-resource-pressure.exe"
@@ -324,19 +326,8 @@ def test_shared_code_memory_reclaim_runs_packaged_tool(monkeypatch, tmp_path):
         calls.append(tuple(map(str, argv)))
         return CommandResult(
             argv=calls[-1],
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "schema_version": 1,
-                    "status": "pass",
-                    "bounded_shared_code_memory": True,
-                    "budget_bytes": 64 << 20,
-                    "allocated_bytes": 63 << 20,
-                    "exhaustion_observed": True,
-                    "reclaimed_bytes": 1 << 20,
-                    "post_reclaim_allocation_bytes": 33 << 10,
-                }
-            ),
+            returncode=returncode,
+            stdout=json.dumps(report),
             stderr="",
             duration_seconds=0.1,
             timed_out=False,
@@ -346,16 +337,23 @@ def test_shared_code_memory_reclaim_runs_packaged_tool(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     writer = EvidenceWriter(tmp_path / "evidence")
     record = runner._run_shared_code_memory_reclaim(str(runtime), writer=writer)
-
     assert calls == [(str(executable),)]
+    return record, writer
+
+
+def test_shared_code_memory_reclaim_runs_packaged_tool(monkeypatch, tmp_path):
+    report = {
+        "schema_version": 2,
+        "status": "pass",
+        **_SHARED_CODE_MEMORY_METRICS,
+        "allocated_bytes": 63 << 20,
+    }
+    record, writer = _run_resource_pressure(monkeypatch, tmp_path, report)
+
     assert record["status"] == "pass"
     assert record["metrics"] == {
-        "bounded_shared_code_memory": True,
+        **_SHARED_CODE_MEMORY_METRICS,
         "allocated_bytes": 63 << 20,
-        "budget_bytes": 64 << 20,
-        "exhaustion_observed": True,
-        "reclaimed_bytes": 1 << 20,
-        "post_reclaim_allocation_bytes": 33 << 10,
     }
     assert (
         json.loads(writer.path(record["artifacts"][0]).read_text(encoding="utf-8"))[
@@ -363,6 +361,64 @@ def test_shared_code_memory_reclaim_runs_packaged_tool(monkeypatch, tmp_path):
         ]
         == "pass"
     )
+
+
+def test_shared_code_memory_reclaim_accepts_unbounded_instruction_smoke(
+    monkeypatch, tmp_path
+):
+    report = {
+        "schema_version": 2,
+        "status": "pass",
+        "bounded_shared_code_memory": False,
+        "budget_bytes": 0,
+        "allocated_bytes": 33 << 10,
+        "exhaustion_observed": False,
+        "reclaimed_bytes": 0,
+        "post_reclaim_allocation_bytes": 0,
+        "retained_command_code_bytes": 0,
+        "churned_command_code_bytes": 0,
+        "fragmented_large_allocation_bytes": 0,
+    }
+    record, _ = _run_resource_pressure(monkeypatch, tmp_path, report)
+
+    assert record["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema_version": 1},
+        {"retained_command_code_bytes": 0},
+        {"churned_command_code_bytes": (16 << 20) - 1},
+        {"fragmented_large_allocation_bytes": (48 << 20) - 1},
+        {"fragmented_large_allocation_bytes": None},
+    ],
+)
+def test_shared_code_memory_reclaim_requires_fragmented_large_allocation(
+    monkeypatch, tmp_path, change
+):
+    report = {"schema_version": 2, "status": "pass", **_SHARED_CODE_MEMORY_METRICS}
+    report.update(change)
+    record, _ = _run_resource_pressure(monkeypatch, tmp_path, report)
+
+    assert record["status"] == "fail"
+    assert record["error"] == "resource-pressure tool emitted an invalid report"
+
+
+def test_shared_code_memory_reclaim_reports_failing_phase(monkeypatch, tmp_path):
+    report = {
+        "schema_version": 2,
+        "status": "fail",
+        "phase": "fragmented-large-instruction",
+        "status_code": 14,
+    }
+    record, _ = _run_resource_pressure(monkeypatch, tmp_path, report, returncode=1)
+
+    assert record["status"] == "fail"
+    assert record["error"] == (
+        "resource-pressure tool failed in fragmented-large-instruction"
+    )
+    assert record["metrics"]["fragmented_large_allocation_bytes"] == 0
 
 
 def _fake_powermode_run(responses, calls):
@@ -1040,6 +1096,130 @@ def test_automatic_pull_of_missing_model(monkeypatch, tmp_path):
     assert [call[1] for call in calls] == ["pull", "check"]
     assert record["pulled"] is True
     assert record["files"][0]["path"] == "weights.bin"
+
+
+def _install_model_extension(monkeypatch, root: Path) -> Path:
+    bundle = root / "extension"
+    (bundle / "catalog").mkdir(parents=True)
+    (bundle / "catalog" / "model-list.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "models": {
+                    "open-it": {
+                        "e2b": {
+                            "name": "open-model",
+                            "url": "https://test/resolve/immutable",
+                            "files": ["weights.bin"],
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = bundle / "extension.json"
+    manifest.write_text(
+        json.dumps({"name": "open", "catalog": "catalog/model-list.json"}),
+        encoding="utf-8",
+    )
+    package = SimpleNamespace(
+        model_extension=lambda name: manifest if name == "open" else None
+    )
+    monkeypatch.setitem(sys.modules, "fastflow_sdk_fastflowlm", package)
+    return manifest
+
+
+def test_extension_model_resolves_through_the_extension_catalog(monkeypatch, tmp_path):
+    manifest = _install_model_extension(monkeypatch, tmp_path)
+    model = _model()
+    model.update({"tag": "open-it:e2b", "model_extension": "open"})
+    config = _config(tmp_path)
+    merged = json.loads(config.read_text(encoding="utf-8"))
+    merged["models"]["open-it"] = {
+        "e2b": json.loads(
+            (manifest.parent / "catalog" / "model-list.json").read_text(
+                encoding="utf-8"
+            )
+        )["models"]["open-it"]["e2b"]
+    }
+    model["registry_sha256"] = canonical_json_sha256(merged)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(tuple(map(str, argv)))
+        if len(calls) == 1:
+            (tmp_path / "open-model").mkdir()
+            (tmp_path / "open-model" / "weights.bin").write_bytes(b"model")
+        return _result()
+
+    monkeypatch.setattr(models, "run_command", fake_run)
+    record, _ = models.resolve_model(
+        model,
+        flm=Path("flm"),
+        config_path=config,
+        model_cache=tmp_path,
+        pull_log=tmp_path / "pull.log",
+        offline=False,
+        no_pull=False,
+        environment={},
+    )
+
+    assert calls == [
+        ("flm", "pull", "open-it:e2b", "--model-extension", str(manifest)),
+        ("flm", "check", "open-it:e2b", "--model-extension", str(manifest)),
+    ]
+    assert record["cache_directory"] == "open-model"
+
+
+def test_extension_model_soak_serves_through_the_extension(monkeypatch, tmp_path):
+    manifest = _install_model_extension(monkeypatch, tmp_path)
+    model = _model()
+    model.update({"tag": "open-it:e2b", "model_extension": "open"})
+    model["tests"] = [copy.deepcopy(_extended_gemma_soak())]
+    captured = {}
+
+    def fake_soak(argv, **kwargs):
+        captured["argv"] = [str(item) for item in argv]
+        return _result(), {"ok": True, "samples": []}
+
+    monkeypatch.setattr(runner, "memory_soak_probe", fake_soak)
+    runner._test_model(
+        model,
+        flm=Path("flm"),
+        model_cache=tmp_path / "models",
+        offline=True,
+        writer=EvidenceWriter(tmp_path / "evidence"),
+        environment={},
+        xrt_unavailable={"status": "unavailable", "error": "no XRT"},
+    )
+
+    assert captured["argv"][:5] == [
+        "flm",
+        "serve",
+        "open-it:e2b",
+        "--model-extension",
+        str(manifest),
+    ]
+
+
+def _extended_gemma_soak():
+    model = next(
+        model
+        for model in load_profile("extended")["models"]
+        if model.get("model_extension") == "gemma4-open"
+    )
+    return next(test for test in model["tests"] if test["kind"] == "memory-soak")
+
+
+def test_profile_model_extension_name_is_validated():
+    profile = copy.deepcopy(load_profile("extended"))
+    model = next(m for m in profile["models"] if "model_extension" in m)
+    assert model["tag"] == "gemma4-open-it:e2b"
+    validate_profile(profile)
+    model["model_extension"] = "../gemma4-open"
+    with pytest.raises(ProfileError, match="model extension name is invalid"):
+        validate_profile(profile)
 
 
 def test_cached_model_is_verified_without_network_pull(monkeypatch, tmp_path):
@@ -3392,6 +3572,260 @@ def test_serve_branch_fails_on_probe_error(monkeypatch, tmp_path):
     )
     assert records[0]["status"] == "fail"
     assert "did not report a listening port" in records[0]["error"]
+
+
+_FAKE_VISION_SERVER = r"""
+import base64, json, struct, zlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PALETTE = %(palette)r
+ANSWER = %(answer)r
+
+def first_pixel(png):
+    offset, idat = 8, b""
+    while offset < len(png):
+        (length,) = struct.unpack(">I", png[offset:offset + 4])
+        kind = png[offset + 4:offset + 8]
+        if kind == b"IDAT":
+            idat += png[offset + 8:offset + 8 + length]
+        offset += 12 + length
+    return tuple(zlib.decompress(idat)[1:4])
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        content = body["messages"][0]["content"]
+        images = [part for part in content if part["type"] == "image_url"]
+        png = base64.b64decode(images[0]["image_url"]["url"].split(",", 1)[1])
+        color = PALETTE[first_pixel(png)]
+        answer = "black" if len(images) > 1 else ANSWER.format(color=color)
+        raw = json.dumps({
+            "choices": [{"message": {"content": answer}}],
+            "usage": {"prompt_tokens": 100 * len(images)},
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(raw)
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+print("WebServer started on port %%d ready" %% server.server_address[1], flush=True)
+server.serve_forever()
+"""
+
+
+def _fake_vision_argv(tmp_path, answer="{color}"):
+    script = tmp_path / "fake_vision.py"
+    palette = {rgb: name for name, rgb in VISION_COLORS.items()}
+    script.write_text(
+        _FAKE_VISION_SERVER % {"palette": palette, "answer": answer},
+        encoding="utf-8",
+    )
+    return [sys.executable, str(script)]
+
+
+def _vision_request(color, *, copies=1, min_prompt_tokens=100):
+    return {
+        "width": 64,
+        "height": 48,
+        "copies": copies,
+        "color": color,
+        "min_prompt_tokens": min_prompt_tokens,
+    }
+
+
+def test_solid_color_png_encodes_requested_size_and_pixels():
+    png = solid_color_png(5, 3, (1, 2, 3))
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    width, height = struct.unpack(">II", png[16:24])
+    assert (width, height) == (5, 3)
+    (length,) = struct.unpack(">I", png[33:37])
+    assert png[37:41] == b"IDAT"
+    rows = zlib.decompress(png[41 : 41 + length])
+    assert rows == (b"\x00" + bytes((1, 2, 3)) * 5) * 3
+
+
+def test_vision_probe_checks_answer_color_and_prompt_tokens(tmp_path):
+    result, probe = vision_probe(
+        _fake_vision_argv(tmp_path, answer=" {color}.\n"),
+        log_path=tmp_path / "vision.log",
+        env=dict(os.environ),
+        model="qwen3.5:0.8b",
+        prompt="What colour is this image? Answer with one word.",
+        requests=[_vision_request("blue"), _vision_request("yellow")],
+        boot_timeout=30.0,
+        total_timeout=60.0,
+        request_timeout=15.0,
+    )
+
+    assert probe["ok"] is True, probe["detail"]
+    assert result.returncode == 0
+    assert [sample["answer"] for sample in probe["samples"]] == [
+        " blue.\n",
+        " yellow.\n",
+    ]
+    assert [sample["prompt_tokens"] for sample in probe["samples"]] == [100, 100]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["green, not {color}", "red, green, blue, yellow", "The image is {color}."],
+)
+def test_vision_probe_requires_the_colour_alone(tmp_path, answer):
+    result, probe = vision_probe(
+        _fake_vision_argv(tmp_path, answer=answer),
+        log_path=tmp_path / "vision.log",
+        env=dict(os.environ),
+        model="qwen3.5:0.8b",
+        prompt="What colour is this image? Answer with one word.",
+        requests=[_vision_request("red")],
+        boot_timeout=30.0,
+        total_timeout=60.0,
+        request_timeout=15.0,
+    )
+
+    assert probe["ok"] is False
+    assert result.returncode == 1
+    expected = answer.format(color="red")
+    assert f"answered {expected!r} for a red image" in probe["detail"]
+
+
+@pytest.mark.parametrize(
+    ("request_spec", "detail"),
+    [
+        (_vision_request("red", copies=2), "answered 'black' for a red image"),
+        (_vision_request("red", min_prompt_tokens=101), "below 101"),
+    ],
+)
+def test_vision_probe_fails_on_wrong_answer_or_short_prompt(
+    tmp_path, request_spec, detail
+):
+    result, probe = vision_probe(
+        _fake_vision_argv(tmp_path),
+        log_path=tmp_path / "vision.log",
+        env=dict(os.environ),
+        model="qwen3.5:0.8b",
+        prompt="What colour is this image? Answer with one word.",
+        requests=[_vision_request("green"), request_spec],
+        boot_timeout=30.0,
+        total_timeout=60.0,
+        request_timeout=15.0,
+    )
+
+    assert probe["ok"] is False
+    assert result.returncode == 1
+    assert detail in probe["detail"]
+    assert len(probe["samples"]) == 2
+
+
+def _vision_model(*requests):
+    return {
+        "tag": "qwen3.5:0.8b",
+        "xclbins": [],
+        "tests": [
+            {
+                "name": "large-image-sequence",
+                "kind": "vision",
+                "ctx_len": 65536,
+                "prompt": "What colour is this image?",
+                "requests": list(requests),
+                "timeout_seconds": 600,
+                "request_timeout_seconds": 300,
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("stdout", "ok", "error"),
+    [
+        ("WebServer started on port 1\n", True, None),
+        (
+            "[hrx][ERROR] run::wait hrx_stream_wait: RESOURCE_EXHAUSTED\n",
+            True,
+            "FastFlowLM emitted an HRX runtime error",
+        ),
+        ("", False, "request 1 answered 'black' for a red image"),
+    ],
+)
+def test_vision_branch_records_probe_result(monkeypatch, tmp_path, stdout, ok, error):
+    model = _vision_model(_vision_request("red"), _vision_request("green"))
+    calls = []
+
+    def fake_vision_probe(argv, **kwargs):
+        argv = [str(item) for item in argv]
+        assert argv[argv.index("--img-pre-resize") + 1] == "0"
+        calls.append(kwargs)
+        Path(kwargs["log_path"]).write_text("vision\n", encoding="utf-8")
+        samples = [{"request": 1, "prompt_tokens": 16261}]
+        return (
+            _result(returncode=0 if ok else 1, stdout=stdout),
+            {
+                "ok": ok,
+                "port": 1,
+                "detail": "" if ok else error,
+                "samples": samples,
+            },
+        )
+
+    monkeypatch.setattr(runner, "vision_probe", fake_vision_probe)
+    writer = EvidenceWriter(tmp_path / "evidence")
+    records = runner._test_model(
+        model,
+        flm=tmp_path / "flm",
+        model_cache=tmp_path / "models",
+        offline=False,
+        writer=writer,
+        environment={},
+    )
+
+    assert calls[0]["requests"] == model["tests"][0]["requests"]
+    assert records[0]["kind"] == "vision"
+    assert records[0]["status"] == ("pass" if error is None else "fail")
+    assert records[0].get("error") == error
+    assert records[0]["metrics"]["requests_scheduled"] == 2
+    assert records[0]["metrics"]["max_prompt_tokens"] == 16261
+    artifact = json.loads(
+        writer.path(records[0]["artifacts"][0]).read_text(encoding="utf-8")
+    )
+    assert artifact["samples"] == [{"request": 1, "prompt_tokens": 16261}]
+
+
+def _vision_profile(*requests):
+    profile = load_profile("default")
+    profile["models"] = [
+        {**profile["models"][0], "tests": _vision_model(*requests)["tests"]}
+    ]
+    return profile
+
+
+def test_profile_accepts_vision_test():
+    validate_profile(
+        _vision_profile(_vision_request("red"), _vision_request("green", copies=2))
+    )
+
+
+@pytest.mark.parametrize(
+    ("requests", "message"),
+    [
+        ((_vision_request("black"),), "color is invalid"),
+        ((_vision_request([]),), "color is invalid"),
+        ((_vision_request({}),), "color is invalid"),
+        ((_vision_request("red", copies=5),), "copies is invalid"),
+        ((_vision_request("red", min_prompt_tokens=65537),), "min_prompt_tokens"),
+        (({**_vision_request("red"), "prompt": "x"},), "vision request is invalid"),
+        (
+            ({**_vision_request("red"), "platforms": ["windows"]},),
+            "vision request is invalid",
+        ),
+    ],
+)
+def test_profile_rejects_invalid_vision_requests(requests, message):
+    with pytest.raises(ProfileError, match=message):
+        validate_profile(_vision_profile(*requests))
 
 
 def _sweep_args(

@@ -150,12 +150,7 @@ def run_native_qualification_tests(*, configure=True):
         ],
         env=environment.cmake_env(),
     )
-    cmake = Path(environment.cmake_bin())
-    ctest = (
-        cmake.with_name(paths.executable_name("ctest"))
-        if cmake.is_file()
-        else paths.executable_name("ctest")
-    )
+    ctest = environment.ctest_bin()
     QUALIFICATION_BUILD.mkdir(parents=True, exist_ok=True)
     temporary_directory = Path(
         tempfile.mkdtemp(prefix="ctest-", dir=QUALIFICATION_BUILD)

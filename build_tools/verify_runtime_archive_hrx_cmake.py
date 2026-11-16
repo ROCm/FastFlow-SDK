@@ -20,6 +20,7 @@ from build_tools.fastflow_sdk_archive import (
     extract_archive,
     verify_installed_gemma4e_sdk,
 )
+from build_tools.gemma4_open_extension import verify_gemma4_open_extension
 
 _PROBE_CMAKE = r"""
 cmake_minimum_required(VERSION 3.20)
@@ -267,6 +268,7 @@ def verify_extracted_archive(archive: Path, workspace: Path) -> None:
         )
         verify_hrx_prefix(extracted)
         verify_installed_gemma4e_sdk(extracted)
+        verify_gemma4_open_extension(extracted)
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
@@ -307,6 +309,7 @@ def verify_artifact_dir(directory: Path) -> None:
         )
         verify_hrx_prefix(extracted)
         verify_installed_gemma4e_sdk(extracted)
+        verify_gemma4_open_extension(extracted)
         verify_runtime_wheel(runtime_wheel, require_runtime=True)
         verify_runtime_wheel_prefix(runtime_wheel)
         for wheel in fastflowlm_wheels:

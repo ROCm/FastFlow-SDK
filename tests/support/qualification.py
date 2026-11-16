@@ -43,7 +43,20 @@ _POWER_MODE_VALUES = {
     "turbo": 4,
 }
 
+SHARED_CODE_MEMORY_REPORT_METRICS = {
+    "bounded_shared_code_memory": True,
+    "allocated_bytes": 64 << 20,
+    "budget_bytes": 64 << 20,
+    "exhaustion_observed": True,
+    "reclaimed_bytes": 1 << 20,
+    "post_reclaim_allocation_bytes": 33 << 10,
+    "retained_command_code_bytes": 4 << 20,
+    "churned_command_code_bytes": 16 << 20,
+    "fragmented_large_allocation_bytes": 48 << 20,
+}
+
 __all__ = (
+    "SHARED_CODE_MEMORY_REPORT_METRICS",
     "make_candidate",
     "make_evidence",
     "make_policy",
@@ -530,14 +543,7 @@ def make_evidence(
                 "returncode": 0,
                 "duration_seconds": 0,
                 "log": "logs/tests/shared-code-memory-reclaim.log",
-                "metrics": {
-                    "bounded_shared_code_memory": True,
-                    "allocated_bytes": 64 << 20,
-                    "budget_bytes": 64 << 20,
-                    "exhaustion_observed": True,
-                    "reclaimed_bytes": 1 << 20,
-                    "post_reclaim_allocation_bytes": 33 << 10,
-                },
+                "metrics": dict(SHARED_CODE_MEMORY_REPORT_METRICS),
                 "artifacts": ["artifacts/native/shared-code-memory-reclaim.json"],
             },
             {
@@ -621,16 +627,7 @@ def make_evidence(
     )
     writer.write_json(
         "artifacts/native/shared-code-memory-reclaim.json",
-        {
-            "schema_version": 1,
-            "status": "pass",
-            "bounded_shared_code_memory": True,
-            "budget_bytes": 64 << 20,
-            "allocated_bytes": 64 << 20,
-            "exhaustion_observed": True,
-            "reclaimed_bytes": 1 << 20,
-            "post_reclaim_allocation_bytes": 33 << 10,
-        },
+        {"schema_version": 2, "status": "pass", **SHARED_CODE_MEMORY_REPORT_METRICS},
     )
     powermode_reports = [("default", None, 0)]
     for mode, _, _ in POWER_MODE_ROUNDTRIP_MODE_ARTIFACTS:

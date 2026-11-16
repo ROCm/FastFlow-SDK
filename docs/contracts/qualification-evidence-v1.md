@@ -120,10 +120,14 @@ passing `powermode-before.json` baseline report, and every other expected test
 must pass.
 
 The `shared-code-memory-reclaim` native test is required on every platform. Its
-raw JSON artifact records whether the native driver exposes a bounded shared
-code-memory budget and how many instruction bytes were allocated. On bounded
-drivers the test must exhaust that budget through the recoverable allocation
-path, release capacity, and successfully allocate again; on other drivers it
+raw JSON artifact (`schema_version` 2) records whether the native driver
+exposes a bounded shared code-memory budget and how many instruction bytes
+were allocated. On bounded drivers the device must advertise a nonzero
+retained command-code ceiling; the test churns at least four ceilings of
+retained command buffers interleaved with long-lived buffers, releases the
+retained ones, and must then allocate one instruction buffer of three quarters
+of the budget. It then exhausts the budget through the recoverable allocation
+path, releases capacity, and successfully allocates again. On other drivers it
 executes the same instruction-allocation path as a smoke test.
 The XADX report records exact recipe and executable provenance and one result
 per case: dispatch/readback counts, validated bytes, duration, mismatch count,

@@ -231,6 +231,16 @@ def cmake_bin(venv: Path | None = None, *, windows: bool | None = None) -> str:
     return str(candidate) if candidate.exists() else "cmake"
 
 
+def ctest_bin() -> str:
+    """ctest from the same CMake installation as cmake_bin()."""
+    cmake = Path(cmake_bin())
+    return (
+        str(cmake.with_name(paths.executable_name("ctest")))
+        if cmake.is_file()
+        else paths.executable_name("ctest")
+    )
+
+
 def cmake_path(p: Path) -> str:
     r"""Return a path in the form CMake parses correctly on every platform."""
     return p.as_posix()

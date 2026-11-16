@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "extended",
-  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak, 105 continuously novel descending source-Gemma shapes within one internal allocation bucket (including two complete windows after the 64-entry HRX command-cache ceiling), a content-pinned LFM3 changing-prefill regression soak, plus content-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
+  "description": "Opt-in default-suite superset with a 100-iteration LFM2 long-lived-context soak, 105 continuously novel descending source-Gemma shapes through the gemma4-open model extension within one internal allocation bucket (including two complete windows after the 64-entry HRX command-cache ceiling), a content-pinned LFM3 changing-prefill regression soak, a Qwen3.5 0.8B large-image sequence (25 mid-size images then an 8k-token image) at original image size, plus content-pinned Llama 3.1 8B multi-turn, process-soak, semantic 4k context retrieval, and 1k/4k benchmark coverage",
   "extends": "default",
   "test_extensions": [
     {
@@ -18,15 +18,58 @@
           "expected_regex": ""
         }
       ]
+    },
+    {
+      "model": "qwen3.5:0.8b",
+      "tests": [
+        {
+          "name": "large-image-sequence",
+          "kind": "vision",
+          "ctx_len": 65536,
+          "prompt": "What colour is this image? Answer with one word.",
+          "requests": [
+            {"width": 2156, "height": 1695, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 1695, "height": 2200, "copies": 1, "color": "green", "min_prompt_tokens": 3000},
+            {"width": 2162, "height": 1695, "copies": 1, "color": "yellow", "min_prompt_tokens": 3000},
+            {"width": 2159, "height": 1695, "copies": 1, "color": "red", "min_prompt_tokens": 3000},
+            {"width": 2270, "height": 1773, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 1701, "height": 2386, "copies": 1, "color": "green", "min_prompt_tokens": 3000},
+            {"width": 1701, "height": 2386, "copies": 1, "color": "yellow", "min_prompt_tokens": 3000},
+            {"width": 1701, "height": 2386, "copies": 1, "color": "red", "min_prompt_tokens": 3000},
+            {"width": 1682, "height": 2384, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 838, "height": 1638, "copies": 1, "color": "green", "min_prompt_tokens": 1200},
+            {"width": 1744, "height": 816, "copies": 1, "color": "yellow", "min_prompt_tokens": 1200},
+            {"width": 1706, "height": 2205, "copies": 1, "color": "red", "min_prompt_tokens": 3000},
+            {"width": 1760, "height": 2249, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 1760, "height": 2249, "copies": 1, "color": "green", "min_prompt_tokens": 3000},
+            {"width": 1760, "height": 2249, "copies": 1, "color": "yellow", "min_prompt_tokens": 3000},
+            {"width": 1658, "height": 2156, "copies": 1, "color": "red", "min_prompt_tokens": 3000},
+            {"width": 1757, "height": 2263, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 2110, "height": 1612, "copies": 1, "color": "green", "min_prompt_tokens": 3000},
+            {"width": 1695, "height": 2200, "copies": 1, "color": "yellow", "min_prompt_tokens": 3000},
+            {"width": 1728, "height": 2221, "copies": 1, "color": "red", "min_prompt_tokens": 3000},
+            {"width": 1774, "height": 2282, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 1774, "height": 2282, "copies": 1, "color": "green", "min_prompt_tokens": 3000},
+            {"width": 1722, "height": 2298, "copies": 1, "color": "yellow", "min_prompt_tokens": 3000},
+            {"width": 1577, "height": 2134, "copies": 1, "color": "red", "min_prompt_tokens": 3000},
+            {"width": 1706, "height": 2198, "copies": 1, "color": "blue", "min_prompt_tokens": 3000},
+            {"width": 3200, "height": 2560, "copies": 1, "color": "green", "min_prompt_tokens": 7500},
+            {"width": 512, "height": 512, "copies": 1, "color": "red", "min_prompt_tokens": 250}
+          ],
+          "timeout_seconds": 2400,
+          "request_timeout_seconds": 600
+        }
+      ]
     }
   ],
   "models": [
     {
-      "tag": "gemma4-it:e2b",
+      "tag": "gemma4-open-it:e2b",
+      "model_extension": "gemma4-open",
       "source": "https://huggingface.co/FastFlowLM/Gemma4-E2B-IT-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "6b192b0bce81e9eff5561dba4a574dd18bb2524d84b8d72a633d43dadb088177",
+      "registry_sha256": "1e8dde87e04af159912488d9a3df1f68e277192dd49f225ab72f0f592dc9e612",
       "files": [
         {"path": "audio_weight.q4nx", "sha256": "48d4632ee75ba1fdf40b8369d5961b1edfc86152e51d585aa6bd37b31f6f4895"},
         {"path": "chat_template.jinja", "sha256": "2f1b4d75d067bae3fe44e676721c7f077d243bc007156cb9c2f8b5836613d082"},
@@ -61,7 +104,7 @@
       "source": "https://huggingface.co/FastFlowLM/LFM3-1.7B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "6b192b0bce81e9eff5561dba4a574dd18bb2524d84b8d72a633d43dadb088177",
+      "registry_sha256": "c61a2157259ca8b568f4ab1b1589b9bf8c5ad1473328ed6dec15cc3a19e32d25",
       "files": [
         {"path": "chat_template.jinja", "sha256": "f45005c50cd2a97329722bf3a2dee9f16c04cdf825a589b280fb7e99e6827818"},
         {"path": "config.json", "sha256": "ed76b4e8045ba916c619773c1b04a14dc4e91063b88df2807cf42e51652b5a51"},
@@ -90,7 +133,7 @@
       "source": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
       "revision": null,
       "identity_policy": "content-sha256",
-      "registry_sha256": "6b192b0bce81e9eff5561dba4a574dd18bb2524d84b8d72a633d43dadb088177",
+      "registry_sha256": "c61a2157259ca8b568f4ab1b1589b9bf8c5ad1473328ed6dec15cc3a19e32d25",
       "files": [
         {"path": "config.json", "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"},
         {"path": "model.q4nx", "sha256": "0c03021f1cd21e43376234817b34ad32ccf07dca94785ede7640833d15169d8a"},

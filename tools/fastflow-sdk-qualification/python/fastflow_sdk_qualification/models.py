@@ -51,6 +51,33 @@ OPTIONAL_HRX_ENGINE_BY_FAMILY = {
 }
 
 
+def model_extension_manifest(model: Mapping[str, Any]) -> Path | None:
+    """The installed ``extension.json`` a profile model is served through."""
+    name = model.get("model_extension")
+    if not name:
+        return None
+    import fastflow_sdk_fastflowlm
+
+    return Path(fastflow_sdk_fastflowlm.model_extension(name))
+
+
+def model_extension_args(model: Mapping[str, Any]) -> list[str]:
+    """``flm`` options that load the model's extension, if it has one."""
+    manifest = model_extension_manifest(model)
+    return [] if manifest is None else ["--model-extension", str(manifest)]
+
+
+def _merge_extension_catalog(config: dict[str, Any], manifest: Path) -> dict[str, Any]:
+    """The registry ``flm`` sees once the extension catalog is merged in."""
+    descriptor = json.loads(manifest.read_text(encoding="utf-8"))
+    catalog_path = manifest.parent / descriptor["catalog"]
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    models = dict(config.get("models", {}))
+    for model_type, sizes in catalog["models"].items():
+        models[model_type] = {**models.get(model_type, {}), **sizes}
+    return {**config, "models": models}
+
+
 def engine_search_directories(flm: Path) -> list[Path]:
     """Directories that may hold FastFlowLM engine libraries next to ``flm``."""
     parent = flm.resolve().parent
@@ -118,6 +145,9 @@ def _registry_model(
 ) -> tuple[dict[str, Any], str, str | None, str, str]:
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
+        manifest = model_extension_manifest(model)
+        if manifest is not None:
+            config = _merge_extension_catalog(config, manifest)
         model_type, size = model["tag"].split(":", 1)
         entry = config["models"][model_type][size]
         model_path = config.get("model_path", "")
@@ -314,7 +344,7 @@ def resolve_model(
             )
     if not cached and not offline and not no_pull:
         pull = run_command(
-            [flm, "pull", model["tag"]],
+            [flm, "pull", model["tag"], *model_extension_args(model)],
             log_path=pull_log,
             env=environment,
             timeout=1800,
@@ -327,7 +357,7 @@ def resolve_model(
             )
         pulled = True
         check = run_command(
-            [flm, "check", model["tag"]],
+            [flm, "check", model["tag"], *model_extension_args(model)],
             log_path=pull_log.with_name(pull_log.stem + "-check-after.log"),
             env=environment,
             timeout=120,

@@ -31,6 +31,7 @@ HRX_AMDXDNA_HOST_TESTS = (
     "executable_test",
     "executable_xclbin_test",
     "nop_executable_cache_test",
+    "program_image_test",
     "semaphore_test",
 )
 HRX_AMDXDNA_HOST_TESTS_WINDOWS = ("native_windows_mcdm_test",)

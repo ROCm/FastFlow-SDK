@@ -6,6 +6,16 @@ plugin through FastFlowLM. The compiler, operator sources, runtime, and
 extension sources all come from one FastFlow SDK wheel release. Product `flm`
 keeps its prebuilt Gemma 4 engine.
 
+The FastFlowLM wheel also ships a prebuilt stock `gemma4-open` extension,
+without IRON overrides, built from the same sources. To serve it without
+building anything, pass its manifest to `flm`:
+
+```bash
+flm --model-extension "$(python -c \
+  'import fastflow_sdk_fastflowlm as p; print(p.model_extension("gemma4-open"))')" \
+  serve gemma4-open-it:e2b
+```
+
 For a smaller example that replaces only projection GEMMs and runtime
 dequantization, see
 [Replace Gemma 4 GEMM and dequant with IRON](iron-gemma4-gemm-dequant.md).

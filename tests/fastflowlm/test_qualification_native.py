@@ -103,7 +103,7 @@ def test_native_contract_tests_build_and_run_through_ctest(tmp_path):
     ]
     assert build[4:6] == list(qualification.NATIVE_TEST_TARGETS)
     assert ctest == [
-        cmake.with_name(qualification.paths.executable_name("ctest")),
+        str(cmake.with_name(qualification.paths.executable_name("ctest"))),
         "--test-dir",
         (tmp_path / "build").as_posix(),
         "--output-on-failure",
