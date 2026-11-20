@@ -272,7 +272,9 @@ class TestOpsOperatorProbe:
         ]
         assert [spec["name"] for spec in sequences] == [s.name for s in SEQUENCES]
         assert [spec["name"] for spec in operators if spec["full_elf"]] == [
-            "strided_copy"
+            "strided_copy",
+            "gather",
+            "gather_device_ids",
         ]
         for spec in operators:
             assert spec["device"] == "npu2"
@@ -290,6 +292,7 @@ class TestOpsOperatorProbe:
             "def construct_operator",
             "def add_relu_graph",
             "def offset_copy_graph",
+            "def gather_graph",
             "def require_compile_cache",
             "def compile_full_elf",
             "def compile_operator",
@@ -298,7 +301,10 @@ class TestOpsOperatorProbe:
             "def resolve_build_kwargs",
         ):
             assert helper in script, helper
-        assert "FULL_ELF_GRAPHS = {'strided_copy': offset_copy_graph}" in script
+        assert (
+            "FULL_ELF_GRAPHS = {'strided_copy': offset_copy_graph, "
+            "'gather': gather_graph, 'gather_device_ids': gather_graph}"
+        ) in script
         assert "STAGED_NAMES = " in script
         assert "NPU_CACHE_HOME" in script
         assert "--keep-cache" in script

@@ -109,7 +109,7 @@ Windows:
 $IronGemma4App = python -c @'
 from pathlib import Path
 import iron
-print(Path(iron.__file__).resolve().parent / "operators/flm/gemma4_engine")
+print(Path(iron.__file__).resolve().parent / 'operators/flm/gemma4_engine')
 '@
 ```
 
@@ -168,7 +168,7 @@ $FlmAssets = python -c "import fastflow_sdk_fastflowlm as p; print(p.xclbin_path
 $IronIncludeDir = python -c @'
 from pathlib import Path
 import fastflow_sdk_compiler as p
-print(Path(p.__file__).resolve().parent / "include")
+print(Path(p.__file__).resolve().parent / 'include')
 '@
 
 # Keep this path short: generated operator names can exceed Windows path limits.
@@ -244,7 +244,7 @@ cmake -S $FlmGemma4Source -B "$Gemma4Build\engine" -G Ninja `
   "-DFASTFLOW_SDK_ROOT=$FastFlowSdkRoot" `
   "-DFLM_ENGINE_LIB_DIR=$FlmEngineLibDir" `
   "-DFLM_IRON_INCLUDE_DIRS=$IronGemma4App;$Gemma4Build\gen;$IronIncludeDir" `
-  -DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp `
+  "-DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp" `
   "-DFLM_GEMMA4_XCLBIN_DIR=$Gemma4Build\xclbins\Gemma4-E2B-IT-NPU2"
 
 cmake --build "$Gemma4Build\engine" --parallel 2

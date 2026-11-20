@@ -9,7 +9,6 @@ import pytest
 from build_tools import paths
 from build_tools.iron import (
     DEFAULT,
-    GRAPH_ONLY,
     OPERATORS,
     SEQUENCES,
     Operator,
@@ -89,7 +88,7 @@ def test_suite_covers_the_operator_catalog():
 
 
 def test_suite_classes_are_iron_s_whole_catalog():
-    """Every IRON operator class is compiled here, or runs only inside a graph."""
+    """Every IRON operator class is compiled here."""
     operators = paths.PROJ / "iron-ops" / "iron" / "operators"
     if not operators.is_dir():
         pytest.skip("iron-ops source is not checked out for this CI profile")
@@ -102,8 +101,7 @@ def test_suite_classes_are_iron_s_whole_catalog():
         else operator.class_name
         for operator in OPERATORS
     }
-    assert ours | GRAPH_ONLY == iron_catalog
-    assert not ours & GRAPH_ONLY
+    assert ours == iron_catalog
 
 
 def test_select_filters_by_name():
@@ -383,3 +381,51 @@ def test_stage_refuses_a_full_elf_without_a_table_or_arguments(tmp_path):
             Compiled(_Artifacts(full_elf=True, image=elf, entry=_Entry(params=params))),
             tmp_path / "out",
         )
+
+
+class Gather:
+    pass
+
+
+class Copy:
+    pass
+
+
+class _Step:
+    def __init__(self, op):
+        self.op = op
+
+
+class _Graph:
+    """A graph whose compile records ``steps`` and allocates no arguments."""
+
+    def __init__(self, *steps):
+        self.steps = steps
+
+    def compile(self, **_):
+        class _Sizes:
+            @staticmethod
+            def arguments():
+                return {}
+
+        class _Sequence:
+            buffer_sizes = _Sizes
+
+        class _Recording:
+            steps = [_Step(op) for op in self.steps]
+
+        class _Compiled:
+            artifacts = None
+            recording = _Recording
+            sequence = _Sequence
+
+        return _Compiled
+
+
+def test_full_elf_compile_requires_the_step_it_covers():
+    from build_tools.iron import compile_full_elf
+
+    compile_full_elf(_Graph(Copy(), Gather()), {}, None, "Gather")
+    compile_full_elf(_Graph(Copy()), {}, None)
+    with pytest.raises(RuntimeError, match="graph recorded Copy, not Gather"):
+        compile_full_elf(_Graph(Copy()), {}, None, "Gather")
