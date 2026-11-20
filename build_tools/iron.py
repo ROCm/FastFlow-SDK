@@ -489,6 +489,32 @@ def offset_copy_graph(input_buffer_size, length):
     return OffsetCopy(), {"x": (input_buffer_size,)}
 
 
+def gather_graph(table_rows, row, rows, device_ids=False):
+    """Copy the ``rows`` rows each call's ids name from a bf16 weight, in one full ELF.
+
+    The graph lowers ``table[ids]`` to a ``Gather``. Host-supplied ids are
+    encoded into its control words per call; with ``device_ids`` a ``Copy``
+    makes them on the device, and a ``GatherWords`` step writes those words.
+    """
+    import iron as graphs
+    import numpy as np
+    from iron.operators import Copy
+    from ml_dtypes import bfloat16
+
+    table = np.zeros((table_rows, row), dtype=bfloat16)
+
+    class Gathered(graphs.Graph):
+        def __init__(self):
+            self.table = graphs.weight(table)
+
+        def body(self, ids):
+            if device_ids:
+                ids = Copy.step(ids, dtype=np.int32)
+            return Copy.step(self.table[ids])
+
+    return Gathered(), {"ids": ((rows,), np.int32)}
+
+
 def require_compile_cache():
     """mlir-aie compiles into the ``NPU_CACHE_HOME`` this process was given.
 
@@ -507,12 +533,22 @@ def require_compile_cache():
 
 
 # A full-ELF catalog entry's graph, by name: its build_kwargs are the builder's.
-FULL_ELF_GRAPHS = {"strided_copy": offset_copy_graph}
+FULL_ELF_GRAPHS = {
+    "strided_copy": offset_copy_graph,
+    "gather": gather_graph,
+    "gather_device_ids": gather_graph,
+}
 
 
-def compile_full_elf(graph, shapes, device):
-    """Compile ``graph`` at ``shapes`` to one full ELF; return its ``Compiled``."""
+def compile_full_elf(graph, shapes, device, step=None):
+    """Compile ``graph`` at ``shapes`` to one full ELF; return its ``Compiled``.
+
+    ``step`` is an operator class name the recorded graph must contain.
+    """
     compiled = graph.compile(dev=device, full_elf=True, **shapes)
+    recorded = {type(recorded.op).__name__ for recorded in compiled.recording.steps}
+    if step is not None and step not in recorded:
+        raise RuntimeError(f"graph recorded {', '.join(sorted(recorded))}, not {step}")
     return Compiled(compiled.artifacts, compiled.sequence.buffer_sizes.arguments())
 
 
@@ -528,7 +564,7 @@ def compile_operator(operator, device):
     kwargs = resolve_build_kwargs(operator.build_kwargs)
     if operator.full_elf:
         graph, shapes = FULL_ELF_GRAPHS[operator.name](**kwargs)
-        return compile_full_elf(graph, shapes, device)
+        return compile_full_elf(graph, shapes, device, operator.class_name)
     cls = operator_class(operator.module or operator.name, operator.class_name)
     with aie_utils.set_current_device(device):
         return Compiled(construct_operator(cls, kwargs).resolved(device).compile())
@@ -793,6 +829,29 @@ OPERATORS = (
         full_elf=True,
         context="copy",
     ),
+    # Gather and GatherWords exist only as the steps a graph lowers
+    # ``table[ids]`` to, so these compile IRON's two gathers through a graph:
+    # 256 ids, four shim feeds, from a 4096 x 512 table. IRON's
+    # test_copy_gather.py runs them on the NPU; no packaged case yet.
+    Operator(
+        name="gather",
+        module="copy",
+        class_name="Gather",
+        build_kwargs={"table_rows": 4096, "row": 512, "rows": 256},
+        full_elf=True,
+    ),
+    Operator(
+        name="gather_device_ids",
+        module="copy",
+        class_name="GatherWords",
+        build_kwargs={
+            "table_rows": 4096,
+            "row": 512,
+            "rows": 256,
+            "device_ids": True,
+        },
+        full_elf=True,
+    ),
     Operator(
         name="mha",
         class_name="MHA",
@@ -908,10 +967,6 @@ OPERATORS = (
 
 
 DEFAULT = OPERATORS[0].name
-
-# IRON operators with no shape of their own to compile: they run only as a
-# step of a graph (Copy's gathered rows), so OPERATORS has no row for them.
-GRAPH_ONLY = frozenset({"Gather", "GatherWords"})
 
 
 def select(name: str | None) -> tuple[Operator, ...]:

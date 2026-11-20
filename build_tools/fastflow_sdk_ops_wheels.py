@@ -351,6 +351,7 @@ def _installed_ops_compile(build_dir: Path) -> str:
             iron.construct_operator,
             iron.add_relu_graph,
             iron.offset_copy_graph,
+            iron.gather_graph,
             iron.require_compile_cache,
             iron.compile_full_elf,
             iron.compile_operator,
