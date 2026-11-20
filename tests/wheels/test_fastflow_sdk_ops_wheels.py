@@ -12,9 +12,7 @@ from build_tools import paths
 from build_tools.artifact import git_source_state
 from build_tools.fastflow_sdk_ops_wheels import (
     _EXE,
-    _TORCH_AT_IMPORT,
     _VBIN,
-    IRON_OPS_SOURCE,
     OPS_SUMMARY,
     OPS_WHEEL_TAG,
     _installed_ops_compile,
@@ -36,10 +34,12 @@ from build_tools.fastflow_sdk_wheel_common import (
     verify_wheel_source_revision,
     verify_wheel_text_path_references,
 )
-from build_tools.iron import OPERATORS, host_compile_suite
+from build_tools.iron import SEQUENCES, host_compile_suite
 from build_tools.release_policy import compiler_requires_python
 
 pytestmark = [pytest.mark.compiler_stack, pytest.mark.presubmit]
+
+_ENGINE = "iron/operators/flm/gemma4_engine"
 
 
 def _write_iron_ops_source(root: Path) -> Path:
@@ -47,17 +47,21 @@ def _write_iron_ops_source(root: Path) -> Path:
     files = {
         "LICENSE": "Apache-2.0\n",
         "iron/__init__.py": "",
-        "iron/operators/__init__.py": "from .elementwise_add.op import ElementwiseAdd\n",
-        "iron/operators/elementwise_add/op.py": "class ElementwiseAdd:\n    pass\n",
-        "iron/operators/elementwise_add/test.py": "def test_should_not_ship():\n    pass\n",
+        "iron/operators/__init__.py": "from .elementwise_add import ElementwiseAdd\n",
+        "iron/operators/elementwise_add.py": "class ElementwiseAdd:\n    pass\n",
+        "iron/operators/flm/__init__.py": "",
+        "iron/operators/flm/gemm/__init__.py": "",
+        "iron/operators/flm/gemm/op.py": "class ProjectionGEMM:\n    pass\n",
+        "iron/operators/flm/gemm/test.py": "def test_should_not_ship():\n    pass\n",
         "iron/common/test_utils.py": "def run_test():\n    pass\n",
         "iron/tests/infrastructure/foo.py": "assert False\n",
         "iron/applications/llama.py": "assert False\n",
-        "iron/applications/gemma4_flm/build.py": "def main():\n    pass\n",
-        "iron/applications/gemma4_flm/overrides.hpp": "// override\n",
-        "iron/applications/gemma4_flm/pli_weights.py": "def pack():\n    pass\n",
-        "iron/applications/gemma4_flm/test.py": "def test_should_not_ship():\n    pass\n",
-        "iron/applications/gemma4_flm/Makefile": "clone:\n",
+        f"{_ENGINE}/build.py": "def main():\n    pass\n",
+        f"{_ENGINE}/overrides.hpp": "// override\n",
+        f"{_ENGINE}/pli_weights.py": "def pack():\n    pass\n",
+        f"{_ENGINE}/Makefile": "clone:\n",
+        f"{_ENGINE}/README.md": "engine\n",
+        f"{_ENGINE}/build/FastFlowLM/build.py": "assert False\n",
         "aie_kernels/generic/add.cc": "// add\n",
         "aie_kernels/README.md": "kernels\n",
     }
@@ -74,24 +78,24 @@ class TestFastflowSdkOpsWheels:
         tree = stage_ops_tree(source, tmp_path / "stage", version="0.1.0.dev1")
 
         assert (tree / "iron" / "operators" / "__init__.py").is_file()
+        assert (tree / "iron" / "operators" / "elementwise_add.py").is_file()
+        assert (tree / "iron" / "operators" / "flm" / "gemm" / "op.py").is_file()
         assert (tree / "iron" / "common" / "test_utils.py").is_file()
-        assert (tree / "aie_kernels" / "generic" / "add.cc").is_file()
+        assert not (tree / "aie_kernels").exists()
         assert not (tree / "iron" / "tests").exists()
-        assert (tree / "iron" / "applications" / "gemma4_flm" / "build.py").is_file()
-        assert (
-            tree / "iron" / "applications" / "gemma4_flm" / "overrides.hpp"
-        ).is_file()
-        assert not (tree / "iron" / "applications" / "llama.py").exists()
-        assert not (tree / "iron" / "applications" / "gemma4_flm" / "test.py").exists()
-        assert not (tree / "iron" / "applications" / "gemma4_flm" / "Makefile").exists()
-        assert not (
-            tree / "iron" / "operators" / "elementwise_add" / "test.py"
-        ).exists()
+        assert not (tree / "iron" / "applications").exists()
+        assert not (tree / "iron" / "operators" / "flm" / "gemm" / "test.py").exists()
+        engine = tree / _ENGINE
+        assert sorted(path.name for path in engine.iterdir()) == [
+            "build.py",
+            "overrides.hpp",
+            "pli_weights.py",
+        ]
         assert (tree / OPS_PACKAGE / "licenses" / "IRON-LICENSE").is_file()
         assert (tree / OPS_PACKAGE / "licenses" / "fastflow-sdk-LICENSE").is_file()
         init = (tree / OPS_PACKAGE / "__init__.py").read_text(encoding="utf-8")
         assert "def kernels_root" in init
-        assert "def gemma4_flm_root" in init
+        assert "def gemma4_engine_root" in init
         assert "def manifest" in init
 
         manifest = json.loads(
@@ -99,10 +103,17 @@ class TestFastflowSdkOpsWheels:
         )
         paths = {record["path"] for record in manifest["files"]}
         assert "iron/operators/__init__.py" in paths
-        assert "aie_kernels/generic/add.cc" in paths
+        assert "aie_kernels/generic/add.cc" not in paths
         assert "iron/tests/infrastructure/foo.py" not in paths
+        assert f"{_ENGINE}/Makefile" not in paths
         assert manifest["requires"] == [f"{COMPILER_DISTRIBUTION} ==0.1.0.dev1"]
         assert manifest["wheel_tag"] == OPS_WHEEL_TAG
+
+    def test_staging_requires_the_gemma4_engine(self, tmp_path):
+        source = _write_iron_ops_source(tmp_path)
+        (source / _ENGINE / "overrides.hpp").unlink()
+        with pytest.raises(RuntimeError, match="missing gemma4_engine files"):
+            stage_ops_tree(source, tmp_path / "stage", version="0.1.0.dev1")
 
     def test_ops_wheel_requires_matching_compiler(self, tmp_path, monkeypatch):
         monkeypatch.setattr("build_tools.fastflow_sdk_ops_wheels.paths.BUILD", tmp_path)
@@ -115,7 +126,7 @@ class TestFastflowSdkOpsWheels:
         with zipfile.ZipFile(wheel) as archive:
             names = archive.namelist()
             assert "iron/operators/__init__.py" in names
-            assert "aie_kernels/generic/add.cc" in names
+            assert not any(name.startswith("aie_kernels/") for name in names)
             assert "iron/tests/infrastructure/foo.py" not in names
             metadata = email.parser.Parser().parsestr(
                 archive.read("fastflow_sdk_ops-0.1.0.dev1.dist-info/METADATA").decode(
@@ -148,10 +159,10 @@ class TestFastflowSdkOpsWheels:
             product="ops wheel",
         )
 
-    def test_text_path_scan_covers_kernel_sources(self, tmp_path, monkeypatch):
+    def test_text_path_scan_covers_engine_sources(self, tmp_path, monkeypatch):
         monkeypatch.setattr("build_tools.fastflow_sdk_ops_wheels.paths.BUILD", tmp_path)
         source = _write_iron_ops_source(tmp_path)
-        (source / "aie_kernels" / "generic" / "add.cc").write_text(
+        (source / _ENGINE / "overrides.hpp").write_text(
             f"// leaked {tmp_path.resolve()}\n", encoding="utf-8"
         )
         wheel = build_ops_wheel(
@@ -166,46 +177,40 @@ class TestFastflowSdkOpsWheels:
 
     def test_metadata_package_resolves_kernel_layout(self, tmp_path, monkeypatch):
         import sys
+        import types
 
         source = _write_iron_ops_source(tmp_path)
         tree = stage_ops_tree(source, tmp_path / "stage", version="0.1.0.dev1")
+        compiler_kernels = tmp_path / "compiler" / "include" / "aie_kernels"
+        config = types.ModuleType("aie.utils.config")
+        config.aie_kernels_dir = lambda: str(compiler_kernels)
+        for name in ("aie", "aie.utils"):
+            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+        monkeypatch.setitem(sys.modules, "aie.utils.config", config)
         monkeypatch.syspath_prepend(str(tree))
         sys.modules.pop("fastflow_sdk_ops", None)
         import fastflow_sdk_ops
 
         try:
             assert fastflow_sdk_ops.install_root() == tree.resolve()
-            assert (fastflow_sdk_ops.kernels_root() / "generic" / "add.cc").is_file()
+            assert fastflow_sdk_ops.kernels_root() == compiler_kernels
+            assert (fastflow_sdk_ops.gemma4_engine_root() / "overrides.hpp").is_file()
             assert fastflow_sdk_ops.manifest()["product"] == OPS_DISTRIBUTION
         finally:
             sys.modules.pop("fastflow_sdk_ops", None)
 
 
-def _write_operators_catalog(
-    root: Path, packages: dict[str, str], exports: dict[str, str]
-) -> Path:
+def _write_operators_catalog(root: Path, modules: dict[str, str], catalog: str) -> Path:
+    """An ``iron.operators`` package of ``modules`` (dotted name to source)."""
     site = root / "site"
     operators = site / "iron" / "operators"
     operators.mkdir(parents=True)
     (site / "iron" / "__init__.py").write_text("", encoding="utf-8")
-    for package, body in packages.items():
-        package_dir = operators / package
-        package_dir.mkdir()
-        (package_dir / "op.py").write_text(body, encoding="utf-8")
-    mapping = ", ".join(f"{name!r}: {package!r}" for name, package in exports.items())
-    (operators / "__init__.py").write_text(
-        (
-            "import importlib\n"
-            f"_OPERATOR_MODULES = {{{mapping}}}\n"
-            "__all__ = sorted(_OPERATOR_MODULES)\n"
-            "def __getattr__(name):\n"
-            "    module = _OPERATOR_MODULES.get(name)\n"
-            "    if module is None:\n"
-            "        raise AttributeError(name)\n"
-            "    return getattr(importlib.import_module(f'.{module}.op', __name__), name)\n"
-        ),
-        encoding="utf-8",
-    )
+    for dotted, body in modules.items():
+        path = operators.joinpath(*dotted.split(".")).with_suffix(".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    (operators / "__init__.py").write_text(catalog, encoding="utf-8")
     return site
 
 
@@ -221,6 +226,13 @@ def _load_operators(site: Path, monkeypatch):
     return operators
 
 
+_CATALOG = (
+    "from .relu import ReLU\n"
+    "from .flm.gemm.op import ProjectionGEMM\n"
+    "CATALOG = {'ReLU': ReLU, 'flm.ProjectionGEMM': ProjectionGEMM}\n"
+)
+
+
 class TestOpsOperatorProbe:
     @pytest.fixture(autouse=True)
     def _isolate_iron(self):
@@ -230,91 +242,89 @@ class TestOpsOperatorProbe:
         for name in list(sys.modules):
             if name == "iron" or name.startswith("iron."):
                 del sys.modules[name]
+        # Only the stand-in the torch test plants; a real torch has a file.
+        torch = sys.modules.get("torch")
+        if torch is not None and not hasattr(torch, "__file__"):
+            del sys.modules["torch"]
 
-    def test_probe_script_embeds_closed_catalog_helper(self):
+    @pytest.fixture
+    def no_torch(self):
+        import sys
+
+        if "torch" in sys.modules:
+            pytest.skip("torch is already imported in this process")
+
+    def test_probe_script_embeds_the_catalog_helper(self):
         probe = _installed_ops_probe()
         compile(probe, "<ops-probe>", "exec")
         assert "def probe_operator_modules" in probe
         assert "import fastflow_sdk_ops" in probe
         assert "kernels_root" in probe
-        assert "ModuleNotFoundError" in probe
-        assert 'current.name == "torch"' in probe
-        assert '(child / "op.py")' in probe or 'child / "op.py"' in probe
-        assert _TORCH_AT_IMPORT == {"swiglu_prefill_stream"}
-        for name in _TORCH_AT_IMPORT:
-            assert repr(name) in probe
+        assert "gemma4_engine_root" in probe
+        assert '"torch" in sys.modules' in probe
 
-    def test_compile_script_embeds_torch_free_operator_suite(self, tmp_path):
+    def test_compile_script_embeds_the_whole_suite(self, tmp_path):
         script = _installed_ops_compile(tmp_path / "ops-compile")
         compile(script, "<ops-compile>", "exec")
-        specs = _ops_compile_specs()
-        names = [spec["name"] for spec in specs]
-        assert names == [
-            *(operator.name for operator in host_compile_suite()),
-            "add_relu_fused",
+        operators, sequences = _ops_compile_specs()
+        assert [spec["name"] for spec in operators] == [
+            operator.name for operator in host_compile_suite()
         ]
-        assert not _TORCH_AT_IMPORT.intersection(names)
-        assert "gemm" in names
-        assert "relu" in names
-        assert "elementwise_add" in names
-        assert "mha" in names
-        assert "swiglu_decode" not in names
-        assert "swiglu_prefill" not in names
-        assert "strided_copy" in names
-        strided_copy = next(spec for spec in specs if spec["name"] == "strided_copy")
-        assert strided_copy["full_elf"] is True
-        add_relu_fused = next(
-            spec for spec in specs if spec["name"] == "add_relu_fused"
-        )
-        assert add_relu_fused["kind"] == "add_relu_sequence"
-        assert add_relu_fused["full_elf"] is True
-        assert all(
-            spec["full_elf"] is False
-            for spec in specs
-            if spec["name"] not in ("strided_copy", "add_relu_fused")
-        )
-        for spec in specs:
+        assert [spec["name"] for spec in sequences] == [s.name for s in SEQUENCES]
+        assert [spec["name"] for spec in operators if spec["full_elf"]] == [
+            "strided_copy"
+        ]
+        for spec in operators:
             assert spec["device"] == "npu2"
-            assert spec["kwargs"]
-        for package in _TORCH_AT_IMPORT:
-            assert f"'name': {package!r}" not in script
+            assert spec["build_kwargs"]
+            assert spec["class_name"]
+        for helper in (
+            "class Operator(NamedTuple)",
+            "class Sequence(NamedTuple)",
+            "def require_runtime_image",
+            "def require_host_library",
+            "def classify_compiled_images",
+            "class Compiled(NamedTuple)",
+            "def stage_compiled_images",
+            "def operator_class",
+            "def construct_operator",
+            "def add_relu_graph",
+            "def offset_copy_graph",
+            "def require_compile_cache",
+            "def compile_full_elf",
+            "def compile_operator",
+            "def compile_sequence",
+            "def compile_job_count",
+            "def resolve_build_kwargs",
+        ):
+            assert helper in script, helper
+        assert "FULL_ELF_GRAPHS = {'strided_copy': offset_copy_graph}" in script
+        assert "STAGED_NAMES = " in script
+        assert "NPU_CACHE_HOME" in script
+        assert "--keep-cache" in script
         assert "def compile_one(" in script
         assert "ThreadPoolExecutor" in script
         assert "subprocess.run" in script
-        assert "--operator" in script
         assert "ProcessPoolExecutor" not in script
-        assert "compile_job_count" in script
         assert 'if __name__ == "__main__"' in script
-        assert "def require_runtime_image" in script
-        assert "def classify_compiled_images" in script
-        assert 'if spec["full_elf"]:' in script
-        assert "OperatorSequence(" in script
-        assert '"full-elf"' in script
-        assert '"context"' in script
-        assert "tile_m" in script
-        assert "FullElfArtifact" in script
         assert "activate_toolchain_env" in script
         assert "compiler prefix has no include" in script
 
-    def test_compile_suite_is_every_torch_free_op_with_a_shape(self):
-        operators = IRON_OPS_SOURCE / "iron" / "operators"
-        if not operators.is_dir():
-            pytest.skip("iron-ops source is not checked out for this CI profile")
-        packages = set()
-        for child in operators.iterdir():
-            if not child.is_dir():
-                continue
-            if (child / "op.py").is_file():
-                packages.add(child.name)
-                continue
-            for nested in child.iterdir():
-                if nested.is_dir() and (nested / "op.py").is_file():
-                    packages.add(f"{child.name}.{nested.name}")
-        catalog = {op.name for op in OPERATORS} | {
-            op.module for op in OPERATORS if op.module
-        }
-        leftover = packages - catalog - set(_TORCH_AT_IMPORT)
-        assert leftover == set()
+    def test_compile_script_rebuilds_the_catalog_records(self, tmp_path):
+        script = _installed_ops_compile(tmp_path / "ops-compile")
+        start = script.index("STAGED_NAMES = ")
+        end = script.index("DEFAULT_BUILD_DIR = ")
+        namespace = {}
+        exec(
+            "import importlib, json, os, shutil\n"
+            "from pathlib import Path\n"
+            "from typing import NamedTuple\n" + script[start:end],
+            namespace,
+        )
+        names = [operator.name for operator in namespace["OPERATORS"]]
+        assert names == [operator.name for operator in host_compile_suite()]
+        assert namespace["OPERATORS"] == host_compile_suite()
+        assert [s.name for s in namespace["SEQUENCES"]] == [s.name for s in SEQUENCES]
 
     def test_reuse_venv_keeps_existing_interpreter(self, tmp_path, monkeypatch):
         monkeypatch.setattr("build_tools.fastflow_sdk_ops_wheels.paths.BUILD", tmp_path)
@@ -341,76 +351,53 @@ class TestOpsOperatorProbe:
             COMPILER_BINDINGS_DISTRIBUTION,
         )
 
-    def test_catalog_imports_and_skips_torch_packages(self, tmp_path, monkeypatch):
+    def test_probe_imports_every_package_module(self, tmp_path, monkeypatch, no_torch):
         site = _write_operators_catalog(
             tmp_path,
             {
-                "elementwise_add": "class ElementwiseAdd:\n    pass\n",
                 "relu": "class ReLU:\n    pass\n",
-                "mha": "import torch\n\nclass MHA:\n    pass\n",
+                "flm.__init__": "",
+                "flm.gemm.__init__": "",
+                "flm.gemm.op": "class ProjectionGEMM:\n    pass\n",
+                "flm.gemm.test": "assert False, 'a test module ships no import'\n",
+                "flm.gemma4_engine.build": "assert False, 'a script, not a module'\n",
             },
-            {"ElementwiseAdd": "elementwise_add", "MHA": "mha"},
+            _CATALOG,
         )
         operators = _load_operators(site, monkeypatch)
-        imported, skipped = probe_operator_modules(
-            operators, torch_at_import=frozenset({"mha"})
-        )
-        assert "iron.operators.elementwise_add.op" in imported
-        assert "iron.operators.relu.op" in imported
-        assert skipped == ["iron.operators.mha.op"]
+        imported = probe_operator_modules(operators)
+        assert imported == [
+            "iron.operators",
+            "iron.operators.flm",
+            "iron.operators.flm.gemm",
+            "iron.operators.flm.gemm.op",
+            "iron.operators.relu",
+        ]
 
-    def test_unused_torch_skip_is_a_hard_failure(self, tmp_path, monkeypatch):
+    def test_an_import_that_pulls_in_torch_fails(self, tmp_path, monkeypatch, no_torch):
         site = _write_operators_catalog(
             tmp_path,
             {
-                "elementwise_add": "class ElementwiseAdd:\n    pass\n",
-                "mha": "class MHA:\n    pass\n",
+                "relu": "class ReLU:\n    pass\n",
+                "flm.__init__": "",
+                "flm.gemm.__init__": "",
+                "flm.gemm.op": "class ProjectionGEMM:\n    pass\n",
+                "mha": "import sys, types\nsys.modules['torch'] = types.ModuleType('torch')\n",
             },
-            {"ElementwiseAdd": "elementwise_add", "MHA": "mha"},
+            _CATALOG,
         )
         operators = _load_operators(site, monkeypatch)
-        with pytest.raises(RuntimeError, match="skip list is stale; drop: mha"):
-            probe_operator_modules(operators, torch_at_import=frozenset({"mha"}))
+        with pytest.raises(RuntimeError, match="imported torch"):
+            probe_operator_modules(operators)
 
-    def test_missing_torch_skip_package_fails(self, tmp_path, monkeypatch):
-        site = _write_operators_catalog(
-            tmp_path,
-            {"elementwise_add": "class ElementwiseAdd:\n    pass\n"},
-            {"ElementwiseAdd": "elementwise_add"},
-        )
-        operators = _load_operators(site, monkeypatch)
-        with pytest.raises(RuntimeError, match="missing torch-at-import"):
-            probe_operator_modules(operators, torch_at_import=frozenset({"mha"}))
-
-    def test_unexpected_torch_import_is_not_skipped(self, tmp_path, monkeypatch):
-        site = _write_operators_catalog(
-            tmp_path,
-            {
-                "elementwise_add": "class ElementwiseAdd:\n    pass\n",
-                "relu": "import torch\n\nclass ReLU:\n    pass\n",
-            },
-            {"ElementwiseAdd": "elementwise_add"},
-        )
-        operators = _load_operators(site, monkeypatch)
-        with pytest.raises(ModuleNotFoundError):
-            probe_operator_modules(operators, torch_at_import=frozenset())
-
-    def test_all_torch_error_does_not_skip_imported_exports(
-        self, tmp_path, monkeypatch
+    def test_a_catalog_entry_must_be_an_imported_class(
+        self, tmp_path, monkeypatch, no_torch
     ):
         site = _write_operators_catalog(
             tmp_path,
-            {
-                "elementwise_add": "class ElementwiseAdd:\n    pass\n",
-                "mha": "import torch\n\nclass MHA:\n    pass\n",
-            },
-            {"ElementwiseAdd": "elementwise_add", "MHA": "mha"},
+            {"relu": "class ReLU:\n    pass\n"},
+            "from .relu import ReLU\nCATALOG = {'ReLU': ReLU, 'Gone': None}\n",
         )
         operators = _load_operators(site, monkeypatch)
-
-        def _raise_torch(name):
-            raise ModuleNotFoundError("No module named 'torch'", name="torch")
-
-        operators.__getattr__ = _raise_torch
-        with pytest.raises(ModuleNotFoundError):
-            probe_operator_modules(operators, torch_at_import=frozenset({"mha"}))
+        with pytest.raises(RuntimeError, match=r"CATALOG\['Gone'\]"):
+            probe_operator_modules(operators)

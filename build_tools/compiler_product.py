@@ -52,7 +52,7 @@ COMPILER_PRODUCT_RELOCATED = paths.BUILD / "fastflow-sdk-compiler-relocated"
 COMPILER_ARTIFACTS = paths.BUILD / "artifacts"
 COMPILER_PRODUCT_ZSTD_LEVEL = 6
 COMPILER_PRODUCT_ZSTD_WINDOW_LOG = 27
-PEANO_WHEEL = "llvm-aie==22.0.0.2026092101+0006955e"
+PEANO_WHEEL = "llvm-aie==22.0.0.2026102001+4f5df13d"
 PEANO_INDEX = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
 NPU_PREREQ_TOOLS = [
     "aiecc",
@@ -633,6 +633,7 @@ def verify_product_inventory(product):
     required_files = [
         "python/aie/ir.py",
         "include/aie_api/aie.hpp",
+        "include/aie_kernels/eltwise/add.cc",
         "aie_runtime_lib/AIE2P/vec_math.h",
         *manifest.get("required_tools", []),
     ]

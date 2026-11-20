@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8089d533435..0ef89f00011 100644
+index 2918eb132a8..619a952f4a0 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -228,7 +228,13 @@ if(MSVC AND OPENSSL_USE_STATIC_LIBS)
+@@ -356,7 +356,13 @@ if(MSVC AND OPENSSL_USE_STATIC_LIBS)
    set(OPENSSL_MSVC_STATIC_RT TRUE)
  endif()
  
@@ -18,7 +18,7 @@ index 8089d533435..0ef89f00011 100644
  
  # What happens when you have a non-void function with no return?
 diff --git a/runtime_lib/test_lib/CMakeLists.txt b/runtime_lib/test_lib/CMakeLists.txt
-index 5ea94c6da9a..ff4479ad779 100644
+index a34e85aa7f2..631fa5ead0e 100644
 --- a/runtime_lib/test_lib/CMakeLists.txt
 +++ b/runtime_lib/test_lib/CMakeLists.txt
 @@ -45,6 +45,14 @@ if (BUILD_TEST_UTILS_LIBRARY)
@@ -33,11 +33,11 @@ index 5ea94c6da9a..ff4479ad779 100644
 +    target_compile_options(test_utils PRIVATE /EHsc)
 +  endif()
 +
-   # XRT headers on Windows pull in boost/any.hpp which is not typically
-   # available.  Skip XRT integration there; the core helpers (load_instr_*,
-   # nearly_equal, etc.) are still usable without it.
+   # xrt_test_wrapper.h calls init_xrt_load_kernel, so the XRT helpers must be
+   # built on every platform a host test can link from, Windows included.
+   if (XRT_FOUND)
 diff --git a/test/CppTests/CMakeLists.txt b/test/CppTests/CMakeLists.txt
-index 92f9c72a55e..e38973853ce 100644
+index 7e13911b30c..1b2066f9c6d 100644
 --- a/test/CppTests/CMakeLists.txt
 +++ b/test/CppTests/CMakeLists.txt
 @@ -4,6 +4,15 @@
@@ -57,10 +57,10 @@ index 92f9c72a55e..e38973853ce 100644
  
  add_executable(target_model  target_model.cpp)
 diff --git a/tools/bootgen/CMakeLists.txt b/tools/bootgen/CMakeLists.txt
-index c97b80794f8..54d0fe41c6a 100644
+index 8e57325a4d1..8f3e91de5fb 100644
 --- a/tools/bootgen/CMakeLists.txt
 +++ b/tools/bootgen/CMakeLists.txt
-@@ -174,7 +174,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+@@ -197,7 +197,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
  else()
    set(bootgen_warning_ignores)
  endif()
@@ -72,7 +72,7 @@ index c97b80794f8..54d0fe41c6a 100644
    target_compile_definitions(bootgen-lib PRIVATE YY_NO_UNISTD_H)
    # Enable correct unwind semantics on MSVC
    target_compile_options(bootgen-lib PRIVATE /EHsc)
-@@ -207,7 +210,7 @@ set_target_properties(bootgen PROPERTIES POSITION_INDEPENDENT_CODE ON)
+@@ -230,7 +233,7 @@ set_target_properties(bootgen PROPERTIES POSITION_INDEPENDENT_CODE ON)
  target_include_directories(bootgen PUBLIC ${bootgen_include_dirs} ${OPENSSL_INCLUDE_DIR}
    ${CMAKE_CURRENT_BINARY_DIR}/include)
  target_compile_options(bootgen PRIVATE ${bootgen_warning_ignores})

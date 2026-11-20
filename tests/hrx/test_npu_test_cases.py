@@ -97,12 +97,14 @@ def test_nan_remains_nan():
             ],
         ),
         ("gelu", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
-        ("leaky_relu", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
         ("sigmoid", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
         ("tanh", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
         ("silu", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
-        ("mem_copy", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
-        ("layer_norm", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
+        ("copy", [("input", (2048,), "uint16"), ("output", (2048,), "uint16")]),
+        (
+            "layer_norm",
+            [("input", (1, 2048), "uint16"), ("output", (1, 2048), "uint16")],
+        ),
         (
             "rms_norm",
             [("input", (1, 2048), "uint16"), ("output", (1, 2048), "uint16")],
@@ -120,14 +122,6 @@ def test_nan_remains_nan():
             ],
         ),
         (
-            "transpose",
-            [("input", (64, 64), "uint16"), ("output", (64, 64), "uint16")],
-        ),
-        (
-            "repeat",
-            [("input", (32, 1024), "uint16"), ("output", (64, 1024), "uint16")],
-        ),
-        (
             "add_relu_fused",
             [
                 ("inputs", (8192,), "uint16"),
@@ -137,7 +131,11 @@ def test_nan_remains_nan():
         ),
         (
             "strided_copy",
-            [("input", (2048,), "uint16"), ("output", (1024,), "uint16")],
+            [
+                ("input", (2048,), "uint16"),
+                ("output", (1024,), "uint16"),
+                ("scratch", (1,), "uint16"),
+            ],
         ),
     ],
 )
@@ -209,29 +207,16 @@ def test_binary_and_copy_references_match_rounded_inputs():
             + cases.bf16_to_float32(axpy[1]["data"])
         ),
     )
-    copied = cases.mem_copy()["buffers"]
+    copied = cases.copy()["buffers"]
     np.testing.assert_array_equal(copied[1]["expected"], copied[0]["data"])
 
 
-def test_gemm_and_layout_references():
+def test_gemm_reference():
     gemm = cases.gemm()["buffers"]
     reference = cases.float32_to_bf16(
         cases.bf16_to_float32(gemm[0]["data"]) @ cases.bf16_to_float32(gemm[1]["data"])
     )
     np.testing.assert_array_equal(gemm[2]["expected"], reference)
-
-    transposed = cases.transpose()["buffers"]
-    np.testing.assert_array_equal(
-        transposed[1]["expected"],
-        cases.float32_to_bf16(cases.bf16_to_float32(transposed[0]["data"]).T),
-    )
-    repeated = cases.repeat()["buffers"]
-    np.testing.assert_array_equal(
-        repeated[1]["expected"],
-        cases.float32_to_bf16(
-            np.repeat(cases.bf16_to_float32(repeated[0]["data"]), 2, axis=0)
-        ),
-    )
 
 
 def test_strided_copy_alternates_parameterized_input_offsets():
@@ -268,11 +253,14 @@ def test_add_relu_fused_uses_consolidated_arenas_and_rounded_intermediate():
 
 
 def test_unary_and_norm_references_match_rounded_inputs():
-    relu_like = cases.leaky_relu()["buffers"]
-    source = cases.bf16_to_float32(relu_like[0]["data"])
+    layer = cases.layer_norm()["buffers"]
+    rows = cases.bf16_to_float32(layer[0]["data"])
+    centered = rows - rows.mean(axis=-1, keepdims=True)
     np.testing.assert_array_equal(
-        relu_like[1]["expected"],
-        cases.float32_to_bf16(np.where(source >= 0, source, np.float32(0.01) * source)),
+        layer[1]["expected"],
+        cases.float32_to_bf16(
+            centered / np.sqrt(rows.var(axis=-1, keepdims=True) + np.float32(1e-5))
+        ),
     )
 
     silu = cases.silu()["buffers"]

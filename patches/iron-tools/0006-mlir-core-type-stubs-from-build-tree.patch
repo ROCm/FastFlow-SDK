@@ -1,8 +1,8 @@
 diff --git a/python/CMakeLists.txt b/python/CMakeLists.txt
-index 9af332d1ea8..d8825a864ff 100644
+index d650abc772a..dbbf6ca72f3 100644
 --- a/python/CMakeLists.txt
 +++ b/python/CMakeLists.txt
-@@ -231,13 +231,26 @@ install(
+@@ -264,13 +264,26 @@ install(
  # `from ._mlir_libs._mlir.ir import *`; the .py sources we assemble don't carry
  # their types, so a static type checker can only resolve them from these stubs.
  # They ship with the MLIR distro but aren't copied by add_mlir_python_modules.

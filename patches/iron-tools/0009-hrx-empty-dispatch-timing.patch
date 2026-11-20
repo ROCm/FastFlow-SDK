@@ -1,0 +1,115 @@
+diff --git a/python/utils/hostruntime/hrxruntime/hostruntime.py b/python/utils/hostruntime/hrxruntime/hostruntime.py
+index 70ba6f665ba..b6e81c46608 100644
+--- a/python/utils/hostruntime/hrxruntime/hostruntime.py
++++ b/python/utils/hostruntime/hrxruntime/hostruntime.py
+@@ -32,6 +32,8 @@ from collections.abc import Mapping
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ 
++import numpy as np
++
+ from ..hostruntime import HostRuntime, HostRuntimeError, KernelHandle, KernelResult
+ from ..tensor_class import TensorRegion
+ from . import HRXContext, HRXError, control_code_from_elf
+@@ -125,16 +127,26 @@ class HRXKernelHandle(KernelHandle):
+         self._ctx = ctx
+         if ctx is not None and executable:
+             ctx.retain_executable(executable)
++        # The header of the last transaction dispatched, and the empty
++        # transaction's executable built from it, for empty_dispatch_ns.
++        self.txn_header: np.ndarray | None = None
++        if insts_path is not None:
++            self.txn_header = _txn_header(Path(insts_path).read_bytes())
++        self._empty = None
+ 
+     def __del__(self):
+         ctx = getattr(self, "_ctx", None)
+-        exe = getattr(self, "executable", None)
+-        if ctx is not None and exe:
+-            try:
+-                ctx.release_executable(exe)
+-            except Exception:
+-                pass
+-            self.executable = None
++        empty = getattr(self, "_empty", None)
++        if ctx is None:
++            return
++        for exe in (getattr(self, "executable", None), empty and empty[0]):
++            if exe:
++                try:
++                    ctx.release_executable(exe)
++                except Exception:
++                    pass
++        self.executable = None
++        self._empty = None
+ 
+     def xclbin_image(self) -> bytes:
+         """Read and cache the immutable xclbin image for dynamic dispatches."""
+@@ -142,6 +154,59 @@ class HRXKernelHandle(KernelHandle):
+             self._xclbin_bytes = Path(self.xclbin_path).read_bytes()
+         return self._xclbin_bytes
+ 
++    def empty_dispatch_ns(self) -> int | None:
++        """Time one dispatch that does nothing, on this kernel's xclbin.
++
++        It is a transaction with the header of the last one dispatched and
++        no operations, in an executable of its own: libhrx gives each
++        executable its own hardware context, so the context is this kernel's
++        configuration rather than this kernel's context itself.
++
++        Returns:
++            Nanoseconds from submit to completion, timed as a run is; None
++            before a transaction has been dispatched, or without a context.
++
++        Raises:
++            HostRuntimeError: The empty dispatch failed.
++        """
++        if self._ctx is None or self.txn_header is None:
++            return None
++        header = self.txn_header.tobytes()
++        if self._empty is None or self._empty[2] != header:
++            if self._empty is not None:
++                self._ctx.release_executable(self._empty[0])
++                self._empty = None
++            words = self.txn_header.copy()
++            words[2:4] = (0, words.nbytes)
++            try:
++                exe = self._ctx.create_executable(
++                    self.xclbin_image(), words.tobytes(), self.kernel_name
++                )
++                try:
++                    ordv = self._ctx.lookup_export(exe, self.kernel_name)
++                except BaseException:
++                    self._ctx.release_executable(exe)
++                    raise
++            except HRXError as e:
++                raise HostRuntimeError(
++                    f"HRX failed to load an empty dispatch: {e}"
++                ) from e
++            self._empty = (exe, ordv, header)
++        start = time.perf_counter_ns()
++        try:
++            self._ctx.dispatch(self._empty[0], self._empty[1], [])
++            self._ctx.synchronize()
++        except HRXError as e:
++            raise HostRuntimeError(f"An empty HRX dispatch failed: {e}") from e
++        return time.perf_counter_ns() - start
++
++
++def _txn_header(insts: bytes) -> np.ndarray:
++    """The four-word XAie transaction header of ``insts.bin`` words or an ELF's."""
++    if insts[:4] == b"\x7fELF":
++        insts = control_code_from_elf(insts).tobytes()
++    return np.frombuffer(insts[:16], dtype=np.uint32).copy()
++
+ 
+ class HRXKernelResult(KernelResult):
+     """Result wrapper for an HRX dispatch.
+@@ -367,6 +432,7 @@ class HRXHostRuntime(HostRuntime):
+                 kernel_handle.kernel_name,
+             )
+             exe = dispatch_exe
++            kernel_handle.txn_header = _txn_header(dispatch_insts.tobytes())
+ 
+         try:
+             start = time.perf_counter_ns()

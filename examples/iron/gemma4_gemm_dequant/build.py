@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build IRON GEMM/dequant operators for a Gemma 4 model-extension bundle.
 
-Derived from amd/IRON's Gemma 4 GEMM/dequant example:
-https://github.com/amd/IRON/tree/devel/iron/applications/gemma4_flm
+Derived from amd/IRON's Gemma 4 engine override:
+https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemma4_engine
 
     python build.py <FastFlowLM xclbins> <out dir>
 
@@ -23,8 +23,9 @@ from pathlib import Path
 
 import aie.utils as aie_utils
 from aie.iron.device import NPU2
-from iron.common import AIEContext
-from iron.operators.flm import GEMM, DequantBFP
+from iron import Precision
+from iron.operators.flm import DequantBFP, ProjectionGEMM
+from iron.operators.flm.dequant.op import CT_K as DEQUANT_CT_K
 from iron.operators.flm.gemm.design import Epilogue
 
 MODEL = "Gemma4-E2B-IT-NPU2"
@@ -67,88 +68,96 @@ UPGATE = [(1536, 6144), (1536, 12288)]
 UPGATE_RUN = 512
 
 
-def gemm(m, k, n, gelu, context):
-    """Create one GEMM with arithmetic matching the FastFlowLM engine."""
-    return GEMM(
+def gemm(m, k, n, gelu):
+    """Create one GEMM with arithmetic matching the FastFlowLM engine.
+
+    Floor rounding, bf16_steps gelu and MEDIUM's bfp16 macs reproduce the
+    engine bit for bit. ``k_tile=256`` divides every K, so one configuration
+    serves all shapes; B's k slice comes from DequantBFP's.
+    """
+    return ProjectionGEMM(
         M=m,
         K=k,
         N=n,
         epilogue=Epilogue.GELU if gelu else Epilogue.NONE,
         tile_n=64,
         k_tile=256,
+        ct_k=DEQUANT_CT_K,
         rounding="floor",
         gelu="bf16_steps",
-        context=context,
+        precision=Precision.MEDIUM,
+        bfp16_b=True,
     )
 
 
-def create_operators(context):
-    dequants = [DequantBFP(K=k, N=n, context=context) for k, n in DEQUANT]
+def create_operators():
+    dequants = [DequantBFP(K=k, N=n) for k, n in DEQUANT]
     dequants += [
         DequantBFP(
             K=k,
             N=n,
             run_out_features=UPGATE_RUN,
             run_period_out_features=2 * UPGATE_RUN,
-            context=context,
         )
         for k, n in UPGATE
     ]
-    gemms = [gemm(m, k, n, gelu, context) for m in WIDTHS for k, n, gelu in GEMMS]
+    gemms = [gemm(m, k, n, gelu) for m in WIDTHS for k, n, gelu in GEMMS]
     return dequants, gemms
 
 
 def compile_all(operators):
+    """Compile each operator; return its artifacts (xclbin, instruction stream) by operator."""
+    built = {}
     for index, operator in enumerate(operators, 1):
         print(f"[{index}/{len(operators)}] {operator.name}", flush=True)
-        operator.compile()
+        built[operator] = operator.compile()
+    return built
 
 
-def one_xclbin(operators):
+def one_xclbin(built):
     """Return the xclbin shared by all operators in one family."""
-    xclbins = {operator.xclbin_artifact.filename for operator in operators}
+    xclbins = {artifacts.image for artifacts in built}
     if len(xclbins) != 1:
         raise RuntimeError(f"expected one configuration, got {sorted(xclbins)}")
     return xclbins.pop()
 
 
-def stage(engine_xclbins, out, dequants, gemms):
+def stage(engine_xclbins, out, dequants, gemms, built):
     target = out / "xclbins" / MODEL
     shutil.rmtree(target, ignore_errors=True)
     shutil.copytree(Path(engine_xclbins) / MODEL, target, symlinks=True)
     sequences = target / "iron"
     sequences.mkdir()
 
-    for name, xclbin in {
-        "mm": one_xclbin(gemms),
-        "dequant": one_xclbin(dequants),
-    }.items():
-        shutil.copyfile(xclbin, target / f"{name}.xclbin")
+    for name, family in {"mm": gemms, "dequant": dequants}.items():
+        shutil.copyfile(
+            one_xclbin(built[operator] for operator in family),
+            target / f"{name}.xclbin",
+        )
 
     for operator in dequants:
         shutil.copyfile(
-            operator.insts_artifact.filename,
+            built[operator].insts,
             sequences / f"dequant_K{operator.K}_N{operator.N}.bin",
         )
     for operator in gemms:
         gelu = "_gelu" if operator.epilogue == Epilogue.GELU else ""
         shutil.copyfile(
-            operator.insts_artifact.filename,
+            built[operator].insts,
             sequences / f"gemm_M{operator.M}_K{operator.K}_N{operator.N}{gelu}.bin",
         )
     print(f"staged {target}")
 
 
 def main(engine_xclbins, out, *, compile_only=False, smoke=False):
-    aie_utils.set_current_device(NPU2())
-    context = AIEContext(build_dir=out / "ops")
-    dequants, gemms = create_operators(context)
-    selected = [dequants[0], gemms[0]] if smoke else [*dequants, *gemms]
-    compile_all(selected)
-    if not compile_only:
-        if smoke:
-            raise ValueError("--smoke requires --compile-only")
-        stage(engine_xclbins, out, dequants, gemms)
+    if smoke and not compile_only:
+        raise ValueError("--smoke requires --compile-only")
+    with aie_utils.set_current_device(NPU2()):
+        dequants, gemms = create_operators()
+        selected = [dequants[0], gemms[0]] if smoke else [*dequants, *gemms]
+        built = compile_all(selected)
+        if not compile_only:
+            stage(engine_xclbins, out, dequants, gemms, built)
 
 
 def parse_args():

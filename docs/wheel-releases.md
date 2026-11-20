@@ -129,23 +129,22 @@ wheels do not depend on the runtime package; a compiler-only install skips
 the hook. Importing `fastflow_sdk_runtime` performs the same HRX selection.
 
 `fastflow-sdk-ops` is `py3-none-any` and requires `fastflow-sdk-compiler` at exactly
-the same version. It ships the IRON `iron` package plus the `aie_kernels`
-sources that `AIEContext.base_dir` resolves next to it, so
-`from iron.operators import ElementwiseAdd` works after a wheel install.
-The wheel is compile-oriented: it does not depend on torch. CPU reference
-helpers and stream-dse still import torch at module scope; MHA and the
-hand-written SwiGLU sequences do not. `verify-ops-wheels` imports every
-`iron.operators.*.op` module (and every lazy `iron.operators` export), and fails
-if a torch skip is unused or a skip-list package is missing. CI then installs
+the same version. It ships the IRON `iron` package, so
+`from iron.operators import ElementwiseAdd` works after a wheel install. It
+ships no kernel sources: the kernel factories compile from the compiler's own
+`include/aie_kernels`, which `fastflow_sdk_ops.kernels_root()` returns.
+The wheel is compile-oriented: it does not depend on torch. `verify-ops-wheels`
+imports every module under the `iron.operators` packages, checks that every
+`iron.operators.CATALOG` entry is a class those modules define, and fails if
+any import pulled in torch. CI then installs
 that wheel into the Python 3.12 compiler verify venv and compiles every
-torch-free operator in `build_tools.iron.host_compile_suite()` in parallel
+operator in `build_tools.iron.host_compile_suite()` in parallel
 (the same small shapes as `test-iron-ops`, so `generic/` and `aie2p/` kernels
-both go through Peano from site-packages). MHA is in that compile catalog;
-IRON devel binds `get_current_device()` itself. The compiler wheel includes `aiebu-asm`;
-the dynamic strided-copy row compile-checks runtime parameters in a fused ELF,
-and the fused add-to-ReLU row compile-checks multi-PDI reconfiguration and
-intermediate scratch routing. SwiGLU stays in `OPERATORS` but is not
-host-compiled because it has no packaged numeric case.
+both go through Peano). The compiler wheel includes `aiebu-asm`;
+the dynamic strided-copy row compiles an `iron.Graph` whose copy offset is a
+scratchpad parameter into one full ELF, and the fused add-to-ReLU row compiles
+a two-design graph (multi-PDI reconfiguration and an intermediate scratch
+buffer) into one.
 NPU CI does not run iron-ops pytest: it dispatches the prebuilt
 `npu-test-package` for operators that have `CASE_GENERATORS`.
 `dev.py test-npu-iron-ops` is local and still compiles inside `run_test`; CPU

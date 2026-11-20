@@ -170,74 +170,92 @@ def _scalar_byte_length(scalar_type):
 def parse_params(params_text):
     """Parses aiecc scratchpad metadata into HRX control-parameter records.
 
-    The file is a parameter count, one record per parameter, then a joint-bound
-    count and one record per bound. A parameter record is ``name slot type
-    kind`` or, since mlir-aie v1.4.4, those four fields plus ``min max``
-    (``- -`` when the parameter has no range). Joint bounds are host-side DMA
-    limits and are not part of the XADX control-parameter table.
+    The file (aiecc's ``emitScratchpadParamsFile``) is whitespace-separated::
+
+        <num_parameters> <num_slots>
+        <name> <slot> <type> <kind> <min> <max>     (per parameter)
+        <num_joint_bounds>
+        <length> <offset> <length_step> <max>      (per joint bound)
+        <num_commands>
+        <device>:<sequence> <num_read> <name>...   (per command)
+
+    ``slot`` is ``-`` for a parameter no command reads and ``min max`` is
+    ``- -`` for one with no range. Unread parameters, ranges and joint bounds
+    are host-side checks, not part of the XADX control-parameter table. An XADX
+    holds one entry, so the module must have at most one command.
     """
-    lines = [line.strip() for line in params_text.splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("scratchpad parameter metadata is empty")
-    expected_count = _leading_count(lines[0], "scratchpad parameter count")
-    records = lines[1:]
-    if len(records) < expected_count:
+    tokens = iter(params_text.split())
+
+    def take(label):
+        token = next(tokens, None)
+        if token is None:
+            raise ValueError(f"scratchpad parameter metadata ends before {label}")
+        return token
+
+    def count(label):
+        token = take(label)
+        try:
+            value = int(token)
+        except ValueError as error:
+            raise ValueError(f"{label} {token!r} is not an integer") from error
+        if value < 0:
+            raise ValueError(f"{label} {value} is negative")
+        return value
+
+    parameter_count = count("the scratchpad parameter count")
+    slot_count = count("the scratchpad slot count")
+    if slot_count > 32:
+        raise ValueError(f"scratchpad slot count {slot_count} is past 32")
+    parameters = []
+    constant_offset = 0
+    for index in range(parameter_count):
+        fields = [take(f"scratchpad parameter {index}") for _ in range(6)]
+        record = _parse_parameter_record(fields, constant_offset, slot_count)
+        if record is not None:
+            parameters.append(record)
+            constant_offset += record[4]
+    for index in range(count("the scratchpad joint-bound count")):
+        for _ in range(4):
+            take(f"scratchpad joint bound {index}")
+    command_count = count("the scratchpad command count")
+    if command_count > 1:
         raise ValueError(
-            f"scratchpad parameter count is {expected_count}, "
-            f"but {len(records)} records follow"
+            f"scratchpad metadata lists {command_count} commands, "
+            "but an XADX holds one entry"
         )
-    parameters = [
-        _parse_parameter_record(line, constant_offset)
-        for constant_offset, line in _parameter_offsets(records[:expected_count])
-    ]
-    rest = records[expected_count:]
-    if rest:
-        joint_count = _leading_count(rest[0], "scratchpad joint-bound count")
-        joint_lines = rest[1:]
-        if joint_count != len(joint_lines):
-            raise ValueError(
-                f"scratchpad joint-bound count is {joint_count}, "
-                f"but {len(joint_lines)} records follow"
-            )
-        for line in joint_lines:
-            if len(line.split()) != 4:
-                raise ValueError(f"malformed scratchpad joint bound {line!r}")
+    for index in range(command_count):
+        take(f"scratchpad command {index}")
+        for _ in range(count(f"scratchpad command {index}'s parameter count")):
+            take(f"scratchpad command {index}'s parameters")
+    leftover = next(tokens, None)
+    if leftover is not None:
+        raise ValueError(f"unexpected scratchpad metadata {leftover!r}")
     return parameters
 
 
-def _leading_count(line, label):
-    try:
-        return int(line)
-    except ValueError as error:
-        raise ValueError(f"{label} is not an integer") from error
-
-
-def _parameter_offsets(lines):
-    offset = 0
-    for line in lines:
-        record = _parse_parameter_record(line, offset)
-        yield offset, line
-        offset += record[4]
-
-
-def _parse_parameter_record(line, constant_offset):
-    fields = line.split()
-    if len(fields) not in (4, 6):
-        raise ValueError(f"malformed scratchpad parameter record {line!r}")
+def _parse_parameter_record(fields, constant_offset, slot_count):
     name, state_table_index_text, scalar_type, kind_text = fields[:4]
+    if kind_text not in ("core", "addr", "repeat"):
+        raise ValueError(
+            f"scratchpad parameter {name!r} has unknown kind {kind_text!r}"
+        )
+    if state_table_index_text == "-":
+        return None
+    if kind_text == "repeat":
+        raise ValueError(
+            f"scratchpad parameter {name!r} is a repeat count, "
+            "which HRX control parameters cannot patch"
+        )
     try:
         state_table_index = int(state_table_index_text)
     except ValueError as error:
         raise ValueError(
             f"scratchpad parameter {name!r} has a non-integer slot"
         ) from error
-    if not 0 <= state_table_index < 32:
+    if not 0 <= state_table_index < slot_count:
         raise ValueError(
-            f"scratchpad parameter {name!r} slot {state_table_index} is outside [0, 32)"
-        )
-    if kind_text not in ("core", "addr"):
-        raise ValueError(
-            f"scratchpad parameter {name!r} has unknown kind {kind_text!r}"
+            f"scratchpad parameter {name!r} slot {state_table_index} is outside "
+            f"[0, {slot_count})"
         )
     byte_length = _scalar_byte_length(scalar_type)
     return (

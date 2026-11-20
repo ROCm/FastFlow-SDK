@@ -93,14 +93,14 @@ New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
 
 The operator wheel contains the release-matched Gemma application source. Use
 it by default. The
-[upstream application source](https://github.com/amd/IRON/tree/devel/iron/applications/gemma4_flm)
+[upstream application source](https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemma4_engine)
 is also available for browsing and development.
 
 Linux:
 
 ```bash
 export IRON_GEMMA4_APP=$(python -c \
-  'from pathlib import Path; import iron; print(Path(iron.__file__).resolve().parent / "applications/gemma4_flm")')
+  'from pathlib import Path; import iron; print(Path(iron.__file__).resolve().parent / "operators/flm/gemma4_engine")')
 ```
 
 Windows:
@@ -109,7 +109,7 @@ Windows:
 $IronGemma4App = python -c @'
 from pathlib import Path
 import iron
-print(Path(iron.__file__).resolve().parent / "applications/gemma4_flm")
+print(Path(iron.__file__).resolve().parent / "operators/flm/gemma4_engine")
 '@
 ```
 
@@ -188,7 +188,7 @@ Linux:
 ```bash
 (
   cd "$IRON_GEMMA4_APP"
-  python build.py "$FLM_ASSETS/xclbins" "$GEMMA4_BUILD"
+  python build.py --engine-xclbins "$FLM_ASSETS/xclbins" --out "$GEMMA4_BUILD"
 )
 ```
 
@@ -197,7 +197,7 @@ Windows:
 ```powershell
 Push-Location $IronGemma4App
 try {
-  python build.py (Join-Path $FlmAssets "xclbins") $Gemma4Build
+  python build.py --engine-xclbins (Join-Path $FlmAssets "xclbins") --out $Gemma4Build
 } finally {
   Pop-Location
 }

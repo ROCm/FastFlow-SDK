@@ -233,6 +233,8 @@ def cmd_test_npu(args):
     design_dir = paths.PROJ / "iron-tools" / "programming_examples" / "basic" / design
     if not design_dir.is_dir():
         sys.exit(f"{design}: no such design under programming_examples/basic")
+    if getattr(args, "chain", False) and design != "vector_scalar_add":
+        sys.exit(f"{design}: chain_dispatch.py supports only vector_scalar_add")
     _require_hrx_runtime(getattr(args, "compiler_prefix", None))
     env = _select_hrx_runtime(iron.iron_env(getattr(args, "compiler_prefix", None)))
     target = getattr(args, "device", None) or "npu2"
@@ -243,17 +245,17 @@ def cmd_test_npu(args):
     except iron.E2EError as error:
         sys.exit(f"test-npu design build failed: {error}")
     iron.require_txn_devgen(artifacts.insts, target)
-    if getattr(args, "chain", False):
-        if not (design_dir / "test_chain_hrx.py").exists():
-            sys.exit(
-                f"{design}: no chained testbench (only vector_scalar_add ships one)"
-            )
-        testbench = [environment.venv_py(), "test_chain_hrx.py"]
-    else:
-        testbench = [
-            environment.venv_py(),
-            paths.ROOT / "tests" / "npu" / "single_dispatch.py",
-        ]
+    testbench = [
+        environment.venv_py(),
+        paths.ROOT
+        / "tests"
+        / "npu"
+        / (
+            "chain_dispatch.py"
+            if getattr(args, "chain", False)
+            else "single_dispatch.py"
+        ),
+    ]
     environment.sh(
         testbench
         + [
@@ -295,32 +297,35 @@ def cmd_test_npu_jit(args):
     )
 
 
-def npu_iron_ops_pytest_selection(operators, ops_dir: Path):
-    """Dirs and -k clauses for operators that have an HRX pytest filter.
+IRON_CATALOG_TEST = Path("iron") / "tests" / "operators" / "test_catalog.py"
 
-    ``hrx_pytest_filter is None`` means local test-npu-iron-ops must not
-    collect that operator's test.py. An empty -k would otherwise run every
-    test in the directory, including XRT fused-ELF cases that fail on HRX.
-    CI does not call this helper.
+
+def npu_iron_ops_pytest_selection(operators, ops_dir: Path):
+    """Exact IRON catalog test ids for operators that name an HRX pytest case.
+
+    ``hrx_pytest_case is None`` means IRON declares no case at that shape and
+    local test-npu-iron-ops skips the operator. Node ids rather than -k: a
+    case id is a substring of its longer variants (GELU's ``-approximate_none``),
+    and pytest fails on a node id that names no case, where -k would quietly
+    select nothing. CI does not call this helper.
     """
-    test_dirs = []
-    filters = []
+    catalog = ops_dir / IRON_CATALOG_TEST
+    node_ids = []
     ran = []
     skipped = []
     for operator in operators:
-        test_dir = ops_dir / "iron" / "operators" / operator.name
-        if operator.hrx_pytest_filter is None:
+        if operator.hrx_pytest_case is None:
             skipped.append(operator.name)
             continue
-        if not (test_dir / "test.py").is_file():
+        if not catalog.is_file():
             raise RuntimeError(
-                f"{operator.name}: hrx_pytest_filter is set but "
-                f"{test_dir / 'test.py'} is missing"
+                f"{operator.name}: hrx_pytest_case is set but {catalog} is missing"
             )
         ran.append(operator.name)
-        test_dirs.append(str(test_dir))
-        filters.append(operator.hrx_pytest_filter)
-    return ran, test_dirs, filters, skipped
+        node_ids.append(
+            f"{IRON_CATALOG_TEST.as_posix()}::test_operator[{operator.hrx_pytest_case}]"
+        )
+    return ran, node_ids, skipped
 
 
 def cmd_test_npu_iron_ops(args):
@@ -336,14 +341,12 @@ def cmd_test_npu_iron_ops(args):
     _require_hrx_runtime(compiler_prefix)
     ops_dir = paths.PROJ / "iron-ops"
     try:
-        ran, test_dirs, filters, skipped = npu_iron_ops_pytest_selection(
-            operators, ops_dir
-        )
+        ran, node_ids, skipped = npu_iron_ops_pytest_selection(operators, ops_dir)
     except RuntimeError as error:
         sys.exit(str(error))
     for name in skipped:
         print(
-            f"{name}: compile-only (no hrx_pytest_filter); skipped by test-npu-iron-ops"
+            f"{name}: compile-only (no hrx_pytest_case); skipped by test-npu-iron-ops"
         )
     if not ran:
         names = ", ".join(operator.name for operator in operators)
@@ -356,20 +359,16 @@ def cmd_test_npu_iron_ops(args):
             "python dev.py setup --iron-ops-tests"
         )
     env = _select_hrx_runtime(iron.iron_ops_env(compiler_prefix))
-    pytest_filter = ["-k", " or ".join(f"({value})" for value in filters)]
     rc = subprocess.run(
         [
             str(environment.venv_py()),
             "-m",
             "pytest",
-            *test_dirs,
-            "-m",
-            "not extensive",
-            *pytest_filter,
-            "--iterations",
-            "1",
-            "--csv-output",
-            str(paths.OUT / "iron-ops.csv"),
+            *node_ids,
+            # One token: pytest finds its ini from the args that are existing
+            # paths, so a separate value naming an existing CSV would select
+            # the SDK's pytest.ini over iron-ops'.
+            f"--csv-output={paths.OUT / 'iron-ops.csv'}",
         ],
         cwd=ops_dir,
         env=env,

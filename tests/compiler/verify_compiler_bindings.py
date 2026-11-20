@@ -32,11 +32,9 @@ def verify(expected_python: str) -> dict[str, object]:
 
     runtime_dependencies = {}
     for distribution, module in (
-        ("aiofiles", "aiofiles"),
         ("cloudpickle", "cloudpickle"),
         ("ml-dtypes", "ml_dtypes"),
         ("numpy", "numpy"),
-        ("rich", "rich"),
     ):
         importlib.import_module(module)
         runtime_dependencies[distribution] = importlib.metadata.version(distribution)

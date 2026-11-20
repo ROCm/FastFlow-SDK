@@ -7,15 +7,14 @@ Proves the chain the operator library actually walks:
 
     IRON operator -> MLIR -> Peano (the operator's C++ kernel AND the cores)
                   -> bootgen PDI -> hrx-xclbinutil(.xclbin) + insts.bin
-                     or a full ELF (OperatorSequence fused dispatch)
+                     or an iron.Graph -> aiebu-asm full ELF + parameter table
 
 `run_e2e.py` proves the same toolchain against an iron-tools programming example. This
 proves it against projects/iron-ops, and the difference is the point: iron-ops is developed
-against the mlir_aie wheel (v1.4.4), while this stack builds the aie package from SOURCE at
-the [iron_tools] pin (mlir-aie v1.4.4). When the two drift, an operator stops compiling -- and
-it should say so here,
-on a CPU runner, not an hour later on the one machine that has an NPU. Kernel sources come
-from mlir-aie's aie_kernels, which the examples' @iron.jit path never compiles on its own.
+against the mlir_aie wheel, while this stack builds the aie package from SOURCE at the
+[iron_tools] pin. When the two drift, an operator stops compiling -- and it should say so
+here, on a CPU runner, not an hour later on the one machine that has an NPU. Kernel sources
+come from mlir-aie's aie_kernels, which the examples' @iron.jit path never compiles on its own.
 
 Which operators, at what size: build_tools/iron.py. Runs on Linux and Windows.
 
@@ -25,8 +24,6 @@ tools-bin on PATH). `dev.py test-iron-ops` provides both layers.
 """
 
 import argparse
-import importlib
-import inspect
 import os
 import shutil
 import subprocess
@@ -48,201 +45,80 @@ from build_tools import iron
 # exactly like Windows (where there is none).
 os.environ.setdefault("IRON_RUNTIME", "cpu")
 
-import aie.utils as aie_utils
-from aie.iron.device import NPU2, NPU1Col1
-from iron.common import AIEContext, AIEOperatorBase
-from iron.common.sequence import OperatorSequence
-
-DEVICES = {"npu2": NPU2, "npu1": NPU1Col1}
+DEVICES = ("npu1", "npu2")
+# mlir-aie's compile cache, under the build dir. It is read when aie.utils.compile is
+# first imported, so it is set before any IRON import.
+CACHE = ".npu-cache"
 
 
 class BuildError(RuntimeError):
     """A fatal failure. main() turns this into a non-zero exit."""
 
 
-def find_operator_class(name: str, class_name: str | None = None) -> type:
-    """The AIEOperatorBase subclass defined in iron.operators.<name>.op.
+def device_for(name: str):
+    from aie.iron.device import NPU2, NPU1Col1
 
-    Resolved by inspection rather than by a name table: the directory-to-class mapping is
-    not mechanical (rms_norm -> RMSNorm, mha -> MHA, rope -> RoPE), and a table here would
-    be one more thing to keep in step with the submodule. ``class_name`` selects one class
-    when a module defines several (flm prefill attention).
-    """
-    try:
-        module = importlib.import_module(f"iron.operators.{name}.op")
-    except ModuleNotFoundError as e:
-        raise BuildError(f"{name}: no such operator in iron.operators ({e})") from e
-
-    found = [
-        value
-        for value in vars(module).values()
-        if inspect.isclass(value)
-        and issubclass(value, AIEOperatorBase)
-        and value.__module__ == module.__name__
-    ]
-    if class_name:
-        found = [value for value in found if value.__name__ == class_name]
-    if len(found) != 1:
-        names = ", ".join(sorted(c.__name__ for c in found)) or "none"
-        raise BuildError(
-            f"{name}: expected exactly one operator class in {module.__name__}, found "
-            f"{len(found)} ({names}). Teach this driver which one to build."
-        )
-    return found[0]
+    return {"npu2": NPU2, "npu1": NPU1Col1}[name]()
 
 
-def instantiate(
-    cls: type, operator_spec: iron.Operator, context: AIEContext
-) -> AIEOperatorBase:
-    """The operator shape declared in OPERATORS."""
-    kwargs = iron.resolve_build_kwargs(operator_spec.build_kwargs)
-    params = inspect.signature(cls.__init__).parameters
-    unknown = [p for p in kwargs if p not in params]
-    if unknown:
-        takes = ", ".join(p for p in params if p != "self")
-        raise BuildError(
-            f"{operator_spec.name}: OPERATORS passes unsupported constructor arg(s) "
-            f"{', '.join(unknown)} to {cls.__name__}; it takes ({takes})."
-        )
-    return cls(**kwargs, context=context)
-
-
-def check_runtime_images(operator: AIEOperatorBase, device: str) -> None:
+def check_runtime_images(staged: list[Path], kind: str, device: str) -> None:
     """Require a full ELF, xclbin+insts, or xclbin+dispatch library."""
     try:
-        kind, produced = iron.classify_compiled_images(operator.artifacts)
-        for path in produced:
-            iron.require_runtime_image(path, elf=(kind == "elf"))
+        for path in staged:
+            if kind == "dispatch" and path is staged[1]:
+                iron.require_host_library(path)
+            else:
+                iron.require_runtime_image(path, elf=(kind == "elf"))
             print(f"  ok: {path.name} ({path.stat().st_size} bytes)")
     except RuntimeError as error:
         raise BuildError(str(error)) from error
+    if kind in ("xclbin", "dispatch"):
+        iron.check_sections(
+            iron.require_xclbinutil(iron.compiler_prefix_from_env()),
+            staged[0],
+        )
     if kind == "xclbin":
-        iron.check_sections(
-            iron.require_xclbinutil(iron.compiler_prefix_from_env()),
-            produced[0],
-        )
-        iron.require_txn_devgen(produced[1], device)
-    elif kind == "dispatch":
-        iron.check_sections(
-            iron.require_xclbinutil(iron.compiler_prefix_from_env()),
-            produced[0],
-        )
-        iron.require_host_library(produced[1])
+        iron.require_txn_devgen(staged[1], device)
+
+
+def fresh_dir(build_dir: Path) -> Path:
+    # Start from nothing: a leftover image from an earlier run must never be what we
+    # validate.
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True)
+    return build_dir
+
+
+def stage(compiled: iron.Compiled, build_dir: Path, device: str) -> None:
+    try:
+        kind, staged = iron.stage_compiled_images(compiled, build_dir)
+    except RuntimeError as error:
+        raise BuildError(str(error)) from error
+    check_runtime_images(staged, kind, device)
 
 
 def build(operator_spec: iron.Operator, device: str, build_root: Path) -> None:
     """Build one operator and check what came out. Raises BuildError on any failure."""
-    build_dir = build_root / operator_spec.name
-    # Start from nothing: a leftover xclbin from an earlier run must never be what we
-    # validate. IRON's artifact graph skips any rule whose output is already available.
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
-    build_dir.mkdir(parents=True)
-
-    # Bind the device explicitly. Everything downstream keys off it -- which aie_kernels
-    # subdir the .cc comes from, the core Peano targets, the DevGen in the emitted TXN --
-    # and with no NPU present there is nothing to infer it from.
-    aie_utils.set_current_device(DEVICES[device]())
+    build_dir = fresh_dir(build_root / operator_spec.name)
     shape = ", ".join(f"{k}={v}" for k, v in operator_spec.build_kwargs.items())
     print(f"\n== iron-ops: {operator_spec.name} ({shape}, {device}) ==")
-
-    operator_class = find_operator_class(
-        operator_spec.module or operator_spec.name,
-        operator_spec.class_name,
-    )
-    if operator_spec.full_elf:
-        full_elf_dir = build_dir / "full-elf"
-        operator = instantiate(
-            operator_class,
-            operator_spec,
-            AIEContext(build_dir=full_elf_dir),
-        )
-        sequence = OperatorSequence(
-            name=f"{operator_spec.name}_dynamic",
-            runlist=[(operator, "input", "output")],
-            input_args=["input"],
-            output_args=["output"],
-            dispatch="fused",
-            context=AIEContext(build_dir=full_elf_dir),
-        )
-        sequence.compile()
-        check_runtime_images(sequence, device)
-
-        context_kwargs = dict(operator_spec.build_kwargs)
-        for key in tuple(context_kwargs):
-            if key.endswith("_parameter"):
-                context_kwargs[key] = None
-        context_spec = operator_spec._replace(build_kwargs=context_kwargs)
-        context_operator = instantiate(
-            operator_class,
-            context_spec,
-            AIEContext(build_dir=build_dir / "context"),
-        )
-        context_operator.compile()
-        check_runtime_images(context_operator, device)
-        return
-
-    operator = instantiate(
-        operator_class, operator_spec, AIEContext(build_dir=build_dir)
-    )
-    operator.compile()
-    check_runtime_images(operator, device)
+    try:
+        compiled = iron.compile_operator(operator_spec, device_for(device))
+    except (ImportError, RuntimeError) as error:
+        raise BuildError(f"{operator_spec.name}: {error}") from error
+    stage(compiled, build_dir, device)
 
 
 def build_sequence(sequence_spec: iron.Sequence, device: str, build_root: Path) -> None:
-    """Build one fused add-to-ReLU sequence and its context xclbin."""
-    from iron.operators.elementwise_add.op import ElementwiseAdd
-    from iron.operators.relu.op import ReLU
-
-    build_dir = build_root / sequence_spec.name
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
-    build_dir.mkdir(parents=True)
-
-    aie_utils.set_current_device(DEVICES[device]())
+    """Build one fused add-to-ReLU sequence to a full ELF."""
+    build_dir = fresh_dir(build_root / sequence_spec.name)
     print(
         f"\n== iron-ops: {sequence_spec.name} "
         f"(size={sequence_spec.size}, tile_size={sequence_spec.tile_size}, "
         f"num_aie_columns={sequence_spec.num_aie_columns}, {device}) =="
     )
-
-    full_elf_dir = build_dir / "full-elf"
-    sequence_context = AIEContext(build_dir=full_elf_dir)
-    add = ElementwiseAdd(
-        size=sequence_spec.size,
-        tile_size=sequence_spec.tile_size,
-        num_aie_columns=sequence_spec.num_aie_columns,
-        context=sequence_context,
-    )
-    relu = ReLU(
-        size=sequence_spec.size,
-        tile_size=sequence_spec.tile_size,
-        num_aie_columns=sequence_spec.num_aie_columns,
-        num_channels=1,
-        context=sequence_context,
-    )
-    sequence = OperatorSequence(
-        name=sequence_spec.name,
-        runlist=[
-            (add, "a", "b", "temp"),
-            (relu, "temp", "out"),
-        ],
-        input_args=["a", "b"],
-        output_args=["out"],
-        dispatch="fused",
-        context=sequence_context,
-    )
-    sequence.compile()
-    check_runtime_images(sequence, device)
-
-    context_operator = ElementwiseAdd(
-        size=sequence_spec.size,
-        tile_size=sequence_spec.tile_size,
-        num_aie_columns=sequence_spec.num_aie_columns,
-        context=AIEContext(build_dir=build_dir / "context"),
-    )
-    context_operator.compile()
-    check_runtime_images(context_operator, device)
+    stage(iron.compile_sequence(sequence_spec, device_for(device)), build_dir, device)
 
 
 def _compile_one_subprocess(
@@ -258,6 +134,7 @@ def _compile_one_subprocess(
         str(build_dir),
         "--jobs",
         "1",
+        "--keep-cache",
     ]
     if device:
         command += ["--device", device]
@@ -271,7 +148,7 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--device",
-        choices=sorted(DEVICES),
+        choices=DEVICES,
         help="override the NPU generation the suite pins for each operator",
     )
     parser.add_argument(
@@ -286,7 +163,18 @@ def main(argv: list[str]) -> int:
         default=0,
         help="parallel operator compiles (0 = min(8, CPUs); 1 = this process)",
     )
+    parser.add_argument(
+        "--keep-cache",
+        action="store_true",
+        help=argparse.SUPPRESS,  # a parallel run's children share its fresh cache
+    )
     args = parser.parse_args(argv)
+
+    # A cache hit would skip the very compile this gate exists to run.
+    cache = args.build_dir / CACHE
+    if not args.keep_cache and cache.exists():
+        shutil.rmtree(cache)
+    os.environ["NPU_CACHE_HOME"] = str(cache)
 
     try:
         if args.operator:
@@ -309,7 +197,7 @@ def main(argv: list[str]) -> int:
             if not skipped.host_compile:
                 why = (
                     "local test-npu-iron-ops still collects this operator"
-                    if skipped.hrx_pytest_filter
+                    if skipped.hrx_pytest_case
                     else "not built on this stack"
                 )
                 print(f"{skipped.name}: skipped host compile ({why})")
