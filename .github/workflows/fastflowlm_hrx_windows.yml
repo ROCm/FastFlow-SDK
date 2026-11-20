@@ -373,12 +373,14 @@ jobs:
           function Invoke-NativeReport {
             param([string[]]$CommandArguments, [string]$Output, [switch]$ReturnReport)
             $lines = & $cli.FullName @CommandArguments --json
-            if ($LASTEXITCODE -ne 0) {
-              throw "standalone fastflow $CommandArguments failed with $LASTEXITCODE"
-            }
+            $exitCode = $LASTEXITCODE
             $text = ($lines -join "`n") + "`n"
             [IO.File]::WriteAllText(
               $Output, $text, [Text.UTF8Encoding]::new($false))
+            if ($exitCode -ne 0) {
+              Write-Host $text
+              throw "standalone fastflow $CommandArguments failed with $exitCode"
+            }
             if ($ReturnReport) { return $text | ConvertFrom-Json }
           }
           Invoke-NativeReport -CommandArguments @('version') -Output .native-reports/archive-version.json
