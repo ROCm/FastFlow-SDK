@@ -6,9 +6,9 @@ operator. The application source is available under
 [`examples/iron/gemma4_gemm_dequant`](../../examples/iron/gemma4_gemm_dequant).
 
 The example is adapted from IRON's
-[GEMM and dequant exploration](https://github.com/amd/IRON/blob/devel/iron/applications/gemma4_flm/README_gemm_dequant.md).
-That tutorial also compares offline BF16 and BFP16 weights. This guide keeps
-the smaller runtime-dequantization path.
+[Gemma 4 engine](https://github.com/amd/IRON/blob/devel/iron/operators/flm/gemma4_engine/README.md),
+which replaces every operator. This guide keeps the projection GEMMs and their
+runtime dequantization.
 
 ## Prerequisites
 

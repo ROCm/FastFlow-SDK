@@ -227,16 +227,6 @@ def gelu():
     return _unary_case("gelu", expected)
 
 
-def leaky_relu():
-    """Generates the 2048-element BF16 leaky-ReLU case (alpha=0.01)."""
-    np = _numpy()
-
-    def expected(x):
-        return np.where(x >= 0, x, np.float32(0.01) * x)
-
-    return _unary_case("leaky_relu", expected)
-
-
 def sigmoid():
     """Generates the 2048-element BF16 sigmoid case."""
     np = _numpy()
@@ -263,9 +253,9 @@ def silu():
     return _unary_case("silu", expected)
 
 
-def mem_copy():
+def copy():
     """Generates the 2048-element BF16 identity copy case."""
-    return _unary_case("mem_copy", lambda x: x, rtol=0.0, atol=0.0)
+    return _unary_case("copy", lambda x: x, rtol=0.0, atol=0.0)
 
 
 def layer_norm():
@@ -275,16 +265,16 @@ def layer_norm():
     sit at 0.02. Do not tighten without a passing on-device re-run.
     """
     np = _numpy()
-    values = _signed_ramp(2048)
+    values = _signed_ramp(2048).reshape(1, 2048)
     source = bf16_to_float32(float32_to_bf16(values))
-    mean = source.mean()
-    var = source.var()
+    mean = source.mean(axis=-1, keepdims=True)
+    var = source.var(axis=-1, keepdims=True)
     expected = (source - mean) / np.sqrt(var + np.float32(1e-5))
     return {
         "name": "layer_norm",
         "buffers": [
-            _bf16_input("input", values, (2048,)),
-            _bf16_output("output", expected, (2048,), rtol=0.1, atol=0.1),
+            _bf16_input("input", values, (1, 2048)),
+            _bf16_output("output", expected, (1, 2048), rtol=0.1, atol=0.1),
         ],
     }
 
@@ -347,40 +337,6 @@ def gemm():
     }
 
 
-def transpose():
-    """Generates the 64x64 BF16 transpose case."""
-    np = _numpy()
-    rows = np.arange(64, dtype=np.int32)[:, None]
-    columns = np.arange(64, dtype=np.int32)[None, :]
-    values = (((rows * 3 + columns) % 17) - 8).astype(np.float32) / np.float32(8)
-    source = bf16_to_float32(float32_to_bf16(values))
-    expected = source.T.copy()
-    return {
-        "name": "transpose",
-        "buffers": [
-            _bf16_input("input", values, (64, 64)),
-            _bf16_output("output", expected, (64, 64), rtol=0.0, atol=0.0),
-        ],
-    }
-
-
-def repeat():
-    """Generates the 32x1024 BF16 repeat-interleave-by-2 case."""
-    np = _numpy()
-    rows = np.arange(32, dtype=np.int32)[:, None]
-    columns = np.arange(1024, dtype=np.int32)[None, :]
-    values = (((rows * 3 + columns) % 17) - 8).astype(np.float32) / np.float32(8)
-    source = bf16_to_float32(float32_to_bf16(values))
-    expected = np.repeat(source, 2, axis=0)
-    return {
-        "name": "repeat",
-        "buffers": [
-            _bf16_input("input", values, (32, 1024)),
-            _bf16_output("output", expected, (64, 1024), rtol=0.0, atol=0.0),
-        ],
-    }
-
-
 def add_relu_fused():
     """Generates consolidated arenas for a fused BF16 add-to-ReLU sequence."""
     np = _numpy()
@@ -395,7 +351,7 @@ def add_relu_fused():
     scratch = np.zeros(4096, dtype=np.uint16)
     return {
         "name": "add_relu_fused",
-        # FULL_ELF OperatorSequence binds three consolidated arenas in this order.
+        # The full ELF's input (a then b), output and scratch arenas, in order.
         "buffers": [
             {
                 "name": "inputs",
@@ -436,9 +392,11 @@ def strided_copy():
         )
     return {
         "name": "strided_copy",
+        # The full ELF's input, output and (unused, one-element) scratch arenas.
         "buffers": [
             _bf16_input("input", values, (2048,)),
             _bf16_output("output", values[:1024], (1024,), rtol=0.0, atol=0.0),
+            _bf16_input("scratch", np.zeros(1, dtype=np.float32), (1,)),
         ],
         "dispatches": dispatches,
     }
@@ -452,18 +410,15 @@ CASE_GENERATORS = {
     "axpy": axpy,
     "relu": relu,
     "gelu": gelu,
-    "leaky_relu": leaky_relu,
     "sigmoid": sigmoid,
     "tanh": tanh,
     "silu": silu,
     "layer_norm": layer_norm,
     "rms_norm": rms_norm,
-    "mem_copy": mem_copy,
+    "copy": copy,
     "softmax": softmax,
     "gemv": gemv,
     "gemm": gemm,
-    "transpose": transpose,
-    "repeat": repeat,
     "add_relu_fused": add_relu_fused,
     "strided_copy": strided_copy,
 }

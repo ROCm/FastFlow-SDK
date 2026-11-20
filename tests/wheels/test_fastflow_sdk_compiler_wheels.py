@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from packaging.requirements import Requirement
 
 from build_tools.compiler_native import (
     linux_system_runtime,
@@ -79,11 +80,16 @@ class TestFastflowSdkCompilerWheels:
         )
         if not requirements_path.is_file():
             pytest.skip("iron-tools source is not checked out for this CI profile")
-        upstream = {
-            self.requirement_name(line)
-            for raw_line in requirements_path.read_text(encoding="utf-8").splitlines()
-            if (line := raw_line.split("#", 1)[0].strip()) and not line.startswith("-")
-        }
+        # The wheels are cp312: a requirement whose marker excludes 3.12 never applies.
+        cp312 = {"python_version": "3.12", "python_full_version": "3.12.0"}
+        upstream = set()
+        for raw_line in requirements_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.split("#", 1)[0].strip().removesuffix("\\").strip()
+            if not line or line.startswith("-"):
+                continue
+            requirement = Requirement(line)
+            if requirement.marker is None or requirement.marker.evaluate(cp312):
+                upstream.add(self.requirement_name(requirement.name))
         upstream.remove("eudsl-python-extras")
         declared = {
             self.requirement_name(requirement)
@@ -661,11 +667,9 @@ class TestFastflowSdkCompilerWheels:
             assert not any(name.endswith(".lib") for name in names)
         assert metadata["Requires-Python"] == ">=3.12,<3.15"
         assert set(metadata.get_all("Requires-Dist") or ()) == {
-            "aiofiles ==25.1.0",
             "cloudpickle ==3.1.2",
             "ml-dtypes ==0.6.0",
-            "numpy ==2.4.6",
-            "rich ==15.0.0",
+            "numpy ==2.5.3",
             "fastflow-sdk-compiler-core ==0.1.0.dev1",
         }
         assert (python_root / "aie" / "__init__.py").read_text(encoding="utf-8") == ""

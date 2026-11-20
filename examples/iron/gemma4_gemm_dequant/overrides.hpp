@@ -2,7 +2,7 @@
 // rights reserved. SPDX-License-Identifier: Apache-2.0
 //
 // Derived from amd/IRON's Gemma 4 GEMM/dequant override:
-// https://github.com/amd/IRON/tree/devel/iron/applications/gemma4_flm
+// https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemma4_engine
 
 #ifndef FASTFLOW_SDK_GEMMA4_GEMM_DEQUANT_OVERRIDES_HPP
 #define FASTFLOW_SDK_GEMMA4_GEMM_DEQUANT_OVERRIDES_HPP

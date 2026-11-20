@@ -400,13 +400,59 @@ def _single_artifact(directory, pattern, description):
     return matches[0]
 
 
-def _serialize_full_elf_xadx(elf, context_xclbin, params, serializer):
-    """Converts one internal aiecc ELF into a self-contained XADX."""
-    return aiecc_elf_xadx.convert_to_xadx(
+def _require_full_elf_layout(case, layout):
+    """The case binds one buffer per full-ELF argument, in order, each big enough.
+
+    IRON passes a zero-byte argument (an unused scratch bank) a one-element
+    buffer, so the case binds one too.
+    """
+    arguments = list(layout["arguments"].items())
+    buffers = case["buffers"]
+    if len(buffers) != len(arguments):
+        raise RuntimeError(
+            f"{case['name']}: the full ELF takes {len(arguments)} arguments "
+            f"({', '.join(kind for kind, _ in arguments)}), "
+            f"but the case binds {len(buffers)} buffers"
+        )
+    for buffer, (kind, size) in zip(buffers, arguments, strict=True):
+        array = buffer["data"] if buffer["direction"] == "input" else buffer["expected"]
+        if array.nbytes < max(size, 1):
+            raise RuntimeError(
+                f"{case['name']}.{buffer['name']}: binds the {kind} argument of "
+                f"{size} bytes with {array.nbytes}"
+            )
+
+
+def _full_elf_case(name, context, metadata, serializer):
+    """Package one full ELF from its staged directory as a self-contained XADX case.
+
+    ``context`` is the catalog operator whose staged xclbin creates the
+    hardware context.
+    """
+    build_dir = OUT / "iron-ops" / name
+    elf, params, layout_path = (
+        build_dir / file for file in ("final.elf", "params.txt", "layout.json")
+    )
+    context_xclbin = OUT / "iron-ops" / context / "final.xclbin"
+    for path in (elf, params, layout_path, context_xclbin):
+        if not path.is_file():
+            raise RuntimeError(
+                f"{name}: missing {path} (run: python dev.py test-iron-ops)"
+            )
+    case = npu_test_cases.generate_case(name)
+    _require_full_elf_layout(case, json.loads(layout_path.read_text("utf-8")))
+    xadx = aiecc_elf_xadx.convert_to_xadx(
         serializer,
         elf.read_bytes(),
         context_xclbin.read_bytes(),
         params.read_text("utf-8"),
+    )
+    return write_case(
+        NPU_TEST_PACKAGE_STAGE,
+        case,
+        xadx,
+        {**metadata, "name": name, "context": context},
+        required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
     )
 
 
@@ -459,37 +505,18 @@ def cmd_package_npu_test_package(args):
     )
 
     for sequence in iron.SEQUENCES:
-        build_dir = OUT / "iron-ops" / sequence.name
-        full_elf_dir = build_dir / "full-elf"
-        context_dir = build_dir / "context"
-        elf = _single_artifact(full_elf_dir, "*.elf", "sequence full ELF")
-        params = _single_artifact(
-            full_elf_dir,
-            "**/params.txt",
-            "sequence scratchpad parameter metadata",
-        )
-        context_xclbin = _single_artifact(
-            context_dir, "*.xclbin", "sequence context xclbin"
-        )
         cases.append(
-            write_case(
-                NPU_TEST_PACKAGE_STAGE,
-                npu_test_cases.generate_case(sequence.name),
-                _serialize_full_elf_xadx(
-                    elf,
-                    context_xclbin,
-                    params,
-                    serializer,
-                ),
+            _full_elf_case(
+                sequence.name,
+                sequence.context,
                 {
                     "kind": "iron-ops-full-elf-sequence",
-                    "name": sequence.name,
                     "device": "npu2",
                     "size": sequence.size,
                     "tile_size": sequence.tile_size,
                     "num_aie_columns": sequence.num_aie_columns,
                 },
-                required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
+                serializer,
             )
         )
 
@@ -498,38 +525,26 @@ def cmd_package_npu_test_package(args):
             continue
         build_dir = OUT / "iron-ops" / operator.name
         if operator.full_elf:
-            full_elf_dir = build_dir / "full-elf"
-            context_dir = build_dir / "context"
-            elf = _single_artifact(full_elf_dir, "*.elf", "operator full ELF")
-            params = _single_artifact(
-                full_elf_dir,
-                "**/params.txt",
-                "scratchpad parameter metadata",
-            )
-            context_xclbin = _single_artifact(context_dir, "*.xclbin", "context xclbin")
-            xadx = _serialize_full_elf_xadx(
-                elf,
-                context_xclbin,
-                params,
-                serializer,
-            )
             cases.append(
-                write_case(
-                    NPU_TEST_PACKAGE_STAGE,
-                    npu_test_cases.generate_case(operator.name),
-                    xadx,
+                _full_elf_case(
+                    operator.name,
+                    operator.context,
                     {
                         "kind": "iron-ops-full-elf",
-                        "name": operator.name,
                         "device": operator.device,
                         "build_kwargs": operator.build_kwargs,
                     },
-                    required_features=(FULL_ELF_LOAD_PDI_FEATURE,),
+                    serializer,
                 )
             )
             continue
-        xclbin = _single_artifact(build_dir, "*.xclbin", "operator xclbin")
-        insts = _single_artifact(build_dir, "*.bin", "operator transaction")
+        xclbin = build_dir / "final.xclbin"
+        insts = build_dir / "insts.bin"
+        for path in (xclbin, insts):
+            if not path.is_file():
+                raise RuntimeError(
+                    f"{operator.name}: missing {path} (run: python dev.py test-iron-ops)"
+                )
         iron.require_txn_devgen(insts, operator.device)
         cases.append(
             write_case(

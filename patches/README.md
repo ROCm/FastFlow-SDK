@@ -108,34 +108,9 @@ The sub-buffer patch and the static-destruction-order patch were dropped at
 
 ## patches/iron-ops/
 
-### 0001-windows-dispatch-library-copy.patch
-`_build_dispatch_lib` links the artifact path at the content-addressed library
-aiecc produced. Windows CI does not have `SeCreateSymbolicLinkPrivilege`
-(WinError 1314), so the link fails and the host-compile gate never sees the
-dispatch DLL. The patch copies the library when symlink creation fails.
-
-**Remove when:** IRON copies or hardlinks the dispatch library on Windows.
-
-### 0002-numpy-weight-packing.patch
-`flm` weight packing is NumPy. Importing `flm.gemm` no longer imports torch, and
-`pack_B` returns a NumPy array. A torch tensor is still accepted and converted
-only when a caller passes one. The IRON test harness turns that array into a
-device tensor without going back through torch.
-
-**Remove when:** IRON packs B with NumPy upstream.
-
-### 0003-absolute-dispatch-cpp-path.patch
-`aiecc` writes a relative `--npu-cpp-name` under `--output-dir`. The dispatch
-work directory is already that output directory, so a relative
-`dispatch_gen.cpp` landed one level too deep and the host compile could not
-see it. The path passed to `aiecc` is now absolute. An absolute name is written
-verbatim.
-
-**Remove when:** IRON passes an absolute `--npu-cpp-name`.
-
-MHA binds `get_current_device()` itself, and `mem_copy` compiles the mlir-aie
-passthrough kernel. The patches that used to do those two things were dropped
-at ea09aaa.
+None at `b7e8ea9`. The Windows dispatch-library copy, NumPy weight packing and
+absolute dispatch C++ path patches landed upstream (IRON #245, #246, #247)
+before the graph rewrite removed the files they touched.
 
 ## patches/llvm-project/
 
@@ -280,14 +255,33 @@ no-op on Linux.
 **Remove when:** upstream mlir-aie compiles `tools/aiecc/Utils.h` cleanly under
 clang-cl (annotates the fields, or `#if`-guards them out on Windows).
 
-### 0008-clang-cl-dispatch-dumpmachine.patch
-`host_shared_lib_cmd` builds the dispatch DLL with GCC flags (`-shared`,
-`-std=c++17`, `-Wl,/Brepro`) and probes the compiler with `-dumpmachine`.
-Windows CI sets `CXX` to `clang-cl`. That driver ignores `-shared` and
-`-std=c++17`, reads `-Wl,/Brepro` as a warning name, and does not implement
-`-dumpmachine`. The generated transaction source is C++17, so the ignored
-standard flag fails the compile on `std::optional`. `clang-cl` and `cl` now
-get `/LD`, `/std:c++17`, and `/link /Brepro`. GCC-style drivers still report
-their triple.
+### 0008-gate-parameter-scratchpad-on-xrt-bindings.patch
+Builds the `_parameter_scratchpad` pybind11 module only when
+`AIE_ENABLE_XRT_PYTHON_BINDINGS` is on, which the SDK turns off. mlir-aie #3941
+builds it unconditionally, but its only importer is
+`aie.utils.hostruntime.xrtruntime.parameter_scratchpad`, which imports `pyxrt`
+first, so without the XRT bindings the module can never load. As a pybind11
+module it is also tied to one CPython, and the compiler bindings wheel is
+`cp312-abi3`: packaging rejects it as not stable-ABI. Skipping it also skips its
+pybind11 lookup and its `throw`s, which clang-cl rejects in the LLVM CMake
+environment (`HandleLLVMOptions` strips `/EHsc`).
 
-**Remove when:** mlir-aie builds this DLL with the driver's own flag spelling.
+**Remove when:** mlir-aie gates the module on the XRT Python bindings again, or
+builds it stable-ABI (e.g. nanobind with `STABLE_ABI`).
+
+### 0009-hrx-empty-dispatch-timing.patch
+Implements `HRXKernelHandle.empty_dispatch_ns()`. IRON's `time_call` (which
+`run_test` calls after the numeric check) takes the NPU's time as a call's
+dispatch time minus an empty dispatch's, and raises when the runtime reports
+no empty dispatch. Only the XRT backend implemented it, so every IRON catalog
+case failed under `NPU_RUNTIME=hrx` (`test-npu-iron-ops`) after its numerics
+had passed. The HRX version dispatches a transaction with the kernel's header
+and no operations, from an executable on the same xclbin that the handle
+builds once and releases with itself. libhrx gives that executable its own
+hardware context, so it measures this configuration's dispatch overhead, not
+the kernel's context itself.
+
+**Remove when:** mlir-aie's HRX backend implements `empty_dispatch_ns`.
+
+The former 0008 (clang-cl flags and no `-dumpmachine` probe for the dispatch
+DLL) is upstream at `e5a3fa1`.

@@ -14,7 +14,7 @@ note = "projects/ are pinned by commit (below); canonical remote URLs are in .gi
 
 [llvm]                          # projects/llvm-project — ROCm amd-llvm, LLVM 24
 repo       = "github.com/ROCm/llvm-project"              # canonical ROCm remote (no fork in the chain)
-commit     = "e4fcd12811396e394eab2570f7f9bd25c6369811"  # mlir-aie v1.4.4 utils/clone-llvm.sh LLVM_PROJECT_COMMIT
+commit     = "bdf04ebb32d7a5dce853f9b399dcbd3ed11a5aa7"  # mlir-aie e5a3fa1 (and v1.4.5) utils/clone-llvm.sh LLVM_PROJECT_COMMIT
 branch     = "amd-staging"                               # the commit sits here; pin is the SHA, not the moving tip
 llvm_major = 24
 train_note = "Deliberate leave of the previous ROCm release train (release/therock-7.14, LLVM 23, 46fcb339 / tag therock-7.14). The pin is still a commit SHA — the LLVM_PROJECT_COMMIT mlir-aie names in utils/clone-llvm.sh — which currently lives on amd-staging as LLVM 24. Not an accidental submodule-tip bump."
@@ -24,13 +24,14 @@ win_note   = "Built with the STATIC MSVC runtime on Windows (dev.py passes CMAKE
 
 [iron_tools]                    # projects/iron-tools — built from source against [llvm]
 repo     = "github.com/Xilinx/mlir-aie"
-commit   = "e5c705c7b04bb8470db7364287843ba96e487a6e"    # mlir-aie v1.4.4
+commit   = "e5a3fa14879d2049295e2baff02fcc6a82697e73"    # mlir-aie 1.4.6.dev15+ge5a3fa1, the wheel IRON devel b7e8ea9 pins
 provides = ["aie-opt", "aie-translate", "aiecc", "IRON python", "bootgen", "aie_api", "aie-rt", "xclbinutil (vendored third_party/hrx-xclbinutil)"]
-note     = "Builds against the same ROCm LLVM pin as mlir-aie v1.4.4 utils/clone-llvm.sh (e4fcd128, LLVM 24, wheel date 20260915). hrx-xclbinutil is vendored in-tree (mlir-aie #3473), no longer a nested git submodule. v1.4.4 IRON host-runtime allocates HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A), matching HRX HOST_ONLY."
+note     = "Fifteen commits past v1.4.5. IRON devel needs mlir-aie features after v1.4.5 (#3912, #4015, #3865) and pins exactly this wheel. Builds against the same ROCm LLVM pin as its utils/clone-llvm.sh (bdf04ebb, LLVM 24). hrx-xclbinutil is vendored in-tree (mlir-aie #3473), no longer a nested git submodule. IRON host-runtime allocates HOST_VISIBLE|HOST_CACHED|DEVICE_VISIBLE (0x1A), matching HRX HOST_ONLY."
 e2e_design = "programming_examples/basic/matrix_scalar_add"   # the design `dev.py test` builds
 e2e_device = "npu2"                                          # -d passed to that design
-patches  = ["patches/iron-tools/0001-eudsl-offline-find-links.patch", "patches/iron-tools/0002-windows-clang-cl.patch", "patches/iron-tools/0005-eudsl-download-no-build-isolation.patch", "patches/iron-tools/0006-mlir-core-type-stubs-from-build-tree.patch", "patches/iron-tools/0007-aiecc-capture-stdio-maybe-unused.patch", "patches/iron-tools/0008-clang-cl-dispatch-dumpmachine.patch"]
-hrx_note = "The former 0003 (HRX IRON host-runtime, aie.utils.hostruntime.hrxruntime — what IRON_RUNTIME=hrx selects) was dropped at this pin: mlir-aie now ships the HRX IRON path upstream, so the patch is redundant. The former 0005 (gate-xrt-scratchpad-binding) was dropped for the same reason — this iron-tools pin already gates the _parameter_scratchpad pybind11 module behind AIE_ENABLE_XRT_PYTHON_BINDINGS upstream. The former 0004 (HostRuntime.cleanup() on the ABC) is now upstream (mlir-aie #3567 and follow-ups), so it was dropped at this pin. The former 0008/0009 (LLVM 23 DenseMapInfo sentinels and arith-expand includeMinMaxF guard) were dropped by aligning this stack's LLVM pin with mlir-aie's clone-llvm.sh commit."
+patches  = ["patches/iron-tools/0001-eudsl-offline-find-links.patch", "patches/iron-tools/0002-windows-clang-cl.patch", "patches/iron-tools/0005-eudsl-download-no-build-isolation.patch", "patches/iron-tools/0006-mlir-core-type-stubs-from-build-tree.patch", "patches/iron-tools/0007-aiecc-capture-stdio-maybe-unused.patch", "patches/iron-tools/0008-gate-parameter-scratchpad-on-xrt-bindings.patch", "patches/iron-tools/0009-hrx-empty-dispatch-timing.patch"]
+drop_note = "The former 0008 (clang-cl dispatch DLL flags, no -dumpmachine probe) is upstream at this pin, which also passes /Fo so cl does not write dispatch_gen.obj into the working directory. The new 0008 builds the _parameter_scratchpad pybind11 module only with AIE_ENABLE_XRT_PYTHON_BINDINGS, as the former 0005 did: mlir-aie #3941 builds it unconditionally, but only the XRT host runtime imports it (after pyxrt), and a pybind11 module is not stable-ABI, so the cp312-abi3 bindings wheel refuses it. 0009 gives the HRX backend the empty dispatch IRON's time_call needs."
+hrx_note = "The former 0003 (HRX IRON host-runtime, aie.utils.hostruntime.hrxruntime — what IRON_RUNTIME=hrx selects) was dropped at this pin: mlir-aie now ships the HRX IRON path upstream, so the patch is redundant. The former 0004 (HostRuntime.cleanup() on the ABC) is now upstream (mlir-aie #3567 and follow-ups), so it was dropped at this pin. The former 0008/0009 (LLVM 23 DenseMapInfo sentinels and arith-expand includeMinMaxF guard) were dropped by aligning this stack's LLVM pin with mlir-aie's clone-llvm.sh commit."
 win_note = "0002 is Windows-only in effect (guards keyed on CMake's MSVC var, empty under gcc/clang): gives /EHsc to everything that throws (bootgen, all four test/CppTests, test_utils) because MSVC-style drivers default exceptions off and clang-cl rejects throw outright, and drops -Werror=sign-compare, which aie-rt trips only because MS-ABI enums are signed. Verified a no-op on Linux: build.ninja is byte-identical with and without it."
 win_note2 = "0007 marks CaptureStdio's trivial members ([[maybe_unused]]) in tools/aiecc/Utils.h: they are read only inside the tool's #ifndef _WIN32 stdout/stderr-redirect path, so on Windows the constructor/destructor bodies compile out and clang-cl's -Wunused-private-field (promoted by -Werror=unused) fails the native aiecc build. gcc never emits that clang-only diagnostic, so this is a no-op on Linux."
 
@@ -39,27 +40,27 @@ repo     = "github.com/Xilinx/aiebu"
 commit   = "f8d3c32861249d8fcf92185dab5f50f23d887c6a"
 branch   = "main-ge"
 provides = ["aiebu-asm"]
-note     = "Builds the assembler from source and ships it in the compiler product. IRON OperatorSequence FULL_ELF compilation invokes this tool; without it, FastFlow SDK cannot produce dynamic XADX NPU-test artifacts."
+note     = "Builds the assembler from source and ships it in the compiler product. IRON full-ELF graph compilation invokes this tool; without it, FastFlow SDK cannot produce dynamic XADX NPU-test artifacts."
 patches  = ["patches/aiebu/0001-cmake-4-boost-header-fallback.patch"]
 
 [iron_ops]                      # projects/iron-ops — the IRON operator library (pure Python)
 repo     = "github.com/amd/IRON"
-commit   = "ea09aaa6431fdb1f46c1a07e84990aaaf6c84722"  # origin/devel 2026-10-12 (#243)
+commit   = "b7e8ea91eaad163c01fbc93e9253eb66163d4fce"  # origin/devel 2026-11-12 (#91)
 branch   = "devel"                                              # IRON's default branch; main is an empty initial commit
-provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, flm ports, ...)"]
-note     = "Consumes the `aie` package + Peano. Upstream requirements.txt pins mlir_aie==v1.4.4 and llvm-aie==22.0.0.2026092101+0006955e; here it runs against the SOURCE-built iron-tools ([iron_tools] v1.4.4) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS (tests/iron-ops/suite.py re-exports it). Kernels come from mlir-aie's aie_kernels (IRON #203), not an in-tree copy."
-patches  = ["patches/iron-ops/0001-windows-dispatch-library-copy.patch", "patches/iron-ops/0002-numpy-weight-packing.patch", "patches/iron-ops/0003-absolute-dispatch-cpp-path.patch"]
-drop_note = "The former XRT-free host stack, lazy operator imports, and Windows aiecc copy fallback landed upstream as IRON #165/#163/#162. The former aiecc native CLI patch was already dropped at aab8083: #145/#150 compile through mlir-aie's compile_mlir_module(). 0001 (MHA get_current_device) and 0002 (mem_copy -DBIT_WIDTH) were dropped at ea09aaa: MHA calls get_current_device(), and mem_copy uses the mlir-aie passthrough kernel factory. The new 0001 copies the dispatch library when Windows refuses the symlink."
+provides = ["iron.operators (GEMM, MHA, RMSNorm, elementwise, flm ports, ...)", "iron.Graph (multi-operator full ELFs)"]
+note     = "Consumes the `aie` package + Peano. Upstream requirements.txt pins mlir_aie==1.4.6.dev15+ge5a3fa1 and llvm-aie==22.0.0.2026102001+4f5df13d; here it runs against the SOURCE-built iron-tools ([iron_tools] e5a3fa1) and our Peano pin, so its pyproject deps are NOT installed — dev.py installs it --no-deps and requirements/compiler-stack.txt owns numpy/ml_dtypes. Operators are declarative (iron.common.Operator: a declaration, op.compile() -> Artifacts) and multi-operator work is an iron.Graph; build_tools/iron.py compiles both. WHICH operators are gated (and at what size) is a test matrix, not a pin: build_tools/iron.py OPERATORS. Kernels come from mlir-aie's aie_kernels (IRON #203), not an in-tree copy."
+patches  = []
+drop_note = "No patches at b7e8ea9. The former 0001 (copy the dispatch library when Windows refuses the symlink), 0002 (numpy-only weight packing) and 0003 (absolute dispatch C++ path for aiecc) landed upstream as IRON #245/#246/#247 before the graph rewrite (#222) removed the files they touched. The former XRT-free host stack, lazy operator imports, and Windows aiecc copy fallback landed upstream as IRON #165/#163/#162. The former aiecc native CLI patch was already dropped at aab8083: #145/#150 compile through mlir-aie's compile_mlir_module(). The MHA get_current_device and mem_copy -DBIT_WIDTH patches were dropped at ea09aaa."
 
 [peano]                         # the ONLY wheel-sourced toolchain piece (AIE codegen)
-wheel = "llvm-aie==22.0.0.2026092101+0006955e"
+wheel = "llvm-aie==22.0.0.2026102001+4f5df13d"
 index = "https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly"
-note  = "LLVM 22 (lags ROCm's 24). The same wheel IRON devel ea09aaa names in requirements.txt. Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
+note  = "LLVM 22 (lags ROCm's 24). The same wheel IRON devel b7e8ea9 names in requirements.txt. Folding the AIE backend onto ROCm LLVM is future work; until then Peano stays a separate wheel."
 
 [hrx]                           # projects/hrx — amdxdna runtime
 repo       = "github.com/ROCm/hrx-system"                # canonical ROCm remote (no fork in the chain)
 branch     = "users/jtuyls/amdxdna-hal-native-rel"
-commit     = "b40f24c9f32090a983c9f1d098ae42ab37770f06"
+commit     = "2a08124b4465b3fd917409f78aa28be04fa2fd0e"
 mapped_ctrl_note = "Tip of users/jtuyls/amdxdna-hal-native-rel plus the expandable DEV heap. Five commits ahead of upstream hrx-system e67d47db6, which still copies the TXN template onto the mapped instruction BO. f4151e05f drops the host-buffer reuse cache and unleased hardware contexts from the amdxdna executable destructor when the last executable is released, and libhrx only releases the HAL executable and the device. e53f2997f keys retained single commands by shape (control-word count and binding count) as well as executable identity, so a same-identity shape change is a cache miss. 0e4cfc8e3 releases a completion batch before dropping the inflight count, so queue destroy does not return ahead of action cleanups. da190a618 retains START_NPU, START_NPU_PREEMPT_ELF, and START_DPU instruction BOs as EXEC_CMD dependencies on Linux so the driver sees the control BO in the submitted BO list. dbd9a4140 grows the Linux DEV heap only for a BO larger than one 64 MiB chunk, and records a command-build error on that timeline point so a later wait is not rejected."
 pathb_aperture_note = "2fad35cabc reclaims the oldest idle retained Windows Path-B command staging when the fixed aperture cannot satisfy a contiguous allocation. Evicted commands retain their source control code and safely reserve, restage, and repatch compact START_NPU instruction pointers on reuse. a392a65f3f evicts cacheable command-aperture lines before non-temporal stores and fences cache writeback before publication, preventing dirty stale lines from overwriting newly streamed commands."
 issue903_memory_note = "7a8c34001e bounds shape-specialized command/context resources, reuses compatible command storage, and recycles host allocations under count and byte budgets without driver-profile forks. 074210b8e7 maps PASID-off Linux DEV buffers through their validated device-heap slice and rejects sentinel addresses. 61c7f65e30 retains compact command-owned base slots while preserving full release on replacement, eviction, and teardown."
@@ -69,6 +70,7 @@ large_control_code_note = "Three commits on aa6bcdd5cb. 891d4234a0 stages Window
 timeout_recovery_note = "3c0d0aecf, two commits past 7da4a10d73, recreates every live Linux KMQ hardware context in place after an ERT timeout, keeps the shared buffers and the hw_ctx object, and treats a later NEW command as command-scoped until the command submitted after that timeout completes. The Linux KMQ library calls that window through function pointers installed with the queue. State 9 stays fatal. Windows records the completion queue and does not recreate contexts."
 aie4_note  = "Linux KMQ START_DPU on amdxdna-hal-native-rel, parent c023c3e7d. One ert_dpu_data per occupied ELF column; a single column stays a direct packet. CERT's full ERT-header wipe is restored only for START_DPU, so AIE2P cache reuse still keeps rewritten arg VAs. Empty AIE4 contexts are cached by partition column count."
 aie4_dma_once_note = "b40f24c9f, one commit past 3c0d0aecf, applies each AIE4 DMA patch offset once. Full ELFs keep both microcontroller copies of one control page; the loader packs a single page, so the second identical relocation must not add the buffer address again. Compiler-baked chunk offsets stay in the descriptor."
+windows_pdi_note = "2a08124b4, one commit past b40f24c9f, gives each Windows MCDM load_pdi buffer its own command-aperture address instead of sharing byte-identical PDIs. The firmware skips a load_pdi of the address it loaded last, and IRON multi-design ELFs alternate between two identical empty PDIs to reset the array between designs; sharing one address skipped the reset (add_relu_fused timed out with ERT state 8). Linux already uses one buffer per PDI ordinal."
 hal_driver = "runtime/src/iree/hal/drivers/amdxdna"      # Linux KMQ + Windows MCDM; own shim (no XRT)
 reclaim_note = "Classify IPU-remapped CreateContext 0xc01e0009 as pool exhaustion. Windows drivers 32.0.203.280, .314, and .329 expose a larger virtual-context budget than their firmware-active limit; cap their cache one below the hardware-specific active limit (Phoenix 6, Strix 8, Strix B0/Halo/Krackan 16) so LRU eviction occurs before the defective virtual-context suspend/resume path. Other Windows drivers and Linux retain the existing policy, with one-shot evict-and-retry remaining as a fallback."
 dev_heap_note = "Linux KMQ publishes a process-wide DEV heap through the generic shared-code-memory capability. The retained-cache budget stays 64MiB. The committed heap starts at one 64MiB chunk and grows only when a single DEV BO is larger than that chunk. Each AMDXDNA_BO_DEV is charged at the driver's 32KiB quantum, and idle command-cache entries are trimmed under the 64MiB budget. Windows and Linux AIE4/UMQ leave the shared-heap fields at 0; Windows stays bounded by the hardware-context count."
@@ -88,9 +90,9 @@ note       = "FastFlowLM upstream main (07defcb8), release 1.0.14. PR #1044 rebu
 
 [eudsl]                         # the one build-time-FETCHED package (the aie.extras layer)
 package      = "eudsl-python-extras"
-version      = "0.1.0.20260914.759+4853bb0"              # same pin as mlir-aie v1.4.4 python/requirements.txt
+version      = "0.1.0.20261001.532+c60cea4"              # same pin as mlir-aie e5a3fa1 python/requirements.txt
 find_links   = "https://llvm.github.io/eudsl"
-sha256       = "844828b921e29f68494d1df71d81e06dcd30648a0ddc6ea293cbff80b80e21d5"  # sdist (verified on fetch)
+sha256       = "18224f2e706f6fc703c0d802afed9b2694715a014b1100ea4b65593014df4557"  # sdist (verified on fetch)
 find_links_via = "patches/iron-tools/0001-eudsl-offline-find-links.patch"
 note         = "Prefetch mlir-aie's own eudsl pin (LLVM is aligned with clone-llvm.sh, so the former 20260629 override is gone). 0001 only rewrites -f from https://llvm.github.io/eudsl to .cache/find-links; with dev.py's PIP_FIND_LINKS + PIP_NO_INDEX the vendoring is network-free (sha256-verified prefetched sdist)."
 

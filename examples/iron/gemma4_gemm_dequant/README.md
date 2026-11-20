@@ -6,4 +6,4 @@ dequantization with IRON operators. Follow the
 compile and serve them from an installed FastFlow SDK.
 
 The example is adapted from IRON's
-[Gemma 4 GEMM/dequant application](https://github.com/amd/IRON/tree/devel/iron/applications/gemma4_flm).
+[Gemma 4 GEMM/dequant application](https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemma4_engine).

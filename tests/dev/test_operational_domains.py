@@ -363,6 +363,22 @@ class TestTestingDomain:
         assert Path(command[1]).name == "jit_smoke.py"
         assert "--build-only" in command
 
+    def test_test_npu_chain_rejects_designs_without_chain_reference(self, tmp_path):
+        (
+            tmp_path / "iron-tools" / "programming_examples" / "basic" / "passthrough"
+        ).mkdir(parents=True)
+        args = SimpleNamespace(design="passthrough", chain=True, compiler_prefix=None)
+        with (
+            mock.patch.object(device_testing.paths, "PROJ", tmp_path),
+            mock.patch.object(device_testing, "_require_hrx_runtime") as require,
+            mock.patch.object(device_testing.iron, "build_design") as build,
+            pytest.raises(SystemExit, match="supports only vector_scalar_add"),
+        ):
+            device_testing.cmd_test_npu(args)
+
+        require.assert_not_called()
+        build.assert_not_called()
+
 
 class TestIronPolicy:
     def test_iron_ops_environment_extends_shared_toolchain(self):
@@ -383,41 +399,53 @@ class TestIronPolicy:
 class TestNpuIronOpsSelection:
     def test_compile_only_rows_are_not_collected(self, tmp_path):
         ops = tmp_path / "iron-ops"
-        for name in ("relu", "swiglu_decode"):
-            directory = ops / "iron" / "operators" / name
-            directory.mkdir(parents=True)
-            (directory / "test.py").write_text("def test_x():\n    pass\n")
+        catalog = ops / device_testing.IRON_CATALOG_TEST
+        catalog.parent.mkdir(parents=True)
+        catalog.write_text("def test_operator():\n    pass\n")
         operators = (
             iron.Operator(
                 name="relu",
                 build_kwargs={"size": 1},
-                hrx_pytest_filter="test_relu",
+                hrx_pytest_case="npu2-ReLU-size_1",
             ),
             iron.Operator(
-                name="swiglu_decode",
-                build_kwargs={"embedding_dim": 8},
+                name="gemm",
+                build_kwargs={"M": 8},
             ),
         )
-        ran, dirs, filters, skipped = device_testing.npu_iron_ops_pytest_selection(
+        ran, node_ids, skipped = device_testing.npu_iron_ops_pytest_selection(
             operators, ops
         )
         assert ran == ["relu"]
-        assert skipped == ["swiglu_decode"]
-        assert filters == ["test_relu"]
-        assert dirs == [str(ops / "iron" / "operators" / "relu")]
+        assert skipped == ["gemm"]
+        assert node_ids == [
+            "iron/tests/operators/test_catalog.py::test_operator[npu2-ReLU-size_1]"
+        ]
 
-    def test_missing_test_py_with_filter_is_an_error(self, tmp_path):
-        ops = tmp_path / "iron-ops"
-        (ops / "iron" / "operators" / "relu").mkdir(parents=True)
+    def test_missing_catalog_test_with_a_case_is_an_error(self, tmp_path):
         operators = (
             iron.Operator(
                 name="relu",
                 build_kwargs={"size": 1},
-                hrx_pytest_filter="test_relu",
+                hrx_pytest_case="npu2-ReLU-size_1",
             ),
         )
-        with pytest.raises(RuntimeError, match="test.py is missing"):
-            device_testing.npu_iron_ops_pytest_selection(operators, ops)
+        with pytest.raises(RuntimeError, match="test_catalog.py is missing"):
+            device_testing.npu_iron_ops_pytest_selection(
+                operators, tmp_path / "iron-ops"
+            )
+
+    def test_catalog_case_ids_follow_iron_s_labels(self):
+        by_name = {operator.name: operator for operator in iron.OPERATORS}
+        assert by_name["relu"].hrx_pytest_case == (
+            "npu2-ReLU-size_2048-num_aie_columns_1-num_channels_1-tile_size_2048"
+        )
+        assert by_name["axpy"].hrx_pytest_case == (
+            "npu2-AXPY-size_2048-num_aie_columns_1-tile_size_2048-scalar_factor_3.0"
+        )
+        assert (
+            by_name["flm.dequant"].hrx_pytest_case == "npu2-flm.DequantBFP-K_512-N_128"
+        )
 
 
 class TestNpuTestPackageCommand:

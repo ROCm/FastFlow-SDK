@@ -1,12 +1,15 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 
+import ast
 import os
 
 import pytest
 
+from build_tools import paths
 from build_tools.iron import (
     DEFAULT,
+    GRAPH_ONLY,
     OPERATORS,
     SEQUENCES,
     Operator,
@@ -20,16 +23,8 @@ from build_tools.npu_test_cases import CASE_GENERATORS, generate_case
 pytestmark = pytest.mark.presubmit
 
 _BINARY = {"elementwise_add", "elementwise_mul", "axpy"}
-_UNARY = {
-    "relu",
-    "gelu",
-    "leaky_relu",
-    "sigmoid",
-    "tanh",
-    "silu",
-    "mem_copy",
-    "layer_norm",
-}
+_UNARY = {"relu", "gelu", "sigmoid", "tanh", "silu"}
+_ROWS = {"layer_norm", "rms_norm"}
 
 
 def _shapes_from_build_kwargs(operator: Operator):
@@ -42,9 +37,11 @@ def _shapes_from_build_kwargs(operator: Operator):
     if name in _UNARY:
         size = (kwargs["size"],)
         return [("input", size), ("output", size)]
-    if name == "rms_norm":
-        rows = kwargs["size"] // kwargs["tile_size"]
-        tile = (rows, kwargs["tile_size"])
+    if name == "copy":
+        size = (kwargs["input_buffer_size"],)
+        return [("input", size), ("output", size)]
+    if name in _ROWS:
+        tile = (kwargs["rows"], kwargs["tile_size"])
         return [("input", tile), ("output", tile)]
     if name == "gemv":
         return [
@@ -61,62 +58,52 @@ def _shapes_from_build_kwargs(operator: Operator):
     if name == "softmax":
         shape = (kwargs["rows"], kwargs["cols"])
         return [("input", shape), ("output", shape)]
-    if name == "transpose":
-        return [
-            ("input", (kwargs["M"], kwargs["N"])),
-            ("output", (kwargs["N"], kwargs["M"])),
-        ]
-    if name == "repeat":
-        rows, cols, repeat = kwargs["rows"], kwargs["cols"], kwargs["repeat"]
-        return [("input", (rows, cols)), ("output", (rows * repeat, cols))]
     if name == "strided_copy":
         return [
             ("input", (kwargs["input_buffer_size"],)),
-            ("output", (kwargs["output_buffer_size"],)),
+            ("output", (kwargs["length"],)),
+            ("scratch", (1,)),
         ]
     raise AssertionError(f"{name}: no packaged shape contract")
+
+
+def _declared_names(init):
+    """The names an ``iron/operators`` ``__init__.py`` lists in ``__all__``."""
+    for node in ast.parse(init.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        ):
+            return set(ast.literal_eval(node.value))
+    raise AssertionError(f"{init}: no __all__")
 
 
 def test_suite_covers_the_operator_catalog():
     names = [operator.name for operator in OPERATORS]
     assert names[0] == DEFAULT == "elementwise_add"
     assert names == sorted(set(names), key=names.index)
-    expected = {
-        "elementwise_add",
-        "elementwise_mul",
-        "axpy",
-        "relu",
-        "gelu",
-        "leaky_relu",
-        "sigmoid",
-        "tanh",
-        "layer_norm",
-        "silu",
-        "rms_norm",
-        "dequant",
-        "mem_copy",
-        "gemv",
-        "gemm",
-        "softmax",
-        "rope",
-        "transpose",
-        "repeat",
-        "strided_copy",
-        "mha",
-        "swiglu_decode",
-        "swiglu_prefill",
-        "flm.gemm",
-        "flm.dequant",
-        "flm.layer",
-        "flm.lm_head",
-        "flm.prefill_attn",
-        "flm.prefill_sliding_attn",
-        "flm.mm_prebuilt",
-    }
-    assert set(names) == expected
     for operator in OPERATORS:
         assert operator.build_kwargs
         assert operator.device == "npu2"
+        assert operator.class_name, operator.name
+
+
+def test_suite_classes_are_iron_s_whole_catalog():
+    """Every IRON operator class is compiled here, or runs only inside a graph."""
+    operators = paths.PROJ / "iron-ops" / "iron" / "operators"
+    if not operators.is_dir():
+        pytest.skip("iron-ops source is not checked out for this CI profile")
+    iron_catalog = _declared_names(operators / "__init__.py") | {
+        f"flm.{name}" for name in _declared_names(operators / "flm" / "__init__.py")
+    }
+    ours = {
+        f"flm.{operator.class_name}"
+        if (operator.module or operator.name).startswith("flm.")
+        else operator.class_name
+        for operator in OPERATORS
+    }
+    assert ours | GRAPH_ONLY == iron_catalog
+    assert not ours & GRAPH_ONLY
 
 
 def test_select_filters_by_name():
@@ -137,33 +124,26 @@ def test_packaged_numeric_cases_cover_single_kernel_ops():
         "axpy",
         "relu",
         "gelu",
-        "leaky_relu",
         "sigmoid",
         "tanh",
         "silu",
         "layer_norm",
         "rms_norm",
-        "mem_copy",
+        "copy",
         "softmax",
         "gemv",
         "gemm",
-        "transpose",
-        "repeat",
         "strided_copy",
     }
     assert not packaged & {
-        "dequant",
         "rope",
         "mha",
-        "swiglu_decode",
-        "swiglu_prefill",
         "flm.gemm",
         "flm.dequant",
         "flm.layer",
         "flm.lm_head",
         "flm.prefill_attn",
         "flm.prefill_sliding_attn",
-        "flm.mm_prebuilt",
     }
 
 
@@ -190,26 +170,31 @@ def test_packaged_generator_shapes_match_compile_kwargs():
         assert actual == expected, operator.name
 
 
-def test_mha_is_host_compiled_with_local_pytest_filter():
+def test_mha_is_host_compiled_with_its_iron_case():
     mha = next(operator for operator in OPERATORS if operator.name == "mha")
     assert mha.host_compile is True
-    assert mha.hrx_pytest_filter == "test_mha"
-    compile_names = [operator.name for operator in host_compile_suite()]
-    assert "mha" in compile_names
-    assert "swiglu_decode" not in compile_names
-    assert "swiglu_prefill" not in compile_names
+    assert mha.hrx_pytest_case == "npu2-MHA-num_heads_1-seq_len_16384-num_pipelines_8"
+    assert "mha" in [operator.name for operator in host_compile_suite()]
 
 
-def test_compile_only_ops_have_no_npu_filter():
+def test_every_operator_is_host_compiled():
+    assert host_compile_suite() == OPERATORS
+
+
+def test_shapes_iron_declares_no_case_for_have_no_npu_case():
     by_name = {operator.name: operator for operator in OPERATORS}
-    assert by_name["swiglu_decode"].hrx_pytest_filter is None
-    assert by_name["swiglu_prefill"].hrx_pytest_filter is None
-    assert by_name["swiglu_decode"].host_compile is False
-    assert by_name["swiglu_prefill"].host_compile is False
-    # Packaged on NPU CI; IRON pytest has no matching non-extensive compile-shape case.
-    for name in ("gemm", "softmax", "transpose", "repeat", "strided_copy"):
+    # Packaged on NPU CI; IRON's catalog has no case at this compile shape.
+    for name in ("copy", "gemm", "softmax", "strided_copy"):
         assert by_name[name].host_compile is True
-        assert by_name[name].hrx_pytest_filter is None
+        assert by_name[name].hrx_pytest_case is None
+
+
+def test_full_elf_entries_are_graphs():
+    from build_tools.iron import FULL_ELF_GRAPHS
+
+    assert {operator.name for operator in OPERATORS if operator.full_elf} == set(
+        FULL_ELF_GRAPHS
+    )
 
 
 def test_flm_ports_use_the_smallest_upstream_shape():
@@ -221,18 +206,23 @@ def test_flm_ports_use_the_smallest_upstream_shape():
         "flm.lm_head",
         "flm.prefill_attn",
         "flm.prefill_sliding_attn",
-        "flm.mm_prebuilt",
     }
     for name in compiled:
         assert by_name[name].host_compile is True
-        assert by_name[name].hrx_pytest_filter is None
         assert name in {operator.name for operator in host_compile_suite()}
     assert by_name["flm.prefill_attn"].class_name == "PrefillAttention"
     sliding = by_name["flm.prefill_sliding_attn"]
     assert sliding.module == "flm.prefill_attn"
     assert sliding.class_name == "PrefillSlidingAttention"
     assert by_name["flm.layer"].build_kwargs["geometry"] == "FLM_GEMMA4_E2B_DECODE"
-    assert by_name["flm.gemm"].build_kwargs == {"M": 256, "K": 512, "N": 1024}
+    assert by_name["flm.gemm"].class_name == "ProjectionGEMM"
+    assert by_name["flm.gemm"].build_kwargs == {
+        "M": 256,
+        "K": 512,
+        "N": 1024,
+        "precision": "high",
+    }
+    assert by_name["flm.dequant"].build_kwargs == {"K": 512, "N": 128}
     assert by_name["flm.lm_head"].build_kwargs == {
         "dim": 1536,
         "vocab": 4096,
@@ -252,7 +242,6 @@ def test_flm_ports_are_in_the_prebuilt_package():
         "flm.lm_head",
         "flm.prefill_attn",
         "flm.prefill_sliding_attn",
-        "flm.mm_prebuilt",
         "flm.layer-5",
         "flm.layer-700",
     } == set(CASE_NAMES)
@@ -306,3 +295,91 @@ def test_require_host_library_checks_the_host_image(tmp_path):
     library = tmp_path / ("ok.dll" if os.name == "nt" else "ok.so")
     library.write_bytes((b"MZ" if os.name == "nt" else b"\x7fELF") + b"\0" * 12)
     require_host_library(library)
+
+
+class _Entry:
+    def __init__(self, dispatch_library=None, params=None):
+        self.dispatch_library = dispatch_library
+        self.params = params
+
+
+class _Artifacts:
+    def __init__(self, *, full_elf, image, insts=None, entry=None, buffers=None):
+        self.full_elf = full_elf
+        self.image = image
+        self.insts = insts
+        self.entry = entry
+        self.buffers = buffers or {}
+
+    @property
+    def params(self):
+        return None if self.entry is None else self.entry.params
+
+
+def test_classify_names_each_kind_of_image(tmp_path):
+    from build_tools.iron import classify_compiled_images
+
+    xclbin, insts, library, elf = (
+        tmp_path / name for name in ("a.xclbin", "insts.bin", "d.dll", "a.elf")
+    )
+    assert classify_compiled_images(
+        _Artifacts(full_elf=True, image=elf, entry=_Entry())
+    ) == ("elf", [elf])
+    assert classify_compiled_images(
+        _Artifacts(full_elf=False, image=xclbin, insts=insts, entry=_Entry())
+    ) == ("xclbin", [xclbin, insts])
+    assert classify_compiled_images(
+        _Artifacts(full_elf=False, image=xclbin, insts=insts, entry=_Entry(library))
+    ) == ("dispatch", [xclbin, library])
+    with pytest.raises(RuntimeError, match="neither an instruction stream"):
+        classify_compiled_images(_Artifacts(full_elf=False, image=xclbin))
+
+
+def test_stage_copies_a_full_elf_with_its_table_and_layout(tmp_path):
+    import json
+
+    from build_tools.iron import Compiled, stage_compiled_images
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    elf = cache / "design.elf"
+    elf.write_bytes(b"\x7fELF")
+    params = cache / "params.txt"
+    params.write_text("1 1\ninput_offset 0 i32 addr - -\n0\n0\n")
+    artifacts = _Artifacts(
+        full_elf=True,
+        image=elf,
+        entry=_Entry(params=params),
+        buffers={"x": ("input", 0, 4096), "y": ("output", 0, 2048)},
+    )
+    arguments = {"input": 4096, "output": 2048, "scratch": 0}
+    kind, staged = stage_compiled_images(
+        Compiled(artifacts, arguments), tmp_path / "out"
+    )
+    assert kind == "elf"
+    assert [path.name for path in staged] == ["final.elf"]
+    assert (tmp_path / "out" / "params.txt").read_text() == params.read_text()
+    layout = json.loads((tmp_path / "out" / "layout.json").read_text())
+    assert layout == {
+        "arguments": arguments,
+        "buffers": {"x": ["input", 0, 4096], "y": ["output", 0, 2048]},
+    }
+
+
+def test_stage_refuses_a_full_elf_without_a_table_or_arguments(tmp_path):
+    from build_tools.iron import Compiled, stage_compiled_images
+
+    elf = tmp_path / "design.elf"
+    elf.write_bytes(b"\x7fELF")
+    params = tmp_path / "params.txt"
+    params.write_text("0 0\n0\n0\n")
+    with pytest.raises(RuntimeError, match="without a parameter table"):
+        stage_compiled_images(
+            Compiled(_Artifacts(full_elf=True, image=elf, entry=_Entry()), {}),
+            tmp_path / "out",
+        )
+    with pytest.raises(RuntimeError, match="without its argument sizes"):
+        stage_compiled_images(
+            Compiled(_Artifacts(full_elf=True, image=elf, entry=_Entry(params=params))),
+            tmp_path / "out",
+        )

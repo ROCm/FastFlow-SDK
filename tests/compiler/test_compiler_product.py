@@ -69,6 +69,7 @@ def make_product(
     for relative in (
         "python/aie/ir.py",
         "include/aie_api/aie.hpp",
+        "include/aie_kernels/eltwise/add.cc",
         "aie_runtime_lib/AIE2P/vec_math.h",
         "peano/llvm-aie/README.txt",
         "third_party/aie_api/README.txt",
@@ -519,6 +520,24 @@ def test_npu_test_package_contains_only_xadx_and_numeric_cases(tmp_path):
     packaged = {path.suffix for path in stage.rglob("*") if path.is_file()}
     assert ".xclbin" not in packaged
     assert ".mlir" not in packaged
+
+
+def test_full_elf_cases_bind_every_argument_in_order():
+    strided = npu_test_cases.generate_case("strided_copy")
+    layout = {"arguments": {"input": 4096, "output": 2048, "scratch": 0}}
+    npu_test_package._require_full_elf_layout(strided, layout)
+    fused = npu_test_cases.generate_case("add_relu_fused")
+    npu_test_package._require_full_elf_layout(
+        fused, {"arguments": {"input": 16384, "output": 8192, "scratch": 8192}}
+    )
+    with pytest.raises(RuntimeError, match="takes 2 arguments"):
+        npu_test_package._require_full_elf_layout(
+            strided, {"arguments": {"input": 4096, "output": 2048}}
+        )
+    with pytest.raises(RuntimeError, match="input argument of 8192 bytes with 4096"):
+        npu_test_package._require_full_elf_layout(
+            strided, {"arguments": {"input": 8192, "output": 2048, "scratch": 0}}
+        )
 
 
 def test_windows_tar_zst_is_deterministic_and_extracts_valid_files(tmp_path):

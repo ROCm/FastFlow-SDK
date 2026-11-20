@@ -140,7 +140,8 @@ def test_rejects_truncated_section_table():
 
 def test_parses_typed_parameter_layout():
     assert aiecc_elf_xadx.parse_params(
-        "2\nvector_size 0 i32 core\ninput_offset 3 bf16 addr\n"
+        "2 4\nvector_size 0 i32 core - -\ninput_offset 3 bf16 addr - -\n"
+        "0\n1\nmain:sequence 2 vector_size input_offset\n"
     ) == [
         ("vector_size", "i32", 0, 0, 4, 0),
         ("input_offset", "bf16", 4, 3, 2, 1),
@@ -148,17 +149,29 @@ def test_parses_typed_parameter_layout():
 
 
 def test_parses_parameter_ranges_and_joint_bounds():
-    assert aiecc_elf_xadx.parse_params("0\n0\n") == []
+    assert aiecc_elf_xadx.parse_params("0 0\n0\n0\n") == []
     assert aiecc_elf_xadx.parse_params(
-        "1\ninput_offset 3 i32 addr 0 1024\n1\ninput_offset vector_size 1 4096\n"
+        "1 4\ninput_offset 3 i32 addr 0 1024\n1\ninput_offset vector_size 1 4096\n"
+        "1\nmain:sequence 1 input_offset\n"
     ) == [("input_offset", "i32", 0, 3, 4, 1)]
 
 
+def test_skips_parameters_no_command_reads():
+    assert aiecc_elf_xadx.parse_params(
+        "2 1\nunread - i32 core - -\ninput_offset 0 i32 addr - -\n"
+        "0\n1\nmain:sequence 1 input_offset\n"
+    ) == [("input_offset", "i32", 0, 0, 4, 1)]
+
+
 def test_rejects_invalid_parameter_metadata():
-    with pytest.raises(ValueError, match="count is 2"):
-        aiecc_elf_xadx.parse_params("2\nvector_size 0 i32 core\n")
+    with pytest.raises(ValueError, match="ends before"):
+        aiecc_elf_xadx.parse_params("2 1\nvector_size 0 i32 core - -\n")
     with pytest.raises(ValueError, match="outside"):
-        aiecc_elf_xadx.parse_params("1\ninput_offset 32 i32 addr\n")
+        aiecc_elf_xadx.parse_params("1 1\ninput_offset 1 i32 addr - -\n0\n0\n")
+    with pytest.raises(ValueError, match="repeat count"):
+        aiecc_elf_xadx.parse_params("1 1\ntrips 0 i32 repeat 1 8\n0\n0\n")
+    with pytest.raises(ValueError, match="one entry"):
+        aiecc_elf_xadx.parse_params("0 0\n0\n2\na:x 0\nb:y 0\n")
 
 
 def test_conversion_forwards_all_dynamic_metadata():
@@ -175,7 +188,7 @@ def test_conversion_forwards_all_dynamic_metadata():
         serializer,
         _make_test_elf(),
         b"context-xclbin",
-        "1\ninput_offset 3 i32 addr\n",
+        "1 4\ninput_offset 3 i32 addr - -\n0\n1\nmain:sequence 1 input_offset\n",
     )
 
     assert result == b"XADX"

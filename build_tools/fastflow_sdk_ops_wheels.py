@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: MIT
 """Build and verify the platform-neutral FastFlow SDK operator-library wheel.
 
-The importable package is still ``iron`` (and its ``aie_kernels`` sibling). The
-distribution name is ``fastflow-sdk-ops`` so a release install is:
+The importable package is still ``iron``. The distribution name is
+``fastflow-sdk-ops`` so a release install is:
 
     pip install fastflow-sdk-ops==<version>
 
-which pulls ``fastflow-sdk-compiler`` at the same version. IRON looks up kernel
-sources as ``AIEContext.base_dir / "aie_kernels"``, and ``base_dir`` is the
-parent of the ``iron`` package, so the wheel keeps that source-tree layout at
-site-packages root.
+which pulls ``fastflow-sdk-compiler`` at the same version. The wheel keeps the
+source-tree layout at site-packages root. It ships no kernel sources: the
+kernel factories compile from the compiler's own ``include/aie_kernels``
+(``aie.utils.config.aie_kernels_dir()``).
 """
 
 from __future__ import annotations
@@ -55,10 +55,11 @@ OPS_WHEEL_ARTIFACTS = compiler_product.COMPILER_ARTIFACTS
 IRON_OPS_SOURCE = paths.PROJ / "iron-ops"
 _SKIP_DIR_NAMES = frozenset({"tests", "applications", "__pycache__"})
 _SKIP_FILE_NAMES = frozenset({"test.py", "conftest.py"})
-# The Gemma 4 override example stays in IRON and is the one application the
-# installed ops wheel ships. Its Makefile clones FastFlowLM; the SDK example
-# does not.
-_GEMMA4_FLM_FILES = frozenset({"build.py", "overrides.hpp", "pli_weights.py"})
+# IRON's Gemma 4 engine override, under iron.operators.flm. The installed ops
+# wheel ships its sources and nothing else there: its Makefile clones
+# FastFlowLM into build/, and the SDK example does not.
+_GEMMA4_ENGINE = Path("operators") / "flm" / "gemma4_engine"
+_GEMMA4_ENGINE_FILES = frozenset({"build.py", "overrides.hpp", "pli_weights.py"})
 IS_WINDOWS = paths.is_windows()
 _VBIN = "Scripts" if IS_WINDOWS else "bin"
 _EXE = ".exe" if IS_WINDOWS else ""
@@ -68,16 +69,11 @@ def ops_requires(version: str) -> tuple[str, ...]:
     return (f"{COMPILER_DISTRIBUTION} =={version}",)
 
 
-def _ship_gemma4_flm(relative: Path) -> bool:
-    return (
-        relative.parts[:2] == ("applications", "gemma4_flm")
-        and relative.name in _GEMMA4_FLM_FILES
-    )
-
-
 def _skip_relative(relative: Path) -> bool:
-    if _ship_gemma4_flm(relative):
-        return False
+    if relative.is_relative_to(_GEMMA4_ENGINE):
+        return not (
+            relative.parent == _GEMMA4_ENGINE and relative.name in _GEMMA4_ENGINE_FILES
+        )
     return any(part in _SKIP_DIR_NAMES for part in relative.parts) or (
         relative.name in _SKIP_FILE_NAMES or relative.suffix == ".pyc"
     )
@@ -109,8 +105,8 @@ def _ops_metadata_module() -> str:
     return '''"""Metadata for the packaged FastFlow SDK operator library.
 
 The importable operator API is ``iron``. This package is the wheel's
-identity surface: layout next to ``iron/`` and ``aie_kernels/``, plus the
-package manifest used by release assembly.
+identity surface: layout next to ``iron/``, plus the package manifest used by
+release assembly.
 """
 from __future__ import annotations
 
@@ -123,17 +119,20 @@ def package_root() -> Path:
 
 
 def install_root() -> Path:
-    """Directory that contains ``iron/`` and ``aie_kernels/`` (site-packages)."""
+    """Directory that contains ``iron/`` (site-packages)."""
     return package_root().parent
 
 
 def kernels_root() -> Path:
-    return install_root() / "aie_kernels"
+    """The compiler's ``aie_kernels/``, which IRON's kernel factories compile from."""
+    from aie.utils.config import aie_kernels_dir
+
+    return Path(aie_kernels_dir())
 
 
-def gemma4_flm_root() -> Path:
+def gemma4_engine_root() -> Path:
     """Installed ``overrides.hpp`` and ``build.py`` for the Gemma 4 engine override."""
-    return install_root() / "iron" / "applications" / "gemma4_flm"
+    return install_root() / "iron" / "operators" / "flm" / "gemma4_engine"
 
 
 def manifest() -> dict:
@@ -149,39 +148,29 @@ def stage_ops_tree(
     *,
     version: str,
 ) -> Path:
-    """Stage ``iron/``, ``aie_kernels/``, and the ``fastflow_sdk_ops`` metadata package."""
+    """Stage ``iron/`` and the ``fastflow_sdk_ops`` metadata package."""
     source_root = Path(source_root)
     destination = Path(destination)
     iron_root = source_root / "iron"
-    kernels_root = source_root / "aie_kernels"
-    if not kernels_root.is_dir():
-        kernels_root = paths.PROJ / "iron-tools" / "aie_kernels"
-    if not iron_root.is_dir() or not kernels_root.is_dir():
+    if not iron_root.is_dir():
         raise RuntimeError(
-            "projects/iron-ops is missing iron/, and neither iron-ops nor "
-            "iron-tools has aie_kernels/; run: python dev.py submodules iron-ops iron-tools"
+            "projects/iron-ops is missing iron/; run: python dev.py submodules iron-ops"
         )
     reset_directory(destination, destination.parent)
     _copy_tree_filtered(iron_root, destination / "iron")
-    _copy_tree_filtered(kernels_root, destination / "aie_kernels")
-    gemma4_flm = destination / "iron" / "applications" / "gemma4_flm"
+    gemma4_engine = destination / "iron" / _GEMMA4_ENGINE
     missing_gemma4 = [
-        name for name in sorted(_GEMMA4_FLM_FILES) if not (gemma4_flm / name).is_file()
+        name
+        for name in sorted(_GEMMA4_ENGINE_FILES)
+        if not (gemma4_engine / name).is_file()
     ]
     if missing_gemma4:
         raise RuntimeError(
-            "staged IRON ops wheel is missing gemma4_flm files: "
+            "staged IRON ops wheel is missing gemma4_engine files: "
             + ", ".join(missing_gemma4)
         )
     if not (destination / "iron" / "operators" / "__init__.py").is_file():
         raise RuntimeError("staged IRON ops wheel is missing iron.operators")
-    if not (
-        (destination / "aie_kernels" / "generic" / "add.cc").is_file()
-        or (destination / "aie_kernels" / "eltwise" / "add.cc").is_file()
-    ):
-        raise RuntimeError(
-            "staged IRON ops wheel is missing aie_kernels add.cc (generic/ or eltwise/)"
-        )
 
     package_root = destination / OPS_PACKAGE
     write_file(package_root / "__init__.py", _ops_metadata_module())
@@ -260,118 +249,42 @@ def cmd_package_ops_wheels(args):
     print(f"package ops wheel: ok -> {wheel}")
 
 
-# Operator packages whose import graph still needs torch at module scope.
-# Stream-dse binds torch/onnx in iron.common.stream.ops. MHA and the hand-written
-# SwiGLU sequences compile without torch (IRON #164/#165). An unused skip is a
-# hard failure so a pin bump cannot leave a torch regression silently ignored.
-_TORCH_AT_IMPORT = frozenset({"swiglu_prefill_stream"})
+def probe_operator_modules(operators):
+    """Import every module of the ``iron.operators`` package; none may need torch.
 
-
-def _torch_is_missing(error: BaseException) -> bool:
-    seen: set[int] = set()
-    current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, ModuleNotFoundError) and current.name == "torch":
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
-
-def probe_operator_modules(operators, *, torch_at_import: frozenset[str]):
-    """Import every ``iron.operators.<pkg>.op``; skip only ``torch_at_import``.
-
-    Discovery is ``*/op.py`` next to ``iron.operators``, plus one nested level
-    (``flm/<name>/op.py``). IRON operator packages have no ``__init__.py``, so
-    ``pkgutil.iter_modules`` would miss them. The
-    discovered set must equal imported ∪ skipped. Every skip-list package must
-    be present and must fail with missing torch. A skip-list package that
-    imports is a stale allowlist (drop it). Lazy ``__all__`` exports are
-    resolved through ``getattr`` after the package walk.
+    Discovery walks ``*.py`` under the package, through each directory that is
+    itself a package (has ``__init__.py``), so the Gemma 4 engine's scripts are
+    left out. ``test.py`` and ``conftest.py`` do not ship. Every name in
+    ``CATALOG`` must then be a class from an imported module. IRON keeps torch
+    off the import path of every operator; an import that pulls it in fails.
     """
     import importlib
     import sys
     from pathlib import Path
 
     operators_root = Path(operators.__file__).resolve().parent
-    discovered = []
     imported = []
-    skipped = []
-    for child in sorted(operators_root.iterdir()):
-        if not child.is_dir():
+    for path in sorted(operators_root.rglob("*.py")):
+        relative = path.relative_to(operators_root)
+        if path.name in ("test.py", "conftest.py") or any(
+            not (
+                operators_root.joinpath(*relative.parts[:depth]) / "__init__.py"
+            ).is_file()
+            for depth in range(1, len(relative.parts))
+        ):
             continue
-        packages = []
-        if (child / "op.py").is_file():
-            packages.append(child.name)
-        else:
-            packages.extend(
-                f"{child.name}.{nested.name}"
-                for nested in sorted(child.iterdir())
-                if nested.is_dir() and (nested / "op.py").is_file()
-            )
-        for package in packages:
-            discovered.append(package)
-            name = f"{operators.__name__}.{package}.op"
-            try:
-                importlib.import_module(name)
-            except ModuleNotFoundError as error:
-                if package in torch_at_import and _torch_is_missing(error):
-                    skipped.append(name)
-                    continue
-                raise
-            imported.append(name)
-
-    discovered_set = set(discovered)
-    missing_skips = sorted(torch_at_import - discovered_set)
-    if missing_skips:
-        raise RuntimeError(
-            "ops wheel is missing torch-at-import operator packages: "
-            + ", ".join(missing_skips)
-        )
-    unused_skips = sorted(
-        pkg for pkg in torch_at_import if f"{operators.__name__}.{pkg}.op" in imported
-    )
-    if unused_skips:
-        raise RuntimeError(
-            "torch-at-import skip list is stale; drop: " + ", ".join(unused_skips)
-        )
-    expected_skipped = {f"{operators.__name__}.{pkg}.op" for pkg in torch_at_import}
-    if set(skipped) != expected_skipped:
-        raise RuntimeError(
-            f"torch-at-import skips mismatch: skipped={skipped} "
-            f"expected={sorted(expected_skipped)}"
-        )
-    expected_imported = {
-        f"{operators.__name__}.{pkg}.op"
-        for pkg in discovered_set - set(torch_at_import)
-    }
-    if set(imported) != expected_imported:
-        raise RuntimeError(
-            f"operator import set mismatch: imported={imported} "
-            f"expected={sorted(expected_imported)}"
-        )
-
-    for export in operators.__all__:
-        try:
-            value = getattr(operators, export)
-        except ModuleNotFoundError as error:
-            if not _torch_is_missing(error):
-                raise
-            if not skipped:
-                raise
-            imported_modules = [
-                sys.modules[name] for name in imported if name in sys.modules
-            ]
-            if any(
-                getattr(module, export, None) is not None for module in imported_modules
-            ):
-                raise
-            continue
-        module_name = getattr(value, "__name__", None)
-        if module_name != export and module_name != f"{operators.__name__}.{export}":
-            raise RuntimeError(f"iron.operators.{export} resolved to {value!r}")
-
-    return imported, skipped
+        parts = relative.with_suffix("").parts
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        name = ".".join((operators.__name__, *parts))
+        importlib.import_module(name)
+        imported.append(name)
+    if "torch" in sys.modules:
+        raise RuntimeError("importing iron.operators imported torch")
+    for label, cls in operators.CATALOG.items():
+        if not isinstance(cls, type) or cls.__module__ not in imported:
+            raise RuntimeError(f"iron.operators.CATALOG[{label!r}] resolved to {cls!r}")
+    return imported
 
 
 def _installed_ops_probe() -> str:
@@ -383,101 +296,85 @@ from pathlib import Path
 import iron.operators as operators
 
 """
-        + inspect.getsource(_torch_is_missing)
-        + "\n"
         + inspect.getsource(probe_operator_modules)
-        + f"""
+        + """
 assert importlib.metadata.version("fastflow-sdk-ops")
 import fastflow_sdk_ops
 kernel = fastflow_sdk_ops.kernels_root() / "eltwise" / "add.cc"
-if not kernel.is_file():
-    kernel = fastflow_sdk_ops.kernels_root() / "generic" / "add.cc"
 assert kernel.is_file(), kernel
 assert fastflow_sdk_ops.manifest()["product"] == "fastflow-sdk-ops"
-imported, skipped = probe_operator_modules(
-    operators, torch_at_import=frozenset({sorted(_TORCH_AT_IMPORT)!r})
-)
-assert "iron.operators.elementwise_add.op" in imported
-print(
-    f"ops import: ok ({{len(imported)}} modules, skipped {{skipped or ['none']}}, {{kernel}})"
-)
+assert (fastflow_sdk_ops.gemma4_engine_root() / "overrides.hpp").is_file()
+imported = probe_operator_modules(operators)
+assert "iron.operators.elementwise_add" in imported
+print(f"ops import: ok ({len(imported)} modules, {len(operators.CATALOG)} operators, {kernel})")
 """
     )
 
 
-def _ops_compile_specs() -> tuple[dict[str, object], ...]:
-    """Shapes compiled from an installed ops wheel.
+def _ops_compile_specs() -> tuple[
+    tuple[dict[str, object], ...], tuple[dict[str, object], ...]
+]:
+    """Catalog records compiled from an installed ops wheel.
 
-    Same catalog as ``dev.py test-iron-ops`` (``host_compile_suite()``).
-    Torch-at-import packages stay out of that list. ``host_compile=False``
-    operators stay in ``OPERATORS`` for leftover-closed-set.
+    Same catalog as ``dev.py test-iron-ops``: ``host_compile_suite()`` and
+    ``SEQUENCES``, as the fields of their records.
     """
-    from build_tools.iron import OPERATORS, SEQUENCES, host_compile_suite
+    from build_tools.iron import SEQUENCES, host_compile_suite
 
-    overlap = sorted({operator.name for operator in OPERATORS} & _TORCH_AT_IMPORT)
-    if overlap:
-        raise RuntimeError(
-            "OPERATORS includes torch-at-import packages: " + ", ".join(overlap)
-        )
-    operators = []
-    for operator in host_compile_suite():
-        spec = {
-            "name": operator.name,
-            "kind": "operator",
-            "kwargs": dict(operator.build_kwargs),
-            "device": operator.device,
-            "full_elf": operator.full_elf,
-        }
-        if operator.module:
-            spec["module"] = operator.module
-        if operator.class_name:
-            spec["class_name"] = operator.class_name
-        operators.append(spec)
-    operators = tuple(operators)
-    sequences = tuple(
-        {
-            "name": sequence.name,
-            "kind": "add_relu_sequence",
-            "kwargs": {
-                "size": sequence.size,
-                "tile_size": sequence.tile_size,
-                "num_aie_columns": sequence.num_aie_columns,
-            },
-            "device": "npu2",
-            "full_elf": True,
-        }
-        for sequence in SEQUENCES
+    return (
+        tuple(operator._asdict() for operator in host_compile_suite()),
+        tuple(sequence._asdict() for sequence in SEQUENCES),
     )
-    return operators + sequences
 
 
 def _installed_ops_compile(build_dir: Path) -> str:
     """Python the wheel venv runs: subprocess-per-operator, like test-iron-ops.
 
-    The venv has ``iron`` and the compiler, not ``build_tools``. ELF helpers are
-    copied from this tree. The driver itself is a script (argparse + re-exec),
-    not pickled ``build_tools`` callables.
+    The venv has ``iron`` and the compiler, not ``build_tools``. The catalog
+    records and the compile and staging helpers are copied from this tree, so
+    an installed wheel compiles exactly what ``test-iron-ops`` does.
     """
-    from build_tools.iron import (
-        classify_compiled_images,
-        compile_job_count,
-        require_host_library,
-        require_runtime_image,
-        resolve_build_kwargs,
-    )
+    from build_tools import iron
 
-    specs = _ops_compile_specs()
+    operator_specs, sequence_specs = _ops_compile_specs()
+    helpers = "\n\n".join(
+        inspect.getsource(helper)
+        for helper in (
+            iron.Operator,
+            iron.Sequence,
+            iron.require_runtime_image,
+            iron.require_host_library,
+            iron.classify_compiled_images,
+            iron.Compiled,
+            iron.stage_compiled_images,
+            iron.operator_class,
+            iron.construct_operator,
+            iron.add_relu_graph,
+            iron.offset_copy_graph,
+            iron.require_compile_cache,
+            iron.compile_full_elf,
+            iron.compile_operator,
+            iron.compile_sequence,
+            iron.compile_job_count,
+            iron.resolve_build_kwargs,
+        )
+    )
+    graphs = ", ".join(
+        f"{name!r}: {builder.__name__}"
+        for name, builder in iron.FULL_ELF_GRAPHS.items()
+    )
     return (
         """
 import argparse
 import importlib
-import inspect
+import json
 import os
 import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 os.environ.setdefault("IRON_RUNTIME", "cpu")
 
@@ -490,198 +387,46 @@ if not (prefix / "include").is_dir():
     raise SystemExit(f"compiler prefix has no include/: {prefix}")
 
 """
-        + inspect.getsource(require_runtime_image)
-        + "\n"
-        + inspect.getsource(require_host_library)
-        + "\n"
-        + inspect.getsource(classify_compiled_images)
-        + "\n"
-        + inspect.getsource(compile_job_count)
-        + "\n"
-        + inspect.getsource(resolve_build_kwargs)
+        + f"STAGED_NAMES = {iron.STAGED_NAMES!r}\n\n\n"
+        + helpers
         + f"""
 
-SPECS = {specs!r}
+FULL_ELF_GRAPHS = {{{graphs}}}
+OPERATORS = tuple(Operator(**spec) for spec in {operator_specs!r})
+SEQUENCES = tuple(Sequence(**spec) for spec in {sequence_specs!r})
 DEFAULT_BUILD_DIR = Path({str(build_dir)!r})
-DEVICES = None
 
 
-def _devices():
-    global DEVICES
-    if DEVICES is None:
-        from aie.iron.device import NPU1Col1, NPU2
+def _device(name):
+    from aie.iron.device import NPU1Col1, NPU2
 
-        DEVICES = {{"npu1": NPU1Col1, "npu2": NPU2}}
-    return DEVICES
+    return {{"npu1": NPU1Col1, "npu2": NPU2}}[name]()
 
 
-def compile_one(spec, build_root):
-    import aie.utils as aie_utils
-    from iron.common import AIEContext, AIEOperatorBase
-    from iron.common.sequence import OperatorSequence
-
-    devices = _devices()
-    name = spec["name"]
-    device = spec["device"]
-    if device not in devices:
-        raise SystemExit(f"{{name}}: unknown device {{device!r}}")
-    aie_utils.set_current_device(devices[device]())
+def compile_one(name, build_root):
     op_dir = Path(build_root) / name
     if op_dir.exists():
         shutil.rmtree(op_dir)
-    op_dir.mkdir(parents=True)
-    if spec["kind"] == "add_relu_sequence":
-        from iron.operators.elementwise_add.op import ElementwiseAdd
-        from iron.operators.relu.op import ReLU
-
-        kwargs = spec["kwargs"]
-        full_elf_dir = op_dir / "full-elf"
-        context_dir = op_dir / "context"
-        sequence_context = AIEContext(build_dir=full_elf_dir)
-        add = ElementwiseAdd(
-            size=kwargs["size"],
-            tile_size=kwargs["tile_size"],
-            num_aie_columns=kwargs["num_aie_columns"],
-            context=sequence_context,
-        )
-        relu = ReLU(
-            size=kwargs["size"],
-            tile_size=kwargs["tile_size"],
-            num_aie_columns=kwargs["num_aie_columns"],
-            num_channels=1,
-            context=sequence_context,
-        )
-        sequence = OperatorSequence(
-            name=name,
-            runlist=[
-                (add, "a", "b", "temp"),
-                (relu, "temp", "out"),
-            ],
-            input_args=["a", "b"],
-            output_args=["out"],
-            dispatch="fused",
-            context=sequence_context,
-        )
-        sequence.compile()
-        try:
-            kind, produced = classify_compiled_images(sequence.artifacts)
-            if kind != "elf":
-                raise RuntimeError("fused sequence did not produce a full ELF")
-            for path in produced:
-                require_runtime_image(path, elf=True)
-        except RuntimeError as error:
-            raise SystemExit(f"{{name}}: {{error}}") from error
-
-        context_operator = ElementwiseAdd(
-            size=kwargs["size"],
-            tile_size=kwargs["tile_size"],
-            num_aie_columns=kwargs["num_aie_columns"],
-            context=AIEContext(build_dir=context_dir),
-        )
-        context_operator.compile()
-        try:
-            kind, context_produced = classify_compiled_images(
-                context_operator.artifacts
-            )
-            if kind != "xclbin":
-                raise RuntimeError("sequence context did not produce xclbin+insts")
-            for path in context_produced:
-                require_runtime_image(path)
-        except RuntimeError as error:
-            raise SystemExit(f"{{name}} context: {{error}}") from error
-        print(
-            "ops compile: ok",
-            name,
-            *(path.name for path in produced + context_produced),
-            flush=True,
-        )
-        return name
-
-    module_name = spec.get("module") or name
-    class_name = spec.get("class_name")
-    module = importlib.import_module(f"iron.operators.{{module_name}}.op")
-    found = [
-        value
-        for value in vars(module).values()
-        if inspect.isclass(value)
-        and issubclass(value, AIEOperatorBase)
-        and value.__module__ == module.__name__
-    ]
-    if class_name:
-        found = [value for value in found if value.__name__ == class_name]
-    if len(found) != 1:
-        names = ", ".join(sorted(cls.__name__ for cls in found)) or "none"
-        raise SystemExit(
-            f"{{name}}: expected exactly one operator class, found "
-            f"{{len(found)}} ({{names}})"
-        )
-    cls = found[0]
-    kwargs = resolve_build_kwargs(spec["kwargs"])
-    params = inspect.signature(cls.__init__).parameters
-    unknown = [key for key in kwargs if key not in params]
-    if unknown:
-        raise SystemExit(f"{{name}}: unsupported constructor args {{unknown}}")
-    if spec["full_elf"]:
-        full_elf_dir = op_dir / "full-elf"
-        context_dir = op_dir / "context"
-        operator = cls(
-            **kwargs, context=AIEContext(build_dir=full_elf_dir)
-        )
-        sequence = OperatorSequence(
-            name=f"{{name}}_dynamic",
-            runlist=[(operator, "input", "output")],
-            input_args=["input"],
-            output_args=["output"],
-            dispatch="fused",
-            context=AIEContext(build_dir=full_elf_dir),
-        )
-        sequence.compile()
-        try:
-            kind, produced = classify_compiled_images(sequence.artifacts)
-            if kind != "elf":
-                raise RuntimeError("dynamic sequence did not produce a full ELF")
-            for path in produced:
-                require_runtime_image(path, elf=True)
-        except RuntimeError as error:
-            raise SystemExit(f"{{name}}: {{error}}") from error
-
-        context_kwargs = dict(kwargs)
-        for key in tuple(context_kwargs):
-            if key.endswith("_parameter"):
-                context_kwargs[key] = None
-        context_operator = cls(
-            **context_kwargs, context=AIEContext(build_dir=context_dir)
-        )
-        context_operator.compile()
-        try:
-            kind, context_produced = classify_compiled_images(
-                context_operator.artifacts
-            )
-            if kind != "xclbin":
-                raise RuntimeError("context build did not produce xclbin+insts")
-            for path in context_produced:
-                require_runtime_image(path)
-        except RuntimeError as error:
-            raise SystemExit(f"{{name}} context: {{error}}") from error
-        print(
-            "ops compile: ok",
-            name,
-            *(path.name for path in produced + context_produced),
-            flush=True,
-        )
-        return name
-
-    operator = cls(**kwargs, context=AIEContext(build_dir=op_dir))
-    operator.compile()
+    sequence = next((s for s in SEQUENCES if s.name == name), None)
     try:
-        kind, produced = classify_compiled_images(operator.artifacts)
-        for path in produced:
-            require_runtime_image(path, elf=(kind == "elf"))
-        if kind == "dispatch":
-            require_host_library(produced[1])
-    except RuntimeError as error:
+        if sequence is not None:
+            compiled = compile_sequence(sequence, _device("npu2"))
+            want = "elf"
+        else:
+            operator = next(o for o in OPERATORS if o.name == name)
+            compiled = compile_operator(operator, _device(operator.device))
+            want = "elf" if operator.full_elf else None
+        kind, staged = stage_compiled_images(compiled, op_dir)
+        if want is not None and kind != want:
+            raise RuntimeError(f"built {{kind}}, not {{want}}")
+        for path in staged:
+            if kind == "dispatch" and path == staged[1]:
+                require_host_library(path)
+            else:
+                require_runtime_image(path, elf=(kind == "elf"))
+    except (ImportError, RuntimeError) as error:
         raise SystemExit(f"{{name}}: {{error}}") from error
-    print("ops compile: ok", name, *(path.name for path in produced), flush=True)
+    print("ops compile: ok", name, *(path.name for path in staged), flush=True)
     return name
 
 
@@ -695,6 +440,7 @@ def _spawn(name, build_root):
         "1",
         "--build-dir",
         str(build_root),
+        "--keep-cache",
     ]
     return name, subprocess.run(command, capture_output=True, text=True)
 
@@ -704,29 +450,31 @@ def main(argv):
     parser.add_argument("--operator")
     parser.add_argument("--jobs", type=int, default=0)
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
+    parser.add_argument("--keep-cache", action="store_true")
     args = parser.parse_args(argv)
-    selected = [
-        spec
-        for spec in SPECS
-        if args.operator is None or spec["name"] == args.operator
-    ]
+    names = [o.name for o in OPERATORS] + [s.name for s in SEQUENCES]
+    selected = [name for name in names if args.operator in (None, name)]
     if args.operator and not selected:
         raise SystemExit(f"unknown operator: {{args.operator}}")
     if not selected:
         print("ops compile: ok 0 operators")
         return 0
-    workers = compile_job_count(len(selected), args.jobs)
-    print(f"ops compile: {{len(selected)}} operators, jobs={{workers}}", flush=True)
     build_root = args.build_dir
     build_root.mkdir(parents=True, exist_ok=True)
+    # mlir-aie's compile cache, read at its first import: fresh, so every
+    # operator is compiled rather than found.
+    cache = build_root / ".npu-cache"
+    if not args.keep_cache and cache.exists():
+        shutil.rmtree(cache)
+    os.environ["NPU_CACHE_HOME"] = str(cache)
+    workers = compile_job_count(len(selected), args.jobs)
+    print(f"ops compile: {{len(selected)}} operators, jobs={{workers}}", flush=True)
     if workers == 1:
-        compiled = [compile_one(spec, build_root) for spec in selected]
+        compiled = [compile_one(name, build_root) for name in selected]
     else:
         failures = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [
-                pool.submit(_spawn, spec["name"], build_root) for spec in selected
-            ]
+            futures = [pool.submit(_spawn, name, build_root) for name in selected]
             for future in as_completed(futures):
                 name, completed = future.result()
                 if completed.stdout:
@@ -737,7 +485,7 @@ def main(argv):
                     failures.append(name)
         if failures:
             raise SystemExit("ops compile failed: " + ", ".join(failures))
-        compiled = [spec["name"] for spec in selected]
+        compiled = selected
     print("ops compile: ok", len(compiled), "operators")
     return 0
 
