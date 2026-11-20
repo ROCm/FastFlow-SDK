@@ -77,6 +77,12 @@ jobs:
       - name: Validate GitHub Actions workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
+  pages:
+    name: Docs
+    uses: ./.github/workflows/build_fastflow_sdk_pages.yml
+    permissions:
+      contents: read
+
   linux:
     name: Linux
     needs: presubmit

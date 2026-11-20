@@ -139,6 +139,10 @@ class TestNpuWorkflowParity:
             assert "qualify intake" not in text
             assert "--bundle-output .qualification-run.evidence.zip" in text
             assert "test-fastflowlm --wheel-package" not in text
+            npu = workflow_job(text, "npu")
+            assert "--require-hashes -r requirements/examples.lock" in npu
+            assert "tests/fastflowlm/run_serve_examples.py" in npu
+            assert npu.index("qualify verify") < npu.index("run_serve_examples.py")
 
     def test_all_declared_runner_labels_are_covered_by_shared_matrix_jobs(self):
         compiler_labels = _runner_labels(

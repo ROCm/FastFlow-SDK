@@ -340,6 +340,15 @@ jobs:
           build/fastflow-sdk-wheel-venv/bin/fastflow qualify verify \
             --input .qualification-run.evidence.zip --json
 
+      # The scripts the documentation site shows, against the installed flm.
+      - name: Run the serving examples
+        run: |
+          build/fastflow-sdk-wheel-venv/bin/python -m pip install \
+            --disable-pip-version-check --only-binary=:all: \
+            --require-hashes -r requirements/examples.lock
+          build/fastflow-sdk-wheel-venv/bin/python tests/fastflowlm/run_serve_examples.py \
+            --model-cache build/FastFlowLM-models
+
       - name: Upload qualification evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

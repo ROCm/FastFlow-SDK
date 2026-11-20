@@ -309,7 +309,7 @@ class TestTestingDomain:
         iron_env.assert_not_called()
         select_hrx.assert_called_once()
         command = run.call_args.args[0]
-        assert Path(command[1]).name == "jit_smoke.py"
+        assert Path(command[1]).name == "hello_npu.py"
         assert "--build-only" not in command
 
     def test_test_npu_jit_uses_iron_env_when_aie_opt_exists(self, tmp_path):
@@ -360,7 +360,7 @@ class TestTestingDomain:
         select_hrx.assert_not_called()
         iron_env.assert_not_called()
         command = run.call_args.args[0]
-        assert Path(command[1]).name == "jit_smoke.py"
+        assert Path(command[1]).name == "hello_npu.py"
         assert "--build-only" in command
 
     def test_test_npu_chain_rejects_designs_without_chain_reference(self, tmp_path):

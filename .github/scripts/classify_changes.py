@@ -18,11 +18,27 @@ def changed_files_between(base_sha: str, head_sha: str) -> list[str]:
     ).splitlines()
 
 
+# Inputs of the documentation site only; Presubmit builds and tests them.
+DOCUMENTATION_PATHS = (
+    "docs/",
+    "build_tools/docs/",
+    "zensical.toml",
+    "requirements/docs.txt",
+    "requirements/docs.lock",
+    "tools/fastflow/checks.toml",
+)
+
+
+def is_documentation(path: str) -> bool:
+    return pathlib.PurePosixPath(path).suffix.lower() == ".md" or any(
+        path == prefix or (prefix.endswith("/") and path.startswith(prefix))
+        for prefix in DOCUMENTATION_PATHS
+    )
+
+
 def requires_full_ci(changed_files: Iterable[str]) -> bool:
     paths = list(changed_files)
-    return not paths or any(
-        pathlib.PurePosixPath(path).suffix.lower() != ".md" for path in paths
-    )
+    return not paths or not all(is_documentation(path) for path in paths)
 
 
 def classify_changes(event_name: str, base_sha: str, head_sha: str) -> bool:

@@ -4,7 +4,7 @@
 > This document is the **release-operator** policy for versioning, validating,
 > and publishing wheels. To *install* a published build, use the
 > [FastFlow SDK package index](#package-index) and the
-> [README install section](../README.md#install-a-release-and-run-models).
+> [install guide](install.md).
 
 FastFlow SDK compiler, ops, runtime, and FastFlowLM wheels use
 [PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/)
@@ -244,11 +244,18 @@ GitHub SHA-256 digest, falling back to the release `SHA256SUMS`. Wheels are
 never copied to Pages. Each project page lists every release that ships that
 project, so `fastflow-sdk` starts at `0.1.0.dev202610230003`.
 
-The index does not update itself. After publishing a release, run the
-`Publish FastFlow SDK simple index` workflow from `main` (Actions → Run
-workflow); it rebuilds the whole index from the releases API
-(`build_tools/publish_fastflow_sdk_simple_index.py`) and deploys it. The
-repository's Pages source must be set to GitHub Actions.
+The index is published together with the documentation site, because every
+Pages deployment replaces the whole site, and the site documents a release, not
+`main`. After publishing a release, run the
+`Publish FastFlow SDK docs and simple index` workflow
+(`.github/workflows/publish_fastflow_sdk_pages.yml`) from `main` (Actions → Run
+workflow). It rebuilds the whole index from the releases API
+(`build_tools/publish_fastflow_sdk_simple_index.py`), builds the documentation
+at the latest release's tag, or at the `ref` input, into the same site, and
+deploys both. A ref without `zensical.toml`, such as a release from before the
+documentation site, publishes the index alone with a warning; run it with
+`ref: main` to publish the documentation of `main` instead. The repository's
+Pages source must be set to GitHub Actions.
 
 All published versions are currently development builds. Install commands use
 `--pre` because PyPI hosts an unrelated `fastflow-sdk 0.0.1` final release that

@@ -1,0 +1,121 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Builds the GitHub Pages site: the documentation (zensical.toml) at the root
+# and the PEP 503 package index under /simple/. CI calls it to validate both
+# for the pull request; the publish workflow calls it for a release, with
+# upload_pages, and deploys the artifact.
+name: Build FastFlow SDK Pages
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: >-
+          The source the documentation describes: a git ref, or latest-release
+          for the newest published fastflow-sdk-v* release. Empty means the
+          calling commit.
+        type: string
+        default: ""
+      upload_pages:
+        description: Upload the site as the GitHub Pages artifact
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build docs and simple index
+    runs-on: ubuntu-24.04
+    steps:
+      # The calling commit builds the index; the documented source, checked
+      # out into docs-src, builds the documentation with its own tooling.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: List published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .docs-data
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > .docs-data/releases.json
+
+      - name: Resolve the documented source
+        id: source
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ "${REF}" = latest-release ]; then
+            REF="$(python -m build_tools.docs latest-release --releases .docs-data/releases.json)"
+          fi
+          release=""
+          case "${REF}" in fastflow-sdk-v*) release="${REF}" ;; esac
+          echo "ref=${REF:-${GITHUB_SHA}}" >> "${GITHUB_OUTPUT}"
+          echo "release=${release}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout the documented source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.source.outputs.ref }}
+          path: docs-src
+
+      - name: Check for documentation
+        id: docs
+        env:
+          REF: ${{ steps.source.outputs.ref }}
+        run: |
+          if [ -f docs-src/zensical.toml ]; then
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::warning::${REF} has no zensical.toml; publishing the package index only"
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # The generated pages read the published releases, the FastFlowLM model
+      # list, and the IRON sources, all at the documented source's pins.
+      - name: Build the documentation
+        if: ${{ steps.docs.outputs.build == 'true' }}
+        working-directory: docs-src
+        env:
+          FASTFLOW_SDK_DOCS_RELEASE: ${{ steps.source.outputs.release }}
+          FASTFLOW_SDK_DOCS_RELEASES: ../.docs-data/releases.json
+          FASTFLOW_SDK_DOCS_MODEL_LIST: ../.docs-data/model_list.json
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements/docs.lock
+          fastflowlm="$(git rev-parse HEAD:projects/FastFlowLM)"
+          curl -fsSL --retry 3 -o ../.docs-data/model_list.json \
+            "https://raw.githubusercontent.com/ROCm/FastFlowLM/${fastflowlm}/src/model_list.json"
+          git submodule update --init --depth 1 projects/iron-ops
+          python -m build_tools.docs build
+          mv site ../site
+          test -f ../site/index.html
+          test -f ../site/llms.txt
+          test -f ../site/llms-full.txt
+          test -f ../site/examples/hello_npu.py
+
+      - name: Build the simple index
+        run: |
+          set -euo pipefail
+          python -m build_tools.publish_fastflow_sdk_simple_index \
+            --releases .docs-data/releases.json \
+            --output site
+          test -f site/.nojekyll
+          test -f site/simple/index.html
+          test -f site/simple/fastflow-sdk/index.html
+
+      - name: Upload Pages artifact
+        if: ${{ inputs.upload_pages }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+          retention-days: 7

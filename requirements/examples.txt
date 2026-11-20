@@ -1,0 +1,8 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+# What examples/serve needs beyond the SDK; the FastFlowLM NPU jobs install it
+# to run them. Regenerate requirements/examples.lock with:
+#   uv pip compile requirements/examples.txt --generate-hashes \
+#     --python-version 3.12 --universal --system-certs \
+#     --output-file requirements/examples.lock
+openai==3.57.0

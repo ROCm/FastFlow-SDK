@@ -371,7 +371,7 @@ jobs:
         run: .venv/bin/python dev.py test-npu-package
 
   # Full compiler + bindings on linux-gfx1150-gpu-rocm-npu. Compiles and runs
-  # the README IRON JIT example (tests/npu/jit_smoke.py) end to end.
+  # the README IRON JIT example (examples/hello_npu.py) end to end.
   npu_examples:
     name: NPU examples (Linux gfx1150)
     if: ${{ inputs.run_npu_e2e }}

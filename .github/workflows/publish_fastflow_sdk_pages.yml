@@ -1,0 +1,50 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Publishes https://rocm.github.io/FastFlow-SDK/: the documentation of a
+# release and the /simple/ package index, rebuilt together because every Pages
+# deployment replaces the whole site. Run it from main after publishing a
+# release; the github-pages environment accepts deployments from main only.
+name: Publish FastFlow SDK docs and simple index
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          What the documentation describes: latest-release, a release tag, or
+          another ref such as main
+        type: string
+        default: latest-release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fastflow-sdk-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build_fastflow_sdk_pages.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ inputs.ref }}
+      upload_pages: true
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

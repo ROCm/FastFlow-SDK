@@ -9,6 +9,14 @@
 /.pytest-tmp/
 /.ruff_cache/
 /qualification-evidence*/
+# The documentation site, the pages and example copies build_tools/docs
+# generates into docs/, and the data the docs workflow fetches for them
+/site/
+/.docs-data/
+/docs/reference/
+/docs/releases.md
+/docs/examples/*.py
+/docs/examples/serve/
 # vcpkg's binary-package store on the Windows CI (restored/saved by actions/cache)
 /.vcpkg-bincache/
 # per-project local build dirs (submodules are tracked only as gitlinks)

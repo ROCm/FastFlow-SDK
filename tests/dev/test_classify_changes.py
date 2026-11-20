@@ -25,6 +25,12 @@ pytestmark = pytest.mark.presubmit
         (["README.md", "docs/release-notes.MD"], False),
         (["README.md", ".github/workflows/ci.yml"], True),
         ([], True),
+        (["zensical.toml", "docs/serve.md", "build_tools/docs/cli.py"], False),
+        (["docs/serve.md", "examples/serve/chat.py"], True),
+        (["requirements/docs.lock", "tools/fastflow/checks.toml"], False),
+        (["requirements/docs.lock", "requirements/test.lock"], True),
+        (["build_tools/docs.py"], True),
+        (["tools/fastflow/src/command.cc"], True),
     ),
 )
 def test_full_ci_classification(changed_files, expected):

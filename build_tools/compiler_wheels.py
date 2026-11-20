@@ -383,7 +383,7 @@ def cmd_verify_compiler_wheels(args):
         env=_compiler_e2e_env(prefix),
     )
     subprocess.run(
-        [python, ROOT / "tests" / "npu" / "jit_smoke.py", "--build-only"],
+        [python, ROOT / "examples" / "hello_npu.py", "--build-only"],
         check=True,
     )
     if getattr(args, "consumer_root", None):
