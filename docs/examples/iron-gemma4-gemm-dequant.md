@@ -50,7 +50,7 @@ $FlmAssets = python -c "import fastflow_sdk_fastflowlm as p; print(p.xclbin_path
 $IronIncludeDir = python -c @'
 from pathlib import Path
 import fastflow_sdk_compiler as p
-print(Path(p.__file__).resolve().parent / "include")
+print(Path(p.__file__).resolve().parent / 'include')
 '@
 
 # Generated operator names require a short path on Windows.
@@ -106,7 +106,7 @@ cmake -S $FlmGemma4Source -B "$GemmDequantBuild\engine" -G Ninja `
   "-DFASTFLOW_SDK_ROOT=$FastFlowSdkRoot" `
   "-DFLM_ENGINE_LIB_DIR=$FlmEngineLibDir" `
   "-DFLM_IRON_INCLUDE_DIRS=$IronGemmDequantApp;$IronIncludeDir" `
-  -DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp `
+  "-DFLM_EXTENSION_ENGINE_HEADER=overrides.hpp" `
   "-DFLM_GEMMA4_XCLBIN_DIR=$GemmDequantBuild\xclbins\Gemma4-E2B-IT-NPU2"
 
 cmake --build "$GemmDequantBuild\engine" --parallel 2
