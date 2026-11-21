@@ -88,10 +88,13 @@ generation needs initialized FastFlowLM headers, engine libraries, and
 production XCLBINs plus an installed HRX serializer, but not a built `flm`
 executable.
 
-The Linux runtime wheel is tagged `manylinux_2_28_x86_64` because its complete
-native closure satisfies that policy. The FastFlowLM wheel is conservatively
-tagged `linux_x86_64`: it resolves `libhrx.so.0` from the separately installed
-runtime wheel, while manylinux policy evaluates each wheel independently.
+Both Linux runtime wheels are tagged `manylinux_2_28_x86_64` because their
+native closures satisfy that policy. The FastFlowLM wheel loads `libhrx.so.0`
+from the runtime wheel, which it pins exactly, so its audit treats the runtime
+wheel's libraries as provided. FastFlowLM's engine libraries are built with GCC
+OpenMP, but manylinux does not include `libgomp`; the packager relinks them
+against LLVM's `libomp`, built from the pinned `llvm-project`, and ships it in
+the FastFlowLM wheel and the Linux archive.
 
 The compiler is a coordinated split distribution:
 

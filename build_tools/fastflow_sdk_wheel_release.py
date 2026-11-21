@@ -282,7 +282,6 @@ def _find_release_wheels(
         tags = {
             "py3-none-any",
             "py3-none-manylinux_2_28_x86_64",
-            "py3-none-linux_x86_64",
             "py3-none-win_amd64",
         }
         abi = "cp" + release_policy.compiler_python_stable_abi().replace(".", "")
@@ -331,9 +330,8 @@ def _find_release_wheels(
         ),
         None,
     )
-    linux = "py3-none-linux_x86_64"
     windows = "py3-none-win_amd64"
-    required_base_tags = {"py3-none-any", linux, windows}
+    required_base_tags = {"py3-none-any", windows}
     if manylinux:
         required_base_tags.add(manylinux)
     missing_tags = sorted(required_base_tags - expected_tags)
@@ -347,7 +345,7 @@ def _find_release_wheels(
     expected_keys = {
         (RUNTIME_DISTRIBUTION, manylinux),
         (RUNTIME_DISTRIBUTION, windows),
-        (FASTFLOWLM_DISTRIBUTION, linux),
+        (FASTFLOWLM_DISTRIBUTION, manylinux),
         (FASTFLOWLM_DISTRIBUTION, windows),
         (COMPILER_DISTRIBUTION, "py3-none-any"),
         (QUALIFICATION_DISTRIBUTION, "py3-none-any"),

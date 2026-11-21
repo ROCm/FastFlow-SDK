@@ -143,6 +143,7 @@ class TestDevCli:
             "hrx-xclbinutil": "build_tools.dev.compiler_build",
             "hrx": "build_tools.dev.runtime_build",
             "fastflow-cli": "build_tools.dev.runtime_build",
+            "llvm-openmp": "build_tools.dev.fastflowlm_build",
             "fastflowlm": "build_tools.dev.fastflowlm_build",
             "fastflowlm-xrt": "build_tools.dev.fastflowlm_build",
             "all": "build_tools.dev.build",

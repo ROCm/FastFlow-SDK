@@ -14,6 +14,7 @@ BUILD_HANDLERS = {
     "iron-tools": compiler_build.cmd_build_iron_tools,
     "hrx-xclbinutil": compiler_build.cmd_build_hrx_xclbinutil,
     "hrx": runtime_build.cmd_build_hrx,
+    "llvm-openmp": fastflowlm_build.cmd_build_llvm_openmp,
     "fastflowlm": fastflowlm_build.cmd_build_fastflowlm,
     # Diagnostic-only XRT-backed FastFlowLM build for HRX-vs-XRT benchmark
     # comparisons (qualify --bench --xrt-flm). Never packaged into wheels.
