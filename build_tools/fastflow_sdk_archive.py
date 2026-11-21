@@ -875,6 +875,36 @@ def artifact_name(system: str | None = None, machine: str | None = None) -> str:
     return f"fastflow-sdk-{system}-{machine}"
 
 
+# Ninja and cl.exe on Windows stop at MAX_PATH (259 usable characters) for the
+# full path, so building the shipped Gemma 4 extension sources limits how deep
+# the product can be installed. sentencepiece adds its protobuf include
+# directory as src/../third_party/protobuf-lite, and cl.exe counts the "src/.."
+# before normalizing it.
+WINDOWS_MAX_PATH = 259
+INSTALL_ROOT_BUDGET = 120
+_UNNORMALIZED_INCLUDE_SLACK = len("/src/..")
+MAX_PRODUCT_PATH = (
+    WINDOWS_MAX_PATH - INSTALL_ROOT_BUDGET - len("/") - _UNNORMALIZED_INCLUDE_SLACK
+)
+
+
+def verify_product_path_lengths(files: list[dict[str, object]]) -> None:
+    """Rejects product paths that leave less than INSTALL_ROOT_BUDGET characters
+    for the Windows install folder."""
+    paths = (str(record["path"]) for record in files)
+    too_long = sorted(
+        (path for path in paths if len(path) > MAX_PRODUCT_PATH),
+        key=len,
+        reverse=True,
+    )
+    if too_long:
+        raise RuntimeError(
+            f"{len(too_long)} product paths are longer than {MAX_PRODUCT_PATH} "
+            f"characters, which leaves less than {INSTALL_ROOT_BUDGET} for the "
+            f"Windows install folder. Longest: {too_long[0]} ({len(too_long[0])})"
+        )
+
+
 def _patch_manifest(root: Path) -> list[dict[str, object]]:
     records = []
     for component in ("hrx", "FastFlowLM"):
@@ -1100,6 +1130,10 @@ WINDOWS_ENGINE_NORMAL_IMPORTS = frozenset(
 WINDOWS_ENGINE_OPTIONAL_NORMAL_IMPORTS = frozenset({"d3_npu.dll"})
 
 
+# Short on purpose: tokenizers-cpp holds the deepest product paths (see
+# MAX_PRODUCT_PATH).
+GEMMA4E_TOKENIZERS_DIR = "tok"
+
 _GEMMA4E_FRONTEND_SOURCES = (
     "chat/chat_continue.cpp",
     "image/image_reader.cpp",
@@ -1148,8 +1182,10 @@ def _stage_gemma4e_frontend(flm_source: Path, destination: Path) -> None:
         raise RuntimeError(f"tokenizers-cpp is missing: {tokenizers}")
     shutil.copytree(
         tokenizers,
-        destination / "third_party" / "tokenizers-cpp",
-        ignore=shutil.ignore_patterns(".git", "target", "build", "fuzz"),
+        destination / GEMMA4E_TOKENIZERS_DIR,
+        ignore=shutil.ignore_patterns(
+            ".git", "target", "build", "fuzz", "__pycache__", "*.pyc"
+        ),
     )
 
 
@@ -1249,7 +1285,7 @@ def verify_installed_gemma4e_sdk(bundle: Path) -> None:
     catalog = engine / "model-list.json"
     frontend = engine / "src" / "frontend" / "gemma4_open_frontend.cpp"
     codecs = engine / "src" / "cmake" / "FlmImageCodecs.cmake"
-    tokenizers = engine / "third_party" / "tokenizers-cpp" / "CMakeLists.txt"
+    tokenizers = engine / GEMMA4E_TOKENIZERS_DIR / "CMakeLists.txt"
     if (
         not detail.is_dir()
         or not header.is_file()
@@ -1412,6 +1448,7 @@ def stage_runtime_bundle(
         }
 
     files = file_inventory(bundle)
+    verify_product_path_lengths(files)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,

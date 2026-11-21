@@ -48,8 +48,9 @@ set(FLM_OVERRIDE_FLAGS "" CACHE STRING
 set(FLM_EXTENSION_BUNDLE_DIR "${CMAKE_BINARY_DIR}/bundle" CACHE PATH
     "Output directory containing extension.json, libraries, and assets.")
 
-# The installed tree is share/fastflow-sdk/gemma4e. Its src/ and third_party/
-# are enough to configure; a FastFlowLM checkout is not required.
+# The installed tree is share/fastflow-sdk/gemma4e. Its src/ and tok/
+# (tokenizers-cpp) are enough to configure; a FastFlowLM checkout is not
+# required. tok/ is kept short because Ninja and cl.exe stop at MAX_PATH.
 set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/src" CACHE PATH
     "Shipped Gemma 4 open sources (engine, frontend, and media helpers)")
 if(NOT EXISTS "${FLM_SOURCE_DIR}/frontend/gemma4_open_frontend.cpp")
@@ -57,7 +58,7 @@ if(NOT EXISTS "${FLM_SOURCE_DIR}/frontend/gemma4_open_frontend.cpp")
         "FLM_SOURCE_DIR must contain frontend/gemma4_open_frontend.cpp")
 endif()
 set(FLM_TOKENIZERS_CPP_DIR
-    "${CMAKE_CURRENT_LIST_DIR}/third_party/tokenizers-cpp" CACHE PATH
+    "${CMAKE_CURRENT_LIST_DIR}/tok" CACHE PATH
     "tokenizers-cpp sources shipped beside this project")
 set(_tokenizers_dir "${FLM_TOKENIZERS_CPP_DIR}")
 if(NOT EXISTS "${_tokenizers_dir}/CMakeLists.txt")

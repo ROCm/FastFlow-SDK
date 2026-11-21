@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from build_tools.fastflow_sdk_archive import (
+    INSTALL_ROOT_BUDGET,
     stage_gemma4e_extension_sources,
     verify_installed_gemma4e_sdk,
+    verify_product_path_lengths,
 )
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -131,6 +133,9 @@ def _write_open_frontend_tree(source: Path) -> None:
     (tokenizers / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.24)\n", encoding="utf-8"
     )
+    cache = tokenizers / "sentencepiece" / "python" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "sentencepiece_pb2.cpython-312.pyc").write_bytes(b"pyc")
 
 
 def test_shipped_tree_includes_the_open_frontend(tmp_path: Path):
@@ -165,7 +170,32 @@ def test_shipped_tree_includes_the_open_frontend(tmp_path: Path):
     assert (engine / "src" / "common" / "audio" / "audio_reader.cpp").is_file()
     assert (engine / "src" / "cmake" / "FlmImageCodecs.cmake").is_file()
     assert (engine / "src" / "cmake" / "FlmAudioCodecs.cmake").is_file()
-    assert (engine / "third_party" / "tokenizers-cpp" / "CMakeLists.txt").is_file()
+    assert (engine / "tok" / "CMakeLists.txt").is_file()
+    assert not (engine / "third_party").exists()
+    assert not list((engine / "tok").rglob("__pycache__"))
+    cmake_text = (engine / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert '"${CMAKE_CURRENT_LIST_DIR}/tok" CACHE PATH' in cmake_text
+
+
+_PROTOBUF_HEADER = (
+    "sentencepiece/third_party/protobuf-lite/google/protobuf/"
+    "generated_message_table_driven_lite.h"
+)
+
+
+def test_deepest_tokenizer_header_fits_the_install_root_budget():
+    verify_product_path_lengths(
+        [{"path": f"share/fastflow-sdk/gemma4e/tok/{_PROTOBUF_HEADER}"}]
+    )
+    with pytest.raises(RuntimeError, match=str(INSTALL_ROOT_BUDGET)):
+        verify_product_path_lengths(
+            [
+                {
+                    "path": "share/fastflow-sdk/gemma4e/third_party/"
+                    f"tokenizers-cpp/{_PROTOBUF_HEADER}"
+                }
+            ]
+        )
 
 
 def test_installed_engine_library_is_not_replaced(tmp_path: Path):
