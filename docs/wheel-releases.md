@@ -258,8 +258,8 @@ documentation site, publishes the index alone with a warning; run it with
 Pages source must be set to GitHub Actions.
 
 All published versions are currently development builds. Install commands use
-`--pre` because PyPI hosts an unrelated `fastflow-sdk 0.0.1` final release that
-pip otherwise prefers; an exact `==<version>` pin works without it.
+`--pre` because PyPI hosts a `fastflow-sdk 0.0.1` placeholder, a final release
+that pip otherwise prefers; an exact `==<version>` pin works without it.
 
 Each wheel uses Core Metadata 2.4 with an SPDX license expression and copies
 all applicable license and notice files under `.dist-info/licenses/`. It also

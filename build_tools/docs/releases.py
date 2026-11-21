@@ -118,9 +118,9 @@ _UNAVAILABLE = (
 def releases_page(releases: list[dict] | None) -> str:
     header = f"""# Release notes
 
-Every FastFlow SDK release is a prerelease on
-[GitHub Releases]({RELEASES_URL}) with its wheels, standalone archives,
-checksums, and qualification evidence. Install a specific release by pinning
+Every FastFlow SDK release is on [GitHub Releases]({RELEASES_URL}) with its
+wheels, standalone archives, checksums, and qualification evidence. Install a
+specific release by pinning
 its version:
 
 ```bash

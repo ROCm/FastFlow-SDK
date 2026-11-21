@@ -23,9 +23,9 @@ Install the latest release:
 --8<-- "README.md:pip-install"
 
 Keep `--pre` while releases are development builds. Without it, pip installs
-an unrelated `fastflow-sdk 0.0.1` placeholder from PyPI. To install one
-release, pin its version, `"fastflow-sdk==<version>"`, with a version from the
-[Release notes](releases.md); an exact pin does not need `--pre`.
+the `fastflow-sdk 0.0.1` placeholder from PyPI instead of the SDK. To install
+one release, pin its version, `"fastflow-sdk==<version>"`, with a version from
+the [Release notes](releases.md); an exact pin does not need `--pre`.
 
 `fastflow-sdk` installs these packages, which you can also install alone:
 
