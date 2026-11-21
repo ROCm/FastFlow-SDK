@@ -8,12 +8,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include "fastflow_sdk/platform.h"
 #include "fastflow_sdk/product.h"
 
 int main() {
   const std::filesystem::path root =
       std::filesystem::temp_directory_path() / "fastflow-sdk-product-test";
-  std::filesystem::remove_all(root);
+  std::filesystem::remove_all(fastflow_sdk::LongPath(root));
   std::filesystem::create_directories(root / "bin");
   std::filesystem::create_directories(root / "pkg");
   std::ofstream(root / "bin" / "payload", std::ios::binary) << "abc";
@@ -55,6 +56,24 @@ int main() {
                                                    details, error));
   assert(error.find("unsafe") != std::string::npos);
 
-  std::filesystem::remove_all(root);
+  // Windows file APIs reject paths of MAX_PATH (260) or more unless they are
+  // \\?\-prefixed, so the deep file can only be created through LongPath.
+  const std::string deep_payload = "deep/" + std::string(120, 'a') + "/" +
+                                   std::string(120, 'b') + "/payload";
+  const std::filesystem::path long_payload =
+      fastflow_sdk::LongPath(root / deep_payload);
+  std::filesystem::create_directories(long_payload.parent_path());
+  std::ofstream(long_payload, std::ios::binary) << "abc";
+  assert(std::filesystem::absolute(root / deep_payload).native().size() >= 260);
+  manifest["files"] = {
+      {{"path", deep_payload},
+       {"size", std::uint64_t{3}},
+       {"sha256",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}};
+  assert(fastflow_sdk::VerifyProductManifestFiles(manifest_path, manifest,
+                                                  details, error));
+  assert(details.at("verified_file_count") == 1);
+
+  std::filesystem::remove_all(fastflow_sdk::LongPath(root));
   return 0;
 }

@@ -230,6 +230,7 @@ bool VerifyProductManifestFiles(const std::filesystem::path& manifest_path,
     error = "could not resolve manifest root: " + filesystem_error.message();
     return false;
   }
+  const std::filesystem::path long_root = LongPath(canonical_root);
   std::size_t verified = 0;
   std::set<std::string> verified_paths;
   for (const auto& record : *files) {
@@ -254,14 +255,14 @@ bool VerifyProductManifestFiles(const std::filesystem::path& manifest_path,
       return false;
     }
     const std::filesystem::path path =
-        std::filesystem::weakly_canonical(root / relative, filesystem_error);
+        LongPath(std::filesystem::weakly_canonical(
+            LongPath(canonical_root / relative), filesystem_error));
     if (filesystem_error) {
       error = relative_text + ": " + filesystem_error.message();
       return false;
     }
-    const std::filesystem::path from_root =
-        std::filesystem::relative(path, canonical_root, filesystem_error);
-    if (filesystem_error || from_root.empty() || from_root.is_absolute() ||
+    const std::filesystem::path from_root = path.lexically_relative(long_root);
+    if (from_root.empty() || from_root.is_absolute() ||
         *from_root.begin() == ".." ||
         !std::filesystem::is_regular_file(path, filesystem_error)) {
       error =

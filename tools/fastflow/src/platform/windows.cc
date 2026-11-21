@@ -780,6 +780,22 @@ std::filesystem::path ExecutablePath() {
   return std::filesystem::path(std::wstring(buffer.data(), length));
 }
 
+std::filesystem::path LongPath(const std::filesystem::path& path) {
+  std::error_code error;
+  const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+  if (error) {
+    return path;
+  }
+  const std::wstring& native = absolute.native();
+  if (native.rfind(LR"(\\?\)", 0) == 0 || native.rfind(LR"(\\.\)", 0) == 0) {
+    return absolute;
+  }
+  if (native.rfind(LR"(\\)", 0) == 0) {
+    return std::filesystem::path(LR"(\\?\UNC\)" + native.substr(2));
+  }
+  return std::filesystem::path(LR"(\\?\)" + native);
+}
+
 std::optional<std::filesystem::path::string_type> PluginSearchPathOverride() {
   return NativeEnvironmentVariable("FASTFLOW_SDK_PLUGIN_PATH");
 }

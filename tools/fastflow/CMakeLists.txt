@@ -86,6 +86,9 @@ endif()
 
 add_executable(fastflow src/main.cc "${FASTFLOW_SDK_MAIN_SOURCE}")
 target_link_libraries(fastflow PRIVATE fastflow_sdk_core)
+if(WIN32)
+  target_sources(fastflow PRIVATE src/fastflow.manifest)
+endif()
 
 install(TARGETS fastflow RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(

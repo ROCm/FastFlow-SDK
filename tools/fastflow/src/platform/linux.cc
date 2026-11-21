@@ -293,6 +293,10 @@ std::filesystem::path ExecutablePath() {
   return std::filesystem::path(buffer.data());
 }
 
+std::filesystem::path LongPath(const std::filesystem::path& path) {
+  return path;
+}
+
 std::optional<std::filesystem::path::string_type> PluginSearchPathOverride() {
   return NativeEnvironmentVariable("FASTFLOW_SDK_PLUGIN_PATH");
 }
