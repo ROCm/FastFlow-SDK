@@ -4,6 +4,7 @@
 import hashlib
 import io
 import json
+import re
 import subprocess
 import sys
 import tarfile
@@ -214,7 +215,9 @@ class TestFastflowSdkWheelRelease:
     ):
         policy = self._write_policy(tmp_path, "1.2.3")
         with pytest.raises(
-            RuntimeError, match="cannot be published as a GitHub prerelease"
+            RuntimeError,
+            match="cannot be published as a GitHub prerelease; use "
+            "publish_target=github-release",
         ):
             resolve_release_inputs(
                 "main",
@@ -223,6 +226,92 @@ class TestFastflowSdkWheelRelease:
                 publish_target="github-prerelease",
                 policy_path=policy,
             )
+
+    def test_resolve_release_inputs_publishes_stable_github_release(self, tmp_path):
+        policy = self._write_policy(tmp_path, "1.2.3")
+        release = resolve_release_inputs(
+            "main",
+            "1.2.3",
+            7,
+            publish_target="github-release",
+            policy_path=policy,
+        )
+
+        assert release["package_version"] == "1.2.3"
+        assert release["is_prerelease"] == "false"
+        assert release["tag_name"] == "fastflow-sdk-v1.2.3"
+        assert release["release_name"] == "FastFlow SDK 1.2.3"
+
+    def test_resolve_release_inputs_requires_explicit_github_release_version(
+        self, tmp_path
+    ):
+        policy = self._write_policy(tmp_path, "1.2.3")
+        with pytest.raises(
+            RuntimeError,
+            match="github-release requires an explicit package_version equal to "
+            "the configured 1.2.3 stable release",
+        ):
+            resolve_release_inputs(
+                "main",
+                "",
+                7,
+                publish_target="github-release",
+                now=datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
+                policy_path=policy,
+            )
+
+    @pytest.mark.parametrize("version", ("1.2.3.dev202607240007", "1.2.3rc1"))
+    def test_resolve_release_inputs_rejects_prerelease_github_release(
+        self, tmp_path, version
+    ):
+        policy = self._write_policy(tmp_path, "1.2.3")
+        with pytest.raises(
+            RuntimeError,
+            match=rf"{re.escape(version)} is not the configured 1\.2\.3 stable "
+            "release; publish development and RC versions with "
+            "publish_target=github-prerelease",
+        ):
+            resolve_release_inputs(
+                "main",
+                version,
+                7,
+                publish_target="github-release",
+                policy_path=policy,
+            )
+
+    def test_resolve_release_inputs_rejects_unknown_publish_target(self, tmp_path):
+        policy = self._write_policy(tmp_path, "1.2.3")
+        with pytest.raises(RuntimeError, match="unsupported wheel publish target"):
+            resolve_release_inputs(
+                "main", "1.2.3", 7, publish_target="pypi", policy_path=policy
+            )
+
+    def test_resolve_cli_accepts_github_release_target(self, tmp_path):
+        output = tmp_path / "github-output"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "build_tools/fastflow_sdk_wheel_release_cli.py",
+                "resolve",
+                "--ref",
+                "main",
+                "--package-version",
+                "",
+                "--publish-target",
+                "github-release",
+                "--run-number",
+                "1",
+                "--github-output",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert "github-release requires an explicit package_version" in (result.stderr)
+        assert "invalid choice" not in result.stderr
 
     def test_resolve_release_inputs_rejects_version_from_another_train(self, tmp_path):
         policy = self._write_policy(tmp_path, "1.2.3")
@@ -255,6 +344,20 @@ class TestFastflowSdkWheelRelease:
         )
 
         assert release["package_version"] == "2.3.0.dev202607240007"
+
+    def test_resolve_release_inputs_generates_github_prerelease_version(self, tmp_path):
+        policy = self._write_policy(tmp_path, "2.3.0")
+        release = resolve_release_inputs(
+            "main",
+            "",
+            7,
+            publish_target="github-prerelease",
+            now=datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
+            policy_path=policy,
+        )
+
+        assert release["package_version"] == "2.3.0.dev202607240007"
+        assert release["is_prerelease"] == "true"
 
     def test_prepare_release_payload_validates_and_indexes_tested_wheels(
         self, tmp_path

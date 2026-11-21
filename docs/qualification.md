@@ -301,7 +301,7 @@ fastflow qualify stage-release \
   --json
 ```
 
-Upload every top-level file from `github-upload/` to the draft prerelease.
+Upload every top-level file from `github-upload/` to the draft release.
 
 For a shared cache across worktrees:
 

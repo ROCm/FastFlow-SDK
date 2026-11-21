@@ -56,6 +56,8 @@ RELEASE_DISTRIBUTIONS = (
     SDK_DISTRIBUTION,
 )
 
+PUBLISH_TARGETS = ("none", "github-prerelease", "github-release")
+
 
 def validate_release_version(
     package_version: str,
@@ -88,10 +90,16 @@ def resolve_release_inputs(
         raise RuntimeError("release source ref must be a non-empty single line")
     if run_number < 1:
         raise RuntimeError("GitHub run number must be positive")
-    if publish_target not in ("none", "github-prerelease"):
+    if publish_target not in PUBLISH_TARGETS:
         raise RuntimeError(f"unsupported wheel publish target: {publish_target}")
     base_version = release_policy.release_base_version(policy_path)
     if not package_version:
+        if publish_target == "github-release":
+            raise RuntimeError(
+                "publish_target=github-release requires an explicit "
+                f"package_version equal to the configured {base_version} "
+                "stable release"
+            )
         timestamp = now or datetime.now(UTC)
         package_version = (
             f"{base_version}.dev{timestamp.astimezone(UTC):%Y%m%d}{run_number:04d}"
@@ -101,7 +109,14 @@ def resolve_release_inputs(
     if publish_target == "github-prerelease" and not is_prerelease:
         raise RuntimeError(
             f"stable release {package_version} cannot be published as a GitHub "
-            "prerelease; use publish_target=none for validation"
+            "prerelease; use publish_target=github-release to publish it or "
+            "publish_target=none for validation"
+        )
+    if publish_target == "github-release" and is_prerelease:
+        raise RuntimeError(
+            f"{package_version} is not the configured {base_version} stable "
+            "release; publish development and RC versions with "
+            "publish_target=github-prerelease"
         )
     return {
         "ref": source_ref,
