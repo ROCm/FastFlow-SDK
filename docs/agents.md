@@ -26,8 +26,8 @@ releases each time the site is published.
 
 1. **Install from the FastFlow SDK index.** Use
    `python -m pip install --pre --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple fastflow-sdk`.
-   Plain `pip install fastflow-sdk` installs an unrelated 0.0.1 placeholder
-   from PyPI. Use Python 3.12 to 3.14 in a virtual environment.
+   Plain `pip install fastflow-sdk` installs the 0.0.1 placeholder from PyPI
+   instead of the SDK. Use Python 3.12 to 3.14 in a virtual environment.
 2. **Do not install XRT or upstream `mlir-aie` wheels into the same
    environment.** The SDK ships its own compiler and the HRX runtime, and
    importing `aie` selects HRX.
