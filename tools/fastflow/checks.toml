@@ -1,0 +1,258 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# What each `fastflow` check verifies and what to do when it does not pass.
+# The documentation's Troubleshooting page is generated from this file, and
+# tests/dev/test_docs.py requires its check IDs to equal the IDs emitted under
+# tools/fastflow/src. Check IDs are part of the runtime-cli-json contract.
+#
+# `commands` lists the commands whose report can contain the check; "*" means
+# any command. `fix` is Markdown.
+
+schema_version = 1
+
+[checks."invocation.arguments"]
+commands = ["*"]
+summary = "The command line parsed: a known command, valid options, and valid arguments."
+fix = """
+Run `fastflow --help` for the accepted commands and options. Global options
+(`--json`, `--runtime <path>`, `--verbose`) can come before or after the
+command. `plugin` accepts only `list`, `powermode` accepts at most one mode,
+and the other built-in commands take no positional arguments. Exit status is 2.
+"""
+
+[checks."internal.error"]
+commands = ["*"]
+summary = "The command ran to completion without an unhandled error."
+fix = """
+The message carries the error text. Rerun with `--verbose --json` and file an
+issue with the full report.
+"""
+
+[checks."package.manifest"]
+commands = ["doctor", "self-test"]
+summary = "The installed product manifest exists, its version matches the `fastflow` executable, and every declared file matches its size and SHA-256."
+fix = """
+A missing manifest or a mismatch means the install is incomplete, modified, or
+mixes files from different releases. Reinstall one release into a clean
+environment, for example
+`python -m pip install --force-reinstall --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple "fastflow-sdk==<version>"`,
+or use a freshly extracted archive. Do not copy `fastflow` between installs.
+"""
+
+[checks."device.enumeration"]
+commands = ["probe", "doctor", "self-test"]
+summary = "Windows only: the operating system's device enumeration API answered."
+fix = """
+`SetupDiGetClassDevsW` or `SetupDiEnumDeviceInfo` failed, so no device facts
+could be read. The details carry the Windows error code. Run from a normal
+(non-sandboxed) PowerShell session and retry. If it persists, reboot.
+"""
+
+[checks."device.present"]
+commands = ["doctor", "self-test"]
+summary = "At least one AMD NPU is visible to the operating system."
+fix = """
+On Linux, no `amdxdna` accelerator node exists under sysfs: check that the
+`amdxdna` kernel module is loaded (`lsmod | grep amdxdna`) and that
+`dmesg` shows it probing the NPU. On Windows, check that the NPU appears in
+Device Manager with the AMD NPU driver installed. The NPU can also be disabled
+in firmware setup. See [Hardware and drivers](hardware.md) for the drivers each
+release was qualified on.
+"""
+
+[checks."device.access"]
+commands = ["doctor", "self-test"]
+summary = "The current user can open at least one NPU device read/write."
+fix = """
+On Linux, the `/dev/accel/accel<N>` node exists but cannot be opened, or does
+not match its sysfs entry. The device's `access_error` in `fastflow probe --json`
+gives the reason. For a permission error, check the node's group with
+`ls -l /dev/accel/` and add your user to that group, then log in again. On
+Windows, update the NPU driver and reboot.
+"""
+
+[checks."device.ioctl"]
+commands = ["doctor", "self-test"]
+summary = "Linux only: an opened NPU answered the diagnostic ioctls (DRM version, firmware version, AIE metadata, power mode)."
+fix = """
+The check passes when the device is usable even if some optional diagnostic
+ioctls are unavailable; `details.diagnostics_complete` says which case applies.
+It fails only when no accessible device accepted ioctls: update the `amdxdna`
+driver, then reboot.
+"""
+
+[checks."runtime.library.present"]
+commands = ["doctor", "self-test"]
+summary = "An HRX runtime library file exists at one of the candidate paths."
+fix = """
+The loader tries `--runtime`, then `HRX_LIBHRX`, then the packaged path next to
+the executable (`lib/libhrx.so.0` on Linux, `bin/hrx.dll` on Windows), then the
+system library path. `fastflow probe --json` lists the candidates under
+`data.runtime.candidates`. Reinstall the release, or point `--runtime` or
+`HRX_LIBHRX` at an existing library.
+"""
+
+[checks."runtime.library.load"]
+commands = ["doctor", "self-test"]
+summary = "The HRX runtime library loaded into the process."
+fix = """
+`details.errors` has the loader's error for each candidate. Common causes are a
+missing dependency of the library, an architecture mismatch, or a stale
+`HRX_LIBHRX` pointing at another build. Unset `HRX_LIBHRX` to use the packaged
+runtime. An explicit `--runtime` is authoritative; the CLI does not fall back to
+another candidate.
+"""
+
+[checks."runtime.symbols"]
+commands = ["doctor", "self-test"]
+summary = "Every public HRX C symbol the CLI needs resolved in the loaded library."
+fix = """
+`details.missing` lists the absent symbols. The loaded library is from a
+different HRX build than this CLI. Use the runtime that ships with the same
+release.
+"""
+
+[checks."runtime.abi"]
+commands = ["doctor", "self-test"]
+summary = "The loaded HRX runtime's major and minor ABI version match the headers the CLI was built with."
+fix = """
+`details.required` and `details.actual` show both versions. Install the CLI and
+runtime from the same release, or remove an `HRX_LIBHRX` or `--runtime`
+override that selects another HRX.
+"""
+
+[checks."runtime.initialize"]
+commands = ["doctor", "self-test"]
+summary = "HRX initialized."
+fix = """
+The message carries the HRX status. A failing `device.*` check in the same
+report usually explains it; fix that first. After a driver install or change,
+reboot and rerun `fastflow doctor`.
+"""
+
+[checks."runtime.device_count"]
+commands = ["doctor", "self-test"]
+summary = "HRX reports one or more NPU devices."
+fix = """
+The OS sees an NPU but HRX does not. Check that the driver is one this release
+was qualified on ([Hardware and drivers](hardware.md)); then reboot and rerun
+`fastflow doctor`.
+"""
+
+[checks."runtime.shutdown"]
+commands = ["doctor", "self-test"]
+summary = "HRX shut down cleanly after the doctor checks."
+fix = """
+The message carries the HRX status. Rerun `fastflow doctor`. If it repeats, file
+an issue with `fastflow doctor --json --verbose` output.
+"""
+
+[checks."self_test.prerequisites"]
+commands = ["self-test"]
+summary = "Every doctor check passed, so the self-test can dispatch."
+fix = """
+Fix the failing checks reported by `fastflow doctor` first.
+"""
+
+[checks."self_test.fixture"]
+commands = ["self-test"]
+summary = "The device is NPU2 and the packaged self-test fixture is intact and matches its provenance hashes."
+fix = """
+The packaged fixture targets NPU2 (XDNA2). On NPU1, `probe` and `doctor` still
+apply but no self-test fixture ships. On NPU2, a fixture error means the files
+under `share/fastflow-sdk/self-test` are damaged or from another release:
+reinstall.
+"""
+
+[checks."self_test.load"]
+commands = ["self-test"]
+summary = "The self-test could read its XADX and load the HRX runtime."
+fix = """
+Reinstall when `kernel.xadx` is missing or empty. If HRX could not be loaded,
+follow the `runtime.library.load` guidance.
+"""
+
+[checks."self_test.dispatch"]
+commands = ["self-test"]
+summary = "The packaged XADX loaded on the device and its dispatch completed."
+fix = """
+The message names the failing HRX operation. After installing or changing a
+driver, reboot and retry: a package switch without a reboot can leave the device
+unhealthy even though the OS reports the new driver. If it persists, compare the
+driver with the qualified list in [Hardware and drivers](hardware.md).
+"""
+
+[checks."self_test.cleanup"]
+commands = ["self-test"]
+summary = "Every buffer, executable, and device the self-test created was released."
+fix = """
+The details list the release errors. Rerun `fastflow self-test`; if it repeats,
+reboot and file an issue with `fastflow self-test --json --verbose` output.
+"""
+
+[checks."self_test.output"]
+commands = ["self-test"]
+summary = "The output bytes match the packaged golden result exactly."
+fix = """
+The dispatch ran but produced wrong data. Reboot and rerun. A repeat failure on
+a qualified driver is a bug: file an issue with
+`fastflow self-test --json --verbose` and `fastflow probe --json` output.
+"""
+
+[checks."powermode.arguments"]
+commands = ["powermode"]
+summary = "The requested power mode is one of default, powersaver, balanced, performance, or turbo."
+fix = """
+Use one of `default`, `powersaver`, `balanced`, `performance`, `turbo`.
+"""
+
+[checks."powermode.support"]
+commands = ["powermode"]
+summary = "The platform's power-mode backend is available."
+fix = """
+On Windows this needs the native KMT interface of the AMD NPU driver; update the
+driver. The details carry the enumeration error.
+"""
+
+[checks."powermode.device_present"]
+commands = ["powermode"]
+summary = "At least one NPU was found to query or set."
+fix = """
+Follow the `device.present` guidance.
+"""
+
+[checks."powermode.query"]
+commands = ["powermode"]
+summary = "Every detected NPU reported its current power mode."
+fix = """
+Follow the `device.access` guidance, then retry.
+"""
+
+[checks."powermode.set"]
+commands = ["powermode"]
+summary = "Every detected NPU reached the requested mode, confirmed by a second query."
+fix = """
+Setting the power mode can need elevated privileges. On Linux the current
+`amdxdna` driver requires root, so run `sudo fastflow powermode <mode>`. On
+Windows, run from an elevated PowerShell.
+"""
+
+[checks."plugin.discovery"]
+commands = ["plugin"]
+summary = "Plugin discovery finished; the message gives the number of `fastflow-*` executables found."
+fix = """
+This check always passes. If an expected plugin is missing, put its directory on
+`FASTFLOW_SDK_PLUGIN_PATH` or `PATH`; `data.search_paths` shows where the CLI
+looked.
+"""
+
+[checks."plugin.dispatch"]
+commands = ["*"]
+summary = "An external `fastflow-<name>` plugin was found and started."
+fix = """
+`fastflow <name>` runs the `fastflow-<name>` executable from
+`FASTFLOW_SDK_PLUGIN_PATH`, the CLI's directory, or `PATH`. Run
+`fastflow plugin list` to see what was found. `fastflow qualify` needs the
+`fastflow-sdk-qualification` package.
+"""

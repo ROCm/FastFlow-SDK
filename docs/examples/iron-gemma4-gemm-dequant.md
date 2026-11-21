@@ -3,7 +3,7 @@
 This example replaces only the projection GEMMs and their runtime
 dequantization in Gemma 4 E2B. FastFlowLM continues to run every other
 operator. The application source is available under
-[`examples/iron/gemma4_gemm_dequant`](../../examples/iron/gemma4_gemm_dequant).
+[`examples/iron/gemma4_gemm_dequant`](https://github.com/ROCm/FastFlow-SDK/tree/main/examples/iron/gemma4_gemm_dequant).
 
 The example is adapted from IRON's
 [Gemma 4 engine](https://github.com/amd/IRON/blob/devel/iron/operators/flm/gemma4_engine/README.md),

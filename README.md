@@ -4,6 +4,9 @@ FastFlow SDK is a new software stack that brings together emerging capabilities,
 tools, and runtimes for developing custom GenAI applications for AMD XDNA Neural
 Processing Engines (NPUs).
 
+**Documentation:** [rocm.github.io/FastFlow-SDK](https://rocm.github.io/FastFlow-SDK/),
+with [`llms.txt`](https://rocm.github.io/FastFlow-SDK/llms.txt) for coding agents.
+
 > [!IMPORTANT]
 > **This is an early-access release** that enables developers to experiment with
 > the iron-tools compiler stack for custom model development and run
@@ -104,6 +107,7 @@ Each release includes a relocatable FastFlowLM + HRX archive:
 Extract it and run the binaries from the archive root (`bin/flm` and
 `bin/fastflow`):
 
+<!-- --8<-- [start:archive] -->
 ```powershell
 # Windows
 Expand-Archive .\fastflow-sdk-windows-x86_64.zip -DestinationPath .
@@ -127,6 +131,7 @@ cd fastflow-sdk-linux-x86_64
 ./bin/flm list
 ./bin/flm run qwen3:0.6b
 ```
+<!-- --8<-- [end:archive] -->
 
 `fastflow self-test` also dispatches a packaged NPU2 fixture. The first
 `flm run` downloads model assets and needs Hugging Face access.
@@ -145,6 +150,7 @@ package index at `https://rocm.github.io/FastFlow-SDK/simple`. The
 Install Python and create a virtual environment. Activate the environment
 before every command below:
 
+<!-- --8<-- [start:venv] -->
 ```powershell
 # Windows
 winget install --exact --id Python.Python.3.12
@@ -158,12 +164,15 @@ sudo apt-get install -y python3.12 python3.12-venv
 python3.12 -m venv ~/fastflow
 source ~/fastflow/bin/activate
 ```
+<!-- --8<-- [end:venv] -->
 
 Install the latest release:
 
+<!-- --8<-- [start:pip-install] -->
 ```bash
 python -m pip install --pre --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple fastflow-sdk
 ```
+<!-- --8<-- [end:pip-install] -->
 
 Releases are currently development builds, so always pass `--pre`. Without it,
 `pip install fastflow-sdk` installs the `fastflow-sdk 0.0.1` placeholder from
@@ -174,6 +183,7 @@ does not need `--pre`. The version is the release tag without the
 
 To validate the runtime, use the following commands:
 
+<!-- --8<-- [start:validate] -->
 ```bash
 fastflow version
 fastflow probe --json
@@ -182,6 +192,7 @@ fastflow self-test
 flm list
 flm run qwen3:0.6b
 ```
+<!-- --8<-- [end:validate] -->
 
 To compile your own NPU programs with the installed compiler, see
 [Develop your own models and applications](#develop-your-own-models-and-applications-using-iron-tools).
@@ -211,14 +222,14 @@ instead of the vendored `fastflow-sdk-compiler` package; see instructions there.
 
 ### Hello world example
 
-[tests/npu/jit_smoke.py](tests/npu/jit_smoke.py) contains a small IRON JIT example
+[examples/hello_npu.py](examples/hello_npu.py) contains a small IRON JIT example
 program that we can compile for the NPU using `iron-tools`. It copies a buffer
 DDR -> MemTile -> DDR: pure DMA, no compute kernel.
 
 After installing `fastflow-sdk`, clone or download this repository and run:
 
 ```bash
-python tests/npu/jit_smoke.py
+python examples/hello_npu.py
 # PASS: 4096 int32 elements copied through the NPU
 ```
 
@@ -244,10 +255,13 @@ FastFlowLM, compiler stack, platform prerequisites, packaging, and tests.
   does not yet support or validate the required preemption save/restore
   payloads end-to-end, so FastFlowLM preemption must remain disabled when using
   this flow.
-- **`load_pdi` and control scratchpad:** FastFlow SDK packaging does not yet carry
-  standalone PDIs, `load_pdi` relocations, or scratchpad parameter metadata.
-  IRON sequences using `load_pdi` or `ScratchpadParameter` are therefore not
-  currently supported.
+- **`load_pdi` and control scratchpad:** the `xclbin` and instruction-stream
+  path (`@iron.jit`) does not carry standalone PDIs, `load_pdi` relocations, or
+  scratchpad parameter metadata, so its sequences cannot use `load_pdi` or
+  `ScratchpadParameter`. An `iron.Graph` compiled to a full ELF carries them.
+  Running one needs NPU firmware 1.0.20.31 or later on Linux. On Windows it
+  needs NPU driver 32.0.20101.3760 or later, or 32.0.203.376 or later on the
+  32.0.203 line; 32.0.203.329 and older refuse it.
 
 ## Additional documentation
 
@@ -257,7 +271,7 @@ FastFlowLM, compiler stack, platform prerequisites, packaging, and tests.
   FastFlowLM projection GEMMs and runtime dequantization with IRON
 - [IRON Gemma 4 E2E](docs/examples/iron-gemma4.md): compile packaged or local IRON
   operators and serve the replacement FastFlowLM engine
-- [tests/npu/jit_smoke.py](tests/npu/jit_smoke.py): compiler/JIT smoke test
+- [examples/hello_npu.py](examples/hello_npu.py): compiler/JIT smoke test
   and the smallest complete iron-tools design
 - iron-tools programming:
   [guide](https://xilinx.github.io/mlir-aie/dev/) and

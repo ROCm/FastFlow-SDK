@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_requirement_profiles_are_grouped_and_locked():
     expected = {
         "compiler-stack",
+        "docs",
+        "examples",
         "fastflowlm",
         "iron-ops-test",
         "npu-test-runtime",

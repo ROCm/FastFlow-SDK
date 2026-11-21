@@ -280,7 +280,7 @@ def cmd_test_npu_jit(args):
     env = _compiler_env(compiler_prefix)
     command = [
         environment.venv_py(),
-        paths.ROOT / "tests" / "npu" / "jit_smoke.py",
+        paths.ROOT / "examples" / "hello_npu.py",
     ]
     if build_only:
         command.append("--build-only")

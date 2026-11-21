@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
-"""SMOKE: the compiler plus the IRON JIT still produce a design that runs.
+"""Hello NPU: compile the smallest complete IRON design and run it on the NPU.
 
-Compiles the smallest complete design -- a pure-DMA memcpy, DDR -> MemTile ->
-DDR, with no compute kernel -- and dispatches it. That covers the whole chain:
-IRON -> MLIR -> aiecc -> bootgen -> xclbin -> HRX -> NPU.
+The design is a pure-DMA memcpy, DDR -> MemTile -> DDR, with no compute
+kernel, so it covers the whole chain: IRON -> MLIR -> aiecc -> bootgen ->
+xclbin -> HRX -> NPU.
 
-Run it with `python dev.py test-npu-jit [--build-only]`, or directly once
-fastflow-sdk-compiler is installed.
+    python hello_npu.py               # compile and run (needs an NPU)
+    python hello_npu.py --build-only  # compile only
+
+CI runs it with `python dev.py test-npu-jit [--build-only]`.
 
 For the programming abstractions (ObjectFifo, Worker, tiling, C++ kernels) and
 many more designs, see the iron-tools/MLIR-AIE programming guide

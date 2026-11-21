@@ -1,0 +1,169 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# The documentation site. Build it with `python -m build_tools.docs build`
+# (requirements/docs.lock), which first writes the generated pages into docs/.
+
+[project]
+site_name = "FastFlow SDK"
+site_url = "https://rocm.github.io/FastFlow-SDK/"
+site_description = """\
+FastFlow SDK runs FastFlowLM language models and compiles custom IRON NPU \
+programs for AMD Ryzen AI XDNA2 NPUs on Linux and Windows, on the HRX runtime."""
+site_author = "Advanced Micro Devices, Inc."
+repo_name = "ROCm/FastFlow-SDK"
+repo_url = "https://github.com/ROCm/FastFlow-SDK"
+copyright = "Copyright © 2026 Advanced Micro Devices, Inc. Licensed under the MIT License."
+docs_dir = "docs"
+site_dir = "site"
+# Fail on any warning: a broken link or anchor, or a missing snippet.
+strict = true
+
+nav = [
+  { "Home" = "index.md" },
+  { "Get started" = [
+    { "Install" = "install.md" },
+    { "Run and serve models" = "serve.md" },
+    { "Hello NPU" = "hello-npu.md" },
+    { "For AI agents" = "agents.md" },
+  ] },
+  { "Guides" = [
+    { "Replace Gemma 4 GEMM and dequant with IRON" = "examples/iron-gemma4-gemm-dequant.md" },
+    { "Compile and serve the IRON Gemma 4 example" = "examples/iron-gemma4.md" },
+    { "Build from source" = "build-from-source.md" },
+    { "Model qualification" = "qualification.md" },
+  ] },
+  { "Reference" = [
+    { "fastflow CLI" = "reference/cli.md" },
+    { "Troubleshooting" = "reference/troubleshooting.md" },
+    { "Runtime CLI behavior" = "runtime-cli.md" },
+    { "Models" = "reference/models.md" },
+    { "IRON operators" = "reference/operators.md" },
+    { "Hardware and drivers" = "reference/hardware.md" },
+    { "Component versions" = "reference/versions.md" },
+    { "Glossary" = "glossary.md" },
+    { "Contracts" = [
+      { "Runtime CLI JSON" = "contracts/runtime-cli-json.md" },
+      { "Plugin API v1" = "contracts/plugin-api-v1.md" },
+      { "Qualification evidence v1" = "contracts/qualification-evidence-v1.md" },
+    ] },
+  ] },
+  { "Releases" = [
+    { "Release notes" = "releases.md" },
+    { "Wheel releases and the package index" = "wheel-releases.md" },
+    { "Third-party notices" = "third-party-notices.md" },
+  ] },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "navigation.tabs",
+  "navigation.sections",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.top",
+  "navigation.footer",
+  "search.highlight",
+  "content.tabs.link",
+  "content.code.copy",
+  "content.action.copy",
+  "toc.follow",
+]
+
+[project.theme.icon]
+logo = "lucide/cpu"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "black"
+accent = "red"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "black"
+accent = "red"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/ROCm/FastFlow-SDK"
+name = "FastFlow SDK on GitHub"
+
+# GitHub alerts in docs/ (> [!NOTE]) render as admonitions.
+[project.plugins.gh-admonitions]
+
+# /llms.txt indexes the site for coding agents and /llms-full.txt is the whole
+# site as one Markdown file; every page is also served as Markdown.
+[project.plugins.llmstxt]
+full_output = "llms-full.txt"
+markdown_description = """\
+FastFlow SDK is AMD's software stack for XDNA2 NPUs in Ryzen AI processors, on \
+Linux and Windows (x86_64). `pip install fastflow-sdk` (from the FastFlow SDK \
+package index) installs FastFlowLM (`flm`, which runs and serves LLMs through \
+an OpenAI-compatible API on the NPU), the HRX runtime and the `fastflow` \
+health CLI, the iron-tools (MLIR-AIE) compiler with its `aie.iron` Python API, \
+and the IRON operator library. Use `fastflow doctor --json` to check a machine \
+and the Troubleshooting page to act on any check that fails. The scripts the \
+pages show can be downloaded from /examples/ on this site."""
+
+[project.plugins.llmstxt.sections]
+"Start here" = [
+  { "index.md" = "What the SDK contains and which part to use for a task" },
+  { "install.md" = "Install command, requirements, packages, and verification" },
+  { "agents.md" = "Rules and commands for coding agents" },
+  { "glossary.md" = "NPU2, XDNA2, AIE2P, MLIR-AIE, iron-tools, IRON, HRX, and other names" },
+]
+"Run and serve models" = [
+  { "serve.md" = "flm run and flm serve, the OpenAI-compatible API, tools, embeddings, speech" },
+  { "reference/models.md" = "Model tags with size, context, and capabilities" },
+]
+"Program the NPU" = [
+  { "hello-npu.md" = "The smallest complete IRON program, compiled and run on the NPU" },
+  { "reference/operators.md" = "Run IRON library operators; their parameters and operands" },
+  "examples/*.md",
+]
+"Reference" = [
+  { "reference/cli.md" = "fastflow commands, exit status, and JSON output" },
+  { "reference/troubleshooting.md" = "What each fastflow check ID means and how to fix it" },
+  { "runtime-cli.md" = "What fastflow commands inspect and change" },
+  { "reference/hardware.md" = "Qualified systems, drivers, and firmware" },
+  { "reference/versions.md" = "Pinned revisions of every component" },
+  "contracts/*.md",
+]
+"Releases and building" = [
+  { "releases.md" = "Release notes for every release" },
+  { "wheel-releases.md" = "How wheels are versioned, built, and published" },
+  { "build-from-source.md" = "Build the SDK from this repository" },
+  { "qualification.md" = "fastflow qualify profiles and evidence" },
+  { "third-party-notices.md" = "Licenses of bundled third-party code" },
+]
+
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.footnotes]
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.superfences]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+
+# Guides include tested repository files, and README.md sections, by path
+# from the repository root.
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["."]
+check_paths = true
+
+# GitHub's heading anchors, so links between pages work on GitHub and the site.
+[project.markdown_extensions.toc]
+permalink = true
+slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } }

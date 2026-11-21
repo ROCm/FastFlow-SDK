@@ -10,4 +10,4 @@ Copyright © 2013-2025 Niels Lohmann.
 It is distributed under the MIT License. Products containing `fastflow`
 include the complete license as `licenses/nlohmann-json-LICENSE.MIT`.
 Vendored-file provenance and update instructions are recorded in
-[`third_party/nlohmann_json/README.md`](../third_party/nlohmann_json/README.md).
+[`third_party/nlohmann_json/README.md`](https://github.com/ROCm/FastFlow-SDK/blob/main/third_party/nlohmann_json/README.md).

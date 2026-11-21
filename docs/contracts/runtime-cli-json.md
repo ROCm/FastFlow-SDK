@@ -5,6 +5,9 @@ a newline to standard output. Diagnostics that are not part of the report are
 written to standard error. A failed health check or self-test still produces a
 complete report. If `--json` is present but invocation parsing fails, the CLI
 emits an `invocation` report containing `invocation.arguments` and exits 2.
+`--help` prints the usage text instead of a report. An external plugin that
+starts writes its own output and sets the exit status; the CLI reports
+`plugin.dispatch` only when it cannot start one.
 
 Consumers must use `schema_version` before interpreting a report. Version 1
 has a stable envelope with these top-level members:
@@ -69,7 +72,13 @@ Stable doctor check IDs include:
 Power-mode reporting and setting use `powermode.device_present`,
 `powermode.query`, `powermode.set`, and `powermode.support`.
 `powermode.support` reports whether platform power-mode setting is available.
+`powermode.arguments` reports an invalid mode that reaches the command; the
+invocation parser normally rejects one first with `invocation.arguments`.
 Self-test adds `self_test.prerequisites`, `self_test.fixture`, `self_test.load`,
 `self_test.dispatch`, `self_test.cleanup`, and `self_test.output`. Plugin
-discovery uses `plugin.discovery`. Unhandled execution failures use
-`internal.error`.
+discovery uses `plugin.discovery`, and a plugin that cannot be started reports
+`plugin.dispatch`. Unhandled execution failures use `internal.error`.
+
+[Troubleshooting](https://rocm.github.io/FastFlow-SDK/reference/troubleshooting/)
+explains each check ID and what to do when it does not pass; it is generated
+from `tools/fastflow/checks.toml`.

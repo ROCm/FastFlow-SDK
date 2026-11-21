@@ -563,7 +563,7 @@ jobs:
         run: .venv/Scripts/python.exe dev.py test-npu-package
 
   # Full compiler + bindings on the primary Windows SKU. Compiles and runs the
-  # README IRON JIT example (tests/npu/jit_smoke.py) end to end.
+  # README IRON JIT example (examples/hello_npu.py) end to end.
   npu_examples:
     name: NPU examples (Windows gfx1151)
     if: ${{ inputs.run_npu_e2e }}
