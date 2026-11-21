@@ -236,7 +236,7 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert "source_sha: ${{ steps.source.outputs.sha }}" in workflow
         assert "git merge-base --is-ancestor" in workflow
         assert '"${GITHUB_REF}" != refs/heads/main' in workflow
-        assert "if: ${{ inputs.publish_target == 'github-prerelease' }}" in workflow
+        assert "if: ${{ inputs.publish_target != 'none' }}" in workflow
         assert "fetch-depth: 0" in workflow
         assert "--release-platform" not in workflow
         assert '--publish-target "${INPUT_PUBLISH_TARGET}"' in workflow
@@ -312,9 +312,76 @@ class TestFastflowSdkReleaseWheelWorkflow:
             assert "if: ${{ inputs.publish_target == 'none' }}" in validation
             assert "id-token: write" not in validation
             assert "attestations: write" not in validation
-        publish = workflow.split("\n  publish_github_prerelease:", 1)[1]
+        publish = _job(workflow, "publish_github_release")
         assert "vars.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
-        assert "Create draft GitHub prerelease (disabled)" in publish
+        assert "name: Create draft GitHub release (disabled)\n" in publish
+
+    def test_stable_release_shares_attested_builds_with_prerelease(self):
+        workflow = read_workflow("release_fastflow_sdk_wheels.yml")
+        options = workflow.split("        options:\n", 1)[1].split("\n\n", 1)[0]
+        assert options.split() == [
+            "-",
+            "none",
+            "-",
+            "github-prerelease",
+            "-",
+            "github-release",
+        ]
+        assert "        default: none\n" in workflow
+        assert "github-release requires the stable version" in workflow
+
+        history = workflow.split("- name: Require reviewed main history", 1)[1]
+        history = history.split("- name:", 1)[0]
+        assert "if: ${{ inputs.publish_target != 'none' }}" in history
+        for job in (
+            "linux_publish_wheels",
+            "windows_publish_wheels",
+            "linux_publish_compiler_wheels",
+            "windows_publish_compiler_wheels",
+        ):
+            section = _job(workflow, job)
+            assert "if: ${{ inputs.publish_target != 'none' }}" in section
+            assert "attest_wheels: true" in section
+            assert "prerelease" not in section
+        assert (
+            "publish_target == 'github-prerelease'"
+            not in workflow.split("\n  publish_github_release:", 1)[0]
+        )
+
+        collect = _job(workflow, "collect")
+        assert "inputs.publish_target == 'none' &&" in collect
+        assert "inputs.publish_target != 'none' &&" in collect
+
+    def test_github_release_job_gates_and_flags_follow_the_version(self):
+        workflow = read_workflow("release_fastflow_sdk_wheels.yml")
+        assert "publish_github_prerelease:" not in workflow
+        publish = _job(workflow, "publish_github_release")
+        gate = publish.split("    if: >-\n", 1)[1].split("    runs-on:", 1)[0]
+        assert re.search(
+            r"inputs\.publish_target != 'none' &&\s*"
+            r"vars\.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'\s*}}",
+            gate,
+        )
+        assert "ENABLE_GITHUB_RELEASE" not in workflow
+        assert "    environment: fastflow-sdk-prerelease\n" in publish
+        assert "contents: write" in publish
+        assert "- name: Create draft GitHub release for qualification evidence" in (
+            publish
+        )
+        assert "draft: true" in publish
+        assert "prerelease: ${{ needs.prepare.outputs.is_prerelease }}" in publish
+        assert (
+            "makeLatest: ${{ needs.prepare.outputs.is_prerelease == 'true' && "
+            "'false' || 'true' }}"
+        ) in publish
+        assert "prerelease: true" not in publish
+        assert "makeLatest: false" not in publish
+        assert (
+            "Linux and Windows ${{ needs.prepare.outputs.is_prerelease == 'true' "
+            "&& 'prerelease' || 'release' }} wheels"
+        ) in publish
+        assert "This release remains a draft until" in publish
+        assert "allowUpdates: false" in publish
 
     def test_qualification_candidate_is_release_wide(self):
         for name in ("fastflowlm_hrx_linux.yml", "fastflowlm_hrx_windows.yml"):
@@ -329,7 +396,7 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert "release/candidate-manifest.json" in release
         assert "draft: true" in release
         assert "immutableCreate: true" not in release
-        publish = release.split("\n  publish_github_prerelease:", 1)[1]
+        publish = _job(release, "publish_github_release")
         assert "vars.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'" in publish
 
     def test_release_uses_neutral_public_names_and_shared_release_lock(self):
