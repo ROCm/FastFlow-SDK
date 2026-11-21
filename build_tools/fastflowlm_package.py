@@ -140,7 +140,12 @@ def cmd_audit_fastflowlm_wheels(args):
                 f"{product} wheel does not use expected tag {expected_tags[product]}: "
                 f"{wheels[product].name}"
             )
-        policy = auditwheel_policy(wheels[product])
+        exclude = (
+            implementation.runtime_wheel_libraries(wheels[RUNTIME_DISTRIBUTION])
+            if product == FASTFLOWLM_DISTRIBUTION
+            else frozenset()
+        )
+        policy = auditwheel_policy(wheels[product], exclude=exclude)
         print(f"auditwheel overall policy: {policy}")
         implementation.validate_auditwheel_policy(product, policy)
 

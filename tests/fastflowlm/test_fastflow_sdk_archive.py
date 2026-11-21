@@ -282,11 +282,13 @@ class TestFastFlowLMArtifact:
             "libpthread.so.0",
             "libgcc_s.so.1",
             "libstdc++.so.6",
-            "libgomp.so.1",
             "ld-linux-x86-64.so.2",
             "linux-vdso.so.1",
         ):
             assert _is_linux_system_runtime(name), name
+        # manylinux has no libgomp; the bundle carries LLVM libomp instead.
+        assert not _is_linux_system_runtime("libgomp.so.1")
+        assert not _is_linux_system_runtime("libomp.so")
         assert not _is_linux_system_runtime("libcurl.so.4")
         assert not _is_linux_system_runtime("libedit.so.0")
         assert not _is_linux_system_runtime("libboost_container.so.1.91.0")

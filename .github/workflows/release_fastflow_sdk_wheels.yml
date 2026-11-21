@@ -359,7 +359,6 @@ jobs:
             --source-sha "${FASTFLOW_SDK_SOURCE_SHA}" \
             --expected-wheel-tag py3-none-any \
             --expected-wheel-tag py3-none-manylinux_2_28_x86_64 \
-            --expected-wheel-tag py3-none-linux_x86_64 \
             --expected-wheel-tag py3-none-win_amd64 \
             --expected-wheel-tag cp312-abi3-manylinux_2_28_x86_64 \
             --expected-wheel-tag cp312-abi3-win_amd64
@@ -398,7 +397,6 @@ jobs:
           for platform in linux windows; do
             if [[ "${platform}" == linux ]]; then
               platform_args=(
-                --platform linux_x86_64
                 --platform manylinux_2_28_x86_64
               )
             else

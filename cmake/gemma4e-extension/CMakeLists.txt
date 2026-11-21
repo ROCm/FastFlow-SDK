@@ -23,7 +23,19 @@ list(PREPEND CMAKE_PREFIX_PATH
 
 find_package(hrx CONFIG REQUIRED)
 find_package(FastFlowLMModelExtension CONFIG REQUIRED)
-find_package(OpenMP REQUIRED)
+# Linux packages carry LLVM libomp in place of libgomp. Linking that copy keeps
+# the plugin on flm's OpenMP runtime instead of loading a second one. Compile
+# with -fopenmp only: at link time GCC would add libgomp.
+set(_bundled_openmp "${FASTFLOWLM_PACKAGE_ROOT}/lib/libomp.so")
+if(NOT WIN32 AND EXISTS "${_bundled_openmp}")
+    add_library(fastflow_sdk_openmp INTERFACE)
+    target_compile_options(fastflow_sdk_openmp INTERFACE -fopenmp)
+    target_link_libraries(fastflow_sdk_openmp INTERFACE "${_bundled_openmp}")
+    set(_openmp_target fastflow_sdk_openmp)
+else()
+    find_package(OpenMP REQUIRED)
+    set(_openmp_target OpenMP::OpenMP_CXX)
+endif()
 
 # Archive installs keep the import libraries next to the HRX prefix. A wheel
 # install splits them: FASTFLOW_SDK_ROOT is fastflow-sdk-runtime, and
@@ -175,7 +187,7 @@ target_link_libraries(gemma4e_open_extension PRIVATE
     flm_image_codecs
     flm_audio_codecs
     hrx::hrx
-    OpenMP::OpenMP_CXX
+    ${_openmp_target}
     "${Q4_NPU_EXPRESS_LIBRARY}")
 if(WIN32)
     target_link_libraries(gemma4e_open_extension PRIVATE "${MHA_LIBRARY}")

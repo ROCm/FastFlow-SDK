@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from build_tools import environment, paths
+from build_tools import environment, llvm_openmp, paths
 from build_tools.artifact import directory_state, git_source_state
 from build_tools.dev import patches
 from build_tools.fastflowlm_deps import dependency_errors, dependency_paths
@@ -134,6 +134,20 @@ def _host_xrt_pkgconfig_dir(prefix):
     """
     host_pc = Path(prefix) / "share" / "pkgconfig" / "xrt.pc"
     return host_pc.parent if host_pc.is_file() else None
+
+
+def cmd_build_llvm_openmp(args):
+    """Build the LLVM OpenMP runtime that replaces libgomp in the Linux payload."""
+    if paths.is_windows():
+        sys.exit(
+            "llvm-openmp is Linux-only; the Windows payload ships the MSVC "
+            "OpenMP runtime"
+        )
+    source = llvm_openmp.openmp_source(paths.ROOT, paths.LLVM_OPENMP_SOURCE)
+    installed = llvm_openmp.build(
+        paths.ROOT, source, paths.LLVM_OPENMP_BUILD, paths.LLVM_OPENMP_INSTALL
+    )
+    print("build llvm-openmp: ok ->", installed / "lib" / llvm_openmp.LIBRARY)
 
 
 def cmd_build_fastflowlm(args):

@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from build_tools import llvm_openmp
 from build_tools.artifact import reset_directory
 from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
@@ -448,13 +449,25 @@ def write_runtime_wheel_manifests(
         "source_product": source_manifest.get("product"),
         "strip": strip_report,
     }
+    # The OpenMP runtime ships with the FastFlowLM engine libraries that use it.
+    components = source_manifest.get("components", [])
+    runtime_components = [
+        record
+        for record in components
+        if record.get("name") != llvm_openmp.COMPONENT_NAME
+    ]
+    fastflowlm_components = [
+        record
+        for record in components
+        if record.get("name") == llvm_openmp.COMPONENT_NAME
+    ]
     _write_package_manifest(
         trees.runtime_root,
         {
             **common,
             "product": RUNTIME_DISTRIBUTION,
             "artifact": runtime_artifact_name(),
-            "components": source_manifest.get("components", []),
+            "components": runtime_components,
             "wheel_tag": runtime_wheel_tag,
             "binary_dependencies": {
                 name: needed
@@ -469,7 +482,7 @@ def write_runtime_wheel_manifests(
             **common,
             "product": FASTFLOWLM_DISTRIBUTION,
             "artifact": fastflowlm_artifact_name(),
-            "components": [],
+            "components": fastflowlm_components,
             "wheel_tag": fastflowlm_wheel_tag,
             "requires": [f"{RUNTIME_DISTRIBUTION} =={version}"],
             "binary_dependencies": {

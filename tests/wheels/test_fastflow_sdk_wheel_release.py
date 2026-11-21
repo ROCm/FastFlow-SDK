@@ -270,7 +270,6 @@ class TestFastflowSdkWheelRelease:
             root,
             version,
             wheel_tag="py3-none-manylinux_2_28_x86_64",
-            fastflowlm_wheel_tag="py3-none-linux_x86_64",
             output_directory=root / "dist" / "linux",
             include_meta=False,
         )
@@ -359,7 +358,6 @@ class TestFastflowSdkWheelRelease:
             assert (release / f"{filename}.sha256").is_file()
         assert artifact_tags == {
             "py3-none-manylinux_2_28_x86_64",
-            "py3-none-linux_x86_64",
             "py3-none-win_amd64",
             "py3-none-any",
             "cp312-abi3-manylinux_2_28_x86_64",
@@ -385,7 +383,7 @@ class TestFastflowSdkWheelRelease:
             if distribution == RUNTIME_DISTRIBUTION:
                 assert "manylinux_2_28_x86_64" in index
             elif distribution == FASTFLOWLM_DISTRIBUTION:
-                assert "py3-none-linux_x86_64" in index
+                assert "py3-none-manylinux_2_28_x86_64" in index
             if distribution not in (
                 COMPILER_DISTRIBUTION,
                 QUALIFICATION_DISTRIBUTION,
@@ -437,7 +435,6 @@ class TestFastflowSdkWheelRelease:
             version,
             runtime_requirement="0.1.0.dev0",
             wheel_tag="py3-none-manylinux_2_28_x86_64",
-            fastflowlm_wheel_tag="py3-none-linux_x86_64",
             output_directory=root / "dist" / "linux",
             include_meta=False,
         )
@@ -471,7 +468,6 @@ class TestFastflowSdkWheelRelease:
             version,
             binding_runtime_requirements=(),
             wheel_tag="py3-none-manylinux_2_28_x86_64",
-            fastflowlm_wheel_tag="py3-none-linux_x86_64",
             output_directory=root / "dist" / "linux",
             include_meta=False,
         )
@@ -506,7 +502,6 @@ class TestFastflowSdkWheelRelease:
             root,
             version,
             wheel_tag="py3-none-manylinux_2_28_x86_64",
-            fastflowlm_wheel_tag="py3-none-linux_x86_64",
             output_directory=root / "dist" / "linux",
             include_meta=False,
         )
@@ -561,7 +556,6 @@ class TestFastflowSdkWheelRelease:
             root,
             version,
             wheel_tag="py3-none-manylinux_2_28_x86_64",
-            fastflowlm_wheel_tag="py3-none-linux_x86_64",
             output_directory=root / "dist/linux",
             include_meta=False,
         )
@@ -784,7 +778,6 @@ class TestFastflowSdkWheelRelease:
         tags = {
             "py3-none-any",
             "py3-none-manylinux_2_28_x86_64",
-            "py3-none-linux_x86_64",
             "py3-none-win_amd64",
         }
         tags.update(
