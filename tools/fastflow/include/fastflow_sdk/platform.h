@@ -49,6 +49,8 @@ std::optional<PowerMode> ParsePowerMode(const std::string& value);
 std::optional<PowerMode> PowerModeFromValue(std::uint32_t value);
 std::string PowerModeName(PowerMode mode);
 std::filesystem::path ExecutablePath();
+// Absolute form of `path` that file APIs accept past MAX_PATH on Windows.
+std::filesystem::path LongPath(const std::filesystem::path& path);
 inline std::string PathToUtf8(const std::filesystem::path& path) {
   return path.u8string();
 }
