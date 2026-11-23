@@ -37,17 +37,53 @@ PACKAGE_MODULES = {
     "numpy": "numpy",
     "ml-dtypes": "ml_dtypes",
 }
+SDK_DISTRIBUTION = "fastflow-sdk"
+# Written by build_tools/fastflow_sdk_pypi_wheel.py into the single PyPI wheel,
+# which installs every component under the one ``fastflow-sdk`` distribution.
+SDK_COMPONENTS_FILE = "fastflow-sdk-components.json"
+
+
+def bundled_component_versions() -> dict[str, str]:
+    """Return component versions recorded by a single-wheel ``fastflow-sdk``."""
+    try:
+        text = metadata.distribution(SDK_DISTRIBUTION).read_text(SDK_COMPONENTS_FILE)
+    except metadata.PackageNotFoundError:
+        return {}
+    if text is None:
+        return {}
+    try:
+        components = json.loads(text)["components"]
+        return {
+            component["distribution"]: component["version"] for component in components
+        }
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise QualificationError(
+            f"installed {SDK_DISTRIBUTION} component record is invalid"
+        ) from error
+
+
+def _distribution_installed(distribution: str) -> bool:
+    try:
+        metadata.distribution(distribution)
+    except metadata.PackageNotFoundError:
+        return False
+    return True
 
 
 def package_versions() -> dict[str, str]:
     versions = {}
+    bundled = None
     for distribution in PACKAGE_DISTRIBUTIONS:
         try:
             versions[distribution] = metadata.version(distribution)
         except metadata.PackageNotFoundError as error:
-            raise QualificationError(
-                f"required package is not installed: {distribution}"
-            ) from error
+            if bundled is None:
+                bundled = bundled_component_versions()
+            if distribution not in bundled:
+                raise QualificationError(
+                    f"required package is not installed: {distribution}"
+                ) from error
+            versions[distribution] = bundled[distribution]
     return versions
 
 
@@ -531,6 +567,13 @@ def validate_versions(
         return
     if candidate_path is None:
         raise QualificationError("candidate manifest path is required")
+    bundled = [name for name in installed if not _distribution_installed(name)]
+    if bundled:
+        raise QualificationError(
+            "candidate qualification requires the component wheels; "
+            f"{', '.join(bundled)} is installed through the single "
+            f"{SDK_DISTRIBUTION} wheel"
+        )
     for name, version in installed.items():
         expected = {
             identity["version"] for identity in candidate_manifest["packages"][name]

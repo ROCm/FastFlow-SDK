@@ -3,7 +3,6 @@
 > [!NOTE]
 > This document is the **release-operator** policy for versioning, validating,
 > and publishing wheels. To *install* a published build, use the
-> [FastFlow SDK package index](#package-index) and the
 > [install guide](install.md).
 
 FastFlow SDK compiler, ops, runtime, and FastFlowLM wheels use
@@ -66,9 +65,10 @@ replace or reuse a published version; produce a new development or release
 candidate version instead.
 
 `fastflow-sdk-qualification` is `py3-none-any` and requires
-`fastflow-sdk-fastflowlm` at exactly the same version plus NumPy 2.4.6 and
-ml-dtypes 0.6.0. Pip resolves the numeric wheels from the package index for
-CPython 3.11 through 3.14 on Linux and Windows. Candidate v1 binds the required
+`fastflow-sdk-fastflowlm` at exactly the same version plus NumPy 2.5.3 and
+ml-dtypes 0.6.0, the versions the compiler bindings pin. Pip resolves the
+numeric wheels from the package index for CPython 3.12 through 3.14 on Linux
+and Windows. Candidate v1 binds the required
 versions, and qualification evidence records the installed wheel tags, RECORD
 digest, and verified payload digest.
 Linux and Windows generate the qualification wheel independently from the same
@@ -261,15 +261,16 @@ Pages deployment replaces the whole site, and the site documents a release, not
 (`.github/workflows/publish_fastflow_sdk_pages.yml`) from `main` (Actions → Run
 workflow). It rebuilds the whole index from the releases API
 (`build_tools/publish_fastflow_sdk_simple_index.py`), builds the documentation
-at the latest release's tag, or at the `ref` input, into the same site, and
-deploys both. A ref without `zensical.toml`, such as a release from before the
+at the latest stable release's tag (the latest prerelease's while no release is
+stable), or at the `ref` input, into the same site, and deploys both. For a
+stable release, run it after the [PyPI upload](#pypi-wheel). A ref without `zensical.toml`, such as a release from before the
 documentation site, publishes the index alone with a warning; run it with
 `ref: main` to publish the documentation of `main` instead. The repository's
 Pages source must be set to GitHub Actions.
 
-All published versions are currently development builds. Install commands use
-`--pre` because PyPI hosts a `fastflow-sdk 0.0.1` placeholder, a final release
-that pip otherwise prefers; an exact `==<version>` pin works without it.
+Development builds install from this index with `--pre`. Stable releases also
+appear on it, but users install them from PyPI as the single wheel described in
+[PyPI wheel](#pypi-wheel).
 
 Each wheel uses Core Metadata 2.4 with an SPDX license expression and copies
 all applicable license and notice files under `.dist-info/licenses/`. It also
@@ -308,6 +309,72 @@ aiecc --help
 
 Also check that an unpinned `--pre` install of `fastflow-sdk` resolves to the
 new version.
+
+## PyPI wheel
+
+PyPI hosts only stable releases, as one `fastflow-sdk` wheel per platform:
+`cp312-abi3-manylinux_2_28_x86_64` for Linux and `cp312-abi3-win_amd64` for
+Windows. Each repacks a published release's component wheels unchanged
+(`build_tools/fastflow_sdk_pypi_wheel.py`), without rebuilding anything:
+
+- Every component wheel must be listed in the release `SHA256SUMS`, match its
+  own `RECORD`, and share the release version. Every payload file is copied
+  byte for byte with its mode, and two components may not ship the same path.
+- The merged metadata pins the union of the components' external requirements
+  and intersects their `Requires-Python`. A requirement on a component that is
+  not bundled, or two requirements that conflict, fails the build.
+- Each component's licenses and SBOM are kept under
+  `.dist-info/licenses/<component>/` and `.dist-info/sboms/<component>.cyclonedx.json`.
+  `.dist-info/fastflow-sdk-components.json` records each bundled wheel's name,
+  version, and SHA-256, and `fastflow qualify` reads its versions from there.
+- Linux inputs must already be manylinux; the wheel takes the most restrictive
+  component tag, and `auditwheel` must confirm it.
+
+Candidate-bound qualification still requires the component wheels, so release
+evidence is always collected from them, not from the PyPI wheel.
+
+CI repacks, audits, and checks every collected release the same way, in the
+collect job (`collect_fastflow_sdk_ci_release.yml`), after uploading the
+unchanged release payload. After merge to `main`, and in the release workflow
+below, `verify_fastflow_sdk_pypi_wheels.yml` also installs the result on Linux
+and Windows with Python 3.12 and 3.14, in the `manylinux_2_28` container on the
+Linux NPU runner, and on the Windows NPU runner. Pull requests skip those
+installs, which download the large wheels to shared runners. The same steps run
+locally:
+
+```bash
+python dev.py package-pypi-wheel --release-dir <release> --platform linux
+python dev.py package-pypi-wheel --release-dir <release> --platform windows
+python dev.py audit-pypi-wheel build/pypi-wheel/fastflow_sdk-<version>-cp312-abi3-manylinux_2_28_x86_64.whl
+python dev.py verify-pypi-wheel build/pypi-wheel --require-hardware
+```
+
+`verify-pypi-wheel` installs the host's wheel into a clean virtual environment,
+then runs `pip check`, the imports, the runtime self-test, every console
+script, and the `fastflow` reports; `--require-hardware` adds `flm version` and
+`examples/hello_npu.py` on an NPU.
+
+To publish a stable release:
+
+1. Publish the GitHub release after qualification, as for any release.
+2. Run the `Build FastFlow SDK PyPI wheels for a release` workflow
+   (`.github/workflows/release_fastflow_sdk_pypi_wheels.yml`) from `main` with
+   the release tag. It downloads the release wheels and `SHA256SUMS`, verifies
+   each wheel's build-provenance attestation, repacks, audits, runs
+   `twine check --strict`, attests the two PyPI wheels, and runs the install and
+   NPU checks above. It does not upload anything.
+3. Download its `fastflow-sdk-pypi-wheel-linux` and
+   `fastflow-sdk-pypi-wheel-windows` artifacts, check each wheel with
+   `gh attestation verify <wheel> --repo ROCm/FastFlow-SDK`, and upload both
+   wheels with a PyPI API token scoped to the `fastflow-sdk` project:
+
+   ```bash
+   python -m twine upload --repository pypi fastflow_sdk-<version>-*.whl
+   ```
+
+4. In a clean virtual environment, check that `pip install fastflow-sdk`
+   installs the new version and that `fastflow self-test` passes.
+5. Run the documentation workflow from [Package index](#package-index).
 
 The release workflow creates GitHub build-provenance attestations for published
 wheels and standalone runtime archives in each native platform build job,

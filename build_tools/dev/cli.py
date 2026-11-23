@@ -13,6 +13,7 @@ from build_tools import (
     compiler_wheels,
     fastflow_sdk_meta_wheel,
     fastflow_sdk_ops_wheels,
+    fastflow_sdk_pypi_wheel,
     fastflow_sdk_qualification_wheel,
     fastflowlm_package,
     fastflowlm_xadx_assets,
@@ -276,6 +277,56 @@ def create_parser():
         "--dir",
         default=str(fastflow_sdk_meta_wheel.SDK_WHEEL_ARTIFACTS),
         help="wheel output directory",
+    )
+    ppw = _add_command(
+        sub,
+        "package-pypi-wheel",
+        fastflow_sdk_pypi_wheel.cmd_package_pypi_wheel,
+    )
+    ppw.add_argument(
+        "--release-dir",
+        required=True,
+        help="directory holding one release's wheels and its SHA256SUMS",
+    )
+    ppw.add_argument(
+        "--platform", required=True, choices=fastflow_sdk_pypi_wheel.PYPI_PLATFORMS
+    )
+    ppw.add_argument(
+        "--sha256sums", help="release digest listing (default: RELEASE_DIR/SHA256SUMS)"
+    )
+    ppw.add_argument(
+        "--dir",
+        default=str(fastflow_sdk_pypi_wheel.PYPI_WHEEL_ARTIFACTS),
+        help="wheel output directory",
+    )
+    apw = _add_command(
+        sub,
+        "audit-pypi-wheel",
+        fastflow_sdk_pypi_wheel.cmd_audit_pypi_wheel,
+    )
+    apw.add_argument("wheel", help="Linux PyPI wheel to audit")
+    vpw = _add_command(
+        sub,
+        "verify-pypi-wheel",
+        fastflow_sdk_pypi_wheel.cmd_verify_pypi_wheel,
+    )
+    vpw.add_argument(
+        "wheel", help="PyPI wheel, or a directory holding this platform's wheel"
+    )
+    vpw.add_argument(
+        "--venv",
+        default=str(fastflow_sdk_pypi_wheel.PYPI_WHEEL_VENV),
+        help="venv to replace and install the wheel into",
+    )
+    vpw.add_argument(
+        "--report-dir",
+        default=str(fastflow_sdk_pypi_wheel.PYPI_WHEEL_REPORTS),
+        help="directory for the fastflow CLI JSON reports",
+    )
+    vpw.add_argument(
+        "--require-hardware",
+        action="store_true",
+        help="also require a passing NPU self-test, flm, and the IRON JIT example",
     )
     vow = _add_command(
         sub,

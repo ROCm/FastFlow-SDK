@@ -381,6 +381,41 @@ def test_releases_start_at_the_documented_release(tmp_path):
         releases.latest_tag(path)
 
 
+def test_latest_release_prefers_the_newest_stable_release(tmp_path):
+    def release(tag, published, *, prerelease):
+        return dict(_release(tag, "", published=published), prerelease=prerelease)
+
+    path = tmp_path / "releases.json"
+    path.write_text(
+        json.dumps(
+            [
+                release(
+                    "fastflow-sdk-v0.2.0.dev1",
+                    "2026-12-02T00:00:00Z",
+                    prerelease=True,
+                ),
+                release(
+                    "fastflow-sdk-v0.1.0", "2026-12-01T00:00:00Z", prerelease=False
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert releases.latest_tag(path) == "fastflow-sdk-v0.1.0"
+
+    path.write_text(
+        json.dumps(
+            [
+                release(
+                    "fastflow-sdk-v0.1.0.dev3", "2026-11-18T00:00:00Z", prerelease=True
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert releases.latest_tag(path) == "fastflow-sdk-v0.1.0.dev3"
+
+
 def test_write_puts_pages_and_examples_where_the_site_reads_them(tmp_path):
     for name in (
         cli.COMMAND_SOURCE,

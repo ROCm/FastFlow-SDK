@@ -53,7 +53,11 @@ def load_releases(path: Path, tag: str | None = None) -> list[dict]:
 
 
 def latest_tag(path: Path) -> str:
-    """The tag of the newest published FastFlow SDK release.
+    """The tag of the newest stable release, else of the newest prerelease.
+
+    Stable releases are the ones on PyPI, which the documented plain
+    ``pip install fastflow-sdk`` installs; a newer development build would not
+    match it.
 
     Raises:
         ValueError: Nothing is published.
@@ -61,7 +65,8 @@ def latest_tag(path: Path) -> str:
     releases = load_releases(path)
     if not releases:
         raise ValueError("no FastFlow SDK release is published")
-    return str(releases[0]["tag_name"])
+    stable = [r for r in releases if not r.get("prerelease")]
+    return str((stable or releases)[0]["tag_name"])
 
 
 def version(release: dict) -> str:

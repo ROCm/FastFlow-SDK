@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "requires_python": ">=3.11,<3.15",
-  "python_abis": ["cp311", "cp312", "cp313", "cp314"],
+  "requires_python": ">=3.12,<3.15",
+  "python_abis": ["cp312", "cp313", "cp314"],
   "packages": {
     "ml-dtypes": "0.6.0",
-    "numpy": "2.4.6"
+    "numpy": "2.5.3"
   }
 }

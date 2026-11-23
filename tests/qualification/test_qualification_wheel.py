@@ -243,9 +243,9 @@ def test_qualification_wheel_is_pure_and_owns_only_plugin_entrypoint(
     assert "fastflow-qualify = fastflow_sdk_qualification.cli:main" in entry_points
     assert "\nfastflow =" not in entry_points
     assert "Requires-Dist: fastflow-sdk-fastflowlm ==1.2.3" in metadata_text
-    assert "Requires-Dist: numpy ==2.4.6" in metadata_text
+    assert "Requires-Dist: numpy ==2.5.3" in metadata_text
     assert "Requires-Dist: ml-dtypes ==0.6.0" in metadata_text
-    assert "Requires-Python: >=3.11,<3.15" in metadata_text
+    assert "Requires-Python: >=3.12,<3.15" in metadata_text
     assert (
         "License-Expression: MIT AND LicenseRef-FastFlowLM-Proprietary-Kernel-Terms"
     ) in metadata_text

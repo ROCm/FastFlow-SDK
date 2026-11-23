@@ -29,7 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("generate", "build", "serve"):
         commands.add_parser(name)
     latest = commands.add_parser(
-        "latest-release", help="print the newest published release's tag"
+        "latest-release",
+        help="print the newest stable release's tag, else the newest prerelease's",
     )
     latest.add_argument("--releases", type=Path, required=True)
     options = parser.parse_args(argv)

@@ -10,7 +10,12 @@ def package_version() -> str:
     try:
         return version("fastflow-sdk-qualification")
     except PackageNotFoundError:
-        return "0.0.0+source"
+        pass
+    from .installation import bundled_component_versions
+
+    return bundled_component_versions().get(
+        "fastflow-sdk-qualification", "0.0.0+source"
+    )
 
 
 __version__ = package_version()
