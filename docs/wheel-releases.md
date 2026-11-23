@@ -44,13 +44,15 @@ version. `compiler_python_stable_abi` sets the bindings ABI floor, and
 
 An explicit `package_version` supplied to a manual workflow dispatch overrides
 automatic development-version generation. Use that override for release
-candidates and stable-release validation. Explicit versions must be the
+candidates and stable releases. Explicit versions must be the
 configured base version, `<base>rcN`, or `<base>.devN`; versions from another
 train and alpha, beta, post, or local versions are rejected. Automated GitHub
 publication is currently disabled. Development and RC versions may use
-`publish_target=github-prerelease` to build the attested release payload, while
-the stable base version is accepted only with `publish_target=none`; neither
-mode creates a tag or release.
+`publish_target=github-prerelease` to build the attested release payload. The
+stable base version uses `publish_target=github-release` instead, which
+requires an explicit `package_version` and rejects development and RC versions;
+`github-prerelease` rejects the stable version. Neither mode creates a tag or
+release while the publication gate is disabled.
 
 Local non-release wheel builds use a commit-derived development version. That
 fallback identifies an individual checkout and is intentionally separate from
@@ -179,9 +181,10 @@ source commit. An operator may publish the validated payload manually under
 
 The `Release FastFlow SDK Wheels` workflow defaults to validation only. With
 `publish_target=none`, it builds and validates both platform wheel sets and
-uploads a temporary Actions artifact. `publish_target=github-prerelease` also
-builds and attests the release payload, but its GitHub publication job is
-disabled; it does not create or push a tag.
+uploads a temporary Actions artifact. `publish_target=github-prerelease` (for
+development and RC versions) and `publish_target=github-release` (for the
+stable version) also build and attest the same release payload, but the GitHub
+publication job is disabled; it does not create or push a tag.
 The same payload includes the tested standalone FastFlowLM + HRX runtime
 archives (`fastflow-sdk-linux-x86_64.tar.zst` and `fastflow-sdk-windows-x86_64.zip`),
 checksum sidecars, and detached bundle provenance manifests. Compiler CI also
@@ -215,7 +218,11 @@ bundles, transfers them to an intake machine, runs `fastflow qualify verify`
 and `fastflow qualify intake --policy release --require-status pass`, and
 reviews the recorded policy satisfaction in `qualification-index.json`.
 
-The GitHub prerelease publication job is currently disabled. Download the
+The GitHub publication job is currently disabled. It runs for both
+`github-prerelease` and `github-release` only when the repository variable
+`FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE` is `true`, and then creates a draft
+release marked as a prerelease for development and RC versions, or as the
+latest release for the stable version. Until then, download the
 complete collected Actions artifact, create the draft release and tag manually,
 then run `fastflow qualify stage-release` to assemble a single flat upload
 directory from that payload plus the intake aggregate

@@ -10,7 +10,7 @@ on:
         required: false
         default: ""
       package_version:
-        description: PEP 440 version; defaults to the configured development release train
+        description: PEP 440 version; defaults to the configured development release train (github-release requires the stable version)
         required: false
         default: ""
       publish_target:
@@ -21,6 +21,7 @@ on:
         options:
           - none
           - github-prerelease
+          - github-release
 
 permissions:
   contents: read
@@ -55,7 +56,7 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Require reviewed main history
-        if: ${{ inputs.publish_target == 'github-prerelease' }}
+        if: ${{ inputs.publish_target != 'none' }}
         shell: bash
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
@@ -133,7 +134,7 @@ jobs:
   linux_publish_wheels:
     name: Build, validate, and attest Linux wheels
     needs: prepare
-    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    if: ${{ inputs.publish_target != 'none' }}
     uses: ./.github/workflows/fastflowlm_hrx_linux.yml
     permissions:
       contents: read
@@ -141,7 +142,7 @@ jobs:
       id-token: write
       attestations: write
     with:
-      name: Linux wheel prerelease
+      name: Linux wheel release publication
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: true
@@ -152,7 +153,7 @@ jobs:
   windows_publish_wheels:
     name: Build, validate, and attest Windows wheels
     needs: prepare
-    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    if: ${{ inputs.publish_target != 'none' }}
     uses: ./.github/workflows/fastflowlm_hrx_windows.yml
     permissions:
       contents: read
@@ -160,7 +161,7 @@ jobs:
       id-token: write
       attestations: write
     with:
-      name: Windows wheel prerelease
+      name: Windows wheel release publication
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: true
@@ -200,7 +201,7 @@ jobs:
   linux_publish_compiler_wheels:
     name: Build, validate, and attest Linux compiler wheels
     needs: prepare
-    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    if: ${{ inputs.publish_target != 'none' }}
     uses: ./.github/workflows/build_fastflow_sdk_linux.yml
     permissions:
       contents: read
@@ -208,7 +209,7 @@ jobs:
       id-token: write
       attestations: write
     with:
-      name: Linux compiler wheel prerelease
+      name: Linux compiler wheel release publication
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: true
@@ -217,7 +218,7 @@ jobs:
   windows_publish_compiler_wheels:
     name: Build, validate, and attest Windows compiler wheels
     needs: prepare
-    if: ${{ inputs.publish_target == 'github-prerelease' }}
+    if: ${{ inputs.publish_target != 'none' }}
     uses: ./.github/workflows/build_fastflow_sdk_windows.yml
     permissions:
       contents: read
@@ -225,7 +226,7 @@ jobs:
       id-token: write
       attestations: write
     with:
-      name: Windows compiler wheel prerelease
+      name: Windows compiler wheel release publication
       ref: ${{ needs.prepare.outputs.source_sha }}
       package_version: ${{ needs.prepare.outputs.package_version }}
       attest_wheels: true
@@ -256,7 +257,7 @@ jobs:
             needs.windows_compiler_wheels.result == 'success'
           ) ||
           (
-            inputs.publish_target == 'github-prerelease' &&
+            inputs.publish_target != 'none' &&
             needs.linux_publish_wheels.result == 'success' &&
             needs.windows_publish_wheels.result == 'success' &&
             needs.linux_publish_compiler_wheels.result == 'success' &&
@@ -493,16 +494,17 @@ jobs:
           compression-level: 0
           retention-days: 30
 
-  publish_github_prerelease:
-    name: Create draft GitHub prerelease (disabled)
+  publish_github_release:
+    name: Create draft GitHub release (disabled)
     needs:
       - prepare
       - collect
-    # Releases remain fully manual unless an administrator explicitly enables
-    # the repository-level publication gate after operational validation.
+    # Prereleases and stable releases remain fully manual unless an
+    # administrator explicitly enables the repository-level publication gate
+    # after operational validation.
     if: >-
       ${{
-        inputs.publish_target == 'github-prerelease' &&
+        inputs.publish_target != 'none' &&
         vars.FASTFLOW_SDK_ENABLE_GITHUB_PRERELEASE == 'true'
       }}
     runs-on: ubuntu-24.04
@@ -516,14 +518,14 @@ jobs:
           name: fastflow-sdk-wheels-${{ needs.prepare.outputs.package_version }}
           path: release
 
-      - name: Create draft prerelease for qualification evidence
+      - name: Create draft GitHub release for qualification evidence
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           tag: ${{ needs.prepare.outputs.tag_name }}
           name: ${{ needs.prepare.outputs.release_name }}
           commit: ${{ needs.prepare.outputs.source_sha }}
           body: |
-            Linux and Windows prerelease wheels for the FastFlow SDK compiler,
+            Linux and Windows ${{ needs.prepare.outputs.is_prerelease == 'true' && 'prerelease' || 'release' }} wheels for the FastFlow SDK compiler,
             operator library, runtime, and FastFlowLM. Compiler bindings
             support CPython 3.12, 3.13, and 3.14.
             Tested standalone Linux `.tar.zst` and Windows `.zip` runtime
@@ -558,6 +560,6 @@ jobs:
           artifacts: "release/*.whl,release/*.zip,release/*.tar.zst,release/*.sha256,release/*.zip.manifest.json,release/*.tar.zst.manifest.json,release/SHA256SUMS,release/candidate-SHA256SUMS,release/candidate-manifest.json,release/fastflow-sdk-release-manifest.json,release/index.html"
           artifactErrorsFailBuild: true
           draft: true
-          prerelease: true
-          makeLatest: false
+          prerelease: ${{ needs.prepare.outputs.is_prerelease }}
+          makeLatest: ${{ needs.prepare.outputs.is_prerelease == 'true' && 'false' || 'true' }}
           allowUpdates: false

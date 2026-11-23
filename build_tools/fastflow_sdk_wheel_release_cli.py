@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from build_tools.fastflow_sdk_wheel_release import (
+    PUBLISH_TARGETS,
     prepare_fastflow_sdk_release_payload,
     resolve_release_inputs,
 )
@@ -72,7 +73,7 @@ def main() -> int:
     resolve.add_argument("--package-version", default="")
     resolve.add_argument(
         "--publish-target",
-        choices=("none", "github-prerelease"),
+        choices=PUBLISH_TARGETS,
         default="none",
     )
     resolve.add_argument(
