@@ -261,14 +261,14 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert "python -m twine check --strict wheelhouse/*/*.whl" in workflow
         assert "python build_tools/fastflow_sdk_wheel_release_cli.py" in workflow
         assert "--expected-wheel-tag py3-none-manylinux_2_28_x86_64" in workflow
-        assert "--expected-wheel-tag py3-none-linux_x86_64" in workflow
+        assert "--expected-wheel-tag py3-none-linux_x86_64" not in workflow
         assert "--expected-wheel-tag py3-none-win_amd64" in workflow
         assert "--expected-wheel-tag py3-none-any" in workflow
         assert "--expected-wheel-tag cp312-abi3-manylinux_2_28_x86_64" in workflow
         assert "--expected-wheel-tag cp312-abi3-win_amd64" in workflow
         assert "-cp313-" not in workflow
         assert "-cp314-" not in workflow
-        assert "--platform linux_x86_64" in workflow
+        assert "--platform linux_x86_64" not in workflow
         assert "--platform manylinux_2_28_x86_64" in workflow
         assert "python -m build_tools.verify_qualification_dependencies" in workflow
         assert "python -m build_tools.resolve_release_wheel" in workflow

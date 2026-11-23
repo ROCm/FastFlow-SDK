@@ -163,6 +163,31 @@ jobs:
       - name: Build FastFlowLM
         run: .venv/bin/python dev.py build fastflowlm --fresh
 
+      - name: Resolve pinned llvm-project commit
+        id: llvm-pin
+        run: >-
+          python3 -c 'import tomllib;
+          print("commit=" + tomllib.load(open("manifests/versions.toml", "rb"))["llvm"]["commit"])'
+          >> "${GITHUB_OUTPUT}"
+
+      - name: Restore LLVM OpenMP runtime
+        id: llvm-openmp
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/llvm-openmp-install
+          key: fastflowlm-llvm-openmp-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-abi.outputs.key }}-${{ steps.llvm-pin.outputs.commit }}-${{ hashFiles('build_tools/llvm_openmp.py') }}
+
+      - name: Build LLVM OpenMP runtime
+        if: steps.llvm-openmp.outputs.cache-hit != 'true'
+        run: .venv/bin/python dev.py build llvm-openmp
+
+      - name: Save LLVM OpenMP runtime
+        if: success() && steps.llvm-openmp.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/build/llvm-openmp-install
+          key: ${{ steps.llvm-openmp.outputs.cache-primary-key }}
+
       - name: Generate attested FastFlowLM kernel recipe assets
         run: .venv/bin/python dev.py generate-fastflowlm-xadx --fresh
 

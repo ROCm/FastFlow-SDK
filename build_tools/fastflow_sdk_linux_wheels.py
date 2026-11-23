@@ -6,19 +6,21 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import shutil
 import subprocess
 import zipfile
 from pathlib import Path
 
+from build_tools import llvm_openmp
 from build_tools.fastflow_sdk_archive import (
     _is_linux_system_runtime,
+    _origin_path,
     verify_bundle,
 )
 from build_tools.fastflow_sdk_wheel_common import (
     FASTFLOWLM_DISTRIBUTION,
     FASTFLOWLM_PACKAGE,
+    LICENSE_EXPRESSIONS,
     RUNTIME_DISTRIBUTION,
     RUNTIME_PACKAGE,
     find_distribution_wheels,
@@ -49,6 +51,9 @@ from build_tools.wheel_payload import (
     copy_file as _copy_file,
 )
 from build_tools.wheel_payload import (
+    copy_license as _copy_license,
+)
+from build_tools.wheel_payload import (
     copy_relative_file as _copy_relative_file,
 )
 from build_tools.wheel_payload import (
@@ -56,27 +61,38 @@ from build_tools.wheel_payload import (
 )
 
 LINUX_WHEEL_TAG = "py3-none-manylinux_2_28_x86_64"
-FASTFLOWLM_LINUX_WHEEL_TAG = "py3-none-linux_x86_64"
+FASTFLOWLM_LINUX_WHEEL_TAG = LINUX_WHEEL_TAG
 
 
 def validate_auditwheel_policy(distribution: str, policy: str) -> str:
     """Checks runtime-product audit policy against its claimed wheel tag."""
-    if distribution == RUNTIME_DISTRIBUTION:
-        try:
-            return validate_manylinux_policy(policy, maximum_glibc=(2, 28))
-        except RuntimeError as error:
-            raise RuntimeError(
-                f"{distribution} is not manylinux_2_28 compatible: {policy}"
-            ) from error
-    if distribution == FASTFLOWLM_DISTRIBUTION:
-        if policy != "linux_x86_64" and not re.fullmatch(
-            r"manylinux_\d+_\d+_x86_64", policy
-        ):
-            raise RuntimeError(
-                f"{distribution} has an unexpected auditwheel policy: {policy}"
-            )
-        return policy
-    raise RuntimeError(f"unexpected Linux runtime wheel distribution: {distribution}")
+    if distribution not in (RUNTIME_DISTRIBUTION, FASTFLOWLM_DISTRIBUTION):
+        raise RuntimeError(
+            f"unexpected Linux runtime wheel distribution: {distribution}"
+        )
+    try:
+        return validate_manylinux_policy(policy, maximum_glibc=(2, 28))
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"{distribution} is not manylinux_2_28 compatible: {policy}"
+        ) from error
+
+
+def runtime_wheel_libraries(wheel: Path) -> frozenset[str]:
+    """Returns the shared libraries the runtime wheel ships for its dependents.
+
+    The FastFlowLM wheel pins the runtime wheel exactly and its RUNPATH points
+    into it, so auditwheel treats these libraries as provided rather than as
+    host dependencies.
+    """
+    with zipfile.ZipFile(wheel) as archive:
+        return frozenset(
+            Path(name).name
+            for name in archive.namelist()
+            if name.startswith(f"{RUNTIME_PACKAGE}/lib/")
+            and ".so" in Path(name).name
+            and name.count("/") == 2
+        )
 
 
 def wheel_tag(system: str | None = None, machine: str | None = None) -> str:
@@ -207,6 +223,16 @@ def _rpath_for(path: Path, package_root: Path) -> str:
         return "$ORIGIN:$ORIGIN/..:$ORIGIN/../../../fastflow_sdk_runtime/lib"
     if relative.parts[0] == "lib":
         return "$ORIGIN:$ORIGIN/flm:$ORIGIN/../../fastflow_sdk_runtime/lib"
+    if relative.parts[0] == "share":
+        return ":".join(
+            (
+                "$ORIGIN",
+                _origin_path(path.parent, package_root / "lib"),
+                _origin_path(
+                    path.parent, package_root.parent / RUNTIME_PACKAGE / "lib"
+                ),
+            )
+        )
     return "$ORIGIN"
 
 
@@ -317,6 +343,10 @@ def stage_wheel_products(
     fastflowlm_license_names = _copy_fastflowlm_native_closure(
         source_bundle, fastflowlm_root, runtime_root
     )
+    if llvm_openmp.LIBRARY in fastflowlm_license_names:
+        _copy_license(
+            source_bundle, f"licenses/{llvm_openmp.BUNDLED_LICENSE}", fastflowlm_root
+        )
 
     runtime_names = {path.name for path in runtime_root.rglob("*") if path.is_file()}
     runtime_names.update(runtime_license_names)
@@ -361,6 +391,7 @@ def build_wheel(
     requires: tuple[str, ...] = (),
     console_scripts: dict[str, str] | None = None,
     tag: str | None = None,
+    license_expression: str | None = None,
 ) -> Path:
     return _build_wheel(
         tree_root,
@@ -371,6 +402,7 @@ def build_wheel(
         tag=tag or wheel_tag(),
         requires=requires,
         console_scripts=console_scripts,
+        license_expression=license_expression,
     )
 
 
@@ -389,6 +421,14 @@ def build_runtime_fastflowlm_wheels(
         summary="FastFlow SDK HRX amdxdna runtime",
         console_scripts={"fastflow": f"{RUNTIME_PACKAGE}:main"},
     )
+    fastflowlm_license = LICENSE_EXPRESSIONS[FASTFLOWLM_DISTRIBUTION]
+    if (
+        products[FASTFLOWLM_DISTRIBUTION]
+        / FASTFLOWLM_PACKAGE
+        / "lib"
+        / llvm_openmp.LIBRARY
+    ).is_file():
+        fastflowlm_license += f" AND ({llvm_openmp.COMPONENT_LICENSE})"
     fastflowlm_wheel = build_wheel(
         products[FASTFLOWLM_DISTRIBUTION],
         FASTFLOWLM_DISTRIBUTION,
@@ -398,6 +438,7 @@ def build_runtime_fastflowlm_wheels(
         tag=fastflowlm_wheel_tag(),
         requires=(f"{RUNTIME_DISTRIBUTION} =={version}",),
         console_scripts={"flm": f"{FASTFLOWLM_PACKAGE}:main"},
+        license_expression=fastflowlm_license,
     )
     return {
         RUNTIME_DISTRIBUTION: runtime_wheel,

@@ -29,9 +29,11 @@ from build_tools.fastflow_sdk_linux_wheels import (
     _copy_hrx_soname,
     _copy_runtime_native_closure,
     _patch_and_verify_linux_products,
+    _rpath_for,
     build_wheel,
     fastflowlm_wheel_tag,
     find_fastflow_sdk_wheels,
+    runtime_wheel_libraries,
     validate_auditwheel_policy,
     verify_wheels_do_not_have_text_path_references,
     wheel_tag,
@@ -242,6 +244,7 @@ class TestFastflowSdkLinuxWheelNative:
     def test_linux_wheel_tag(self):
         assert wheel_tag("Linux") == LINUX_WHEEL_TAG
         assert fastflowlm_wheel_tag("Linux") == FASTFLOWLM_LINUX_WHEEL_TAG
+        assert FASTFLOWLM_LINUX_WHEEL_TAG == "py3-none-manylinux_2_28_x86_64"
         with pytest.raises(RuntimeError, match="x86-64"):
             wheel_tag("Linux", "arm64")
 
@@ -256,10 +259,14 @@ class TestFastflowSdkLinuxWheelNative:
         assert (
             validate_auditwheel_policy(
                 FASTFLOWLM_DISTRIBUTION,
-                "linux_x86_64",
+                "manylinux_2_28_x86_64",
             )
-            == "linux_x86_64"
+            == "manylinux_2_28_x86_64"
         )
+        with pytest.raises(RuntimeError, match="not manylinux_2_28"):
+            validate_auditwheel_policy(FASTFLOWLM_DISTRIBUTION, "linux_x86_64")
+        with pytest.raises(RuntimeError, match="not manylinux_2_28"):
+            validate_auditwheel_policy(FASTFLOWLM_DISTRIBUTION, "manylinux_2_38_x86_64")
         assert (
             validate_compiler_auditwheel_policy(
                 COMPILER_BINDINGS_DISTRIBUTION,
@@ -542,3 +549,77 @@ class TestFastflowSdkLinuxWheelNative:
             mock.patch("build_tools.native_dependencies.subprocess.run", fake_run),
         ):
             yield
+
+
+class TestFastflowLMOpenmpPackaging:
+    def test_extension_rpath_reaches_package_and_runtime_lib(self, tmp_path):
+        package_root = tmp_path / FASTFLOWLM_PACKAGE
+        extension = (
+            package_root / "share/fastflow-sdk/extensions/gemma4-open/lib/ext.so"
+        )
+        assert _rpath_for(extension, package_root) == (
+            "$ORIGIN:$ORIGIN/../../../../../lib:"
+            f"$ORIGIN/../../../../../../{RUNTIME_PACKAGE}/lib"
+        )
+
+    def test_runtime_wheel_libraries_lists_only_runtime_lib_entries(self, tmp_path):
+        wheel = tmp_path / "fastflow_sdk_runtime-1.0-py3-none-manylinux_2_28_x86_64.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            for name in (
+                f"{RUNTIME_PACKAGE}/lib/libhrx.so.0",
+                f"{RUNTIME_PACKAGE}/lib/cmake/hrx/hrx-config.cmake",
+                f"{RUNTIME_PACKAGE}/bin/fastflow",
+                f"{RUNTIME_PACKAGE}/__init__.py",
+            ):
+                archive.writestr(name, b"x")
+        assert runtime_wheel_libraries(wheel) == frozenset({"libhrx.so.0"})
+
+    def test_fastflowlm_audit_treats_runtime_libraries_as_provided(self, tmp_path):
+        runtime = tmp_path / f"fastflow_sdk_runtime-1.0-{LINUX_WHEEL_TAG}.whl"
+        fastflowlm = tmp_path / f"fastflow_sdk_fastflowlm-1.0-{LINUX_WHEEL_TAG}.whl"
+        with zipfile.ZipFile(runtime, "w") as archive:
+            archive.writestr(f"{RUNTIME_PACKAGE}/lib/libhrx.so.0", b"x")
+        fastflowlm.write_bytes(b"pk")
+        calls = {}
+
+        def policy(wheel, *, exclude=frozenset()):
+            calls[wheel.name] = exclude
+            return "manylinux_2_28_x86_64"
+
+        with (
+            mock.patch.object(
+                fastflowlm_package,
+                "verify_wheel_checksums",
+                lambda wheels: None,
+            ),
+            mock.patch.object(fastflowlm_package, "auditwheel_policy", policy),
+            mock.patch(
+                "build_tools.fastflow_sdk_linux_wheels.find_fastflow_sdk_wheels",
+                return_value={
+                    RUNTIME_DISTRIBUTION: runtime,
+                    FASTFLOWLM_DISTRIBUTION: fastflowlm,
+                },
+            ),
+        ):
+            fastflowlm_package.cmd_audit_fastflowlm_wheels(
+                types.SimpleNamespace(dir=str(tmp_path))
+            )
+        assert calls == {
+            runtime.name: frozenset(),
+            fastflowlm.name: frozenset({"libhrx.so.0"}),
+        }
+
+    def test_linux_workflow_builds_and_caches_llvm_openmp(self):
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "fastflowlm_hrx_linux.yml"
+        ).read_text(encoding="utf-8")
+        build = workflow.index("run: .venv/bin/python dev.py build llvm-openmp")
+        assert workflow.index("name: Restore LLVM OpenMP runtime") < build
+        assert build < workflow.index("name: Save LLVM OpenMP runtime")
+        assert build < workflow.index("run: .venv/bin/python dev.py package-fastflowlm")
+        assert "path: ${{ github.workspace }}/build/llvm-openmp-install" in workflow
+        assert "steps.llvm-pin.outputs.commit" in workflow
+        assert "hashFiles('build_tools/llvm_openmp.py')" in workflow

@@ -36,6 +36,10 @@ FASTFLOWLM_INSTALL = BUILD / "FastFlowLM-install"
 FASTFLOWLM_XRT_BUILD = BUILD / "FastFlowLM-xrt"
 FASTFLOWLM_XRT_INSTALL = BUILD / "FastFlowLM-xrt-install"
 FASTFLOWLM_MODEL_CACHE = BUILD / "FastFlowLM-models"
+# LLVM's OpenMP runtime replaces libgomp in the Linux FastFlowLM payload.
+LLVM_OPENMP_SOURCE = BUILD / "llvm-openmp-src"
+LLVM_OPENMP_BUILD = BUILD / "llvm-openmp"
+LLVM_OPENMP_INSTALL = BUILD / "llvm-openmp-install"
 
 
 def is_windows() -> bool:

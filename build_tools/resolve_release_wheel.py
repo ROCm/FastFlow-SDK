@@ -30,11 +30,6 @@ PLATFORMS = {
     "linux": ("manylinux_2_28_x86_64",),
     "windows": ("win_amd64",),
 }
-# The FastFlowLM wheel is tagged linux_x86_64, so pip needs that platform too.
-SDK_PLATFORMS = {
-    "linux": ("linux_x86_64", "manylinux_2_28_x86_64"),
-    "windows": ("win_amd64",),
-}
 PRODUCTS = ("compiler", "ops", "sdk")
 
 
@@ -158,9 +153,7 @@ def resolve_release_wheel(
         # resolve only adds the cross-product platform pairing.
         if product == "sdk":
             minors = minors[:1]
-    for platform_name, platforms in (
-        SDK_PLATFORMS if product == "sdk" else PLATFORMS
-    ).items():
+    for platform_name, platforms in PLATFORMS.items():
         for python_minor in minors:
             target = work_dir / (
                 f"{product}-release-install-{platform_name}-{python_tag(python_minor)}"

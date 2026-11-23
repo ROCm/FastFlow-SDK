@@ -13,6 +13,7 @@ import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
 
+from build_tools import llvm_openmp
 from build_tools.archive import (
     create_deterministic_tar_zstd_cli,
     create_deterministic_zip,
@@ -167,6 +168,14 @@ def validate_source_policy(manifest: dict[str, object], root: Path) -> None:
         if not isinstance(state, dict) or state.get("revision") != revision:
             raise RuntimeError(
                 f"artifact {component} revision does not match the pinned revision"
+            )
+    for record in manifest.get("components") or []:
+        if (
+            record.get("name") == llvm_openmp.COMPONENT_NAME
+            and record.get("version") != versions["llvm"]["commit"]
+        ):
+            raise RuntimeError(
+                "artifact LLVM OpenMP runtime does not match the pinned llvm-project"
             )
     staging_state = sources["fastflow-sdk"]
     if staging_state.get("dirty"):
@@ -573,18 +582,58 @@ def _linux_package_owner_candidates(path: Path) -> list[Path]:
 def _is_linux_system_runtime(name: str) -> bool:
     """Returns whether the dynamic loader resolves this SONAME from the host.
 
-    The manylinux baseline provides glibc, including libmvec, and the GCC
-    runtime. libedit is BSD and is copied into the bundle. libcurl and the
+    The manylinux baseline provides glibc, including libmvec, libgcc_s, and
+    libstdc++. It does not provide libgomp, so the bundle carries LLVM libomp
+    instead. libedit is BSD and is copied into the bundle. libcurl and the
     rest of the vcpkg closure are copied from the vcpkg triplet.
     """
     return bool(
         re.match(
             r"^(ld-linux|linux-vdso|lib("
-            r"c|dl|m|mvec|pthread|resolv|rt|gcc_s|stdc\+\+|gomp"
+            r"c|dl|m|mvec|pthread|resolv|rt|gcc_s|stdc\+\+"
             r")\.so)([.-].*)?$",
             name,
         )
     )
+
+
+def _bundle_llvm_openmp(bundle: Path, library: Path) -> list[str]:
+    """Copies libomp into the bundle and relinks every libgomp import to it.
+
+    Returns the bundle-relative paths of the relinked ELF files.
+    """
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        raise RuntimeError("patchelf is required to package the Linux runtime closure")
+    bundled = bundle / "lib" / llvm_openmp.LIBRARY
+    _copy_checked(library, bundled)
+    relinked = []
+    for path in _linux_elf_files(bundle):
+        if llvm_openmp.GNU_LIBRARY not in elf_needed(path, patchelf=patchelf):
+            continue
+        subprocess.run(
+            [
+                patchelf,
+                "--replace-needed",
+                llvm_openmp.GNU_LIBRARY,
+                llvm_openmp.LIBRARY,
+                str(path),
+            ],
+            check=True,
+        )
+        relinked.append(path.relative_to(bundle).as_posix())
+    return relinked
+
+
+def _verify_llvm_openmp_imports(
+    bundle: Path, binary_dependencies: dict[str, list[str]]
+) -> None:
+    consumers = [
+        bundle / relative
+        for relative, needed in binary_dependencies.items()
+        if llvm_openmp.LIBRARY in needed
+    ]
+    llvm_openmp.verify_openmp_imports(bundle / "lib" / llvm_openmp.LIBRARY, consumers)
 
 
 def _ldconfig_library_index() -> dict[str, Path]:
@@ -676,6 +725,11 @@ def _copy_vcpkg_linux_closure(bundle: Path, vcpkg_lib: Path) -> None:
                 progressed = True
 
 
+def _origin_path(directory: Path, target: Path) -> str:
+    """Returns ``target`` as an ELF RPATH entry relative to ``directory``."""
+    return "$ORIGIN/" + Path(os.path.relpath(target, directory)).as_posix()
+
+
 def _normalize_and_verify_linux_elf(bundle: Path) -> dict[str, list[str]]:
     patchelf = shutil.which("patchelf")
     if not patchelf:
@@ -684,30 +738,37 @@ def _normalize_and_verify_linux_elf(bundle: Path) -> dict[str, list[str]]:
     if not elf_files:
         raise RuntimeError("Linux runtime bundle contains no ELF payloads")
 
+    search_dirs = {}
     for path in elf_files:
         relative = path.relative_to(bundle)
         if relative.parts[0] == "bin":
             rpath = "$ORIGIN/../lib/flm:$ORIGIN/../lib"
         elif relative.parts[0] == "share":
-            # Model-extension plugins are dlopened by flm, which already
-            # loaded HRX; their private libraries sit beside them.
-            rpath = "$ORIGIN"
+            # Model-extension plugins keep their private libraries beside them
+            # and share lib/ (HRX, libomp) with flm.
+            rpath = f"$ORIGIN:{_origin_path(path.parent, bundle / 'lib')}"
         elif relative.parent.as_posix() == "lib/flm":
             rpath = "$ORIGIN:$ORIGIN/.."
         else:
             rpath = "$ORIGIN:$ORIGIN/flm"
         set_elf_rpath(path, rpath, patchelf=patchelf)
+        search_dirs[path] = [
+            Path(entry.replace("$ORIGIN", str(path.parent)))
+            for entry in rpath.split(":")
+        ]
 
-    bundled_names = {path.name for path in elf_files}
+    # Each library must be reachable through its own RPATH, as the dynamic
+    # loader and auditwheel resolve it, not only present somewhere in the bundle.
     graph = {}
     missing = []
     for path in elf_files:
         needed = elf_needed(path, patchelf=patchelf)
         graph[path.relative_to(bundle).as_posix()] = sorted(needed)
         missing.extend(
-            f"{path.name} -> {name}"
+            f"{path.relative_to(bundle).as_posix()} -> {name}"
             for name in needed
-            if name not in bundled_names and not _is_linux_system_runtime(name)
+            if not _is_linux_system_runtime(name)
+            and not any((directory / name).exists() for directory in search_dirs[path])
         )
     if missing:
         raise RuntimeError(
@@ -1338,7 +1399,11 @@ def verify_installed_gemma4e_sdk(bundle: Path) -> None:
 
 
 def stage_runtime_bundle(
-    root: Path, flm_install: Path, hrx_install: Path, destination: Path
+    root: Path,
+    flm_install: Path,
+    hrx_install: Path,
+    destination: Path,
+    openmp_install: Path | None = None,
 ) -> Path:
     """Creates the bundle root and writes its complete hash manifest."""
     cli_install = root / "build" / "fastflow-cli-install"
@@ -1357,6 +1422,15 @@ def stage_runtime_bundle(
         build_marker.unlink()
 
     binary_dependencies = None
+    openmp = None
+    components = [
+        {
+            "name": "nlohmann/json",
+            "version": "3.12.0",
+            "upstream": "https://github.com/nlohmann/json",
+            "license": "MIT",
+        }
+    ]
     if os.name == "nt":
         _copy_checked(hrx_install / "bin" / "hrx.dll", bundle / "bin" / "hrx.dll")
         _copy_checked(
@@ -1378,6 +1452,12 @@ def stage_runtime_bundle(
             hrx_install / "bin" / "hrx-amdxdna-resource-pressure",
             bundle / "bin" / "hrx-amdxdna-resource-pressure",
         )
+        # Before the extension build, so it links the bundled runtime too.
+        openmp = llvm_openmp.load_install(
+            root, openmp_install or root / "build" / "llvm-openmp-install"
+        )
+        _bundle_llvm_openmp(bundle, openmp["library"])
+        components.append(llvm_openmp.component(openmp["marker"]))
 
     _stage_hrx_development_files(hrx_install, bundle)
     stage_gemma4e_extension_sources(root / "projects" / "FastFlowLM", bundle, root)
@@ -1402,6 +1482,7 @@ def stage_runtime_bundle(
         _copy_vcpkg_linux_closure(bundle, vcpkg_lib)
         _copy_host_libedit_closure(bundle)
         binary_dependencies = _normalize_and_verify_linux_elf(bundle)
+        _verify_llvm_openmp_imports(bundle, binary_dependencies)
 
     license_sources = [
         (root / "LICENSE", "fastflow-sdk-LICENSE"),
@@ -1420,6 +1501,8 @@ def stage_runtime_bundle(
         ),
         (root / "docs" / "third-party-notices.md", "THIRD_PARTY_NOTICES.md"),
     ]
+    if openmp:
+        license_sources.append((openmp["license"], llvm_openmp.BUNDLED_LICENSE))
     for source, name in license_sources:
         if not source.is_file():
             raise RuntimeError(f"required license file missing: {source}")
@@ -1436,6 +1519,7 @@ def stage_runtime_bundle(
         internal_runtime_files.update(
             path.name for path in (bundle / "lib").glob("libhrx.so*")
         )
+        internal_runtime_files.add(llvm_openmp.LIBRARY)
         system_dependencies = _linux_dependencies_and_licenses(
             bundle,
             set(vcpkg_dependencies["runtime_file_packages"]),
@@ -1464,14 +1548,7 @@ def stage_runtime_bundle(
         "cli_build": cli_marker,
         "patches": _patch_manifest(root),
         "dependencies": dependencies,
-        "components": [
-            {
-                "name": "nlohmann/json",
-                "version": "3.12.0",
-                "upstream": "https://github.com/nlohmann/json",
-                "license": "MIT",
-            }
-        ],
+        "components": components,
         "binary_dependencies": binary_dependencies,
         "toolchain": {
             "python": platform.python_version(),
@@ -1516,6 +1593,7 @@ def stage_runtime_bundle(
             "fastflowlm_configuration": _cmake_configuration(
                 root / "build" / "FastFlowLM" / "CMakeCache.txt", root
             ),
+            "llvm_openmp": openmp["marker"] if openmp else None,
             "effective_install_prefixes": {
                 "hrx": str(hrx_install.resolve())
                 .replace("\\", "/")

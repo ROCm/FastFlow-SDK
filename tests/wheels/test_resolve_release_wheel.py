@@ -209,7 +209,7 @@ def test_resolve_sdk_wheel_pairs_platforms_at_the_lowest_python(tmp_path, monkey
         for command in calls
     ]
     assert platforms == [
-        ("linux_x86_64", "manylinux_2_28_x86_64"),
+        ("manylinux_2_28_x86_64",),
         ("win_amd64",),
     ]
 
