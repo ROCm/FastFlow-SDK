@@ -160,3 +160,15 @@ jobs:
       package_version: ${{ needs.presubmit.outputs.package_version }}
       source_ref: ${{ github.ref }}
       source_sha: ${{ github.sha }}
+
+  # collect_releases repacks the PyPI wheels on every run. Installing them
+  # downloads the large wheels to shared runners, so it runs only after merge
+  # (and in release_fastflow_sdk_pypi_wheels.yml).
+  pypi_wheels:
+    name: PyPI wheels
+    needs: collect_releases
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/verify_fastflow_sdk_pypi_wheels.yml
+    permissions:
+      contents: read
+      actions: read

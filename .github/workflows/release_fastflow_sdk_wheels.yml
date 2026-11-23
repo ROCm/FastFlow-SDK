@@ -403,7 +403,7 @@ jobs:
             else
               platform_args=(--platform win_amd64)
             fi
-            for python_minor in 3.11 3.12 3.13 3.14; do
+            for python_minor in 3.12 3.13 3.14; do
               python_tag="cp${python_minor/./}"
               target="qualification-release-install-${platform}-${python_tag}"
               python -m pip install \

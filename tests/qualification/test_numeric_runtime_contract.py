@@ -10,6 +10,9 @@ from build_tools import download_qualification_numeric_wheels as downloader
 from build_tools import fastflow_sdk_qualification_wheel as qualification_wheel
 from build_tools import release_policy
 from build_tools import verify_qualification_dependencies as dependency_verifier
+from build_tools.fastflow_sdk_wheel_common import (
+    COMPILER_BINDINGS_RUNTIME_REQUIREMENTS,
+)
 from tests.support.modules import load_module
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -36,6 +39,19 @@ def test_numeric_runtime_contract_has_no_secondary_version_authority():
     )
     assert release_policy.numeric_package_versions() == contract["packages"]
     assert release_policy.numeric_python_abis() == tuple(contract["python_abis"])
+
+
+def test_numeric_runtime_matches_the_compiler_bindings_pins():
+    # fastflow-sdk installs the bindings and qualification together, so their
+    # exact pins must agree or neither the index nor the PyPI wheel resolves.
+    bindings = dict(
+        requirement.replace(" ", "").split("==")
+        for requirement in COMPILER_BINDINGS_RUNTIME_REQUIREMENTS
+    )
+    contract = release_policy.numeric_runtime_contract()
+
+    for distribution, version in contract["packages"].items():
+        assert bindings.get(distribution) == version, distribution
 
 
 def test_downloader_stages_every_attested_python_and_platform(monkeypatch, tmp_path):

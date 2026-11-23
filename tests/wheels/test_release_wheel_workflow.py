@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+from build_tools import release_policy
 from tests.support.workflows import (
     WORKFLOWS,
     read_workflow,
@@ -255,7 +256,10 @@ class TestFastflowSdkReleaseWheelWorkflow:
         assert "path: wheelhouse/qualification" in workflow
         assert '"${SOURCE_SHA}" != "${GITHUB_SHA}"' in workflow
         assert '"${qualification_wheel}"' in workflow
-        assert "for python_minor in 3.11 3.12 3.13 3.14" in workflow
+        python_minors = " ".join(
+            f"{abi[2]}.{abi[3:]}" for abi in release_policy.numeric_python_abis()
+        )
+        assert f"for python_minor in {python_minors}; do" in workflow
         assert "download_qualification_numeric_wheels.py" not in workflow
         assert "numeric-runtime-cp312.lock" not in workflow
         assert "python -m twine check --strict wheelhouse/*/*.whl" in workflow

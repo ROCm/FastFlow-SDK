@@ -13,8 +13,8 @@ on:
       ref:
         description: >-
           The source the documentation describes: a git ref, or latest-release
-          for the newest published fastflow-sdk-v* release. Empty means the
-          calling commit.
+          for the newest stable fastflow-sdk-v* release (the newest prerelease
+          while none is stable). Empty means the calling commit.
         type: string
         default: ""
       upload_pages:

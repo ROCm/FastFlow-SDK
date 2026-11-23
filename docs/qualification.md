@@ -8,8 +8,12 @@ python -m pip install --extra-index-url https://rocm.github.io/FastFlow-SDK/simp
   "fastflow-sdk-qualification==<version>"
 ```
 
+Candidate-bound runs (`--candidate-manifest`) check each installed component
+wheel against the candidate, so they need these component packages rather than
+the PyPI wheel, which `fastflow qualify` rejects for them.
+
 The package depends on the exact same-version `fastflow-sdk-fastflowlm`, which in
-turn depends on `fastflow-sdk-runtime`, and pins NumPy 2.4.6 and ml-dtypes 0.6.0.
+turn depends on `fastflow-sdk-runtime`, and pins NumPy 2.5.3 and ml-dtypes 0.6.0.
 Pip resolves those binary dependencies from the package index. The candidate
 manifest binds their required versions, while each evidence bundle records the
 installed wheel tags, RECORD digest, and verified payload digest. Only the

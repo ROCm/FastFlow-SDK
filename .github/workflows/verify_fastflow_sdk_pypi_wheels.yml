@@ -1,0 +1,103 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Installs the PyPI fastflow-sdk wheels on CPU and NPU runners
+# (dev.py verify-pypi-wheel). The calling run must have uploaded them as the
+# fastflow-sdk-pypi-wheel-linux and -windows artifacts: CI from the collected
+# release (collect_fastflow_sdk_ci_release.yml), after merge only, and
+# release_fastflow_sdk_pypi_wheels.yml from a published release.
+name: Verify FastFlow SDK PyPI wheels
+
+on:
+  workflow_call:
+
+jobs:
+  install:
+    name: Install (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      # The oldest and newest Python the wheel's Requires-Python accepts.
+      # Newer 3.12 patch releases have no Windows assets in the official
+      # actions/python-versions manifest.
+      matrix:
+        include:
+          - os: Linux
+            platform: linux
+            runner: ubuntu-24.04
+            python: "3.12"
+          - os: Linux
+            platform: linux
+            runner: ubuntu-24.04
+            python: "3.14"
+          - os: Windows
+            platform: windows
+            runner: azure-windows-scale-rocm
+            python: "3.12.10"
+          - os: Windows
+            platform: windows
+            runner: azure-windows-scale-rocm
+            python: "3.14"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Download the PyPI wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-pypi-wheel-${{ matrix.platform }}
+          path: dist
+
+      - name: Install and verify the PyPI wheel
+        run: python dev.py verify-pypi-wheel dist
+
+  npu_linux:
+    name: NPU (Linux gfx1150)
+    runs-on: linux-gfx1150-gpu-rocm-npu
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421
+      options: >-
+        --device=/dev/accel/accel0
+        --ulimit memlock=-1:-1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Download the PyPI wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-pypi-wheel-linux
+          path: dist
+
+      # The manylinux_2_28 container also proves the wheel's glibc floor.
+      - name: Install the PyPI wheel and run it on the NPU
+        run: python3 dev.py verify-pypi-wheel dist --require-hardware
+
+  npu_windows:
+    name: NPU (Windows gfx1151)
+    runs-on: windows-gfx1151-gpu-rocm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.10"
+
+      - name: Download the PyPI wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fastflow-sdk-pypi-wheel-windows
+          path: dist
+
+      - name: Install the PyPI wheel and run it on the NPU
+        run: python dev.py verify-pypi-wheel dist --require-hardware

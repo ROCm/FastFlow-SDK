@@ -149,7 +149,7 @@ jobs:
             else
               platform_args=(--platform win_amd64)
             fi
-            for python_minor in 3.11 3.12 3.13 3.14; do
+            for python_minor in 3.12 3.13 3.14; do
               python_tag="cp${python_minor/./}"
               target="qualification-release-install-${platform}-${python_tag}"
               python -m pip install \
@@ -207,6 +207,46 @@ jobs:
         with:
           name: fastflow-sdk-ci-release-${{ inputs.package_version }}
           path: release/**
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      # Repacks the release exactly as release_fastflow_sdk_pypi_wheels.yml
+      # repacks a published one, so a component change that breaks the PyPI
+      # wheel fails here. Runs after the release upload and writes outside
+      # release/, so the release payload above is unchanged and still uploaded
+      # when a repack fails.
+      - name: Install PyPI wheel audit tools
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements/packaging-linux.lock
+
+      - name: Build the PyPI wheels
+        run: |
+          set -euo pipefail
+          for platform in linux windows; do
+            python dev.py package-pypi-wheel --release-dir release --platform "${platform}" --dir pypi
+          done
+
+      - name: Audit the Linux PyPI wheel
+        run: python dev.py audit-pypi-wheel pypi/fastflow_sdk-*-manylinux_*_x86_64.whl
+
+      - name: Check the PyPI metadata
+        run: python -m twine check --strict pypi/*.whl
+
+      # One artifact per platform, so each install job downloads only its wheel.
+      - name: Upload the Linux PyPI wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fastflow-sdk-pypi-wheel-linux
+          path: pypi/fastflow_sdk-*-manylinux_*_x86_64.whl*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload the Windows PyPI wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fastflow-sdk-pypi-wheel-windows
+          path: pypi/fastflow_sdk-*-win_amd64.whl*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7

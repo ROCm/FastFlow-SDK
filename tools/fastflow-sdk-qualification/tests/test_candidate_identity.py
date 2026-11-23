@@ -20,6 +20,7 @@ from build_tools.fastflow_sdk_wheel_common import (
     RUNTIME_DISTRIBUTION,
 )
 from fastflow_sdk_qualification import candidate, cli, installation
+from fastflow_sdk_qualification.numeric_runtime import NUMERIC_RUNTIME
 from tests.support.qualification import write_candidate_wheel as _write_wheel
 
 pytestmark = [pytest.mark.fastflowlm, pytest.mark.presubmit]
@@ -265,10 +266,7 @@ def test_candidate_manifest_binds_exact_wheels(tmp_path):
         identity = identities[0]
         assert len(identity["sha256"]) == 64
         assert len(identity["package_manifest_sha256"]) == 64
-    assert candidate_manifest["numeric_runtime"] == {
-        "numpy": "2.4.6",
-        "ml-dtypes": "0.6.0",
-    }
+    assert candidate_manifest["numeric_runtime"] == NUMERIC_RUNTIME
     normalized = installation.normalize_candidate(candidate_manifest)
     selected = {
         distribution: identities[0]
@@ -294,10 +292,7 @@ def test_candidate_does_not_require_numeric_wheels_in_release_payload(tmp_path):
         [tmp_path], tmp_path / "candidate-manifest.json"
     )
     manifest = json.loads(output.read_text(encoding="utf-8"))
-    assert manifest["numeric_runtime"] == {
-        "numpy": "2.4.6",
-        "ml-dtypes": "0.6.0",
-    }
+    assert manifest["numeric_runtime"] == NUMERIC_RUNTIME
 
 
 def test_candidate_rejects_external_wheels_before_publishing(tmp_path):
@@ -544,7 +539,7 @@ def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path
                 result.append(item)
             return result
 
-    for distribution, version in (("numpy", "2.4.6"), ("ml-dtypes", "0.6.0")):
+    for distribution, version in NUMERIC_RUNTIME.items():
         wheel = _write_numeric_wheel(tmp_path, distribution, version)
         with zipfile.ZipFile(wheel) as archive:
             archive.extractall(installed_root)
@@ -560,8 +555,8 @@ def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path
     assert {
         distribution: identity["version"]
         for distribution, identity in identities.items()
-    } == {"numpy": "2.4.6", "ml-dtypes": "0.6.0"}
-    manifest = {"numeric_runtime": {"numpy": "2.4.6", "ml-dtypes": "0.6.0"}}
+    } == NUMERIC_RUNTIME
+    manifest = {"numeric_runtime": dict(NUMERIC_RUNTIME)}
     installation.verify_numeric_runtime(manifest)
 
     numpy_payload = installed_root / "numpy/__init__.py"
@@ -577,10 +572,103 @@ def test_installed_numeric_record_trees_are_evidence_bound(monkeypatch, tmp_path
         installation.verify_numeric_runtime(manifest)
     sibling_extra.unlink()
 
-    numpy_record = installed_root / "numpy-2.4.6.dist-info/RECORD"
+    numpy_record = installed_root / f"numpy-{NUMERIC_RUNTIME['numpy']}.dist-info/RECORD"
     numpy_record.write_text(
         numpy_record.read_text(encoding="utf-8") + "injected.pth,,\n",
         encoding="utf-8",
     )
     with pytest.raises(cli.QualificationError, match="unbound file"):
         installation.verify_numeric_runtime(manifest)
+
+
+def _single_wheel_install(monkeypatch, components_text: str | None) -> None:
+    """Installs only the PyPI ``fastflow-sdk`` wheel, which bundles components."""
+
+    def distribution(name):
+        if name != installation.SDK_DISTRIBUTION:
+            raise installation.metadata.PackageNotFoundError(name)
+        return SimpleNamespace(
+            read_text=lambda filename: (
+                components_text
+                if filename == installation.SDK_COMPONENTS_FILE
+                else None
+            )
+        )
+
+    def version(name):
+        raise installation.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(installation.metadata, "distribution", distribution)
+    monkeypatch.setattr(installation.metadata, "version", version)
+
+
+def _components_record(version: str = "1.2.3") -> str:
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "components": [
+                {"distribution": name, "version": version}
+                for name in installation.PACKAGE_DISTRIBUTIONS
+            ],
+        }
+    )
+
+
+def test_single_wheel_install_reports_bundled_component_versions(monkeypatch):
+    _single_wheel_install(monkeypatch, _components_record())
+
+    assert installation.package_versions() == {
+        name: "1.2.3" for name in installation.PACKAGE_DISTRIBUTIONS
+    }
+    installation.validate_versions(installation.package_versions(), "1.2.3", None)
+
+
+def test_package_version_falls_back_to_the_bundled_record(monkeypatch):
+    import fastflow_sdk_qualification
+
+    _single_wheel_install(monkeypatch, _components_record("4.5.6"))
+    monkeypatch.setattr(
+        fastflow_sdk_qualification,
+        "version",
+        installation.metadata.version,
+    )
+
+    assert fastflow_sdk_qualification.package_version() == "4.5.6"
+
+
+def test_missing_components_are_reported_without_a_bundled_record(monkeypatch):
+    _single_wheel_install(monkeypatch, None)
+
+    with pytest.raises(cli.QualificationError, match="not installed"):
+        installation.package_versions()
+
+
+def test_invalid_bundled_record_is_rejected(monkeypatch):
+    _single_wheel_install(monkeypatch, '{"components": [{"version": "1"}]}')
+
+    with pytest.raises(cli.QualificationError, match="component record is invalid"):
+        installation.package_versions()
+
+
+def test_candidate_qualification_requires_the_component_wheels(monkeypatch, tmp_path):
+    _single_wheel_install(monkeypatch, _components_record())
+    installed = installation.package_versions()
+    manifest = {
+        "packages": {
+            name: [{"version": "1.2.3"}] for name in installation.PACKAGE_DISTRIBUTIONS
+        }
+    }
+
+    with pytest.raises(cli.QualificationError, match="requires the component wheels"):
+        installation.validate_versions(
+            installed, "1.2.3", manifest, tmp_path / "candidate-manifest.json"
+        )
+
+
+def test_components_file_name_matches_the_pypi_wheel_builder():
+    from build_tools import fastflow_sdk_pypi_wheel
+
+    assert (
+        installation.SDK_COMPONENTS_FILE == fastflow_sdk_pypi_wheel.SDK_COMPONENTS_FILE
+    )
+    assert installation.SDK_DISTRIBUTION == fastflow_sdk_pypi_wheel.SDK_DISTRIBUTION
