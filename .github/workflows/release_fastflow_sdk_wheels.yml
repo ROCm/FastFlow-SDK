@@ -395,6 +395,9 @@ jobs:
           mapfile -t numeric_requirements < <(
             python -c 'import json; from pathlib import Path; contract = json.loads(Path("tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification/numeric-runtime.json").read_text()); print(*(f"{name}=={version}" for name, version in sorted(contract["packages"].items())), sep="\n")'
           )
+          mapfile -t python_minors < <(
+            python -c 'import json; from pathlib import Path; contract = json.loads(Path("tools/fastflow-sdk-qualification/python/fastflow_sdk_qualification/numeric-runtime.json").read_text()); print(*(f"{abi[2]}.{abi[3:]}" for abi in contract["python_abis"]), sep="\n")'
+          )
           for platform in linux windows; do
             if [[ "${platform}" == linux ]]; then
               platform_args=(
@@ -403,7 +406,7 @@ jobs:
             else
               platform_args=(--platform win_amd64)
             fi
-            for python_minor in 3.12 3.13 3.14; do
+            for python_minor in "${python_minors[@]}"; do
               python_tag="cp${python_minor/./}"
               target="qualification-release-install-${platform}-${python_tag}"
               python -m pip install \
