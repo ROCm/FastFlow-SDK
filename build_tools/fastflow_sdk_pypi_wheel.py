@@ -73,6 +73,36 @@ PYPI_PROJECT_URLS = (
     ("Releases", "https://github.com/ROCm/FastFlow-SDK/releases"),
     ("Issues", "https://github.com/ROCm/FastFlow-SDK/issues"),
 )
+PYPI_KEYWORDS = (
+    "amd",
+    "ryzen-ai",
+    "npu",
+    "xdna",
+    "xdna2",
+    "aie",
+    "mlir-aie",
+    "iron",
+    "fastflowlm",
+    "llm",
+    "inference",
+    "openai-compatible",
+)
+# PyPI shows the metadata of the first file uploaded for a version, so both
+# platform wheels carry the same classifiers. PyPI rejects license classifiers
+# next to License-Expression. merge_requires_python supplies the Python versions.
+PYPI_CLASSIFIERS = (
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Compilers",
+)
 PYPI_DESCRIPTION = Path(__file__).with_name("fastflow_sdk_pypi_description.md")
 _COMPONENT_DIST_INFO_FILES = frozenset(
     ("METADATA", "WHEEL", "RECORD", "entry_points.txt")
@@ -339,6 +369,23 @@ def merge_requires_python(components: list[ComponentWheel]) -> str:
     return ",".join(clauses)
 
 
+def python_version_classifiers(requires_python: str) -> list[str]:
+    """Lists the Python 3 minor versions a merged ``>=X,<Y`` range admits."""
+    bounds = {}
+    for clause in requires_python.split(","):
+        operator, version = _PYTHON_BOUND.fullmatch(clause.strip()).groups()
+        bounds[operator] = tuple(int(part) for part in version.split("."))
+    lower, upper = bounds[">="], bounds.get("<")
+    if lower[0] != 3 or upper is None or upper[0] != 3:
+        return []
+    first = lower[1] if len(lower) > 1 else 0
+    last = upper[1] if any(upper[2:]) else upper[1] - 1
+    return [
+        f"Programming Language :: Python :: 3.{minor}"
+        for minor in range(first, last + 1)
+    ]
+
+
 def _and_terms(expression: str) -> list[str]:
     terms, depth, start = [], 0, 0
     for index, character in enumerate(expression):
@@ -424,17 +471,25 @@ def _sdk_metadata(
     components: list[ComponentWheel],
     license_files: list[str],
 ) -> bytes:
+    requires_python = merge_requires_python(components)
     lines = [
         "Metadata-Version: 2.4",
         f"Name: {SDK_DISTRIBUTION}",
         f"Version: {version}",
         f"Summary: {PYPI_SUMMARY}",
+        f"Keywords: {','.join(PYPI_KEYWORDS)}",
         "Author: Advanced Micro Devices, Inc.",
-        f"Requires-Python: {merge_requires_python(components)}",
+        f"Requires-Python: {requires_python}",
         f"License-Expression: {merge_license_expression(components)}",
         "Description-Content-Type: text/markdown",
     ]
     lines.extend(f"Project-URL: {label}, {url}" for label, url in PYPI_PROJECT_URLS)
+    lines.extend(
+        f"Classifier: {classifier}"
+        for classifier in sorted(
+            {*PYPI_CLASSIFIERS, *python_version_classifiers(requires_python)}
+        )
+    )
     lines.extend(f"License-File: {name}" for name in license_files)
     lines.extend(
         f"Requires-Dist: {requirement}"

@@ -263,6 +263,19 @@ def test_writes_merged_sdk_metadata(release, tmp_path):
     assert metadata["Name"] == SDK_DISTRIBUTION
     assert metadata["Version"] == VERSION
     assert metadata["Requires-Python"] == ">=3.12,<3.15"
+    assert metadata["Keywords"].split(",") == list(pypi.PYPI_KEYWORDS)
+    classifiers = metadata.get_all("Classifier")
+    assert classifiers == sorted(classifiers)
+    assert set(classifiers) == {
+        *pypi.PYPI_CLASSIFIERS,
+        *(f"Programming Language :: Python :: 3.{minor}" for minor in (12, 13, 14)),
+    }
+    assert not [name for name in classifiers if name.startswith("License ::")]
+    windows = pypi.build_pypi_wheel(release, "windows", tmp_path / "windows")
+    windows_metadata = parser.parsestr(
+        _members(windows)[f"{dist_info}/METADATA"][0].decode()
+    )
+    assert windows_metadata.get_all("Classifier") == classifiers
     assert sorted(metadata.get_all("Requires-Dist")) == sorted(
         {*COMPILER_BINDINGS_RUNTIME_REQUIREMENTS, *QUALIFICATION_REQUIRES}
     )
@@ -470,6 +483,21 @@ def test_requires_python_is_the_intersection(specifiers, expected):
     ]
 
     assert pypi.merge_requires_python(components) == expected
+
+
+@pytest.mark.parametrize(
+    ("requires_python", "expected"),
+    [
+        (">=3.12,<3.15", ["3.12", "3.13", "3.14"]),
+        (">=3.12.1,<3.14.2", ["3.12", "3.13", "3.14"]),
+        (">=3.12,<4", []),
+        (">=3.12", []),
+    ],
+)
+def test_python_version_classifiers_follow_requires_python(requires_python, expected):
+    assert pypi.python_version_classifiers(requires_python) == [
+        f"Programming Language :: Python :: {version}" for version in expected
+    ]
 
 
 def test_license_terms_split_only_at_the_top_level():
