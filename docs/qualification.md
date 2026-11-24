@@ -1,6 +1,7 @@
 # FastFlow SDK model qualification
 
-Install the optional qualification product from the
+The `fastflow-sdk` release wheel from PyPI includes qualification. For a
+development build, install the optional qualification product from the
 [FastFlow SDK package index](wheel-releases.md#package-index):
 
 ```bash

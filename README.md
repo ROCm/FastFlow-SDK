@@ -142,10 +142,9 @@ The archive cannot compile NPU programs; use the wheels in Option B for that.
 
 ### Option B: Python wheels
 
-Wheels ship on GitHub releases, not on PyPI, and install from the FastFlow SDK
-package index at `https://rocm.github.io/FastFlow-SDK/simple`. The
-`fastflow-sdk` package installs everything: FastFlowLM, the HRX runtime, the
-*iron-tools* compiler, and the IRON operator library.
+Releases are on PyPI as `fastflow-sdk`, one wheel per platform with
+everything: FastFlowLM, the HRX runtime, the *iron-tools* compiler, the IRON
+operator library, and `fastflow qualify`.
 
 Install Python and create a virtual environment. Activate the environment
 before every command below:
@@ -170,16 +169,28 @@ Install the latest release:
 
 <!-- --8<-- [start:pip-install] -->
 ```bash
-python -m pip install --pre --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple fastflow-sdk
+python -m pip install fastflow-sdk
 ```
 <!-- --8<-- [end:pip-install] -->
 
-Releases are currently development builds, so always pass `--pre`. Without it,
-`pip install fastflow-sdk` installs the `fastflow-sdk 0.0.1` placeholder from
-PyPI instead of the SDK. To install a specific release, pin its version, for
-example `"fastflow-sdk==0.1.0.dev202610230003"`; a pinned pre-release version
-does not need `--pre`. The version is the release tag without the
+To install a specific release, pin its version, for example
+`"fastflow-sdk==0.1.0"`. The version is the release tag without the
 `fastflow-sdk-v` prefix.
+
+<!-- --8<-- [start:dev-builds] -->
+Development builds are published on
+[GitHub Releases](https://github.com/ROCm/FastFlow-SDK/releases) between
+releases, not on PyPI. Install them from the FastFlow SDK package index:
+
+```bash
+python -m pip install --pre --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple fastflow-sdk
+```
+
+Pin `"fastflow-sdk==<version>"` to install one development build. They install
+the SDK as separate packages, such as `fastflow-sdk-runtime` and
+`fastflow-sdk-fastflowlm`, instead of the single PyPI wheel. Use a new virtual
+environment to switch between a release and a development build.
+<!-- --8<-- [end:dev-builds] -->
 
 To validate the runtime, use the following commands:
 

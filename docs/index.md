@@ -21,7 +21,7 @@ flm serve qwen3:0.6b     # OpenAI-compatible server on http://127.0.0.1:52625/v1
 ```
 
 !!! warning "Early access"
-    Releases are development snapshots. Interfaces, packages, models, and
+    FastFlow SDK is at version 0. Interfaces, packages, models, and
     supported drivers can change between releases. Each
     [release](releases.md) lists the drivers it was qualified on.
 
