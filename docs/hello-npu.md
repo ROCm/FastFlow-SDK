@@ -8,10 +8,21 @@ an NPU.
 
 ## Run it
 
-Install the SDK ([Install](install.md)), then download and run the program:
+Install the SDK ([Install](install.md)), then download and run the program.
+
+Linux:
 
 ```bash
 curl -fsSLO https://rocm.github.io/FastFlow-SDK/examples/hello_npu.py
+python hello_npu.py
+# PASS: 4096 int32 elements copied through the NPU
+```
+
+Windows, where `curl` in Windows PowerShell is an alias for
+`Invoke-WebRequest`:
+
+```powershell
+curl.exe -fsSLO https://rocm.github.io/FastFlow-SDK/examples/hello_npu.py
 python hello_npu.py
 # PASS: 4096 int32 elements copied through the NPU
 ```

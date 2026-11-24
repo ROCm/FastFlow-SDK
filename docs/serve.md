@@ -48,16 +48,35 @@ they can run together in one server.
 The server does not check API keys, but OpenAI clients require one, so pass
 any string.
 
+Linux:
+
 ```bash
 curl http://127.0.0.1:52625/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "qwen3:0.6b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
+Windows, where `curl` in Windows PowerShell is an alias for
+`Invoke-WebRequest`:
+
+```powershell
+$Body = @{
+  model = "qwen3:0.6b"
+  messages = @(
+    @{ role = "user"; content = "Hello" }
+  )
+} | ConvertTo-Json -Depth 4
+
+$Response = Invoke-RestMethod -Uri "http://127.0.0.1:52625/v1/chat/completions" `
+  -Method Post -ContentType "application/json" -Body $Body
+$Response.choices[0].message.content
+```
+
 The Python examples below need `python -m pip install openai`. CI runs each one
 except speech to text against `flm serve` on an NPU. Download them from this
 site, for example
-`curl -fsSLO https://rocm.github.io/FastFlow-SDK/examples/serve/chat.py`.
+`curl -fsSLO https://rocm.github.io/FastFlow-SDK/examples/serve/chat.py`, or
+with `curl.exe` instead of `curl` in Windows PowerShell.
 
 ## Chat with streaming
 
