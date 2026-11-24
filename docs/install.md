@@ -43,6 +43,29 @@ A development build's packages are `fastflow-sdk-fastflowlm`,
 optional `fastflow-sdk-qualification`. You can also install one alone; the
 runtime and FastFlowLM alone need Python 3.11 or newer.
 
+### If pip finds no matching distribution {#no-matching-distribution}
+
+```text
+ERROR: Could not find a version that satisfies the requirement fastflow-sdk (from versions: none)
+ERROR: No matching distribution found for fastflow-sdk
+```
+
+The package exists, but none of its wheels fits the Python that runs pip.
+Check that interpreter from inside the virtual environment:
+
+```bash
+python -c "import platform, sys; print(sys.version, platform.machine())"
+```
+
+The wheels need:
+
+- Python 3.12, 3.13, or 3.14. pip may also print `Ignored the following
+  versions that require a different python version`. Create the virtual
+  environment again with a supported Python, as shown above.
+- 64-bit x86 Python: `platform.machine()` prints `AMD64` on Windows or
+  `x86_64` on Linux. A 32-bit or ARM64 Python on Windows finds no wheel.
+- Linux with glibc 2.28 or newer (`ldd --version` shows it), or Windows.
+
 ## Verify the install
 
 --8<-- "README.md:validate"

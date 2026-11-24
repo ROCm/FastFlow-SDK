@@ -208,6 +208,10 @@ fastflow doctor --json      # package, driver, device, and runtime health
 fastflow self-test --json   # doctor, then a real dispatch on the NPU
 ```
 
+If `pip install fastflow-sdk` fails with `No matching distribution found`,
+the CLI is not installed yet; see
+[If pip finds no matching distribution](../install.md#no-matching-distribution).
+
 Find each check whose `status` is `fail` or `error` below. After installing or
 changing an NPU driver, reboot before you debug further: a driver switch
 without a reboot can leave the device unhealthy even though the operating
