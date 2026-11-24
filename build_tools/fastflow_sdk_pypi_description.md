@@ -36,6 +36,9 @@ curl -fsSLO https://rocm.github.io/FastFlow-SDK/examples/hello_npu.py
 python hello_npu.py      # PASS: 4096 int32 elements copied through the NPU
 ```
 
+In Windows PowerShell, type `curl.exe` instead of `curl`, which there is an
+alias for `Invoke-WebRequest`.
+
 From there:
 
 - [Hello NPU](https://rocm.github.io/FastFlow-SDK/hello-npu/) walks through
