@@ -35,18 +35,15 @@ Developer PowerShell so CMake can find MSVC.
 ## Install the SDK
 
 Install the latest [FastFlow SDK release](https://github.com/ROCm/FastFlow-SDK/releases).
-The `fastflow-sdk` meta-package installs matching compiler, operator, runtime,
-and FastFlowLM wheels. Current releases use prerelease versions, so pass
-`--pre`.
+The `fastflow-sdk` wheel contains the matching compiler, operators, runtime,
+and FastFlowLM.
 
 Linux:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install --pre --only-binary=:all: \
-  --extra-index-url https://rocm.github.io/FastFlow-SDK/simple \
-  fastflow-sdk
+python -m pip install fastflow-sdk
 ```
 
 Windows:
@@ -54,9 +51,15 @@ Windows:
 ```powershell
 py -3.12 -m venv .venv
 . .\.venv\Scripts\Activate.ps1
-python -m pip install --pre --only-binary=:all: `
-  --extra-index-url https://rocm.github.io/FastFlow-SDK/simple `
-  fastflow-sdk
+python -m pip install fastflow-sdk
+```
+
+On Windows, also set `CXX`. IRON compiles a small host dispatch library with
+the compiler named by `CXX`, or else `c++`, `g++`, or `clang++` on `PATH`. It
+does not find the MSVC `cl` that the Developer PowerShell provides on its own:
+
+```powershell
+$env:CXX = "cl"
 ```
 
 Keep this environment active for every command in the guide. Check the runtime
@@ -69,17 +72,21 @@ fastflow doctor
 
 ## Download Gemma 4 E2B
 
-`FLM_MODEL_PATH` is the directory above the `models` directory that FastFlowLM
-creates. The open catalog entry is pulled after the extension exists, because
-`gemma4-open-it:e2b` is not in the built-in model list. Pulling it requires
-network access to its model host. If the model is already cached elsewhere,
-point `FLM_MODEL_PATH` at that cache instead.
+`build.py` reads the model configuration and weights from
+`$FLM_MODEL_PATH/models/Gemma4-E2B-IT-NPU2`, so pull the built-in
+`gemma4-it:e2b` model first. `FLM_MODEL_PATH` is the directory above the
+`models` directory that FastFlowLM creates. Pulling requires network access to
+the model host. If the model is already cached elsewhere, point
+`FLM_MODEL_PATH` at that cache instead and skip the pull. The open catalog
+entry `gemma4-open-it:e2b` is pulled later, after the extension exists, because
+it is not in the built-in model list.
 
 Linux:
 
 ```bash
 export FLM_MODEL_PATH=$HOME/.cache/fastflowlm
 mkdir -p "$FLM_MODEL_PATH"
+flm pull gemma4-it:e2b
 ```
 
 Windows:
@@ -87,6 +94,7 @@ Windows:
 ```powershell
 $env:FLM_MODEL_PATH = Join-Path $HOME ".cache\fastflowlm"
 New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+flm pull gemma4-it:e2b
 ```
 
 ## Select the IRON application source

@@ -263,7 +263,8 @@ workflow). It rebuilds the whole index from the releases API
 (`build_tools/publish_fastflow_sdk_simple_index.py`), builds the documentation
 at the latest stable release's tag (the latest prerelease's while no release is
 stable), or at the `ref` input, into the same site, and deploys both. For a
-stable release, run it after the [PyPI upload](#pypi-wheel). A ref without `zensical.toml`, such as a release from before the
+stable release, run it only after the [PyPI upload](#pypi-wheel), because the
+documentation installs from PyPI. A ref without `zensical.toml`, such as a release from before the
 documentation site, publishes the index alone with a warning; run it with
 `ref: main` to publish the documentation of `main` instead. The repository's
 Pages source must be set to GitHub Actions.

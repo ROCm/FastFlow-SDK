@@ -7,14 +7,13 @@
 | Operating system | Linux or Windows, x86_64. On Windows use native PowerShell; WSL is not supported. |
 | NPU | AMD Ryzen AI with an XDNA2 (NPU2) NPU. See [Hardware and drivers](reference/hardware.md). |
 | Driver | The `amdxdna` driver on Linux, the AMD NPU driver on Windows. Each release lists the versions it was qualified on. |
-| Python | 3.12, 3.13, or 3.14 for the full SDK. 3.11 or newer for the runtime and FastFlowLM alone. The standalone archive needs no Python. |
+| Python | 3.12, 3.13, or 3.14. The standalone archive needs no Python. |
 
 ## Python wheels
 
-The wheels are attached to [GitHub Releases](https://github.com/ROCm/FastFlow-SDK/releases)
-and installed through the FastFlow SDK package index,
-`https://rocm.github.io/FastFlow-SDK/simple`. Create a virtual environment and
-activate it before every command below:
+Releases are on [PyPI](https://pypi.org/project/fastflow-sdk/) as one
+`fastflow-sdk` wheel per platform. Create a virtual environment and activate it
+before every command below:
 
 --8<-- "README.md:venv"
 
@@ -22,22 +21,27 @@ Install the latest release:
 
 --8<-- "README.md:pip-install"
 
-Keep `--pre` while releases are development builds. Without it, pip installs
-the `fastflow-sdk 0.0.1` placeholder from PyPI instead of the SDK. To install
-one release, pin its version, `"fastflow-sdk==<version>"`, with a version from
-the [Release notes](releases.md); an exact pin does not need `--pre`.
+To install one release, pin its version, `"fastflow-sdk==<version>"`, with a
+version from the [Release notes](releases.md).
 
-`fastflow-sdk` installs these packages, which you can also install alone:
+The wheel contains these parts of the SDK:
 
-| Package | Provides |
+| Part | Provides |
 | --- | --- |
-| `fastflow-sdk-fastflowlm` | `flm`, the model registry, and its matching runtime |
-| `fastflow-sdk-runtime` | `fastflow`, the HRX runtime library, and the `fastflow_sdk_runtime` Python helpers |
-| `fastflow-sdk-compiler` | iron-tools: `aie.iron`, `aiecc`, `aie-opt`, Peano |
-| `fastflow-sdk-ops` | the IRON operator library, `iron.operators` |
+| FastFlowLM | `flm` and the model registry |
+| Runtime | `fastflow`, the HRX runtime library, and the `fastflow_sdk_runtime` Python helpers |
+| Compiler | iron-tools: `aie.iron`, `aiecc`, `aie-opt`, Peano |
+| Operators | the IRON operator library, `iron.operators` |
+| Qualification | `fastflow qualify`, for validating a release on a machine. See [Model qualification](qualification.md). |
 
-`fastflow-sdk-qualification` is optional: it adds `fastflow qualify` for
-validating a release on a machine. See [Model qualification](qualification.md).
+### Development builds
+
+--8<-- "README.md:dev-builds"
+
+A development build's packages are `fastflow-sdk-fastflowlm`,
+`fastflow-sdk-runtime`, `fastflow-sdk-compiler`, `fastflow-sdk-ops`, and the
+optional `fastflow-sdk-qualification`. You can also install one alone; the
+runtime and FastFlowLM alone need Python 3.11 or newer.
 
 ## Verify the install
 
@@ -59,11 +63,14 @@ runs models without Python but cannot compile NPU programs.
 
 ## Upgrade
 
-Add `--upgrade` to the install command. `fastflow-sdk` pins each of its
-packages to its own version, so they move to the new release together:
+Add `--upgrade` to the install command:
 
 ```bash
-python -m pip install --upgrade --pre --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple fastflow-sdk
+python -m pip install --upgrade fastflow-sdk
 ```
+
+For a development build, add `--upgrade` to its install command instead.
+`fastflow-sdk` pins each of its packages to its own version, so they move to
+the new build together.
 
 To build the SDK yourself instead, see [Build from source](build-from-source.md).

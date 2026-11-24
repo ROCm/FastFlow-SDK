@@ -104,8 +104,8 @@ name = "FastFlow SDK on GitHub"
 full_output = "llms-full.txt"
 markdown_description = """\
 FastFlow SDK is AMD's software stack for XDNA2 NPUs in Ryzen AI processors, on \
-Linux and Windows (x86_64). `pip install fastflow-sdk` (from the FastFlow SDK \
-package index) installs FastFlowLM (`flm`, which runs and serves LLMs through \
+Linux and Windows (x86_64). `pip install fastflow-sdk` (from PyPI) installs \
+FastFlowLM (`flm`, which runs and serves LLMs through \
 an OpenAI-compatible API on the NPU), the HRX runtime and the `fastflow` \
 health CLI, the iron-tools (MLIR-AIE) compiler with its `aie.iron` Python API, \
 and the IRON operator library. Use `fastflow doctor --json` to check a machine \

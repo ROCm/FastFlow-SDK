@@ -35,8 +35,9 @@ summary = "The installed product manifest exists, its version matches the `fastf
 fix = """
 A missing manifest or a mismatch means the install is incomplete, modified, or
 mixes files from different releases. Reinstall one release into a clean
-environment, for example
-`python -m pip install --force-reinstall --only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple "fastflow-sdk==<version>"`,
+environment, for example `python -m pip install "fastflow-sdk==<version>"`
+(for a development build, add
+`--only-binary=:all: --extra-index-url https://rocm.github.io/FastFlow-SDK/simple`),
 or use a freshly extracted archive. Do not copy `fastflow` between installs.
 """
 

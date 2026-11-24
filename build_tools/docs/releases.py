@@ -125,8 +125,14 @@ def releases_page(releases: list[dict] | None) -> str:
 
 Every FastFlow SDK release is on [GitHub Releases]({RELEASES_URL}) with its
 wheels, standalone archives, checksums, and qualification evidence. Install a
-specific release by pinning
-its version:
+specific release from PyPI by pinning its version:
+
+```bash
+python -m pip install "fastflow-sdk==<version>"
+```
+
+Development builds, versions with a `.dev` suffix, are not on PyPI; install
+them from the FastFlow SDK package index:
 
 ```bash
 python -m pip install --only-binary=:all: --extra-index-url {INDEX_URL} "fastflow-sdk==<version>"
