@@ -116,7 +116,7 @@ class TestFastflowSdkWheelRelease:
                 "--ref",
                 "release-branch",
                 "--package-version",
-                "0.1.0.dev1",
+                "0.1.1.dev1",
                 "--run-number",
                 "1",
                 "--github-output",
@@ -127,7 +127,7 @@ class TestFastflowSdkWheelRelease:
         )
 
         assert result.returncode == 0, result.stderr
-        assert "package_version=0.1.0.dev1" in output.read_text(encoding="utf-8")
+        assert "package_version=0.1.1.dev1" in output.read_text(encoding="utf-8")
 
     def test_copy_release_archives_requires_and_records_both_platforms(self, tmp_path):
         archives = tmp_path / "archives"
@@ -363,7 +363,7 @@ class TestFastflowSdkWheelRelease:
         self, tmp_path
     ):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(
             root,
             version,
@@ -526,17 +526,17 @@ class TestFastflowSdkWheelRelease:
         self, tmp_path
     ):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(
             root,
             version,
-            runtime_requirement="0.1.0.dev0",
+            runtime_requirement="0.1.1.dev0",
             output_directory=root / "dist" / "windows",
         )
         self._build_release_wheels(
             root,
             version,
-            runtime_requirement="0.1.0.dev0",
+            runtime_requirement="0.1.1.dev0",
             wheel_tag="py3-none-manylinux_2_28_x86_64",
             output_directory=root / "dist" / "linux",
             include_meta=False,
@@ -559,7 +559,7 @@ class TestFastflowSdkWheelRelease:
         self, tmp_path
     ):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(
             root,
             version,
@@ -591,7 +591,7 @@ class TestFastflowSdkWheelRelease:
 
     def test_prepare_release_payload_requires_sdk_to_pin_every_product(self, tmp_path):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(
             root,
             version,
@@ -624,7 +624,7 @@ class TestFastflowSdkWheelRelease:
 
     def test_prepare_release_payload_rejects_extra_wheels(self, tmp_path):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(root, version)
         build_wheel(
             self._package_tree(root, "fastflow_sdk_extra"),
@@ -651,7 +651,7 @@ class TestFastflowSdkWheelRelease:
 
     def test_prepare_release_payload_rejects_extra_allowed_variant(self, tmp_path):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(
             root, version, output_directory=root / "dist/windows"
         )
@@ -685,7 +685,7 @@ class TestFastflowSdkWheelRelease:
 
     def test_prepare_release_payload_rejects_wrong_platform_tag(self, tmp_path):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(
             root, version, wheel_tag="py3-none-manylinux_2_28_x86_64"
         )
@@ -704,7 +704,7 @@ class TestFastflowSdkWheelRelease:
 
     def test_prepare_release_payload_requires_every_platform(self, tmp_path):
         root = tmp_path
-        version = "0.1.0.dev1"
+        version = "0.1.1.dev1"
         self._build_release_wheels(root, version)
 
         with pytest.raises(RuntimeError, match="release wheel set is incomplete"):
